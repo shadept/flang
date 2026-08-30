@@ -139,37 +139,26 @@ pub type TokenKind = enum {
 
 #enum_utils(TokenKind)
 
-// A lexer-produced token. `text` is a view into the source buffer covering exactly the token's
-// bytes - no leading/trailing trivia. `leading` and `trailing` carry the whitespace and comments
-// that border this token; the invariant is that concatenating `t.leading + t.text + t.trailing`
-// across every token in order reproduces the source file exactly.
+// A lexer-produced token - 32 bytes, owning nothing.
 //
-// `offset` is the byte offset of `text` from the start of the source. `line` is the 0-based line of
-// `text`'s first byte - newlines inside the token's own bytes advance the lexer's cursor but do not
-// change this token's `line`. Column is derived on demand from a line-endings table on the source.
+// `text` is a view into the source buffer covering exactly the token's bytes; `offset` is where
+// those bytes start. That pair is the whole token: everything else a token could say about itself
+// is a function of the source and the offsets, so it is derived rather than stored.
 //
-// `leading` and `trailing` are owned, shrunk-to-fit slices produced by `List.to_owned_slice` at lex
-// time - there is no excess capacity per token. Both slices share `allocator` (every trivia list a
-// Token produces comes from the same Lexer), so it lives once on the Token. `null` means the global
-// allocator, resolved at the free site - the same convention the stdlib containers use.
+// Trivia (the whitespace and comments bordering the token) used to live here as two owned slices
+// plus the allocator to free them - 40 of the token's 80 bytes, and a heap allocation per token,
+// for views into a buffer that is kept alive anyway. Every byte between one token's text and the
+// next IS trivia by construction, so `trivia.f` walks it on demand: `trivia_in`, bounded by
+// `leading_end` / `trailing_end`. The losslessness invariant is unchanged - concatenating leading +
+// text + trailing across every token in order still reproduces the source exactly - it is just no
+// longer materialised.
+//
+// `line` is gone the same way. Callers that need a line number either count newlines as they walk
+// (the formatter, folding ranges) or ask a `LineIndex`, which the diagnostic path builds anyway.
 pub type Token = struct {
     kind: TokenKind
     text: String
     offset: usize
-    line: usize
-    leading: Trivia[]
-    trailing: Trivia[]
-    allocator: &Allocator?
-}
-
-// Free the trivia slices owned by this token. Called automatically when the enclosing `List(Token)`
-// is deinit'd (List walks its elements and invokes `.deinit()` on each). The `text` field is a
-// borrow from the source buffer and is not freed; Trivia entries are themselves non-owning (their
-// `text` is a borrow), so no per-element deinit is needed.
-pub fn deinit(self: &Token) {
-    const a = self.allocator.or_global()
-    a.free(self.leading)
-    a.free(self.trailing)
 }
 
 // True for any keyword token - useful for syntax highlighting and the formatter's word-spacing

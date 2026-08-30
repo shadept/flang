@@ -46,11 +46,15 @@ message.
 resolves - and a specialization that binds the blanket rather than the element's own `deinit` is
 neither an error nor a warning. The buffer is freed and everything the elements own is not.
 
-The same generic resolves differently per binary. Lexing and freeing a token list calls
-`flang_0parser__token__deinit` in the `flang_parser` test binary and
-`core__deinit__deinit__ref_flang_0parser__token__Token` in the `flang_lsp` one, where every token's
-trivia slices then leak - per keystroke, since `publish_syntax_diags` re-lexes on every
-`didChange`. Read the pick out of the emitted C with `flang test -k`, or reproduce with
+The same generic resolves differently per binary. This was originally caught on `Token`, which
+owned two trivia slices: freeing a token list picked `flang_0parser__token__deinit` in the
+`flang_parser` test binary and the blanket
+`core__deinit__deinit__ref_flang_0parser__token__Token` in the `flang_lsp` one, leaking every
+token's trivia - per keystroke, since `publish_syntax_diags` re-lexes on every `didChange`. That
+particular leak is gone because `Token` no longer owns anything (trivia is derived from the source;
+see architecture.md §CST storage), so the example no longer reproduces - but the resolution bug it
+exposed is untouched and still applies to any element type that owns memory. Read the pick out of
+the emitted C with `flang test -k`, or reproduce with
 `FLANG_LEAK_TRACE=1 flang test` from `lib/flang_lsp`. Importing `flang_parser.token` at the leaking
 call site does not change it, nor does importing it in `flang_analysis`'s `analyze.f`, so the
 deciding site is unidentified and plain visibility does not explain it.
@@ -309,33 +313,55 @@ allocations; attribution wants a counting-allocator variant that tags
 allocations by call site. Irrelevant to one-shot builds (the process
 exits); relevant to the LSP, where the per-re-demand share accumulates.
 
+### Member access on a primitive type-checks, then dies in lowering
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (member access resolution)
+
+Reading a field that cannot exist off a primitive does not produce a
+diagnostic. The checker leaves the access typed as a free variable, `flang
+check` reports success, and the error surfaces only when lowering trips over
+it — either `unresolved type variable reached lowering - checker bug` or, when
+the value is consumed, a silently skipped function body (`body refused (member
+access unresolved)`), which downgrades to `main was not emitted`.
+
+```
+pub fn main() i32 {
+    const id: u32 = 7
+    return id.start as i32   // no such field; `flang check` says nothing
+}
+```
+
+Scoped to **primitive receivers**. A missing field on a struct or on `String`
+is a clean E2xxx at `check` time, as it should be; only primitives fall
+through. Transparent aliases (`type MyId = u32`) inherit the hole, which is
+how it reaches code that looks like it is handling a distinct id type.
+
+Found while converting the CST to indices: `leading[i].start` on what had
+become a `CstNodeId` passed `check` on every project and only failed at the
+build. The cost is that `flang check` cannot be trusted to catch a whole class
+of refactor breakage, and the eventual error names lowering rather than the
+offending expression. Member access on a type with no fields should be an
+E2xxx at the access site.
+
 ### CST ownership is copy-with-shared-children; no `deinit` can be correct for it
 
-**Status:** Open - worked around, proper fix is arena-backing the parser
+**Status:** FIXED — the CST is struct-of-arrays; a node exists exactly once
 **Affected:** `lib/flang_parser/src/cst.f`, `parser.f`, every CST consumer
 
-`CstNode` holds `children: List(CstChild)` and nodes are COPIED into parent
-builders during parsing (`push_node_into`, the `leading` directive lists),
-so several `CstNode` values can reference the same child-list buffer.
-Giving `CstNode`/`CstChild` a `deinit` therefore corrupts the tree:
-`List` teardown deinits elements, and any list of CST pieces dropped
-mid-parse frees children the kept copies still reference. Trying exactly
-that broke stage 1's self-compile with phantom resolution errors
-(`unknown identifier exit`) - the checker was reading freed CST memory.
+`CstNode` used to hold `children: List(CstChild)` with children stored BY
+VALUE, and nodes were COPIED into parent builders during parsing
+(`push_node_into`), so several `CstNode` values could reference the same
+child-list buffer. Giving `CstNode`/`CstChild` a `deinit` therefore corrupted
+the tree, and the workaround was `free_cst`, an explicitly-named recursive
+free called exactly once on the ROOT after projection.
 
-Current state: `free_cst` is an explicitly-named recursive free, called
-exactly once on the ROOT of a finished tree after projection
-(`parse_to_module`, the LSP's `parse_doc`), where each buffer appears once.
-Before it existed the CST simply leaked - harmless in a one-shot build,
-~MBs per keystroke in the LSP.
-
-The honest fix is making the ownership real instead of conventional:
-either `Rc(CstNode)` (std.rc exists; per-node refcount overhead, correct
-under any sharing) or - better fit - backing the parser's child lists with
-an `ArenaAllocator` the way the AST already does (`Module.arena`), making
-teardown one bulk free and `free_cst` unnecessary. The parser already
-threads an allocator, so the arena variant is mostly plumbing at the two
-parse entry points plus every `list(...)` in the parser honoring it.
+`Cst` now owns three flat arrays — `nodes`, `tokens`, `children` — and a node
+names its children as a `ChildSpan` window rather than owning a list. A node
+exists once, in `Cst.nodes`; a child is an 8-byte index. Teardown is
+`Cst.deinit()`, three list frees, and `free_cst` is gone. The token list is
+moved in from the lexer instead of being copied into child slots, so a caller
+that passes tokens to `parser()` must not also free them.
 
 ### Self-hosted: a call the reference rejects as ambiguous (E2011) resolves silently
 

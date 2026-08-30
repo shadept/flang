@@ -4,16 +4,17 @@
 //       leading:  <n piece(s)>  <text>
 //       trailing: <n piece(s)>  <text>
 //
-// Each piece is one whitespace run or one line comment; the printed
-// text is the full preserved trivia content (escaped). Omitted when
-// there is no trivia on that side.
+// Each piece is one whitespace run or one line comment; the printed text is the full preserved
+// trivia content (escaped). Omitted when there is no trivia on that side.
 
 import std.env
 import std.io.file
 import std.list
+import std.option
 import std.result
 import std.string
 import std.string_builder
+import flang_core.line_index
 import flang_parser.lexer
 import flang_parser.token
 import flang_parser.trivia
@@ -57,40 +58,59 @@ pub fn main() i32 {
     defer banner.deinit()
     println(banner.as_view())
 
+    const view = source.as_view()
+    const idx = line_index(view)
+    defer idx.deinit()
     for i in 0..tokens.len {
-        print_token(&tokens[i])
+        const prev_end = if i == 0 { 0 } else {
+            const p = tokens[i - 1]
+            p.offset + p.text.len
+        }
+        const next_off = if i + 1 < tokens.len { tokens[i + 1].offset } else { view.len }
+        print_token(&tokens[i], view, prev_end, next_off, &idx)
     }
     return 0
 }
 
-fn print_token(tok: &Token) {
+// Trivia and line are derived from the source now; a debug dumper is exactly the caller that should
+// pay for them rather than every token storing them.
+fn print_token(tok: &Token, source: String, prev_end: usize, next_off: usize, idx: &LineIndex) {
     let line = string_builder(96)
     defer line.deinit()
     line.append(tok.offset)
     line.append(":L")
-    line.append(tok.line + 1)
+    line.append(idx.line_of(tok.offset) + 1)
     line.append("  ")
     line.append(tok.kind.to_string())
     line.append("  ")
     append_token_text_preview(&line, tok.text)
     println(line.as_view())
 
-    if tok.leading.len > 0 {
-        print_trivia_line("    leading: ", tok.leading)
-    }
-    if tok.trailing.len > 0 {
-        print_trivia_line("    trailing:", tok.trailing)
-    }
+    print_trivia_line("    leading: ", trivia_in(source, prev_end, tok.offset))
+    print_trivia_line("    trailing:", trivia_in(source, tok.offset + tok.text.len, next_off))
 }
 
-fn print_trivia_line(label: String, pieces: Trivia[]) {
+fn print_trivia_line(label: String, it: TriviaIter) {
+    let pieces: List(Trivia) = list(4)
+    defer pieces.deinit()
+    let walk = it
+    loop {
+        const t = walk.next()
+        if t.is_none() {
+            break
+        }
+        pieces.push(t.unwrap())
+    }
+    if pieces.len == 0 {
+        return
+    }
     let line = string_builder(96)
     defer line.deinit()
     line.append(label)
     line.append(" ")
     line.append(pieces.len)
-    line.append(if pieces.len == 1 { " piece   "} else { " pieces  "})
-    append_trivia_text(&line, pieces)
+    line.append(if pieces.len == 1 { " piece   " } else { " pieces  " })
+    append_trivia_text(&line, pieces.as_slice())
     println(line.as_view())
 }
 
@@ -140,9 +160,17 @@ fn append_token_text_preview(sb: &StringBuilder, text: String) {
 fn append_escaped(sb: &StringBuilder, s: String) {
     for i in 0..s.len {
         const c = s[i]
-        if c == '\n' { sb.append("\\n") }
-        else if c == '\r' { sb.append("\\r") }
-        else if c == '\t' { sb.append("\\t") }
-        else { sb.append_byte(c) }
+        if c == '\n' {
+            sb.append("\\n")
+        }
+        else if c == '\r' {
+            sb.append("\\r")
+        }
+        else if c == '\t' {
+            sb.append("\\t")
+        }
+        else {
+            sb.append_byte(c)
+        }
     }
 }

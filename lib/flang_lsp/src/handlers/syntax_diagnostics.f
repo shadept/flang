@@ -32,8 +32,8 @@ pub fn parse_doc(text: String, allocator: &Allocator? = null) ParsedDoc {
     let diagnostics: List(Diagnostic) = list(0, allocator)
     let lx = lexer(text, allocator)
     let tokens = lx.tokenize()
-    let p = parser(tokens, allocator)
-    let cst = p.parse_module()
+    let p = parser(tokens, text, allocator)
+    let cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, 0i32, allocator)
     const cctx = host_ctx()
     flatten_module_decls(&module, &cctx, &diagnostics, allocator)
@@ -41,8 +41,6 @@ pub fn parse_doc(text: String, allocator: &Allocator? = null) ParsedDoc {
     diagnostics.push_all(taken.0)
     taken.1.free(taken.0)
     p.deinit()
-    tokens.deinit()
-    cst.free_cst()
     return .{ module = module, diagnostics = diagnostics }
 }
 

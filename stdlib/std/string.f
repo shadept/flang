@@ -7,7 +7,7 @@ import std.encoding.utf8
 import std.allocator
 import std.list
 import std.option
-import std.string_builder
+import std.mem
 import std.string_reader
 
 // =============================================================================
@@ -429,6 +429,13 @@ pub fn next(self: &Lines) String? {
 // OwnedString
 // =============================================================================
 
+// OwnedString - owning UTF-8 string
+//
+// Owns its buffer and frees it on `deinit`. Null-terminated for C FFI; `len` excludes the
+// terminator. Fixed size - no spare capacity, so it never grows; build strings with
+// `StringBuilder`.
+//
+// The owning counterpart to [core.string.String], which `as_view` borrows one as.
 pub type OwnedString = struct {
     ptr: &u8
     len: usize
@@ -439,11 +446,23 @@ pub fn from_view(s: String, allocator: &Allocator) OwnedString {
     return from_view(s, Some(allocator))
 }
 
+// Creates an owned copy of a string view by copying its content, plus 1 char for the null byte.
+//
+// - `s`: the view to copy. An empty view yields an empty OwnedString, which still allocates its
+//   one terminator byte.
+// - `allocator`: allocates the new buffer, and is remembered on the result so `deinit` returns the
+//   memory to the same place. Null selects the global allocator.
+//
+// Returns an OwnedString the caller owns and must `deinit()`. Panics if the allocation fails.
 pub fn from_view(s: String, allocator: &Allocator? = null) OwnedString {
-    // TODO optimize
-    const sb = string_builder(s.len, allocator)
-    sb.append(s)
-    return sb.to_string()
+    const buf = allocator.or_global().alloc(s.len + 1, align_of(u8))
+        .expect("OwnedString.from_view: allocation failed")
+    if s.len > 0 {
+        memcpy(buf.ptr, s.ptr, s.len)
+    }
+    const term = buf.ptr + s.len
+    term.* = 0
+    return .{ ptr = buf.ptr, len = s.len, allocator = allocator }
 }
 
 #allow (W2004)

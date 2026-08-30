@@ -79,7 +79,6 @@ pub fn lexer(source: String, allocator: &Allocator? = null, start: usize = 0) Le
     return .{
         source = source,
         position = start,
-        line = 0,
         allocator = allocator,
         interp_stack = list(0, allocator),
         mark_next_string_interp = false,
@@ -177,9 +176,8 @@ pub fn next_token(self: &Lexer) Token {
         return begin_interp_string(self)
     }
 
-    const leading = lex_leading_trivia(self)
+    self.position = leading_end(self.source, self.position)
     const token_start = self.position
-    const token_line = self.line
     let kind = TokenKind.Eof
     if self.position < self.source.len {
         kind = lex_token_text(self)
@@ -200,116 +198,22 @@ pub fn next_token(self: &Lexer) Token {
                     kind = new_kind,
                     text = text,
                     offset = token_start,
-                    line = token_line,
-                    leading = leading,
-                    trailing = empty_trivia(),
-                    allocator = self.allocator,
                 }
             }
         }
     }
 
-    const trailing = lex_trailing_trivia(self)
+    self.position = trailing_end(self.source, self.position, self.source.len)
     return Token {
         kind = kind,
         text = text,
         offset = token_start,
-        line = token_line,
-        leading = leading,
-        trailing = trailing,
-        allocator = self.allocator,
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Trivia
 // ─────────────────────────────────────────────────────────────────────────
-
-// Empty `Trivia[]` - no allocation, ptr=null, len=0. Used everywhere a token is known to have no
-// leading or trailing trivia (interp boundaries, BadToken recovery exits, the EOF placeholder).
-fn empty_trivia() Trivia[] {
-    return slice_from_raw_parts(0usize as &Trivia, 0)
-}
-
-fn lex_leading_trivia(self: &Lexer) Trivia[] {
-    let trivia: List(Trivia) = list(0, self.allocator)
-    const text = self.source
-    loop {
-        if self.position >= text.len {
-            break
-        }
-        const ch = text[self.position]
-        if is_whitespace_byte(ch) {
-            const start = self.position
-            while self.position < text.len and is_whitespace_byte(text[self.position]) {
-                if text[self.position] == '\n' {
-                    self.line = self.line + 1
-                }
-                self.position = self.position + 1
-            }
-            trivia.push(Trivia {
-                kind = TriviaKind.Whitespace,
-                text = text[start..self.position],
-            })
-            continue
-        }
-        if ch == '/' and self.position + 1 < text.len and text[self.position + 1] == '/' {
-            const start = self.position
-            self.position = self.position + 2
-            while self.position < text.len and text[self.position] != '\n' {
-                self.position = self.position + 1
-            }
-            trivia.push(Trivia {
-                kind = TriviaKind.LineComment,
-                text = text[start..self.position],
-            })
-            continue
-        }
-        break
-    }
-    return trivia.to_owned_slice().0
-}
-
-fn lex_trailing_trivia(self: &Lexer) Trivia[] {
-    let trivia: List(Trivia) = list(0, self.allocator)
-    const text = self.source
-
-    const hws_start = self.position
-    while self.position < text.len and is_horizontal_whitespace(text[self.position]) {
-        self.position = self.position + 1
-    }
-    if self.position > hws_start {
-        trivia.push(Trivia {
-            kind = TriviaKind.Whitespace,
-            text = text[hws_start..self.position],
-        })
-    }
-
-    if self.position + 1 < text.len and text[self.position] == '/'
-        and text[self.position + 1] == '/' {
-        const cstart = self.position
-        self.position = self.position + 2
-        while self.position < text.len and text[self.position] != '\n' {
-            self.position = self.position + 1
-        }
-        trivia.push(Trivia {
-            kind = TriviaKind.LineComment,
-            text = text[cstart..self.position],
-        })
-    }
-
-    if self.position < text.len and text[self.position] == '\n' {
-        const nstart = self.position
-        self.position = self.position + 1
-        self.line = self.line + 1
-        trivia.push(Trivia {
-            kind = TriviaKind.Whitespace,
-            text = text[nstart..self.position],
-        })
-    }
-
-    return trivia.to_owned_slice().0
-}
 
 fn is_horizontal_whitespace(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\r'
@@ -685,9 +589,6 @@ fn lex_string(self: &Lexer) TokenKind {
                 self.position = self.position + 1
             }
         } else {
-            if text[self.position] == '\n' {
-                self.line = self.line + 1
-            }
             self.position = self.position + 1
         }
     }
@@ -953,7 +854,6 @@ fn keyword_or_identifier(word: String) TokenKind {
 
 fn begin_interp_string(self: &Lexer) Token {
     const token_start = self.position
-    const token_line = self.line
     self.position = self.position + 1
     self.interp_stack.push(InterpFrame {
         in_segment = true,
@@ -966,10 +866,6 @@ fn begin_interp_string(self: &Lexer) Token {
         kind = TokenKind.InterpStringStart,
         text = self.source[token_start..self.position],
         offset = token_start,
-        line = token_line,
-        leading = empty_trivia(),
-        trailing = empty_trivia(),
-        allocator = self.allocator,
     }
 }
 
@@ -979,7 +875,6 @@ fn begin_interp_string(self: &Lexer) Token {
 fn lex_segment(self: &Lexer) Token {
     const text = self.source
     const seg_start = self.position
-    const seg_line = self.line
     const frame_idx = self.interp_stack.len - 1
 
     loop {
@@ -991,27 +886,18 @@ fn lex_segment(self: &Lexer) Token {
         if c == '"' {
             const seg_text = text[seg_start..self.position]
             const close_start = self.position
-            const close_line = self.line
             self.position = self.position + 1
             self.interp_stack.pop()
             const end_tok = Token {
                 kind = TokenKind.InterpStringEnd,
                 text = text[close_start..self.position],
                 offset = close_start,
-                line = close_line,
-                leading = empty_trivia(),
-                trailing = empty_trivia(),
-                allocator = self.allocator,
             }
             queue_token(self, end_tok)
             return Token {
                 kind = TokenKind.InterpSegment,
                 text = seg_text,
                 offset = seg_start,
-                line = seg_line,
-                leading = empty_trivia(),
-                trailing = empty_trivia(),
-                allocator = self.allocator,
             }
         }
 
@@ -1022,7 +908,6 @@ fn lex_segment(self: &Lexer) Token {
             }
             const seg_text = text[seg_start..self.position]
             const hole_start_pos = self.position
-            const hole_line = self.line
             self.position = self.position + 1
             self.interp_stack[frame_idx].in_segment = false
             self.interp_stack[frame_idx].brace_depth = 0
@@ -1032,20 +917,12 @@ fn lex_segment(self: &Lexer) Token {
                 kind = TokenKind.InterpHoleStart,
                 text = text[hole_start_pos..self.position],
                 offset = hole_start_pos,
-                line = hole_line,
-                leading = empty_trivia(),
-                trailing = empty_trivia(),
-                allocator = self.allocator,
             }
             queue_token(self, hole_tok)
             return Token {
                 kind = TokenKind.InterpSegment,
                 text = seg_text,
                 offset = seg_start,
-                line = seg_line,
-                leading = empty_trivia(),
-                trailing = empty_trivia(),
-                allocator = self.allocator,
             }
         }
 
@@ -1055,16 +932,11 @@ fn lex_segment(self: &Lexer) Token {
                 continue
             }
             const bad_start = self.position
-            const bad_line = self.line
             self.position = self.position + 1
             return Token {
                 kind = TokenKind.BadToken,
                 text = text[bad_start..self.position],
                 offset = bad_start,
-                line = bad_line,
-                leading = empty_trivia(),
-                trailing = empty_trivia(),
-                allocator = self.allocator,
             }
         }
 
@@ -1076,16 +948,11 @@ fn lex_segment(self: &Lexer) Token {
                 self.position = self.position + 1
                 if !consume_unicode_escape(self) {
                     self.position = esc_start
-                    const bad_line = self.line
                     self.position = self.position + 2
                     return Token {
                         kind = TokenKind.BadToken,
                         text = text[esc_start..self.position],
                         offset = esc_start,
-                        line = bad_line,
-                        leading = empty_trivia(),
-                        trailing = empty_trivia(),
-                        allocator = self.allocator,
                     }
                 }
                 continue
@@ -1094,9 +961,6 @@ fn lex_segment(self: &Lexer) Token {
             continue
         }
 
-        if c == '\n' {
-            self.line = self.line + 1
-        }
         self.position = self.position + 1
     }
 
@@ -1106,10 +970,6 @@ fn lex_segment(self: &Lexer) Token {
         kind = TokenKind.BadToken,
         text = text[seg_start..self.position],
         offset = seg_start,
-        line = seg_line,
-        leading = empty_trivia(),
-        trailing = empty_trivia(),
-        allocator = self.allocator,
     }
 }
 
@@ -1118,12 +978,8 @@ fn lex_segment(self: &Lexer) Token {
 fn lex_format_spec(self: &Lexer) Token {
     const text = self.source
     const spec_start = self.position
-    const spec_line = self.line
     const frame_idx = self.interp_stack.len - 1
     while self.position < text.len and text[self.position] != '}' and text[self.position] != '"' {
-        if text[self.position] == '\n' {
-            self.line = self.line + 1
-        }
         self.position = self.position + 1
     }
     if self.position >= text.len or text[self.position] == '"' {
@@ -1132,16 +988,11 @@ fn lex_format_spec(self: &Lexer) Token {
             kind = TokenKind.BadToken,
             text = text[spec_start..self.position],
             offset = spec_start,
-            line = spec_line,
-            leading = empty_trivia(),
-            trailing = empty_trivia(),
-            allocator = self.allocator,
         }
     }
 
     const spec_text = text[spec_start..self.position]
     const close_start = self.position
-    const close_line = self.line
     self.position = self.position + 1
     self.interp_stack[frame_idx].in_format_spec = false
     self.interp_stack[frame_idx].in_segment = true
@@ -1149,20 +1000,12 @@ fn lex_format_spec(self: &Lexer) Token {
         kind = TokenKind.InterpHoleEnd,
         text = text[close_start..self.position],
         offset = close_start,
-        line = close_line,
-        leading = empty_trivia(),
-        trailing = empty_trivia(),
-        allocator = self.allocator,
     }
     queue_token(self, hole_end)
     return Token {
         kind = TokenKind.InterpFormatSpec,
         text = spec_text,
         offset = spec_start,
-        line = spec_line,
-        leading = empty_trivia(),
-        trailing = empty_trivia(),
-        allocator = self.allocator,
     }
 }
 
@@ -1225,9 +1068,6 @@ fn empty_token(allocator: &Allocator?) Token {
         kind = TokenKind.Eof,
         text = "",
         offset = 0,
-        line = 0,
-        leading = empty_trivia(),
-        trailing = empty_trivia(),
         allocator = allocator,
     }
 }

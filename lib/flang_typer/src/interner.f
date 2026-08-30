@@ -1,10 +1,13 @@
 // TypeInterner - the type table (RFC-024). One `TyNode` per distinct type; a `Ty` is an index into
-// it. Identity is the canonical rendering: two structurally equal types (`decl_span` metadata
-// ignored) intern to the same id, so `a == b` on handles is type equality. `Void`, `Never`, `Error`
-// and the 14 primitives hold the fixed ids `type.f` declares, so the common leaves never hash.
+// it. Identity is the node's shape: two structurally equal types (`decl_span` metadata ignored)
+// intern to the same id, so `a == b` on handles is type equality. `Void`, `Never`, `Error` and the
+// 14 primitives hold the fixed ids `type.f` declares, so the common leaves never hash.
+//
+// The identity a lookup hashes is `TyKey`, a fixed-size struct with derived `hash`/`op_eq`, so
+// `Dict` settles collisions itself. Interning allocates nothing on a hit.
 //
 // A node's children are `Ty` handles sliced out of one flat `children` array. The table owns two
-// lists' worth of storage and the key buffers; nothing else owns any part of a type.
+// lists' worth of storage; nothing else owns any part of a type.
 //
 // The empty tuple and `Void` keep distinct ids: unification treats them as the same type by
 // convention, but consumers match them as different shapes.
@@ -14,11 +17,11 @@
 // `generalize`'s free-variable walk reads the level off the node, so a var whose partition level
 // moved interns as a fresh node rather than surfacing a stale level.
 //
-// Rendering: `key_of` is the identity string (vars carry their level as `?id@level`); `format`
-// appends the diagnostic rendering (vars print as `?id`), the same text the tree representation
-// used to print.
+// Rendering is `format`, which walks the node graph and appends the diagnostic text (vars print as
+// `?id`, dropping the level their identity carries).
 
 import std.allocator
+import std.derive
 import std.dict
 import std.list
 import std.option
@@ -72,6 +75,63 @@ pub type TyNode = enum {
     NError
 }
 
+// Structural identity of one node, as a fixed-size value `Dict` can hash and compare itself.
+//
+// Variable-arity children do not fit in a fixed struct, so a child sequence is interned separately
+// (see `KidsKey`) and enters the key as the single id `kids`. `a`/`b` are the two scalar slots the
+// variants use differently - no variant needs more than two values beside its children:
+//
+//   TAG_VAR      a = var id            b = level
+//   TAG_REF      a = elem
+//   TAG_ARRAY    a = elem              b = length
+//   TAG_FUNC     a = return type                     kids = params
+//   TAG_TUPLE                                        kids = elements
+//   TAG_RECORD                                       kids = (name, type) fields
+//   TAG_NOMINAL  a = NominalId                       kids = type arguments
+//
+// The seeded leaves (void, never, error, the prims) hold fixed ids and are reached through
+// `prim_of` and the `TY_*` constants, so they are never looked up by shape and need no key.
+pub type TyKey = struct {
+    tag: u32
+    a: u32
+    b: usize
+    kids: u32
+}
+
+#derive(TyKey, eq, hash)
+
+// One cell of an interned child sequence, built right to left and terminated by `KIDS_NIL`. Equal
+// sequences reach the same id because each cell is a fixed struct the dict compares exactly;
+// sequences sharing a suffix share its cells.
+//
+// Record fields need a name in the cell and everything else does not, so they get their own cell
+// type and their own dict rather than making every cell carry an unused 16-byte `String`. Ids come
+// from one counter, and a key's tag says which dict its `kids` came from.
+pub type KidsKey = struct {
+    head: Ty
+    tail: u32
+}
+
+#derive(KidsKey, eq, hash)
+
+pub type FieldKidsKey = struct {
+    head: Ty
+    name: String
+    tail: u32
+}
+
+#derive(FieldKidsKey, eq, hash)
+
+const KIDS_NIL: u32 = 0
+
+const TAG_VAR: u32 = 1
+const TAG_REF: u32 = 2
+const TAG_ARRAY: u32 = 3
+const TAG_FUNC: u32 = 4
+const TAG_TUPLE: u32 = 5
+const TAG_RECORD: u32 = 6
+const TAG_NOMINAL: u32 = 7
+
 pub type TypeInterner = struct {
     nodes: List(TyNode)
     children: List(Ty)
@@ -81,10 +141,16 @@ pub type TypeInterner = struct {
     // Record field names and declaration spans, windowed by `NRecordNode`.
     rec_names: List(String)
     rec_spans: List(SourceSpan)
-    // Canonical rendering -> id. `keys` owns the buffers the dict's views point into; `keys[id]` is
-    // id's rendering, used to compose parents.
-    by_key: Dict(String, Ty)
-    keys: List(OwnedString)
+    // Structural key -> id.
+    by_key: Dict(TyKey, Ty)
+    // Interned child sequences: cons cell -> list id. Ids live in their own space, never mixing
+    // with `Ty`, so nothing outside this file can mistake one for a type.
+    kids: Dict(KidsKey, u32)
+    field_kids: Dict(FieldKidsKey, u32)
+    kids_next: u32
+    // ponytail: measurement scaffolding for the RFC-024 key rework; drop once the numbers land.
+    n_calls: usize
+    n_hits: usize
     allocator: &Allocator?
 }
 
@@ -112,27 +178,86 @@ pub fn type_interner(allocator: &Allocator?, capacity: usize) TypeInterner {
         rec_names = list(0, allocator),
         rec_spans = list(0, allocator),
         by_key = dict(capacity, allocator),
-        keys = list(capacity, allocator),
+        kids = dict(capacity, allocator),
+        field_kids = dict(0, allocator),
+        kids_next = 1,
+        n_calls = 0,
+        n_hits = 0,
         allocator = allocator,
     }
-    seed_leaf(&self, TyNode.NVoid, "void")
-    seed_leaf(&self, TyNode.NNever, "never")
-    seed_leaf(&self, TyNode.NError, "<error>")
+    seed_leaf(&self, TyNode.NVoid)
+    seed_leaf(&self, TyNode.NNever)
+    seed_leaf(&self, TyNode.NError)
     // `prim_of` (type.f) fixes the id order; this is that order.
     const prims: [PrimitiveKind; 14] = [PrimitiveKind.Bool, PrimitiveKind.I8, PrimitiveKind.I16,
         PrimitiveKind.I32, PrimitiveKind.I64, PrimitiveKind.ISize, PrimitiveKind.U8,
         PrimitiveKind.U16, PrimitiveKind.U32, PrimitiveKind.U64, PrimitiveKind.USize,
         PrimitiveKind.F32, PrimitiveKind.F64, PrimitiveKind.Char]
     for p in prims {
-        seed_leaf(&self, TyNode.NPrim(p), prim_name(p))
+        seed_leaf(&self, TyNode.NPrim(p))
     }
     return self
 }
 
-fn seed_leaf(self: &TypeInterner, node: TyNode, key: String) {
+fn probe(self: &TypeInterner, key: TyKey) Ty? {
+    self.n_calls = self.n_calls + 1
+    const hit = self.by_key.get(key)
+    if hit.is_some() {
+        self.n_hits = self.n_hits + 1
+    }
+    return hit
+}
+
+fn seed_leaf(self: &TypeInterner, node: TyNode) {
     self.nodes.push(node)
     self.ground.push(true)
-    self.keys.push(from_view(key, self.allocator))
+}
+
+// Id of the cell `(head, tail)`, minting one if this is its first appearance.
+fn cons(self: &TypeInterner, head: Ty, tail: u32) u32 {
+    const cell = KidsKey { head = head, tail = tail }
+    const hit = self.kids.get(cell)
+    if hit.is_some() {
+        return hit.unwrap()
+    }
+    const id = self.kids_next
+    self.kids_next = self.kids_next + 1
+    self.kids.set(cell, id)
+    return id
+}
+
+fn cons_field(self: &TypeInterner, head: Ty, name: String, tail: u32) u32 {
+    const cell = FieldKidsKey { head = head, name = name, tail = tail }
+    const hit = self.field_kids.get(cell)
+    if hit.is_some() {
+        return hit.unwrap()
+    }
+    const id = self.kids_next
+    self.kids_next = self.kids_next + 1
+    self.field_kids.set(cell, id)
+    return id
+}
+
+// Id of `ids` as a sequence. Built right to left so a shared suffix reuses its cells.
+fn intern_kids(self: &TypeInterner, ids: &List(Ty)) u32 {
+    let tail = KIDS_NIL
+    let i = ids.len
+    while i > 0 {
+        i = i - 1
+        tail = self.cons(ids[i], tail)
+    }
+    return tail
+}
+
+// The record analogue: a field's name is part of its identity.
+fn intern_field_kids(self: &TypeInterner, fields: &List(Field)) u32 {
+    let tail = KIDS_NIL
+    let i = fields.len
+    while i > 0 {
+        i = i - 1
+        tail = self.cons_field(fields[i].ty, fields[i].name, tail)
+    }
+    return tail
 }
 
 pub fn deinit(self: &TypeInterner) {
@@ -142,7 +267,8 @@ pub fn deinit(self: &TypeInterner) {
     self.rec_names.deinit()
     self.rec_spans.deinit()
     self.by_key.deinit()
-    self.keys.deinit()
+    self.kids.deinit()
+    self.field_kids.deinit()
 }
 
 pub fn len(self: &TypeInterner) usize {
@@ -155,12 +281,17 @@ pub fn is_pristine(self: &TypeInterner) bool {
     return self.nodes.len == SEED_LEN
 }
 
+// ponytail: measurement scaffolding; drop with n_calls/n_hits.
+pub fn stats_report(self: &TypeInterner) OwnedString {
+    return $"interner: {self.nodes.len} types, {self.n_calls} calls, {self.n_hits} hits, {self.n_calls - self.n_hits} misses, {self.kids.len()} cons cells\n  nodes={self.nodes.capacity_bytes()} children={self.children.capacity_bytes()} ground={self.ground.capacity_bytes()} rec_names={self.rec_names.capacity_bytes()} rec_spans={self.rec_spans.capacity_bytes()} by_key={self.by_key.capacity_bytes()} kids={self.kids.capacity_bytes()} field_kids={self.field_kids.capacity_bytes()} total={self.capacity_bytes()}"
+}
+
 // Backing arrays only, like every `capacity_bytes`.
 pub fn capacity_bytes(self: &TypeInterner) usize {
     return self.nodes.capacity_bytes() + self.children.capacity_bytes()
         + self.ground.capacity_bytes() + self.rec_names.capacity_bytes()
         + self.rec_spans.capacity_bytes() + self.by_key.capacity_bytes()
-        + self.keys.capacity_bytes()
+        + self.kids.capacity_bytes() + self.field_kids.capacity_bytes()
 }
 
 pub fn node(self: &TypeInterner, id: Ty) TyNode {
@@ -174,11 +305,6 @@ pub fn is_ground(self: &TypeInterner, id: Ty) bool {
 
 pub fn is_var(self: &TypeInterner, id: Ty) bool {
     return self.nodes[id] match { NVar(_) => true, _ => false }
-}
-
-// The canonical rendering of `id` - the identity `by_key` hashes on.
-pub fn key_of(self: &TypeInterner, id: Ty) String {
-    return self.keys[id].as_view()
 }
 
 // The window's handles as a slice of the flat child array. The slice aliases the array's current
@@ -208,112 +334,65 @@ pub fn rec_ty(self: &TypeInterner, n: &NRecordNode, i: usize) Ty {
 }
 
 pub fn var_of(self: &TypeInterner, v: TyVar) Ty {
-    let sb = string_builder(12, self.allocator)
-    sb.append("?")
-    sb.append(v.id)
-    sb.append("@")
-    sb.append(v.level)
-    const hit = self.by_key.get(sb.as_view())
+    const key = TyKey { tag = TAG_VAR, a = v.id, b = v.level as usize, kids = KIDS_NIL }
+    const hit = self.probe(key)
     if hit.is_some() {
-        sb.deinit()
         return hit.unwrap()
     }
-    return add(self, &sb, TyNode.NVar(v), false)
+    return add(self, key, TyNode.NVar(v), false)
 }
 
 pub fn ref_of(self: &TypeInterner, elem: Ty) Ty {
-    let sb = string_builder(16, self.allocator)
-    sb.append("&")
-    sb.append(self.key_of(elem))
-    const hit = self.by_key.get(sb.as_view())
+    const key = TyKey { tag = TAG_REF, a = elem, b = 0, kids = KIDS_NIL }
+    const hit = self.probe(key)
     if hit.is_some() {
-        sb.deinit()
         return hit.unwrap()
     }
-    return add(self, &sb, TyNode.NRef(elem), self.is_ground(elem))
+    return add(self, key, TyNode.NRef(elem), self.is_ground(elem))
 }
 
 pub fn array_of(self: &TypeInterner, elem: Ty, length: usize) Ty {
-    let sb = string_builder(24, self.allocator)
-    sb.append("[")
-    sb.append(self.key_of(elem))
-    sb.append("; ")
-    sb.append(length)
-    sb.append("]")
-    const hit = self.by_key.get(sb.as_view())
+    const key = TyKey { tag = TAG_ARRAY, a = elem, b = length, kids = KIDS_NIL }
+    const hit = self.probe(key)
     if hit.is_some() {
-        sb.deinit()
         return hit.unwrap()
     }
     const node = TyNode.NArray(.{ elem = elem, length = length })
-    return add(self, &sb, node, self.is_ground(elem))
+    return add(self, key, node, self.is_ground(elem))
 }
 
 pub fn func_of(self: &TypeInterner, params: &List(Ty), ret: Ty) Ty {
-    let sb = string_builder(32, self.allocator)
-    sb.append("fn(")
-    for i in 0..params.len {
-        if i > 0 {
-            sb.append(", ")
-        }
-        sb.append(self.key_of(params[i]))
-    }
-    sb.append(") ")
-    sb.append(self.key_of(ret))
-    const hit = self.by_key.get(sb.as_view())
+    const key = TyKey { tag = TAG_FUNC, a = ret, b = 0, kids = self.intern_kids(params) }
+    const hit = self.probe(key)
     if hit.is_some() {
-        sb.deinit()
         return hit.unwrap()
     }
 
     const g = all_ground(self, params) and self.is_ground(ret)
     const span = push_children(self, params)
     const node = TyNode.NFunc(.{ params = span, ret = ret })
-    return add(self, &sb, node, g)
+    return add(self, key, node, g)
 }
 
 pub fn tuple_of(self: &TypeInterner, elems: &List(Ty)) Ty {
-    let sb = string_builder(32, self.allocator)
-    sb.append("(")
-    for i in 0..elems.len {
-        if i > 0 {
-            sb.append(", ")
-        }
-        sb.append(self.key_of(elems[i]))
-    }
-    if elems.len == 1 {
-        sb.append(",")
-    }
-    sb.append(")")
-    const hit = self.by_key.get(sb.as_view())
+    const key = TyKey { tag = TAG_TUPLE, a = 0, b = 0, kids = self.intern_kids(elems) }
+    const hit = self.probe(key)
     if hit.is_some() {
-        sb.deinit()
         return hit.unwrap()
     }
 
     const g = all_ground(self, elems)
     const span = push_children(self, elems)
-    return add(self, &sb, TyNode.NTuple(span), g)
+    return add(self, key, TyNode.NTuple(span), g)
 }
 
 // The fields carry the names, the declaration spans AND the field types (`Field.ty` is a handle).
 // The first interning of a shape decides the spans the table stores - they are metadata, outside
 // the identity.
 pub fn record_of(self: &TypeInterner, fields: &List(Field)) Ty {
-    let sb = string_builder(48, self.allocator)
-    sb.append("{ ")
-    for i in 0..fields.len {
-        if i > 0 {
-            sb.append(", ")
-        }
-        sb.append(fields[i].name)
-        sb.append(": ")
-        sb.append(self.key_of(fields[i].ty))
-    }
-    sb.append(" }")
-    const hit = self.by_key.get(sb.as_view())
+    const key = TyKey { tag = TAG_RECORD, a = 0, b = 0, kids = self.intern_field_kids(fields) }
+    const hit = self.probe(key)
     if hit.is_some() {
-        sb.deinit()
         return hit.unwrap()
     }
 
@@ -330,33 +409,20 @@ pub fn record_of(self: &TypeInterner, fields: &List(Field)) Ty {
     }
     const span = ChildSpan { start = start, len = fields.len }
     const node = TyNode.NRecord(.{ tys = span, names_start = names_start })
-    return add(self, &sb, node, g)
+    return add(self, key, node, g)
 }
 
 pub fn nominal_of(self: &TypeInterner, id: NominalId, args: &List(Ty)) Ty {
-    let sb = string_builder(24, self.allocator)
-    sb.append("#")
-    sb.append(id)
-    if args.len > 0 {
-        sb.append("(")
-        for i in 0..args.len {
-            if i > 0 {
-                sb.append(", ")
-            }
-            sb.append(self.key_of(args[i]))
-        }
-        sb.append(")")
-    }
-    const hit = self.by_key.get(sb.as_view())
+    const key = TyKey { tag = TAG_NOMINAL, a = id, b = 0, kids = self.intern_kids(args) }
+    const hit = self.probe(key)
     if hit.is_some() {
-        sb.deinit()
         return hit.unwrap()
     }
 
     const g = all_ground(self, args)
     const span = push_children(self, args)
     const node = TyNode.NNominal(.{ id = id, args = span })
-    return add(self, &sb, node, g)
+    return add(self, key, node, g)
 }
 
 fn all_ground(self: &TypeInterner, ids: &List(Ty)) bool {
@@ -374,20 +440,17 @@ fn push_children(self: &TypeInterner, ids: &List(Ty)) ChildSpan {
     return .{ start = start, len = ids.len }
 }
 
-// Registers the node under the key `sb` holds, taking the buffer.
-fn add(self: &TypeInterner, sb: &StringBuilder, node: TyNode, g: bool) Ty {
+fn add(self: &TypeInterner, key: TyKey, node: TyNode, g: bool) Ty {
     const id = self.nodes.len as Ty
     self.nodes.push(node)
     self.ground.push(g)
-    const idx = self.keys.len
-    self.keys.push(sb.to_string())
-    self.by_key.set(self.keys[idx].as_view(), id)
+    self.by_key.set(key, id)
     return id
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Rendering for diagnostics - the tree representation's `format`, off the node graph. Differs from
-// `key_of` only on vars: `?id`, no level.
+// Rendering for diagnostics - the tree representation's `format`, off the node graph. Vars print as
+// `?id`; the level that is part of their identity is not shown.
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn format(self: &TypeInterner, id: Ty, sb: &StringBuilder) {
@@ -467,6 +530,13 @@ pub fn format(self: &TypeInterner, id: Ty, sb: &StringBuilder) {
     }
 }
 
+// Test helper: `format` into a fresh buffer.
+fn render(it: &TypeInterner, id: Ty) OwnedString {
+    let sb = string_builder(16)
+    it.format(id, &sb)
+    return sb.to_string()
+}
+
 test "equal shapes intern to one id, distinct shapes to two" {
     let it = type_interner()
     defer it.deinit()
@@ -502,8 +572,12 @@ test "leaves hold their fixed ids without touching the table" {
         _ => false
     }
     assert_true(shape_ok, "the fixed prim id names its kind")
-    assert_true(it.key_of(TY_VOID) == "void", "void renders at id 0")
-    assert_true(it.key_of(TY_ERROR) == "<error>", "error renders at id 2")
+    const v = render(&it, TY_VOID)
+    defer v.deinit()
+    assert_true(v.as_view() == "void", "void renders at id 0")
+    const e = render(&it, TY_ERROR)
+    defer e.deinit()
+    assert_true(e.as_view() == "<error>", "error renders at id 2")
 }
 
 test "a var keys on id and level together" {

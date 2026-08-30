@@ -76,7 +76,7 @@ pub fn parse_template_body(body: String, base: usize, file_id: i32, alloc: &Allo
     diags: &List(Diagnostic)) List(TemplateNode) {
     let lx = lexer(body, Some(alloc))
     const tokens = lx.tokenize()
-    let p = parser(tokens, Some(alloc))
+    let p = parser(tokens, body, Some(alloc))
     p.set_file_id(file_id)
     let tp: TemplateParser = .{
         body = body,
@@ -188,7 +188,7 @@ fn parse_nodes(self: &TemplateParser, start: usize, out: &List(TemplateNode)) us
 fn parse_interpolation(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
     self.flush_verbatim(self.tokens[i].offset, out)
     self.parser.seek(i + 2)
-    const cst = self.parser.parse_expression()
+    const cst = self.parser.tree.node_at(self.parser.parse_expression())
     const e = project_expression(cst, self.file_id, self.alloc)
     let j = self.parser.token_index()
     if self.kind_at(j) != TokenKind.CloseParenthesis {
@@ -214,7 +214,7 @@ fn parse_for(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
         return i + 3
     }
     self.parser.seek(i + 4)
-    const cst = self.parser.parse_condition_expression()
+    const cst = self.parser.tree.node_at(self.parser.parse_condition_expression())
     const iterable = project_expression(cst, self.file_id, self.alloc)
     let body: List(TemplateNode) = list(0, Some(self.alloc))
     const after = self.parse_braced_body(self.parser.token_index(), &body)
@@ -227,7 +227,7 @@ fn parse_for(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
 fn parse_if(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
     self.flush_verbatim(self.tokens[i].offset, out)
     self.parser.seek(i + 2)
-    const cst = self.parser.parse_condition_expression()
+    const cst = self.parser.tree.node_at(self.parser.parse_condition_expression())
     const cond = project_expression(cst, self.file_id, self.alloc)
     let body: List(TemplateNode) = list(0, Some(self.alloc))
     let after = self.parse_braced_body(self.parser.token_index(), &body)
@@ -278,13 +278,13 @@ fn parse_string_holes(self: &TemplateParser, tok: Token, out: &List(TemplateNode
         }
         let lx = lexer(self.body, Some(self.alloc), tok.offset + hole + 2)
         const toks = lx.tokenize()
-        let p = parser(toks, Some(self.alloc))
+        let p = parser(toks, self.body, Some(self.alloc))
         p.set_file_id(self.file_id)
-        const cst = p.parse_expression()
+        const cst = p.tree.node_at(p.parse_expression())
         const e = project_expression(cst, self.file_id, self.alloc)
         let close_end = cst.end
         if p.token_index() < toks.len and toks[p.token_index()].kind == TokenKind.CloseParenthesis {
-            close_end = toks[p.token_index()].offset + 1
+            close_end = (toks[p.token_index()].offset + 1) as u32
         } else {
             self.diags.push(error("E1002", $"expected `)` to close `#(` inside a string literal",
                     .{ file_id = self.file_id, start = self.base + cst.end, length = 0 }))

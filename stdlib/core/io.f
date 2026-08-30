@@ -63,8 +63,12 @@ pub fn println(value: &$T) i32 {
     return println(value.*)
 }
 
+// Fallback for any type with an `append` overload but no `println` of its own. `StringBuilder` is
+// resolved from the CALL SITE (core cannot import std), so a caller reaching this overload must
+// have `std.string_builder` visible.
 pub fn println(value: $T) i32 {
-    const sb: StringBuilder
+    let sb: StringBuilder
+    defer sb.deinit()
     sb.append(value)
     return println(sb.as_view())
 }

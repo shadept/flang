@@ -314,6 +314,17 @@ A contiguous block of `//` lines immediately preceding a declaration is its **do
 pub type Token = struct { ... }
 ```
 
+**Shape.** The same shape Javadoc, rustdoc, pydoc and XML doc comments settled on, written in plain `//` lines — there are no `@param`-style tags and no tool parses sections out:
+
+1. A one-line summary, in the third person (`Creates an owned copy of a string view.`).
+2. A blank `//`, then the behaviour a caller needs: what it does to its arguments, what it allocates, what it consumes.
+3. A `- \`name\`:` bullet per parameter whose contract is not obvious from its type — edge cases, ownership, what null means. Skip parameters that need nothing said.
+4. What it returns, who owns it, and what it panics on.
+
+Short items collapse: a total function with a self-evident signature is entitled to a single summary line, and that is the common case. Write the sections a reader would otherwise have to read the body to learn.
+
+**Do not** narrate the implementation's history (why an earlier approach was replaced — that is the commit message's job), restate the signature, or repeat conventions that hold everywhere in the tree (a null `&Allocator?` meaning the global allocator is only worth a line where the choice has a consequence, as it does when the result outlives the call).
+
 A blank line between the comment block and the declaration breaks the attachment — that comment becomes a free-floating note. Trailing comments after the same-line declaration are not doc comments.
 
 Surfaced by:

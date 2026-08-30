@@ -38,6 +38,7 @@ import flang_core.span
 import flang_parser.ast
 import flang_parser.comptime
 import flang_parser.lexer
+import flang_parser.cst
 import flang_parser.parser
 import flang_parser.projector
 import flang_typer.type
@@ -210,12 +211,10 @@ pub type Checker = struct {
     // element-wise deinit away from the AST-arena-owned list buffer (no-op fallback, like
     // GenericTemplate).
     fn_decl_params: Dict(u32, DeclParams)
-    // Anonymous record types (`struct { … }` in type position, an
-    // unpinned `.{ … }` literal), interned by their structural key so one
-    // shape is one registry entry. `anon_keys` owns the key buffers the dict's `String` views point
-    // into.
-    anon_structs: Dict(String, NominalId)
-    anon_keys: List(OwnedString)
+    // Anonymous record types (`struct { … }` in type position, an unpinned `.{ … }` literal), one
+    // registry entry per shape. Keyed by the record `Ty` the interner already canonicalises for
+    // that shape, so field names and field types both count and nothing has to be rendered.
+    anon_structs: Dict(Ty, NominalId)
     // Re-entrancy depth of default materialization: a default expression whose own call omits
     // defaults recurses through `check_expr`; a self-referential default would recurse forever, so
     // cap it.
@@ -597,7 +596,6 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         fn_stack = list(0, allocator),
         fn_decl_params = dict(allocator),
         anon_structs = dict(allocator),
-        anon_keys = list(0, allocator),
         default_depth = 0usize,
         defer_depth = 0usize,
         alias_stack = list(0, allocator),
@@ -667,7 +665,6 @@ pub fn begin_demand(self: &Checker) {
     let decl_params = self.fn_decl_params
     let deprecations = self.fn_deprecations
     let anons = self.anon_structs
-    let anon_keys = self.anon_keys
     let recycled = self.recycled
     let nom_diags = self.nominal_diags
     let nom_diag_keys = self.nominal_diag_keys
@@ -686,7 +683,6 @@ pub fn begin_demand(self: &Checker) {
     self.fn_decl_params = dict(self.allocator)
     self.fn_deprecations = dict(self.allocator)
     self.anon_structs = dict(self.allocator)
-    self.anon_keys = list(0, self.allocator)
     self.recycled = dict(self.allocator)
     self.nominal_diags = dict(self.allocator)
     self.nominal_diag_keys = list(0, self.allocator)
@@ -705,7 +701,6 @@ pub fn begin_demand(self: &Checker) {
     next.fn_decl_params = decl_params
     next.fn_deprecations = deprecations
     next.anon_structs = anons
-    next.anon_keys = anon_keys
     next.recycled = recycled
     next.nominal_diags = nom_diags
     next.nominal_diag_keys = nom_diag_keys
@@ -816,7 +811,6 @@ pub fn deinit(self: &Checker) {
     self.fn_deprecations.deinit()
     self.fn_decl_params.deinit()
     self.anon_structs.deinit()
-    self.anon_keys.deinit()
     self.sig_tps.deinit()
     self.tp_names.deinit()
     self.pending_specs.deinit()
@@ -892,34 +886,24 @@ fn resolve_anon_struct_type(self: &Checker, a: &AnonStructType) Ty {
 
 // Intern an anonymous record as a synthesized nominal, keyed by its exact structure: two spellings
 // of the same record are ONE registry entry, so layout, member access and lowering all take the
-// ordinary nominal path. The reference keeps these as structural `NominalType`s named
-// `__anon_<fields>`; this registry is FQN-indexed, so the key carries the field TYPES too - without
-// them `struct { v: i32 }` and `struct { v: String }` would collide on one definition.
+// ordinary nominal path.
+//
+// The key is the record `Ty` the interner canonicalises for those fields, which already counts
+// field types as well as names - without the types `struct { v: i32 }` and `struct { v: String }`
+// would collide on one definition.
 fn anon_struct_ty(self: &Checker, fields: List(Field), span: SourceSpan) Ty {
-    let sb = string_builder(64, self.allocator)
-    sb.append("__anon{")
-    for i in 0..fields.len {
-        if i > 0 {
-            sb.append(",")
-        }
-        sb.append(fields[i].name)
-        sb.append(":")
-        sb.append(self.engine.interner.key_of(fields[i].ty))
-    }
-    sb.append("}")
-    const key = sb.to_string()
+    const key = self.engine.interner.record_of(&fields)
 
     let no_args: List(Ty) = list(0, self.allocator)
-    let found = self.anon_structs.get(key.as_view())
+    let found = self.anon_structs.get(key)
     if found.is_some() {
         const id = found.unwrap()
-        key.deinit()
         fields.deinit()
         return mk_nominal(self, id, no_args)
     }
 
-    // The registry FQN is a bare counter, NOT the structural key: the key carries `{`, `:` and `,`,
-    // which no C identifier mangling survives. Interning happens through `anon_structs` instead.
+    // The registry FQN is a bare counter, not the structure: no rendering of a record shape
+    // survives C identifier mangling. Interning happens through `anon_structs` instead.
     let empty_tps: List(VarId) = list(0, self.allocator)
     let nid = self.nominals.register(NominalDef.NomStruct(StructDef {
         fqn = "",
@@ -932,9 +916,7 @@ fn anon_struct_ty(self: &Checker, fields: List(Field), span: SourceSpan) Ty {
         is_simd = false,
         is_foreign = false,
     }), $"__anon_{self.nominals.next_id}")
-    let idx = self.anon_keys.len
-    self.anon_keys.push(key)
-    self.anon_structs.set(self.anon_keys[idx].as_view(), nid)
+    self.anon_structs.set(key, nid)
     return mk_nominal(self, nid, no_args)
 }
 
@@ -9287,11 +9269,10 @@ fn visit_sequence(self: &Checker, n: usize, order: &List(usize)?) List(usize) {
 fn parse_src(src: String, fid: i32) Module {
     let lx = lexer(src)
     let tokens = lx.tokenize()
-    let p = parser(tokens)
-    let cst = p.parse_module()
+    let p = parser(tokens, src)
+    let cst = p.tree.node_at(p.parse_module())
     let m = project_module(cst, fid)
     p.deinit()
-    tokens.deinit()
     return m
 }
 

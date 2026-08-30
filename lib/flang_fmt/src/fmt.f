@@ -229,10 +229,10 @@ pub fn format_source(source: String, cfg: &FmtConfig) Result(OwnedString, FmtErr
 fn format_once(source: String, cfg: &FmtConfig) Result(OwnedString, FmtError) {
     let lx = lexer(source)
     let tokens = lx.tokenize()
-    defer tokens.deinit()
-    let p = parser(tokens)
+    // `parser` takes the token list into its `Cst`; `p.deinit()` frees both.
+    let p = parser(tokens, source)
     defer p.deinit()
-    const cst = p.parse_module()
+    const cst = p.tree.node_at(p.parse_module())
 
     const parse_errors = p.diagnostics.len
     if parse_errors > 0 {
@@ -243,7 +243,7 @@ fn format_once(source: String, cfg: &FmtConfig) Result(OwnedString, FmtError) {
     const out = normalize(raw_owned.as_view(), source, cfg)
     raw_owned.deinit()
 
-    if !verify_output(&tokens, &cst, out.as_view()) {
+    if !verify_output(&p.tree.tokens, &cst, out.as_view()) {
         out.deinit()
         return Err(FmtError.VerifyFailed)
     }
@@ -311,6 +311,21 @@ type Renderer = struct {
     // = -1`).
     prev_prefix: bool
     prev_parent: NodeKind
+    // Trivia is not stored on tokens; it is the source between them.
+    //
+    // `prev_end` is where the last emitted token's TRAILING trivia stopped, so a token's leading
+    // trivia is [prev_end, tok.offset). Emitting leading before the token's text and trailing after
+    // it is not cosmetic: guards like the `OpenBrace` one in the forced-children walk read
+    // `pending_newlines` immediately after `render_token` and expect the newline that follows the
+    // token to have been counted already.
+    //
+    // `tokens` and `tok_index` exist only to find where the NEXT token starts, which bounds the
+    // trailing scan. That bound is load-bearing: inside an interpolated string the bytes after a
+    // hole's `}` belong to the segment token, and an unbounded scan would emit them as trivia too.
+    source: String
+    tokens: &List(Token)
+    tok_index: usize
+    prev_end: usize
 }
 
 fn render_module(cst: &CstNode, cfg: &FmtConfig) OwnedString {
@@ -330,6 +345,10 @@ fn render_module(cst: &CstNode, cfg: &FmtConfig) OwnedString {
         prev_kind = TokenKind.Eof,
         prev_prefix = false,
         prev_parent = NodeKind.Module,
+        source = cst.cst.source,
+        tokens = &cst.cst.tokens,
+        tok_index = 0,
+        prev_end = 0,
     }
     render_node(&r, cst, NodeKind.Module)
     flush_line(&r)
@@ -358,8 +377,8 @@ fn render_node(r: &Renderer, node: &CstNode, parent: NodeKind) {
         render_block(r, node, false)
         return
     }
-    for i in 0..node.children.len {
-        const child = node.children[i]
+    for i in 0..node.child_count() {
+        const child = node.child(i)
         child match {
             NodeChild(inner) => {
                 render_node(r, &inner, node.kind)
@@ -369,15 +388,15 @@ fn render_node(r: &Renderer, node: &CstNode, parent: NodeKind) {
                 if tok.kind == TokenKind.Semicolon and r.cfg.remove_semicolons
                     and is_statement_kind(node.kind) {
                     // A statement separator becomes the line break it stood in for.
-                    skip_token_keep_trivia(r, &tok)
+                    skip_token_keep_trivia(r, tok)
                     if r.pending_newlines == 0 {
                         r.pending_newlines = 1
                     }
                 } else if tok.kind == TokenKind.Comma and skip_comma(r, node, i) {
-                    skip_token_keep_trivia(r, &tok)
+                    skip_token_keep_trivia(r, tok)
                 } else {
-                    maybe_insert_trailing_comma(r, node, &tok)
-                    render_token(r, &tok, node.kind)
+                    maybe_insert_trailing_comma(r, node, tok)
+                    render_token(r, tok, node.kind)
                 }
             }
         }
@@ -394,8 +413,8 @@ fn is_statement_kind(kind: NodeKind) bool {
 // `if c { a } else { b }` may stay. Chained `else if`s inherit the chain head's position.
 fn render_if(r: &Renderer, node: &CstNode, stmt_pos: bool) {
     let has_else = false
-    for i in 0..node.children.len {
-        node.children[i] match {
+    for i in 0..node.child_count() {
+        node.child(i) match {
             TokenChild(t) => { if t.kind == TokenKind.Else {
                     has_else = true
                 } }
@@ -407,8 +426,8 @@ fn render_if(r: &Renderer, node: &CstNode, stmt_pos: bool) {
         force = if has_else { r.cfg.ml_if_else_stmt } else { r.cfg.ml_if_stmt }
     }
 
-    for i in 0..node.children.len {
-        const child = node.children[i]
+    for i in 0..node.child_count() {
+        const child = node.child(i)
         child match {
             NodeChild(inner) => {
                 if inner.kind == NodeKind.BlockExpr {
@@ -419,7 +438,7 @@ fn render_if(r: &Renderer, node: &CstNode, stmt_pos: bool) {
                     render_node(r, &inner, node.kind)
                 }
             }
-            TokenChild(tok) => render_token(r, &tok, node.kind)
+            TokenChild(tok) => render_token(r, tok, node.kind)
         }
     }
 }
@@ -432,15 +451,15 @@ fn render_block(r: &Renderer, node: &CstNode, force: bool) {
         f = false
     }
 
-    for i in 0..node.children.len {
-        const child = node.children[i]
+    for i in 0..node.child_count() {
+        const child = node.child(i)
         child match {
             NodeChild(inner) => render_node(r, &inner, node.kind)
             TokenChild(tok) => {
                 if tok.kind == TokenKind.CloseBrace and f and r.pending_newlines == 0 {
                     r.pending_newlines = 1
                 }
-                render_token(r, &tok, node.kind)
+                render_token(r, tok, node.kind)
                 if tok.kind == TokenKind.OpenBrace and f and r.pending_newlines == 0 {
                     r.pending_newlines = 1
                 }
@@ -451,8 +470,8 @@ fn render_block(r: &Renderer, node: &CstNode, force: bool) {
 
 // True when any direct statement of the block ends in a `;` token.
 fn block_has_semicolon(node: &CstNode) bool {
-    for i in 0..node.children.len {
-        const child = node.children[i]
+    for i in 0..node.child_count() {
+        const child = node.child(i)
         const has = child match {
             NodeChild(stmt) => stmt_has_semicolon(&stmt)
             TokenChild(_) => false
@@ -468,8 +487,8 @@ fn stmt_has_semicolon(stmt: &CstNode) bool {
     if !is_statement_kind(stmt.kind) {
         return false
     }
-    for i in 0..stmt.children.len {
-        const is_semi = stmt.children[i] match {
+    for i in 0..stmt.child_count() {
+        const is_semi = stmt.child(i) match {
             TokenChild(t) => t.kind == TokenKind.Semicolon
             NodeChild(_) => false
         }
@@ -545,7 +564,7 @@ fn maybe_insert_trailing_comma(r: &Renderer, node: &CstNode, tok: &Token) {
     if !r.started or r.line_has_comment {
         return
     }
-    if r.pending_newlines == 0 and !trivia_have_newline(tok.leading) {
+    if r.pending_newlines == 0 and !leading_has_newline(r, tok) {
         return
     }
     if r.prev_kind == TokenKind.Comma {
@@ -568,7 +587,7 @@ fn maybe_insert_separator(r: &Renderer, node: &CstNode, i: usize) {
     if !is_separator_body(node.kind) {
         return
     }
-    const child = node.children[i]
+    const child = node.child(i)
     const elem = child match {
         NodeChild(n) => n.kind == NodeKind.StructField or n.kind == NodeKind.EnumVariant
             or n.kind == NodeKind.MatchArm
@@ -591,12 +610,8 @@ fn maybe_insert_separator(r: &Renderer, node: &CstNode, i: usize) {
 
 // Emit a skipped token's comments and newlines without the token itself.
 fn skip_token_keep_trivia(r: &Renderer, tok: &Token) {
-    for i in 0..tok.leading.len {
-        handle_trivia(r, &tok.leading[i])
-    }
-    for i in 0..tok.trailing.len {
-        handle_trivia(r, &tok.trailing[i])
-    }
+    emit_leading(r, tok)
+    emit_trailing(r, tok)
 }
 
 fn is_tuple_kind(kind: NodeKind) bool {
@@ -605,8 +620,8 @@ fn is_tuple_kind(kind: NodeKind) bool {
 
 fn element_count(node: &CstNode) usize {
     let n: usize = 0
-    for i in 0..node.children.len {
-        node.children[i] match {
+    for i in 0..node.child_count() {
+        node.child(i) match {
             NodeChild(_) => { n = n + 1 }
             TokenChild(_) => {}
         }
@@ -651,10 +666,10 @@ fn is_separator_body(kind: NodeKind) bool {
 }
 
 fn next_child_is(node: &CstNode, i: usize, kind: TokenKind) bool {
-    if i + 1 >= node.children.len {
+    if i + 1 >= node.child_count() {
         return false
     }
-    return node.children[i + 1] match {
+    return node.child(i + 1) match {
         TokenChild(t) => t.kind == kind
         NodeChild(_) => false
     }
@@ -662,48 +677,73 @@ fn next_child_is(node: &CstNode, i: usize, kind: TokenKind) bool {
 
 // True when a line break sits between child `i` and whatever follows it.
 fn newline_after_child(node: &CstNode, i: usize) bool {
-    const last = last_token_of(&node.children[i])
-    if last.is_some() {
-        if trivia_have_newline(last.unwrap().trailing) {
-            return true
-        }
+    const last = last_token_of(&node.child(i))
+    if last.is_none() or i + 1 >= node.child_count() {
+        return false
     }
-    if i + 1 < node.children.len {
-        const next = first_token_of(&node.children[i + 1])
-        if next.is_some() {
-            if trivia_have_newline(next.unwrap().leading) {
-                return true
-            }
-        }
+    const next = first_token_of(&node.child(i + 1))
+    if next.is_none() {
+        return false
     }
-    return false
+    // Whatever sits between the two tokens is trivia by construction, so the question is only
+    // whether a newline is in there - which side of the split it fell on does not matter.
+    const l = last.unwrap()
+    return spans_newline(node.cst.source, l.offset + l.text.len, next.unwrap().offset)
 }
 
-fn trivia_have_newline(pieces: Trivia[]) bool {
-    for i in 0..pieces.len {
-        const t = pieces[i]
-        const is_ws = t.kind match {
-            Whitespace => true
-            LineComment => false
+// Emit every piece of trivia between the last token and this one, in order.
+//
+// The leading/trailing split is not reconstructed: `handle_trivia` counts newlines and spaces
+// inside a run and never looks at run boundaries, so one bounded walk of the whole gap produces
+// exactly the output the two separate slices did. The split survives only where it changes an
+// answer - see `leading_has_newline`.
+fn walk_trivia(r: &Renderer, from: usize, to: usize) {
+    let it = trivia_in(r.source, from, to)
+    loop {
+        const t = it.next()
+        if t.is_none() {
+            break
         }
-        if !is_ws {
-            continue
-        }
-        for j in 0..t.text.len {
-            if t.text[j] == '\n' {
-                return true
-            }
-        }
+        const piece = t.unwrap()
+        handle_trivia(r, &piece)
     }
-    return false
+}
+
+// Where the token after `tok` starts, bounding how far its trailing trivia may reach. Tokens are
+// visited in source order, so the cursor steps forward rather than searching.
+fn next_token_start(r: &Renderer, tok: &Token) usize {
+    while r.tok_index < r.tokens.len and r.tokens[r.tok_index].offset < tok.offset {
+        r.tok_index = r.tok_index + 1
+    }
+    if r.tok_index + 1 < r.tokens.len {
+        return r.tokens[r.tok_index + 1].offset
+    }
+    return r.source.len
+}
+
+fn emit_leading(r: &Renderer, tok: &Token) {
+    walk_trivia(r, r.prev_end, tok.offset)
+}
+
+fn emit_trailing(r: &Renderer, tok: &Token) {
+    const end = tok.offset + tok.text.len
+    const split = trailing_end(r.source, end, next_token_start(r, tok))
+    walk_trivia(r, end, split)
+    r.prev_end = split
+}
+
+// Whether a newline sits in `tok`'s LEADING trivia - after the newline that ended the previous
+// token's line, not counting it. This is the one place the split still matters.
+fn leading_has_newline(r: &Renderer, tok: &Token) bool {
+    return spans_newline(r.source, r.prev_end, tok.offset)
 }
 
 fn first_token_of(child: &CstChild) Token? {
     child.* match {
-        TokenChild(t) => return Some(t)
+        TokenChild(t) => return Some(t.*)
         NodeChild(n) => {
-            for i in 0..n.children.len {
-                const found = first_token_of(&n.children[i])
+            for i in 0..n.child_count() {
+                const found = first_token_of(&n.child(i))
                 if found.is_some() {
                     return found
                 }
@@ -715,12 +755,12 @@ fn first_token_of(child: &CstChild) Token? {
 
 fn last_token_of(child: &CstChild) Token? {
     child.* match {
-        TokenChild(t) => return Some(t)
+        TokenChild(t) => return Some(t.*)
         NodeChild(n) => {
-            let i = n.children.len
+            let i = n.child_count()
             while i > 0 {
                 i = i - 1
-                const found = last_token_of(&n.children[i])
+                const found = last_token_of(&n.child(i))
                 if found.is_some() {
                     return found
                 }
@@ -731,9 +771,7 @@ fn last_token_of(child: &CstChild) Token? {
 }
 
 fn render_token(r: &Renderer, tok: &Token, parent: NodeKind) {
-    for i in 0..tok.leading.len {
-        handle_trivia(r, &tok.leading[i])
-    }
+    emit_leading(r, tok)
     if tok.kind == TokenKind.Eof {
         return
     }
@@ -774,9 +812,7 @@ fn render_token(r: &Renderer, tok: &Token, parent: NodeKind) {
     r.prev_parent = parent
     r.started = true
 
-    for i in 0..tok.trailing.len {
-        handle_trivia(r, &tok.trailing[i])
-    }
+    emit_trailing(r, tok)
 }
 
 // Whether the pending line break may be re-flowed into a space, leaving `max_width` to decide the
@@ -1153,16 +1189,15 @@ fn is_binary_op(kind: TokenKind) bool {
 // the code means can never survive.
 fn verify_output(tokens: &List(Token), cst: &CstNode, output: String) bool {
     let lx = lexer(output)
-    let out_tokens = lx.tokenize()
-    defer out_tokens.deinit()
-    let p = parser(out_tokens)
+    // `parser` takes the list into its `Cst`; read it back from there and let `p.deinit()` free it.
+    let p = parser(lx.tokenize(), output)
     defer p.deinit()
-    const out_cst = p.parse_module()
+    const out_cst = p.tree.node_at(p.parse_module())
     if p.diagnostics.len > 0 {
         return false
     }
 
-    if !same_tokens_modulo_separators(tokens, &out_tokens) {
+    if !same_tokens_modulo_separators(tokens, &p.tree.tokens) {
         return false
     }
     return same_shape(cst, &out_cst)
@@ -1202,17 +1237,17 @@ fn same_shape(a: &CstNode, b: &CstNode) bool {
     let i = 0usize
     let j = 0usize
     loop {
-        while i < a.children.len and is_comma_child(&a.children[i]) { i = i + 1 }
-        while j < b.children.len and is_comma_child(&b.children[j]) { j = j + 1 }
-        if i >= a.children.len or j >= b.children.len {
+        while i < a.child_count() and is_comma_child(&a.child(i)) { i = i + 1 }
+        while j < b.child_count() and is_comma_child(&b.child(j)) { j = j + 1 }
+        if i >= a.child_count() or j >= b.child_count() {
             break
         }
-        const ok = a.children[i] match {
-            NodeChild(xn) => b.children[j] match {
+        const ok = a.child(i) match {
+            NodeChild(xn) => b.child(j) match {
                 NodeChild(yn) => same_shape(&xn, &yn)
                 TokenChild(_) => false
             }
-            TokenChild(xt) => b.children[j] match {
+            TokenChild(xt) => b.child(j) match {
                 NodeChild(_) => false
                 TokenChild(yt) => xt.kind == yt.kind and xt.text == yt.text
             }
@@ -1223,7 +1258,7 @@ fn same_shape(a: &CstNode, b: &CstNode) bool {
         i = i + 1
         j = j + 1
     }
-    return i >= a.children.len and j >= b.children.len
+    return i >= a.child_count() and j >= b.child_count()
 }
 
 fn is_comma_child(child: &CstChild) bool {

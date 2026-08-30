@@ -23,6 +23,7 @@ import flang_core.span
 import flang_parser.ast
 import flang_parser.comptime
 import flang_parser.lexer
+import flang_parser.cst
 import flang_parser.parser
 import flang_parser.projector
 import flang_parser.template
@@ -453,16 +454,15 @@ fn report_unknown_types(chk: &Checker, state: &TemplateState, paths: &List(Strin
 fn parse_chunk(chk: &Checker, text: String, file_id: i32) Module {
     let lx = lexer(text, chk.allocator)
     let tokens = lx.tokenize()
-    let p = parser(tokens, chk.allocator)
+    let p = parser(tokens, text, chk.allocator)
     p.set_file_id(file_id)
-    const cst = p.parse_module()
+    const cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, file_id, chk.allocator)
     flatten_module_decls(&module, &chk.comptime, &chk.diagnostics, chk.allocator)
     const taken = p.diagnostics.to_owned_slice()
     for &d in taken.0 { chk.diagnostics.push(error(d.code, d.message, d.span)) }
     taken.1.free(taken.0)
     p.deinit()
-    tokens.deinit()
     return module
 }
 

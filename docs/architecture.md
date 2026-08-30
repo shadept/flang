@@ -174,14 +174,69 @@ have no node of their own. Both spans are metadata, outside a type
 node's identity, so two records that differ only in where they were
 written are still one type.
 
+**CST storage.** The CST is struct-of-arrays: one `Cst` owns `nodes`,
+`tokens` and one flat `children` array, and a node names its children as a
+`ChildSpan` window into that array. A stored node is 20 bytes and a stored
+child 8 (an index plus which array it indexes); the token list is *moved* in
+from the lexer rather than copied, so a caller that hands tokens to `parser()`
+must not free them itself. Consumers walk with `CstNode`, a stack cursor
+carrying the stored record plus a `&Cst`, so `kind`/`start`/`end` read as
+fields and children come from `child_count()` / `child(i)`.
+
+The previous shape gave every node its own `List(CstChild)` — one heap
+allocation per node — and stored children by value, so parsing copied every
+token out of the lexer's array and every finished node into its parent's list.
+On the compiler corpus that was 220,513 allocations and 407,353 token copies;
+the flat form is three allocations per module, halves lex+parse peak memory
+(19.7 MB to 8.4 MB) and cuts allocation count by 52%. It also settles
+ownership — see the known-issues entry.
+
+**Trivia is derived, not stored.** A `Token` is 32 bytes - kind, `text`, `offset` - and owns
+nothing. Whitespace and comments used to hang off it as two owned `Trivia[]` slices plus the
+allocator to free them: 40 of the token's 80 bytes, and a heap allocation per token, recording
+views into a buffer that is kept alive anyway. Every byte between one token's text and the next IS
+trivia by construction, so `trivia.f` walks it on demand (`trivia_in`, `trailing_end`,
+`spans_newline`) and `Cst` exposes `token_leading` / `token_trailing`. `Token.line` went the same
+way - the formatter and folding ranges count newlines as they walk, and the diagnostic path already
+builds a `LineIndex`.
+
+Two rules make the derivation correct. Every walk is **bounded by the next token's offset**: inside
+an interpolated string the bytes after a hole's `}` belong to the segment token, not to the gap, so
+an unbounded scan emits them twice. And a consumer must emit a token's **leading trivia before its
+text and trailing after**, because the formatter reads `pending_newlines` immediately after a token
+and expects the newline that follows it to be counted already. `trailing_end` is the split point:
+at most one run of horizontal whitespace, one line comment, one newline.
+
+On the compiler corpus this takes lex+parse from 509,347 allocations to 2,229 (243,408 of them were
+trivia slices), churn from 299 MB to 62 MB, and lexing 36% faster. The losslessness invariant is
+unchanged - concatenating leading + text + trailing over every token still reproduces the source
+byte-for-byte - it is simply no longer materialised.
+
+**AST arenas.** Each `Module` owns an `ArenaAllocator` holding its whole
+AST, released in one bulk free (`ast.f`). Arena pages grow geometrically -
+the first is `page_size` (4 KB), each subsequent page doubles up to
+`ARENA_MAX_PAGE_SIZE` (128 KB). A fixed page size cannot serve both ends:
+4 KB pages waste a fraction of every page and cost one `malloc` per page,
+while a large fixed page wastes most of the only page a small module ever
+allocates. On a compiler self-check the growth curve cuts end-of-page slack
+from 32 MB to 11 MB and page allocations from 33,181 to 1,778, while a
+module small enough to fit one page still costs 4 KB.
+
 **Interned types (RFC-024).** In the self-hosted checker `Ty` is a
 4-byte handle (`pub type Ty = u32`) into a `TypeInterner` - one `TyNode`
 per distinct type, children as handles sliced out of one flat array,
-identity by canonical rendering. `Void`, `Never`, `Error` and the 14
+identity by structure. `Void`, `Never`, `Error` and the 14
 primitives hold fixed ids (`type.f`), so the common leaves never hash.
 Consequences:
 
 - `a == b` on handles IS type equality; there is no structural `equals`.
+- The lookup key is `TyKey`, a fixed-size struct with `#derive(eq, hash)`,
+  so `Dict` settles collisions itself and interning allocates nothing on a
+  hit. Variable-arity children do not fit a fixed struct, so a child
+  sequence is interned separately as a cons chain and enters the key as one
+  id; those ids live in their own space and never escape `interner.f`.
+  Record fields carry a name and get their own cell type and dict, so the
+  common lists do not pay for a `String` they never use.
 - Consumers match shapes via `interner.node(t)`; diagnostics render via
   `interner.format`. A `Var` node keys on (id, level) because
   `generalize`'s free-variable walk reads levels off the node.

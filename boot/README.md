@@ -14,7 +14,7 @@ Cold start:
 That produces `flang-seed`, a full FLang compiler. It then builds the current
 sources (stage 1), which build themselves again (stage 2):
 
-    cd ../../bootstrap
+    cd ../../compiler
     ../boot/<target>/flang-seed build -r -s ../stdlib     # stage 1
     build/flang build -r -s ../stdlib                     # stage 2
 

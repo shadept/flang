@@ -443,19 +443,30 @@ type ArenaPage = struct {
     offset: usize
 }
 
+// Pages grow geometrically: `page_size` is the FIRST page's size and each subsequent page doubles,
+// up to `ARENA_MAX_PAGE_SIZE`. A short-lived arena that allocates once costs one small page, while
+// a long one stops paying end-of-page slack after a handful of pages. A fixed page size cannot have
+// both - small pages waste a fraction of every page, large pages waste most of the only page.
 pub type ArenaAllocator = struct {
     backing: &Allocator
     page_size: usize
+    // Size of the next page to allocate; doubles per page, capped.
+    next_size: usize
     first_page: &ArenaPage?
     current_page: &ArenaPage?
 }
+
+pub const ARENA_MAX_PAGE_SIZE: usize = 131072
 
 pub const DEFAULT_ARENA_PAGE_SIZE: usize = 4096
 
 fn arena_new_page(state: &ArenaAllocator, min_size: usize) &ArenaPage? {
     const header_size = size_of(ArenaPage)
     const needed = min_size + header_size
-    const total = align_up(needed, state.page_size)
+    const total = align_up(needed, state.next_size)
+    if state.next_size < ARENA_MAX_PAGE_SIZE {
+        state.next_size = state.next_size * 2
+    }
 
     const raw = state.backing.alloc(total, 8)?
     const page = raw.ptr as &ArenaPage
@@ -537,6 +548,7 @@ pub fn arena_allocator(backing: &Allocator, page_size: usize = 4096) ArenaAlloca
     return .{
         backing = backing,
         page_size = page_size,
+        next_size = page_size,
         first_page = null,
         current_page = null,
     }
@@ -558,6 +570,43 @@ pub fn deinit(state: &ArenaAllocator) {
     state.current_page = null
 }
 
+// Bytes held across every page, headers included - what the arena took from its backing allocator,
+// not what callers asked for.
+pub fn capacity_bytes(state: &ArenaAllocator) usize {
+    const header_size = size_of(ArenaPage)
+    let total: usize = 0
+    let page = state.first_page
+    while page.is_some() {
+        const p = page.unwrap()
+        total = total + p.size + header_size
+        page = p.next
+    }
+    return total
+}
+
+// Bytes actually handed out, headers and end-of-page slack excluded. Against `capacity_bytes` this
+// is the arena's packing efficiency.
+pub fn used_bytes(state: &ArenaAllocator) usize {
+    let total: usize = 0
+    let page = state.first_page
+    while page.is_some() {
+        const p = page.unwrap()
+        total = total + p.offset
+        page = p.next
+    }
+    return total
+}
+
+pub fn page_count(state: &ArenaAllocator) usize {
+    let n: usize = 0
+    let page = state.first_page
+    while page.is_some() {
+        n = n + 1
+        page = page.unwrap().next
+    }
+    return n
+}
+
 // Reset all pages to offset 0 - keeps pages allocated for reuse.
 pub fn reset(state: &ArenaAllocator) {
     let page = state.first_page
@@ -567,6 +616,15 @@ pub fn reset(state: &ArenaAllocator) {
         page = p.next
     }
     state.current_page = state.first_page
+    state.next_size = state.page_size
+    let p2 = state.first_page
+    while p2.is_some() {
+        const pp = p2.unwrap()
+        if state.next_size < ARENA_MAX_PAGE_SIZE {
+            state.next_size = state.next_size * 2
+        }
+        p2 = pp.next
+    }
 }
 
 pub fn allocator(state: &ArenaAllocator) Allocator {

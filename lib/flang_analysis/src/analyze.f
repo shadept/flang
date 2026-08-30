@@ -59,8 +59,8 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
 
     let lx = lexer(src, allocator)
     let tokens = lx.tokenize()
-    let p = parser(tokens, allocator)
-    const cst = p.parse_module()
+    let p = parser(tokens, src, allocator)
+    const cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, 0i32, allocator)
 
     // Decl-level #if resolves once, before anything walks the decls: only the active branch's
@@ -72,7 +72,6 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
     // Module exists. Drain parse diagnostics first so they survive `p.deinit()`.
     drain_diagnostics(&diagnostics, &p.diagnostics)
     p.deinit()
-    tokens.deinit()
 
     // A file that didn't parse is not type-checked.
     let checked = count_errors(&diagnostics) == 0
@@ -126,9 +125,9 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
 //
 // Only declaration-level allowance exists. A single site inside a long function is suppressed by
 // naming the code on the enclosing declaration, which is the granularity every current caller
-// wants; a statement-level form arrives when one does not.
-// The survivors, in order. `diags` is left empty: every diagnostic either moved into the result or
-// was freed here, and the old backing buffer is released the way `drain_diagnostics` releases one.
+// wants; a statement-level form arrives when one does not. The survivors, in order. `diags` is left
+// empty: every diagnostic either moved into the result or was freed here, and the old backing
+// buffer is released the way `drain_diagnostics` releases one.
 pub fn filter_allowed(diags: &List(Diagnostic), module: &Module,
     alloc: &Allocator? = null) List(Diagnostic) {
     const taken = diags.to_owned_slice()
@@ -760,14 +759,12 @@ fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List
     alloc: &Allocator?) Module {
     let lx = lexer(src, alloc)
     let tokens = lx.tokenize()
-    let p = parser(tokens, alloc)
-    let cst = p.parse_module()
+    let p = parser(tokens, src, alloc)
+    let cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, file_id, alloc)
     flatten_module_decls(&module, target, diags, alloc)
     drain_diagnostics(diags, &p.diagnostics)
     p.deinit()
-    tokens.deinit()
-    cst.free_cst()
     return module
 }
 

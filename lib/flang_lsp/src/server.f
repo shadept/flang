@@ -316,6 +316,13 @@ fn encode_diag(e: &Encoder, idx: &LineIndex, text: String, d: &Diagnostic, enc: 
 // One publishDiagnostics notification for `uri`. A diagnostic without a location (none_span keeps
 // start = 0) lands at the top of the file rather than being hidden.
 fn publish_file_diags(self: &LspServer, uri: String, text: String, diags: &List(Diagnostic)) {
+    // ponytail: rebuilds a LineIndex per call, so one analysis costs one full scan of every
+    // project-origin file (125 of them for the compiler) just to publish diagnostics. `Document`
+    // already caches an index for OPEN buffers and invalidates it on change (documents.f), but
+    // `text` here is usually an analyzed `unit.sources` entry with no such home. Upgrade path: a
+    // `List(LineIndex)` on the project parallel to `unit.sources`, rebuilt with the analysis that
+    // replaces them - same invalidation point, no new lifetime. Same fix serves the four other
+    // `line_index(text)` builds in this file.
     let idx = line_index(text)
     defer idx.deinit()
     let sb = string_builder(512)

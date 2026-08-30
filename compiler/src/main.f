@@ -11,6 +11,7 @@
 //
 // fmt runs in-process on lib/flang_fmt; lsp runs in-process on lib/flang_lsp.
 
+import std.allocator
 import std.dict
 import std.env
 import std.list
@@ -29,6 +30,7 @@ import flang_parser.lexer
 import flang_fmt.fmt
 import flang_codegen.backend
 import flang_analysis.analyze
+import flang_typer.interner
 import flang_driver.compile
 import flang_analysis.project
 import flang_analysis.resolver
@@ -679,6 +681,28 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
         const m = $"checked {label} ({unit.modules.len} modules) in {elapsed_ns(opts.start_ns) / 1000000}ms"
         defer m.deinit()
         println(m.as_view())
+        // ponytail: measurement scaffolding for the RFC-024 key rework; drop once the numbers land.
+        if env("FLANG_INTERNER_STATS").is_some() {
+            const st = unit.result.interner.stats_report()
+            defer st.deinit()
+            println(st.as_view())
+            let arenas: usize = 0
+            let arenas_used: usize = 0
+            let pages: usize = 0
+            for &m in unit.modules {
+                arenas = arenas + m.arena.capacity_bytes()
+                arenas_used = arenas_used + m.arena.used_bytes()
+                pages = pages + m.arena.page_count()
+            }
+            let src: usize = 0
+            for &sc in unit.sources {
+                src = src + sc.len
+            }
+            const r = &unit.result
+            const mm = $"memory: arenas={arenas} arenas_used={arenas_used} pages={pages} sources={src} interner={r.interner.capacity_bytes()} node_types={r.node_types.capacity_bytes()} resolved_ops={r.resolved_ops.capacity_bytes()} resolved_targets={r.resolved_targets.capacity_bytes()} instantiated={r.instantiated_types.capacity_bytes()} desugars={r.desugars.capacity_bytes()} default_args={r.default_args.capacity_bytes()} arg_lists={r.arg_lists.capacity_bytes()} receiver_derefs={r.receiver_derefs.capacity_bytes()}"
+            defer mm.deinit()
+            println(mm.as_view())
+        }
         if opts.timings {
             print_timings(unit, 0, 0, 0, elapsed_ns(opts.start_ns))
         }

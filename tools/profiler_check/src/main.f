@@ -22,6 +22,7 @@ import std.env
 import std.option
 import std.profile
 import std.result
+import std.string_builder
 import std.time
 
 const MS: u64 = 1000000

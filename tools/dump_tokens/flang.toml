@@ -6,4 +6,5 @@ source = "src/**/*.f"
 output = "build"
 
 [dependencies]
+flang_core = { path = "../../lib/flang_core" }
 flang_parser = { path = "../../lib/flang_parser" }

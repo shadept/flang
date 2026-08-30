@@ -1,7 +1,7 @@
 // AST → JSON. Consumed by tools/cst_explorer_web's AST pane.
 //
-// Schema: `{ "kind": "Foo", "span": [start, length], ...fields }`.
-// Optional fields are `null` when None. `&T` references are inlined.
+// Schema: `{ "kind": "Foo", "span": [start, length], ...fields }`. Optional fields are `null` when
+// None. `&T` references are inlined.
 
 import std.list
 import std.option
@@ -19,7 +19,9 @@ pub fn ast_to_json(sb: &StringBuilder, module: &Module) {
     emit_span(sb, module.span)
     sb.append(",\"decls\":[")
     for i in 0..module.decls.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         emit_decl(sb, &module.decls[i])
     }
     sb.append("]}")
@@ -41,30 +43,52 @@ fn emit_string(sb: &StringBuilder, s: String) {
     sb.append_byte('"')
     for i in 0..s.len {
         const c = s[i]
-        if c == '"' { sb.append("\\\"") }
-        else if c == '\\' { sb.append("\\\\") }
-        else if c == '\n' { sb.append("\\n") }
-        else if c == '\r' { sb.append("\\r") }
-        else if c == '\t' { sb.append("\\t") }
-        else if c == 0x08 { sb.append("\\b") }
-        else if c == 0x0C { sb.append("\\f") }
+        if c == '"' {
+            sb.append("\\\"")
+        }
+        else if c == '\\' {
+            sb.append("\\\\")
+        }
+        else if c == '\n' {
+            sb.append("\\n")
+        }
+        else if c == '\r' {
+            sb.append("\\r")
+        }
+        else if c == '\t' {
+            sb.append("\\t")
+        }
+        else if c == 0x08 {
+            sb.append("\\b")
+        }
+        else if c == 0x0C {
+            sb.append("\\f")
+        }
         else if c < 0x20 {
             sb.append("\\u00")
             sb.append_byte(json_hex_nibble(c >> 4))
             sb.append_byte(json_hex_nibble(c & 0x0F))
         }
-        else { sb.append_byte(c) }
+        else {
+            sb.append_byte(c)
+        }
     }
     sb.append_byte('"')
 }
 
 fn json_hex_nibble(n: u8) u8 {
-    if n < 10 { return '0' + n }
+    if n < 10 {
+        return '0' + n
+    }
     return 'a' + (n - 10)
 }
 
 fn emit_bool(sb: &StringBuilder, b: bool) {
-    if b { sb.append("true") } else { sb.append("false") }
+    if b {
+        sb.append("true")
+    } else {
+        sb.append("false")
+    }
 }
 
 fn emit_kv_string(sb: &StringBuilder, key: String, value: String) {
@@ -94,14 +118,14 @@ fn emit_kv_usize(sb: &StringBuilder, key: String, value: usize) {
 
 fn emit_decl(sb: &StringBuilder, decl: &Decl) {
     decl.* match {
-        Import(imp) => emit_import_decl(sb, &imp),
-        Function(fn_decl) => emit_function_decl(sb, &fn_decl),
-        Type(td) => emit_type_decl(sb, &td),
-        Const(c) => emit_const_decl(sb, &c),
-        Test(t) => emit_test_decl(sb, &t),
-        GenDef(g) => emit_gen_def(sb, &g),
-        GenInvoke(g) => emit_gen_invoke(sb, &g),
-        IfDirective(d) => emit_if_directive_decl(sb, &d),
+        Import(imp) => emit_import_decl(sb, &imp)
+        Function(fn_decl) => emit_function_decl(sb, &fn_decl)
+        Type(td) => emit_type_decl(sb, &td)
+        Const(c) => emit_const_decl(sb, &c)
+        Test(t) => emit_test_decl(sb, &t)
+        GenDef(g) => emit_gen_def(sb, &g)
+        GenInvoke(g) => emit_gen_invoke(sb, &g)
+        IfDirective(d) => emit_if_directive_decl(sb, &d)
         Error(e) => {
             sb.append("{\"kind\":\"Error\",")
             emit_span(sb, e.span)
@@ -116,7 +140,9 @@ fn emit_import_decl(sb: &StringBuilder, imp: &ImportDecl) {
     emit_kv_bool(sb, "is_pub", imp.is_pub)
     sb.append(",\"path\":[")
     for i in 0..imp.path.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         emit_string(sb, imp.path[i])
     }
     sb.append("]}")
@@ -131,18 +157,20 @@ fn emit_function_decl(sb: &StringBuilder, fn_decl: &FunctionDecl) {
     emit_attributes(sb, &fn_decl.directives)
     sb.append(",\"params\":[")
     for i in 0..fn_decl.params.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         emit_function_param(sb, &fn_decl.params[i])
     }
     sb.append("],\"return_type\":")
     fn_decl.return_type match {
-        Some(rt) => emit_type_expr(sb, &rt),
-        None => sb.append("null"),
+        Some(rt) => emit_type_expr(sb, &rt)
+        None => sb.append("null")
     }
     sb.append(",\"body\":")
     fn_decl.body match {
-        Some(body) => emit_block_expr(sb, &body),
-        None => sb.append("null"),
+        Some(body) => emit_block_expr(sb, &body)
+        None => sb.append("null")
     }
     sb.append("}")
 }
@@ -156,8 +184,8 @@ fn emit_function_param(sb: &StringBuilder, p: &FunctionParam) {
     emit_type_expr(sb, &p.type_expr)
     sb.append(",\"default\":")
     p.default_value match {
-        Some(dv) => emit_expr(sb, &dv),
-        None => sb.append("null"),
+        Some(dv) => emit_expr(sb, &dv)
+        None => sb.append("null")
     }
     sb.append("}")
 }
@@ -165,19 +193,31 @@ fn emit_function_param(sb: &StringBuilder, p: &FunctionParam) {
 fn emit_attributes(sb: &StringBuilder, attrs: &List(DeclAttribute)) {
     sb.append("[")
     for i in 0..attrs.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         attrs[i] match {
-            Foreign => sb.append("{\"kind\":\"Foreign\"}"),
-            Inline => sb.append("{\"kind\":\"Inline\"}"),
-            Intrinsic => sb.append("{\"kind\":\"Intrinsic\"}"),
-            Simd => sb.append("{\"kind\":\"Simd\"}"),
+            Foreign => sb.append("{\"kind\":\"Foreign\"}")
+            Inline => sb.append("{\"kind\":\"Inline\"}")
+            Intrinsic => sb.append("{\"kind\":\"Intrinsic\"}")
+            Simd => sb.append("{\"kind\":\"Simd\"}")
             Deprecated(msg) => {
                 sb.append("{\"kind\":\"Deprecated\",\"message\":")
                 msg match {
-                    Some(m) => emit_string(sb, m),
-                    None => sb.append("null"),
+                    Some(m) => emit_string(sb, m)
+                    None => sb.append("null")
                 }
                 sb.append("}")
+            }
+            Allow(codes) => {
+                sb.append("{\"kind\":\"Allow\",\"codes\":[")
+                for j in 0..codes.len {
+                    if j > 0 {
+                        sb.append(",")
+                    }
+                    emit_string(sb, codes[j])
+                }
+                sb.append("]}")
             }
         }
     }
@@ -203,8 +243,8 @@ fn emit_const_decl(sb: &StringBuilder, c: &ConstDecl) {
     emit_kv_string(sb, "name", c.name)
     sb.append(",\"type\":")
     c.type_annotation match {
-        Some(t) => emit_type_expr(sb, &t),
-        None => sb.append("null"),
+        Some(t) => emit_type_expr(sb, &t)
+        None => sb.append("null")
     }
     sb.append(",\"value\":")
     emit_expr(sb, &c.value)
@@ -228,7 +268,9 @@ fn emit_gen_def(sb: &StringBuilder, g: &GenDef) {
     emit_kv_usize(sb, "body_end", g.body_end)
     sb.append(",\"params\":[")
     for i in 0..g.params.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         sb.append("{\"kind\":\"GenParam\",")
         emit_span(sb, g.params[i].span)
         emit_kv_string(sb, "name", g.params[i].name)
@@ -244,10 +286,28 @@ fn emit_gen_invoke(sb: &StringBuilder, g: &GenInvoke) {
     emit_kv_string(sb, "name", g.name)
     sb.append(",\"args\":[")
     for i in 0..g.args.len {
-        if i > 0 { sb.append(",") }
-        emit_expr(sb, &g.args[i])
+        if i > 0 {
+            sb.append(",")
+        }
+        emit_gen_arg(sb, &g.args[i])
     }
     sb.append("]}")
+}
+
+fn emit_gen_arg(sb: &StringBuilder, a: &GenArg) {
+    a.* match {
+        IdentArg(id) => {
+            sb.append("{\"kind\":\"Ident\",")
+            emit_span(sb, id.span)
+            emit_kv_string(sb, "name", id.name)
+            sb.append("}")
+        }
+        TypeArg(t) => {
+            sb.append("{\"kind\":\"Type\",\"type\":")
+            emit_type_expr(sb, &t)
+            sb.append("}")
+        }
+    }
 }
 
 fn emit_if_directive_decl(sb: &StringBuilder, d: &IfDirectiveDecl) {
@@ -257,12 +317,16 @@ fn emit_if_directive_decl(sb: &StringBuilder, d: &IfDirectiveDecl) {
     emit_expr(sb, &d.condition)
     sb.append(",\"then_decls\":[")
     for i in 0..d.then_decls.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         emit_decl(sb, &d.then_decls[i])
     }
     sb.append("],\"else_decls\":[")
     for i in 0..d.else_decls.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         emit_decl(sb, &d.else_decls[i])
     }
     sb.append("]}")
@@ -274,7 +338,7 @@ fn emit_if_directive_decl(sb: &StringBuilder, d: &IfDirectiveDecl) {
 
 fn emit_stmt(sb: &StringBuilder, s: &Stmt) {
     s.* match {
-        Let(let_stmt) => emit_let_stmt(sb, &let_stmt),
+        Let(let_stmt) => emit_let_stmt(sb, &let_stmt)
         Expression(es) => {
             sb.append("{\"kind\":\"ExprStmt\",")
             emit_span(sb, es.span)
@@ -287,8 +351,8 @@ fn emit_stmt(sb: &StringBuilder, s: &Stmt) {
             emit_span(sb, rs.span)
             sb.append(",\"value\":")
             rs.value match {
-                Some(v) => emit_expr(sb, &v),
-                None => sb.append("null"),
+                Some(v) => emit_expr(sb, &v)
+                None => sb.append("null")
             }
             sb.append("}")
         }
@@ -309,9 +373,9 @@ fn emit_stmt(sb: &StringBuilder, s: &Stmt) {
             emit_span(sb, cs.span)
             sb.append("}")
         }
-        For(fs) => emit_for_stmt(sb, &fs),
-        While(ws) => emit_while_stmt(sb, &ws),
-        Loop(ls) => emit_loop_stmt(sb, &ls),
+        For(fs) => emit_for_stmt(sb, &fs)
+        While(ws) => emit_while_stmt(sb, &ws)
+        Loop(ls) => emit_loop_stmt(sb, &ls)
         IfDirective(d) => {
             sb.append("{\"kind\":\"IfDirective\",")
             emit_span(sb, d.span)
@@ -319,12 +383,16 @@ fn emit_stmt(sb: &StringBuilder, s: &Stmt) {
             emit_expr(sb, &d.condition)
             sb.append(",\"then_stmts\":[")
             for i in 0..d.then_stmts.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 emit_stmt(sb, &d.then_stmts[i])
             }
             sb.append("],\"else_stmts\":[")
             for i in 0..d.else_stmts.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 emit_stmt(sb, &d.else_stmts[i])
             }
             sb.append("]}")
@@ -339,13 +407,13 @@ fn emit_let_stmt(sb: &StringBuilder, ls: &LetStmt) {
     emit_kv_string(sb, "name", ls.name)
     sb.append(",\"type\":")
     ls.type_annotation match {
-        Some(t) => emit_type_expr(sb, &t),
-        None => sb.append("null"),
+        Some(t) => emit_type_expr(sb, &t)
+        None => sb.append("null")
     }
     sb.append(",\"init\":")
     ls.init match {
-        Some(init) => emit_expr(sb, &init),
-        None => sb.append("null"),
+        Some(init) => emit_expr(sb, &init)
+        None => sb.append("null")
     }
     sb.append("}")
 }
@@ -386,11 +454,11 @@ fn emit_loop_stmt(sb: &StringBuilder, ls: &LoopStmt) {
 
 fn emit_expr(sb: &StringBuilder, e: &Expr) {
     e.* match {
-        Lit(lit) => emit_literal_expr(sb, &lit),
-        InterpolatedString(is) => emit_interp_string(sb, &is),
-        ArrayLit(al) => emit_array_lit(sb, &al),
-        TupleLit(tl) => emit_tuple_lit(sb, &tl),
-        StructLit(sl) => emit_struct_lit(sb, &sl),
+        Lit(lit) => emit_literal_expr(sb, &lit)
+        InterpolatedString(is) => emit_interp_string(sb, &is)
+        ArrayLit(al) => emit_array_lit(sb, &al)
+        TupleLit(tl) => emit_tuple_lit(sb, &tl)
+        StructLit(sl) => emit_struct_lit(sb, &sl)
         Identifier(id) => {
             sb.append("{\"kind\":\"Identifier\",")
             emit_span(sb, id.span)
@@ -436,7 +504,7 @@ fn emit_expr(sb: &StringBuilder, e: &Expr) {
             emit_expr(sb, ix.index)
             sb.append("}")
         }
-        Call(c) => emit_call_expr(sb, &c),
+        Call(c) => emit_call_expr(sb, &c)
         Cast(cx) => {
             sb.append("{\"kind\":\"Cast\",")
             emit_span(sb, cx.span)
@@ -470,13 +538,13 @@ fn emit_expr(sb: &StringBuilder, e: &Expr) {
             emit_kv_bool(sb, "inclusive", r.inclusive)
             sb.append(",\"start\":")
             r.start match {
-                Some(s) => emit_expr(sb, s),
-                None => sb.append("null"),
+                Some(s) => emit_expr(sb, s)
+                None => sb.append("null")
             }
             sb.append(",\"end\":")
             r.end match {
-                Some(e2) => emit_expr(sb, e2),
-                None => sb.append("null"),
+                Some(e2) => emit_expr(sb, e2)
+                None => sb.append("null")
             }
             sb.append("}")
         }
@@ -505,10 +573,10 @@ fn emit_expr(sb: &StringBuilder, e: &Expr) {
             emit_expr(sb, a.rhs)
             sb.append("}")
         }
-        Block(b) => emit_block_expr(sb, &b),
-        If(ie) => emit_if_expr(sb, &ie),
-        Match(m) => emit_match_expr(sb, &m),
-        Lambda(l) => emit_lambda_expr(sb, &l),
+        Block(b) => emit_block_expr(sb, &b)
+        If(ie) => emit_if_expr(sb, &ie)
+        Match(m) => emit_match_expr(sb, &m)
+        Lambda(l) => emit_lambda_expr(sb, &l)
         Error(e) => {
             sb.append("{\"kind\":\"Error\",")
             emit_span(sb, e.span)
@@ -524,9 +592,9 @@ fn emit_literal_expr(sb: &StringBuilder, lit: &LiteralExpr) {
     sb.append("}")
 }
 
-// Inline the LiteralValue as scalars on the parent. The inner value
-// has no own span (same range as the enclosing literal); nesting it
-// gave consumers a `[0..0]` phantom child that trapped source-click.
+// Inline the LiteralValue as scalars on the parent. The inner value has no own span (same range as
+// the enclosing literal); nesting it gave consumers a `[0..0]` phantom child that trapped
+// source-click.
 fn emit_literal_payload(sb: &StringBuilder, v: LiteralValue) {
     v match {
         Int(i) => {
@@ -557,7 +625,7 @@ fn emit_literal_payload(sb: &StringBuilder, v: LiteralValue) {
             sb.append(",\"literal\":\"Bool\",\"bool_value\":")
             emit_bool(sb, b.value)
         }
-        Null => sb.append(",\"literal\":\"Null\""),
+        Null => sb.append(",\"literal\":\"Null\"")
     }
 }
 
@@ -569,7 +637,9 @@ fn emit_interp_string(sb: &StringBuilder, is: &InterpolatedStringExpr) {
         InterpolationTarget.NewString(args) => {
             sb.append("{\"kind\":\"NewString\",\"args\":[")
             for i in 0..args.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 emit_expr(sb, &args[i])
             }
             sb.append("]}")
@@ -582,7 +652,9 @@ fn emit_interp_string(sb: &StringBuilder, is: &InterpolatedStringExpr) {
     }
     sb.append(",\"parts\":[")
     for i in 0..is.parts.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         is.parts[i] match {
             InterpolationPart.Text(t) => {
                 sb.append("{\"kind\":\"Text\",\"text\":")
@@ -596,8 +668,8 @@ fn emit_interp_string(sb: &StringBuilder, is: &InterpolatedStringExpr) {
                 emit_expr(sb, h.expr)
                 sb.append(",\"format\":")
                 h.format match {
-                    Some(f) => emit_string(sb, f),
-                    None => sb.append("null"),
+                    Some(f) => emit_string(sb, f)
+                    None => sb.append("null")
                 }
                 sb.append("}")
             }
@@ -614,7 +686,9 @@ fn emit_array_lit(sb: &StringBuilder, al: &ArrayLiteralExpr) {
         Elements(es) => {
             sb.append("{\"kind\":\"Elements\",\"elements\":[")
             for i in 0..es.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 emit_expr(sb, &es[i])
             }
             sb.append("]}")
@@ -635,7 +709,9 @@ fn emit_tuple_lit(sb: &StringBuilder, tl: &TupleLiteralExpr) {
     emit_span(sb, tl.span)
     sb.append(",\"elements\":[")
     for i in 0..tl.elements.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         emit_expr(sb, &tl.elements[i])
     }
     sb.append("]}")
@@ -646,19 +722,21 @@ fn emit_struct_lit(sb: &StringBuilder, sl: &StructLiteralExpr) {
     emit_span(sb, sl.span)
     sb.append(",\"type\":")
     sl.type_expr match {
-        Some(te) => emit_type_expr(sb, te),
-        None => sb.append("null"),
+        Some(te) => emit_type_expr(sb, te)
+        None => sb.append("null")
     }
     sb.append(",\"fields\":[")
     for i in 0..sl.fields.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         sb.append("{\"kind\":\"Field\",")
         emit_span(sb, sl.fields[i].span)
         emit_kv_string(sb, "name", sl.fields[i].name)
         sb.append(",\"value\":")
         sl.fields[i].value match {
-            Some(v) => emit_expr(sb, v),
-            None => sb.append("null"),
+            Some(v) => emit_expr(sb, v)
+            None => sb.append("null")
         }
         sb.append("}")
     }
@@ -672,11 +750,13 @@ fn emit_call_expr(sb: &StringBuilder, c: &CallExpr) {
     emit_expr(sb, c.callee)
     sb.append(",\"args\":[")
     for i in 0..c.args.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         c.args[i] match {
-            // No `Positional` wrapper: it would have no own span and trap
-            // source-click descent. Named args still wrap (they carry a name).
-            Positional(e) => emit_expr(sb, e),
+            // No `Positional` wrapper: it would have no own span and trap source-click descent.
+            // Named args still wrap (they carry a name).
+            Positional(e) => emit_expr(sb, e)
             Named(n) => {
                 sb.append("{\"kind\":\"Named\",")
                 emit_span(sb, n.span)
@@ -695,13 +775,15 @@ fn emit_block_expr(sb: &StringBuilder, b: &BlockExpr) {
     emit_span(sb, b.span)
     sb.append(",\"stmts\":[")
     for i in 0..b.stmts.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         emit_stmt(sb, &b.stmts[i])
     }
     sb.append("],\"trailing\":")
     b.trailing match {
-        Some(t) => emit_expr(sb, t),
-        None => sb.append("null"),
+        Some(t) => emit_expr(sb, t)
+        None => sb.append("null")
     }
     sb.append("}")
 }
@@ -715,9 +797,9 @@ fn emit_if_expr(sb: &StringBuilder, ie: &IfExpr) {
     emit_block_expr(sb, &ie.then_branch)
     sb.append(",\"else\":")
     ie.else_branch match {
-        ElseBranch.NoElse => sb.append("null"),
-        ElseBranch.Block(blk) => emit_block_expr(sb, &blk),
-        ElseBranch.If(nested) => emit_if_expr(sb, nested),
+        ElseBranch.NoElse => sb.append("null")
+        ElseBranch.Block(blk) => emit_block_expr(sb, &blk)
+        ElseBranch.If(nested) => emit_if_expr(sb, nested)
     }
     sb.append("}")
 }
@@ -729,15 +811,17 @@ fn emit_match_expr(sb: &StringBuilder, m: &MatchExpr) {
     emit_expr(sb, m.scrutinee)
     sb.append(",\"arms\":[")
     for i in 0..m.arms.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         sb.append("{\"kind\":\"Arm\",")
         emit_span(sb, m.arms[i].span)
         sb.append(",\"pattern\":")
         emit_pattern(sb, &m.arms[i].pattern)
         sb.append(",\"guard\":")
         m.arms[i].guard match {
-            Some(g) => emit_expr(sb, g),
-            None => sb.append("null"),
+            Some(g) => emit_expr(sb, g)
+            None => sb.append("null")
         }
         sb.append(",\"body\":")
         emit_expr(sb, m.arms[i].body)
@@ -751,13 +835,15 @@ fn emit_lambda_expr(sb: &StringBuilder, l: &LambdaExpr) {
     emit_span(sb, l.span)
     sb.append(",\"params\":[")
     for i in 0..l.params.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         emit_function_param(sb, &l.params[i])
     }
     sb.append("],\"return_type\":")
     l.return_type match {
-        Some(rt) => emit_type_expr(sb, &rt),
-        None => sb.append("null"),
+        Some(rt) => emit_type_expr(sb, &rt)
+        None => sb.append("null")
     }
     sb.append(",\"body\":")
     emit_block_expr(sb, &l.body)
@@ -766,33 +852,33 @@ fn emit_lambda_expr(sb: &StringBuilder, l: &LambdaExpr) {
 
 fn json_binary_op_str(op: BinaryOp) String {
     return op match {
-        Add => "+",
-        Sub => "-",
-        Mul => "*",
-        Div => "/",
-        Mod => "%",
-        Eq => "==",
-        Ne => "!=",
-        Lt => "<",
-        Gt => ">",
-        Le => "<=",
-        Ge => ">=",
-        And => "and",
-        Or => "or",
-        BitAnd => "&",
-        BitOr => "|",
-        BitXor => "^",
-        Shl => "<<",
-        Shr => ">>",
-        UShr => ">>>",
+        Add => "+"
+        Sub => "-"
+        Mul => "*"
+        Div => "/"
+        Mod => "%"
+        Eq => "=="
+        Ne => "!="
+        Lt => "<"
+        Gt => ">"
+        Le => "<="
+        Ge => ">="
+        And => "and"
+        Or => "or"
+        BitAnd => "&"
+        BitOr => "|"
+        BitXor => "^"
+        Shl => "<<"
+        Shr => ">>"
+        UShr => ">>>"
     }
 }
 
 fn json_unary_op_str(op: UnaryOp) String {
     return op match {
-        Neg => "-",
-        Not => "!",
-        BitNot => "~",
+        Neg => "-"
+        Not => "!"
+        BitNot => "~"
     }
 }
 
@@ -809,7 +895,9 @@ fn emit_type_expr(sb: &StringBuilder, t: &TypeExpr) {
             emit_kv_string(sb, "name", n.name)
             sb.append(",\"generic_args\":[")
             for i in 0..n.generic_args.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 emit_type_expr(sb, &n.generic_args[i])
             }
             sb.append("]}")
@@ -855,7 +943,9 @@ fn emit_type_expr(sb: &StringBuilder, t: &TypeExpr) {
             emit_span(sb, tup.span)
             sb.append(",\"elements\":[")
             for i in 0..tup.elements.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 emit_type_expr(sb, &tup.elements[i])
             }
             sb.append("]}")
@@ -865,13 +955,15 @@ fn emit_type_expr(sb: &StringBuilder, t: &TypeExpr) {
             emit_span(sb, f.span)
             sb.append(",\"params\":[")
             for i in 0..f.params.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 emit_type_expr(sb, &f.params[i])
             }
             sb.append("],\"return_type\":")
             f.return_type match {
-                Some(rt) => emit_type_expr(sb, rt),
-                None => sb.append("null"),
+                Some(rt) => emit_type_expr(sb, rt)
+                None => sb.append("null")
             }
             sb.append("}")
         }
@@ -880,14 +972,18 @@ fn emit_type_expr(sb: &StringBuilder, t: &TypeExpr) {
             emit_span(sb, s.span)
             sb.append(",\"generics\":[")
             for i in 0..s.generics.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 sb.append("{\"name\":")
                 emit_string(sb, s.generics[i].name)
                 sb.append("}")
             }
             sb.append("],\"fields\":[")
             for i in 0..s.fields.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 sb.append("{\"kind\":\"Field\",")
                 emit_span(sb, s.fields[i].span)
                 emit_kv_string(sb, "name", s.fields[i].name)
@@ -902,20 +998,26 @@ fn emit_type_expr(sb: &StringBuilder, t: &TypeExpr) {
             emit_span(sb, e.span)
             sb.append(",\"generics\":[")
             for i in 0..e.generics.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 sb.append("{\"name\":")
                 emit_string(sb, e.generics[i].name)
                 sb.append("}")
             }
             sb.append("],\"variants\":[")
             for i in 0..e.variants.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 sb.append("{\"kind\":\"Variant\",")
                 emit_span(sb, e.variants[i].span)
                 emit_kv_string(sb, "name", e.variants[i].name)
                 sb.append(",\"payloads\":[")
                 for j in 0..e.variants[i].payloads.len {
-                    if j > 0 { sb.append(",") }
+                    if j > 0 {
+                        sb.append(",")
+                    }
                     emit_type_expr(sb, &e.variants[i].payloads[j])
                 }
                 sb.append("]}")
@@ -959,12 +1061,14 @@ fn emit_pattern(sb: &StringBuilder, p: &Pattern) {
             emit_kv_string(sb, "name", ev.name)
             sb.append(",\"qualifier\":")
             ev.qualifier match {
-                Some(q) => emit_string(sb, q),
-                None => sb.append("null"),
+                Some(q) => emit_string(sb, q)
+                None => sb.append("null")
             }
             sb.append(",\"payloads\":[")
             for i in 0..ev.payloads.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 emit_pattern(sb, &ev.payloads[i])
             }
             sb.append("]}")
@@ -974,7 +1078,9 @@ fn emit_pattern(sb: &StringBuilder, p: &Pattern) {
             emit_span(sb, o.span)
             sb.append(",\"alternatives\":[")
             for i in 0..o.alternatives.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 emit_pattern(sb, &o.alternatives[i])
             }
             sb.append("]}")
@@ -985,13 +1091,13 @@ fn emit_pattern(sb: &StringBuilder, p: &Pattern) {
             emit_kv_bool(sb, "inclusive", r.inclusive)
             sb.append(",\"start\":")
             r.start match {
-                Some(s) => emit_expr(sb, s),
-                None => sb.append("null"),
+                Some(s) => emit_expr(sb, s)
+                None => sb.append("null")
             }
             sb.append(",\"end\":")
             r.end match {
-                Some(e2) => emit_expr(sb, e2),
-                None => sb.append("null"),
+                Some(e2) => emit_expr(sb, e2)
+                None => sb.append("null")
             }
             sb.append("}")
         }
@@ -1003,14 +1109,16 @@ fn emit_pattern(sb: &StringBuilder, p: &Pattern) {
             emit_type_expr(sb, s.type_expr)
             sb.append(",\"fields\":[")
             for i in 0..s.fields.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 sb.append("{\"kind\":\"Field\",")
                 emit_span(sb, s.fields[i].span)
                 emit_kv_string(sb, "name", s.fields[i].name)
                 sb.append(",\"binding\":")
                 s.fields[i].binding match {
-                    Some(b) => emit_pattern(sb, b),
-                    None => sb.append("null"),
+                    Some(b) => emit_pattern(sb, b)
+                    None => sb.append("null")
                 }
                 sb.append("}")
             }
@@ -1021,10 +1129,17 @@ fn emit_pattern(sb: &StringBuilder, p: &Pattern) {
             emit_span(sb, t.span)
             sb.append(",\"elements\":[")
             for i in 0..t.elements.len {
-                if i > 0 { sb.append(",") }
+                if i > 0 {
+                    sb.append(",")
+                }
                 emit_pattern(sb, &t.elements[i])
             }
             sb.append("]}")
+        }
+        Error(e) => {
+            sb.append("{\"kind\":\"Error\",")
+            emit_span(sb, e.span)
+            sb.append("}")
         }
     }
 }

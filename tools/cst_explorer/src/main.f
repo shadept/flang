@@ -2,8 +2,8 @@
 //
 //   cst_explorer <file.f> [-t|--time] [-n|--iterations N]
 //
-// Default behaviour: emit the JSON dump (source + tokens + CST + AST +
-// diagnostics) to stdout. cst_explorer_web consumes this format.
+// Default behaviour: emit the JSON dump (source + tokens + CST + AST + diagnostics) to stdout.
+// cst_explorer_web consumes this format.
 //
 //   -t, --time            measure lex + parse latency instead of dumping;
 //                         reports min/avg/max on stderr
@@ -18,6 +18,7 @@ import std.string
 import std.string_builder
 import std.time
 import std.conv
+import flang_core.line_index
 import flang_parser.lexer
 import flang_parser.parser
 import flang_parser.cst
@@ -47,8 +48,13 @@ pub fn main() i32 {
         help = false,
     }
     let parsed = parse_args(args.as_slice(), &opts)
-    if !parsed { return 1 }
-    if opts.help { print_usage(); return 0 }
+    if !parsed {
+        return 1
+    }
+    if opts.help {
+        print_usage()
+        return 0
+    }
 
     if opts.path.len == 0 {
         print_usage()
@@ -60,17 +66,18 @@ pub fn main() i32 {
     }
 
     const source_opt = read_source(opts.path)
-    if source_opt.is_none() { return 1 }
+    if source_opt.is_none() {
+        return 1
+    }
     let source = source_opt.unwrap()
     defer source.deinit()
 
     let lx = lexer(source.as_view())
     let tokens = lx.tokenize()
-    defer tokens.deinit()
 
-    let p = parser(tokens)
+    let p = parser(tokens, source.as_view())
     defer p.deinit()
-    const cst = p.parse_module()
+    const cst = p.tree.node_at(p.parse_module())
 
     let ast = project_module(cst, 0i32)
     defer ast.deinit()
@@ -124,7 +131,9 @@ fn parse_args(argv: String[], opts: &Options) bool {
                     return false
                 }
                 opts.iterations = parsed.unwrap().0 as usize
-                if opts.iterations == 0 { opts.iterations = 1 }
+                if opts.iterations == 0 {
+                    opts.iterations = 1
+                }
             }
             NonOpt(s) => {
                 if opts.path.len == 0 {
@@ -157,19 +166,20 @@ fn parse_args(argv: String[], opts: &Options) bool {
 // ─────────────────────────────────────────────────────────────────────────
 // Timing mode (--time)
 //
-// Runs lex + parse repeatedly without producing the CST printout. We
-// report per-phase min/avg/max in microseconds plus the source size and
-// final token count. Output goes to stderr so callers can `cst_explorer
+// Runs lex + parse repeatedly without producing the CST printout. We report per-phase min/avg/max
+// in microseconds plus the source size and final token count. Output goes to stderr so callers can
+// `cst_explorer
 // foo.f --time | …` without polluting downstream consumers.
 // ─────────────────────────────────────────────────────────────────────────
 
-// Owns the source read so the OwnedString lives for the duration of
-// the measured loop. Passing the view from main's frame produced an
-// empty view at the call boundary - keeping the OwnedString local to
-// this frame dodges the issue.
+// Owns the source read so the OwnedString lives for the duration of the measured loop. Passing the
+// view from main's frame produced an empty view at the call boundary - keeping the OwnedString
+// local to this frame dodges the issue.
 fn run_timing(path: String, iterations: usize) i32 {
     const source_opt = read_source(path)
-    if source_opt.is_none() { return 1 }
+    if source_opt.is_none() {
+        return 1
+    }
     let source = source_opt.unwrap()
     defer source.deinit()
     const view = source.as_view()
@@ -195,8 +205,8 @@ fn run_timing(path: String, iterations: usize) i32 {
         let tokens = lx.tokenize()
         const t_lex = monotonic_ns()
 
-        let p = parser(tokens)
-        const cst = p.parse_module()
+        let p = parser(tokens, view)
+        const cst = p.tree.node_at(p.parse_module())
         const t_parse = monotonic_ns()
 
         let ast = project_module(cst, 0i32)
@@ -207,20 +217,36 @@ fn run_timing(path: String, iterations: usize) i32 {
         const project_ns = t_project - t_parse
         const total_ns = t_project - t0
 
-        if lex_ns < lex_min { lex_min = lex_ns }
-        if lex_ns > lex_max { lex_max = lex_ns }
+        if lex_ns < lex_min {
+            lex_min = lex_ns
+        }
+        if lex_ns > lex_max {
+            lex_max = lex_ns
+        }
         lex_sum = lex_sum + lex_ns
 
-        if parse_ns < parse_min { parse_min = parse_ns }
-        if parse_ns > parse_max { parse_max = parse_ns }
+        if parse_ns < parse_min {
+            parse_min = parse_ns
+        }
+        if parse_ns > parse_max {
+            parse_max = parse_ns
+        }
         parse_sum = parse_sum + parse_ns
 
-        if project_ns < project_min { project_min = project_ns }
-        if project_ns > project_max { project_max = project_ns }
+        if project_ns < project_min {
+            project_min = project_ns
+        }
+        if project_ns > project_max {
+            project_max = project_ns
+        }
         project_sum = project_sum + project_ns
 
-        if total_ns < total_min { total_min = total_ns }
-        if total_ns > total_max { total_max = total_ns }
+        if total_ns < total_min {
+            total_min = total_ns
+        }
+        if total_ns > total_max {
+            total_max = total_ns
+        }
         total_sum = total_sum + total_ns
 
         tokens_seen = tokens.len
@@ -228,7 +254,6 @@ fn run_timing(path: String, iterations: usize) i32 {
 
         ast.deinit()
         p.deinit()
-        tokens.deinit()
     }
 
     print_timing_banner(path, view.len, tokens_seen, diagnostics_seen, iterations)
@@ -244,7 +269,8 @@ fn eprintln(line: String) {
     const _r2 = stderr.write("\n")
 }
 
-fn print_timing_banner(path: String, bytes: usize, tokens: usize, diagnostics: usize, iterations: usize) {
+fn print_timing_banner(path: String, bytes: usize, tokens: usize, diagnostics: usize,
+    iterations: usize) {
     const banner = $"{path}: {bytes} bytes, {tokens} tokens, {diagnostics} diagnostics - {iterations} iter"
     defer banner.deinit()
     eprintln(banner.as_view())
@@ -262,11 +288,12 @@ fn print_timing_row(label: String, min_ns: u64, max_ns: u64, sum_ns: u64, iterat
 // ─────────────────────────────────────────────────────────────────────────
 // JSON emitter. Schema:
 //   { file, source, tokens[], tree (CST), ast, diagnostics[] }
-// Tokens are an indexed array; the CST `tree` references them by integer
-// to avoid duplicating `text`/`leading`/`trailing` blobs at every leaf.
+// Tokens are an indexed array; the CST `tree` references them by integer to avoid duplicating
+// `text`/`leading`/`trailing` blobs at every leaf.
 // ─────────────────────────────────────────────────────────────────────────
 
-fn print_json(path: String, source: String, tokens: &List(Token), cst: &CstNode, ast: &Module, diagnostics: &List(Diagnostic)) {
+fn print_json(path: String, source: String, tokens: &List(Token), cst: &CstNode, ast: &Module,
+    diagnostics: &List(Diagnostic)) {
     let sb = string_builder(source.len * 4 + 4096)
     defer sb.deinit()
 
@@ -275,10 +302,19 @@ fn print_json(path: String, source: String, tokens: &List(Token), cst: &CstNode,
     sb.append(",\"source\":")
     append_json_string(&sb, source)
 
+    const lidx = line_index(source)
+    defer lidx.deinit()
     sb.append(",\"tokens\":[")
     for i in 0..tokens.len {
-        if i > 0 { sb.append(",") }
-        emit_token_json(&sb, &tokens[i])
+        if i > 0 {
+            sb.append(",")
+        }
+        const prev_end = if i == 0 { 0 } else {
+            const pt = tokens[i - 1]
+            pt.offset + pt.text.len
+        }
+        const next_off = if i + 1 < tokens.len { tokens[i + 1].offset } else { source.len }
+        emit_token_json(&sb, &tokens[i], source, prev_end, next_off, &lidx)
     }
     sb.append("]")
 
@@ -290,7 +326,9 @@ fn print_json(path: String, source: String, tokens: &List(Token), cst: &CstNode,
 
     sb.append(",\"diagnostics\":[")
     for i in 0..diagnostics.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         emit_diagnostic_json(&sb, &diagnostics[i])
     }
     sb.append("]")
@@ -307,20 +345,22 @@ fn emit_node_json(sb: &StringBuilder, node: &CstNode, tokens: &List(Token)) {
     sb.append(",\"end\":")
     sb.append(node.end)
     sb.append(",\"children\":[")
-    for i in 0..node.children.len {
-        if i > 0 { sb.append(",") }
-        const child = node.children[i]
+    for i in 0..node.child_count() {
+        if i > 0 {
+            sb.append(",")
+        }
+        const child = node.child(i)
         child match {
             NodeChild(inner) => {
                 sb.append("{\"node\":")
                 emit_node_json(sb, &inner, tokens)
                 sb.append("}")
-            },
+            }
             TokenChild(tok) => {
                 sb.append("{\"token\":")
-                sb.append(find_token_index(tokens, &tok))
+                sb.append(find_token_index(tokens, tok))
                 sb.append("}")
-            },
+            }
         }
     }
     sb.append("]}")
@@ -336,26 +376,39 @@ fn find_token_index(tokens: &List(Token), tok: &Token) usize {
     return 0usize
 }
 
-fn emit_token_json(sb: &StringBuilder, tok: &Token) {
+fn emit_token_json(sb: &StringBuilder, tok: &Token, source: String, prev_end: usize,
+    next_off: usize, lidx: &LineIndex) {
     sb.append("{\"kind\":\"")
     sb.append(tok.kind.to_string())
     sb.append("\",\"offset\":")
     sb.append(tok.offset)
     sb.append(",\"line\":")
-    sb.append(tok.line)
+    sb.append(lidx.line_of(tok.offset))
     sb.append(",\"text\":")
     append_json_string(sb, tok.text)
     sb.append(",\"leading\":")
-    emit_trivia_json(sb, tok.leading)
+    emit_trivia_json(sb, trivia_in(source, prev_end, tok.offset))
     sb.append(",\"trailing\":")
-    emit_trivia_json(sb, tok.trailing)
+    emit_trivia_json(sb, trivia_in(source, tok.offset + tok.text.len, next_off))
     sb.append("}")
 }
 
-fn emit_trivia_json(sb: &StringBuilder, pieces: Trivia[]) {
+fn emit_trivia_json(sb: &StringBuilder, it: TriviaIter) {
+    let pieces: List(Trivia) = list(4)
+    defer pieces.deinit()
+    let walk = it
+    loop {
+        const t = walk.next()
+        if t.is_none() {
+            break
+        }
+        pieces.push(t.unwrap())
+    }
     sb.append("[")
     for i in 0..pieces.len {
-        if i > 0 { sb.append(",") }
+        if i > 0 {
+            sb.append(",")
+        }
         sb.append("{\"kind\":\"")
         sb.append(if pieces[i].kind == TriviaKind.LineComment { "LineComment" } else { "Whitespace" })
         sb.append("\",\"text\":")
@@ -381,24 +434,42 @@ fn append_json_string(sb: &StringBuilder, s: String) {
     sb.append_byte('"')
     for i in 0..s.len {
         const c = s[i]
-        if c == '"' { sb.append("\\\"") }
-        else if c == '\\' { sb.append("\\\\") }
-        else if c == '\n' { sb.append("\\n") }
-        else if c == '\r' { sb.append("\\r") }
-        else if c == '\t' { sb.append("\\t") }
-        else if c == 0x08 { sb.append("\\b") }
-        else if c == 0x0C { sb.append("\\f") }
+        if c == '"' {
+            sb.append("\\\"")
+        }
+        else if c == '\\' {
+            sb.append("\\\\")
+        }
+        else if c == '\n' {
+            sb.append("\\n")
+        }
+        else if c == '\r' {
+            sb.append("\\r")
+        }
+        else if c == '\t' {
+            sb.append("\\t")
+        }
+        else if c == 0x08 {
+            sb.append("\\b")
+        }
+        else if c == 0x0C {
+            sb.append("\\f")
+        }
         else if c < 0x20 {
             sb.append("\\u00")
             sb.append_byte(hex_nibble(c >> 4))
             sb.append_byte(hex_nibble(c & 0x0F))
         }
-        else { sb.append_byte(c) }
+        else {
+            sb.append_byte(c)
+        }
     }
     sb.append_byte('"')
 }
 
 fn hex_nibble(n: u8) u8 {
-    if n < 10 { return '0' + n }
+    if n < 10 {
+        return '0' + n
+    }
     return 'a' + (n - 10)
 }

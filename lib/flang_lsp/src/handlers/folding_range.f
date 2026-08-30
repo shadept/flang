@@ -27,7 +27,19 @@ pub fn folding_ranges(text: String, allocator: &Allocator? = null) List(FoldRang
     let open_lines: List(usize) = list(16, allocator)
     defer open_lines.deinit()
 
+    // Tokens no longer carry a line number - it was a stored answer to a question only this kind of
+    // ordered walk asks. Counting newlines as we advance costs one pass over the source in total,
+    // against a binary search per token.
+    let line: usize = 0
+    let scanned: usize = 0
+
     for &t in tokens {
+        while scanned < t.offset {
+            if text[scanned] == '\n' {
+                line = line + 1
+            }
+            scanned = scanned + 1
+        }
         const opens: u8 = t.kind match {
             OpenBrace => 0u8
             OpenParenthesis => 1u8
@@ -36,7 +48,7 @@ pub fn folding_ranges(text: String, allocator: &Allocator? = null) List(FoldRang
         }
         if opens != 255u8 {
             open_kinds.push(opens)
-            open_lines.push(t.line)
+            open_lines.push(line)
             continue
         }
         const closes: u8 = t.kind match {
@@ -54,8 +66,8 @@ pub fn folding_ranges(text: String, allocator: &Allocator? = null) List(FoldRang
         }
         const _k = open_kinds.pop()
         const start = open_lines.pop().unwrap()
-        if t.line > start + 1 {
-            out.push(FoldRange { start_line = start, end_line = t.line - 1 })
+        if line > start + 1 {
+            out.push(FoldRange { start_line = start, end_line = line - 1 })
         }
     }
     return out
