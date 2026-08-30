@@ -186,21 +186,22 @@ sharper.
 `&p` asserts 0; an escape reached through an alias chain asserts 1; a write
 asserts 1.
 
-**New harness tests**, behavioural so they score under either compiler. Both need
+**New harness tests**, behavioural so they score under either compiler. They need
 `#allow(W2004)`:
 
 ```
-fn reads(self: S) usize { return &self as usize }
 fn inner(p: &S) usize { return p as usize }
 fn outer(self: S) usize { return inner(&self) }
 
-reads(s) == (&s as usize)   // the guarantee, red today
 outer(s) != (&s as usize)   // the trigger, green today, must stay green
 ```
 
 Plus the plain semantics tests, which pass today and must keep passing: callee
 mutation of a by-value parameter is invisible to the caller, including through an
 escape.
+
+The `reads(s) == (&s as usize)` half was planned here and dropped - see "§3's
+observable guarantee did not survive the whitelist" below.
 
 ## Documentation
 
@@ -214,20 +215,51 @@ escape.
 
 ## What actually landed
 
-Three things differ from the design above.
+Five things differ from the design above.
 
-**The analysis runs on FIR, not on the AST.** `lib/flang_driver/src/param_elision.f` runs on each
-function as the builder finishes it and before it reaches an `IrModule`, so no consumer ever sees a
-body that copies a parameter it only reads. It cannot run earlier: the prologue is emitted before
-the body exists. FIR rather than AST is what makes the classification total - twelve instruction
-forms cover every construct the language has, because desugars, operators, UFCS receivers and
-template expansions all arrive as loads, stores, geps and calls.
+**The analysis runs on the AST, before the prologue is emitted.**
+`lib/flang_driver/src/param_escape.f` answers "does this body write through the parameter, or let
+its address outlive the expression it appears in" from the checked AST, and `lower_function_body`
+consults it while binding parameters. A read-only aggregate parameter is bound straight to the
+caller's pointer, so it never has bytes of its own at any point in the pipeline.
+
+Deciding before emitting, rather than emitting a copy and deleting it afterwards, is what makes the
+by-pointer parameter a real borrow instead of an optimized-away copy. It is also the seam RFC-028
+needs: a moved argument becomes one more reason not to emit the copy, not a second mechanism laid
+over the top.
+
+An earlier revision ran the analysis on FIR as a post-pass (`param_elision.f`, now deleted). FIR
+made classification total for free - twelve instruction forms cover every construct, because
+desugars, operators, UFCS receivers and template expansions all arrive as loads, stores, geps and
+calls - but it can only ever delete a copy that was already emitted.
+
+**The AST classification is a whitelist, and deliberately narrower.** Only a bare identifier read,
+a field read with no recorded `op_deref` hops, a whole-value call argument, a `match` on the
+parameter (arm bindings alias it and join the tracked name set) and `return p` keep the caller's
+pointer. Everything else that so much as mentions the parameter forces the copy, including every
+implicit `&` the checker records: user operators, `op_index`, `op_try`, the iterator protocol and
+UFCS receivers. Missing a case costs a memcpy, never correctness. The `Expr`, `Stmt` and `Pattern`
+matches are total - no `_` arm - so a new AST variant is an E2031 build error here rather than a
+silent miscompile.
+
+**§3's observable guarantee did not survive the whitelist.** §3 closes the `usize as &T` return trip
+so that address *identity* stays observable and "the guarantee is enforceable rather than
+aspirational", and §Testing turns that into `reads(s) == (&s as usize)`. `&self` is an `AddressOf`,
+which the whitelist refuses, so a body that reads its own address still gets the shadow - and the
+only way to observe elision from inside the language is the very form that suppresses it. Elision is
+therefore pinned at the FIR level instead, by the `memcpy_count` tests in `lower.f`; the harness test
+`ownership/param_copy_on_write.f` keeps the behavioural half (a write never reaches the caller, an
+escaped address is distinct storage) and asserts nothing about address identity.
+
+E2122 still earns its keep: it is what makes a future `&p as <integer>` whitelist entry sound, since
+an address that leaves as an integer provably cannot return as a writable reference. Whether to add
+that entry is deferred - it widens the whitelist, and the default branch is always the safe answer.
 
 The escape table is implemented as written, which makes `let x = &p` a copy: storing a tainted
 address is an escape whatever is done with it later. §2's prose sentence "a local `&p` used only
 for reads is not an escape" contradicts its own table and was not implemented. Tracking taint
-through a local slot is an alias analysis through memory; the table's answer is sound and one
-worklist pass.
+through a local slot is an alias analysis through memory; the table's answer is sound and needs no
+worklist.
 
 **E2122 needed a null exemption.** "One stdlib site breaks" was 161. The dominant pattern is
 `0usize as &T`, which is how a null reference is spelled while the language has no null primitive -
@@ -245,16 +277,31 @@ works as designed.
 
 ## Measured
 
-Compiler compiling itself, before and after, on win-x64:
+Compiler compiling itself, on darwin-arm64, with the analysis disabled (every parameter shadowed)
+against the AST analysis as it stands:
 
-| | before | after |
+| | no elision | AST analysis |
 |---|---|---|
-| `memcpy` calls in the emitted C | 100071 | 98557 |
-| stage C | 20019420 B | 19840407 B |
-| stage binary | 2406400 B | 2360320 B |
+| `memcpy` calls in the emitted C | 100780 | 98778 |
+| stage C | 20193571 B | 19952638 B |
 
-1514 parameter copies removed. `is_none` on an `Option(ComptimeCtx)` reads the tag straight out of
-the caller's pointer, which was the motivating case.
+2002 parameter copies removed. `is_none` on an `Option(Slice(u8))` reads the tag straight out of the
+caller's pointer with no `_Alignas` slot, which was the motivating case:
+
+```c
+int8_t std__option__is_0none__core__option__Option_core__slice__Slice_u8__ret_bool(void* v0) {
+    int8_t v2 = 0;
+    int32_t v5; memcpy(&v5, v0, sizeof(int32_t));
+```
+
+Stage binary size is not comparable between those two columns: disabling the analysis also makes
+the whole walk dead code, which the compiler strips.
+
+The FIR post-pass measured 100071 -> 98557 on win-x64 on an older tree, so its 1514 is not directly
+comparable to the 2002 above - different platform, and this branch also carries RFC-027. Measured
+the same way on the same tree, the AST whitelist is expected to elide *fewer* copies than the FIR
+pass did: it refuses every form it has not been taught, where FIR saw through desugars for free.
+That is the trade accepted for deciding before emitting.
 
 ## Separate bug
 

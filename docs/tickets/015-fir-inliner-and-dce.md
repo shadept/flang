@@ -19,6 +19,33 @@ The C compiler will do most classical optimizations at `-O2`. FIR-level passes e
 
 We **don't** do register allocation, instruction selection, vectorization, scheduling, strength reduction, or anything else that needs target knowledge. Stay in the lane where SSA + block-params + 7-type IR is a structural advantage.
 
+### Measured, 2026-08-30 (darwin-arm64, RFC-026 branch)
+
+How much `-O2` already does, so the passes below are scoped against evidence rather than instinct:
+
+| | emitted C | `-O0` | `-O2` |
+|---|---|---|---|
+| `fn sum_fields(self: S) i64`, read-only param | 12 `memcpy` | 111 instrs, 5 libcalls | 6 instrs, 0 libcalls |
+| `fn bump(self: S) i64`, writes the param | 10 `memcpy` | 110 instrs, 4 libcalls | 7 instrs, 0 libcalls |
+
+Whole compiler, stage 2: **98778 `memcpy` in the emitted C, 795 surviving as libcalls in the `-O2`
+binary - 99.2% folded away.** `-O2` also deletes the RFC-026 shadow copy in `bump`, where FIR is
+obliged to emit it, because only the sum escapes.
+
+Two consequences for this RFC:
+
+- The Tier-2 claim that mem2reg "removes memcpy noise that even `-O2` doesn't always undo cleanly"
+  is too optimistic as stated. On this evidence `-O2` undoes essentially all of it. mem2reg's case
+  rests on the other three bullets above, not this one.
+- The honest justification for slot promotion is **`-O0` and C size**: debug builds get none of the
+  above, and 98778 lines of memcpy traffic is C that has to be emitted, written, re-parsed and
+  optimized on every build. That is a compile-time argument, not a runtime one.
+
+A corollary for measurement: `memcpy_count` in `lower.f` counts FIR `Memcpy` instructions, and the
+C backend also spells every scalar `Store`/`Load` as a `memcpy` round-trip for strict-aliasing
+safety (`c_backend.f:1261,1274`). Neither number is a proxy for machine-level cost - they overstate
+it by about 100x. Quote them as FIR pressure and C volume, which is what they measure.
+
 ---
 
 ## 2. Pass tiers

@@ -45,24 +45,18 @@ import flang_typer.node_id
 import flang_typer.result
 import flang_typer.inference_results
 
-// The names that alias the parameter's storage: the parameter, plus whatever a pattern bound out of
-// it. Scope is ignored - a name kept live past its arm only ever costs an extra copy.
-type Aliases = struct {
-    names: List(String)
-}
-
 // Whether each of `decl`'s parameters needs a shadow copy, parallel to `decl.params`. A parameter
 // that is not a by-value aggregate is irrelevant here and answers `true`, which its caller ignores.
-pub fn shadowed_params(decl: &FunctionDecl, result: &TypeCheckResult,
-    overlay: &InferenceResults?, allocator: &Allocator? = null) List(bool) {
+pub fn shadowed_params(decl: &FunctionDecl, result: &TypeCheckResult, overlay: &InferenceResults?,
+    allocator: &Allocator? = null) List(bool) {
     let out: List(bool) = list(decl.params.len, allocator)
     const body = decl.body
-    for i in 0..decl.params.len {
+    for &p in decl.params {
         if body.is_none() {
             out.push(true)
             continue
         }
-        out.push(needs_shadow(decl.params[i].name, &body.unwrap(), result, overlay, allocator))
+        out.push(needs_shadow(p.name, &body.unwrap(), result, overlay, allocator))
     }
     return out
 }
@@ -70,22 +64,22 @@ pub fn shadowed_params(decl: &FunctionDecl, result: &TypeCheckResult,
 // One parameter. True means the body writes through it or lets its address escape.
 pub fn needs_shadow(name: String, body: &BlockExpr, result: &TypeCheckResult,
     overlay: &InferenceResults?, allocator: &Allocator? = null) bool {
-    // A `_`-named parameter is unreachable from the body by convention, but the name is still a
-    // name; nothing special is done for it.
-    let aliases: Aliases = .{ names = list(4, allocator) }
-    defer aliases.names.deinit()
-    aliases.names.push(name)
+    // The names that alias the parameter's storage: the parameter, plus whatever a pattern bound
+    // out of it. Scope is ignored - a name kept live past its arm only ever costs an extra copy. A
+    // `_`-named parameter is unreachable from the body by convention, but the name is still a name;
+    // nothing special is done for it.
+    let aliases: List(String) = list(4, allocator)
+    defer aliases.deinit()
+    aliases.push(name)
     return block_escapes(body, &aliases, result, overlay)
 }
 
 // ── the walk ───────────────────────────────────────────────────────────
 
-fn block_escapes(b: &BlockExpr, al: &Aliases, r: &TypeCheckResult,
+fn block_escapes(b: &BlockExpr, al: &List(String), r: &TypeCheckResult,
     ov: &InferenceResults?) bool {
-    for i in 0..b.stmts.len {
-        if stmt_escapes(&b.stmts[i], al, r, ov) {
-            return true
-        }
+    if stmts_escape(&b.stmts, al, r, ov) {
+        return true
     }
     b.trailing match {
         Some(e) => return expr_escapes(e, al, r, ov)
@@ -94,7 +88,17 @@ fn block_escapes(b: &BlockExpr, al: &Aliases, r: &TypeCheckResult,
     return false
 }
 
-fn stmt_escapes(s: &Stmt, al: &Aliases, r: &TypeCheckResult, ov: &InferenceResults?) bool {
+fn stmts_escape(xs: &List(Stmt), al: &List(String), r: &TypeCheckResult,
+    ov: &InferenceResults?) bool {
+    for &x in xs {
+        if stmt_escapes(x, al, r, ov) {
+            return true
+        }
+    }
+    return false
+}
+
+fn stmt_escapes(s: &Stmt, al: &List(String), r: &TypeCheckResult, ov: &InferenceResults?) bool {
     return s.* match {
         // Re-binding a name we track loses the thread; from here on `name` could be either value.
         Let(l) => {
@@ -113,28 +117,26 @@ fn stmt_escapes(s: &Stmt, al: &Aliases, r: &TypeCheckResult, ov: &InferenceResul
             Some(e) => expr_escapes(&e, al, r, ov)
             None => false
         }
-        Defer(d) => expr_escapes(d.expr, al, r, ov)
+        Defer(d) => expr_escapes(&d.expr, al, r, ov)
         Break(_) => false
         Continue(_) => false
         // The loop variable of `for x in p` names into `p`'s storage.
         For(f) => {
             if roots_in(f.iterable, al, r, ov) {
-                al.names.push(f.var_name)
+                al.push(f.var_name)
             }
             expr_escapes(f.iterable, al, r, ov) or block_escapes(&f.body, al, r, ov)
         }
         While(w) => expr_escapes(w.condition, al, r, ov) or block_escapes(&w.body, al, r, ov)
         Loop(l) => block_escapes(&l.body, al, r, ov)
         // Both arms are projected away before lowering; whichever survives is walked as itself.
-        IfDirective(d) => block_escapes(&d.then_body, al, r, ov)
-            or d.else_body match {
-                Some(b) => block_escapes(&b, al, r, ov)
-                None => false
-            }
+        // They are bare statement lists, not blocks - `#if` introduces no scope.
+        IfDirective(d) => stmts_escape(&d.then_stmts, al, r, ov) or stmts_escape(&d.else_stmts, al,
+            r, ov)
     }
 }
 
-fn expr_escapes(e: &Expr, al: &Aliases, r: &TypeCheckResult, ov: &InferenceResults?) bool {
+fn expr_escapes(e: &Expr, al: &List(String), r: &TypeCheckResult, ov: &InferenceResults?) bool {
     return e.* match {
         // A bare read.
         Identifier(_) => false
@@ -169,40 +171,28 @@ fn expr_escapes(e: &Expr, al: &Aliases, r: &TypeCheckResult, ov: &InferenceResul
         If(f) => if_escapes(&f, al, r, ov)
 
         // Everything below either takes an address the checker recorded rather than the source
-        // showing it, or is a form this analysis has not been taught. Mentioning an alias is
-        // enough to keep the copy.
-        InterpolatedString(s) => mentions_any_expr_list(&s.parts, al)
-        ArrayLit(a) => mentions_any_expr_list(&a.elements, al)
-            or a.repeat_count match {
-                Some(x) => mentions(&x, al)
-                None => false
-            }
-        TupleLit(t) => mentions_any_expr_list(&t.elements, al)
-        StructLit(s) => {
-            let hit = false
-            for i in 0..s.fields.len {
-                if mentions(s.fields[i].value, al) {
-                    hit = true
-                }
-            }
-            hit
-        }
-        Dereference(d) => mentions(d.operand, al)
-        NullPropagation(n) => mentions(n.receiver, al)
-        Index(i) => mentions(i.receiver, al) or mentions(i.index, al)
-        Cast(c) => mentions(c.operand, al)
-        Binary(b) => mentions(b.lhs, al) or mentions(b.rhs, al)
-        Unary(u) => mentions(u.operand, al)
-        Range(g) => g.start match { Some(x) => mentions(&x, al), None => false }
-            or g.end match { Some(x) => mentions(&x, al), None => false }
-        Coalesce(c) => mentions(c.lhs, al) or mentions(c.rhs, al)
-        Try(t) => mentions(t.operand, al)
-        Lambda(l) => mentions_block(&l.body, al)
+        // showing it, or is a form this analysis has not been taught. Mentioning an alias is enough
+        // to keep the copy, so each one defers to `mentions` on the same node rather than restating
+        // how to reach that node's children.
+        InterpolatedString(_) => mentions(e, al)
+        ArrayLit(_) => mentions(e, al)
+        TupleLit(_) => mentions(e, al)
+        StructLit(_) => mentions(e, al)
+        Dereference(_) => mentions(e, al)
+        NullPropagation(_) => mentions(e, al)
+        Index(_) => mentions(e, al)
+        Cast(_) => mentions(e, al)
+        Binary(_) => mentions(e, al)
+        Unary(_) => mentions(e, al)
+        Range(_) => mentions(e, al)
+        Coalesce(_) => mentions(e, al)
+        Try(_) => mentions(e, al)
+        Lambda(_) => mentions(e, al)
         Error(_) => false
     }
 }
 
-fn call_escapes(c: &CallExpr, al: &Aliases, r: &TypeCheckResult, ov: &InferenceResults?) bool {
+fn call_escapes(c: &CallExpr, al: &List(String), r: &TypeCheckResult, ov: &InferenceResults?) bool {
     // A member-access callee is a UFCS call: the receiver crosses as the first argument, adapted to
     // `&T` when that is what the winner declared, and the source never spells the `&`.
     const ufcs = c.callee.* match {
@@ -215,8 +205,8 @@ fn call_escapes(c: &CallExpr, al: &Aliases, r: &TypeCheckResult, ov: &InferenceR
     if expr_escapes(c.callee, al, r, ov) {
         return true
     }
-    for i in 0..c.args.len {
-        const arg = c.args[i] match {
+    for &a in c.args {
+        const arg = a.* match {
             Positional(e) => e
             Named(n) => n.value
         }
@@ -229,13 +219,13 @@ fn call_escapes(c: &CallExpr, al: &Aliases, r: &TypeCheckResult, ov: &InferenceR
     return false
 }
 
-fn match_escapes(m: &MatchExpr, al: &Aliases, r: &TypeCheckResult, ov: &InferenceResults?) bool {
+fn match_escapes(m: &MatchExpr, al: &List(String), r: &TypeCheckResult,
+    ov: &InferenceResults?) bool {
     if expr_escapes(m.scrutinee, al, r, ov) {
         return true
     }
     const from_alias = roots_in(m.scrutinee, al, r, ov)
-    for i in 0..m.arms.len {
-        const arm = &m.arms[i]
+    for &arm in m.arms {
         if from_alias {
             collect_bindings(&arm.pattern, al)
         }
@@ -254,7 +244,7 @@ fn match_escapes(m: &MatchExpr, al: &Aliases, r: &TypeCheckResult, ov: &Inferenc
     return false
 }
 
-fn if_escapes(f: &IfExpr, al: &Aliases, r: &TypeCheckResult, ov: &InferenceResults?) bool {
+fn if_escapes(f: &IfExpr, al: &List(String), r: &TypeCheckResult, ov: &InferenceResults?) bool {
     if expr_escapes(f.condition, al, r, ov) {
         return true
     }
@@ -262,38 +252,39 @@ fn if_escapes(f: &IfExpr, al: &Aliases, r: &TypeCheckResult, ov: &InferenceResul
         return true
     }
     return f.else_branch match {
-        Some(e) => expr_escapes(&e, al, r, ov)
-        None => false
+        NoElse => false
+        Block(b) => block_escapes(&b, al, r, ov)
+        If(i) => if_escapes(i, al, r, ov)
     }
 }
 
 // Every name a pattern introduces, added to the alias set: a payload binding names the scrutinee's
 // storage rather than a copy of it.
-fn collect_bindings(p: &Pattern, al: &Aliases) {
+fn collect_bindings(p: &Pattern, al: &List(String)) {
     p.* match {
-        Variable(v) => al.names.push(v.name)
+        Variable(v) => al.push(v.name)
         EnumVariant(e) => {
-            for i in 0..e.payloads.len {
-                collect_bindings(&e.payloads[i], al)
+            for &pl in e.payloads {
+                collect_bindings(pl, al)
             }
         }
         Struct(s) => {
-            for i in 0..s.fields.len {
-                s.fields[i].binding match {
+            for &f in s.fields {
+                f.binding match {
                     Some(b) => collect_bindings(b, al)
                     // `Point { x }` binds `x` to the field of that name.
-                    None => al.names.push(s.fields[i].name)
+                    None => al.push(f.name)
                 }
             }
         }
         Tuple(t) => {
-            for i in 0..t.elements.len {
-                collect_bindings(&t.elements[i], al)
+            for &el in t.elements {
+                collect_bindings(el, al)
             }
         }
         Or(o) => {
-            for i in 0..o.alternatives.len {
-                collect_bindings(&o.alternatives[i], al)
+            for &alt in o.alternatives {
+                collect_bindings(alt, al)
             }
         }
         Wildcard(_) => {}
@@ -308,7 +299,7 @@ fn collect_bindings(p: &Pattern, al: &Aliases) {
 // Whether `e` is a place rooted at a tracked name: `p`, `p.x`, `p[i]`, `p.*`, `p?.x`. A member hop
 // the checker resolved through `op_deref` is NOT part of the same storage - it is a call - so the
 // chain stops there and the answer is false.
-fn roots_in(e: &Expr, al: &Aliases, r: &TypeCheckResult, ov: &InferenceResults?) bool {
+fn roots_in(e: &Expr, al: &List(String), r: &TypeCheckResult, ov: &InferenceResults?) bool {
     return e.* match {
         Identifier(id) => contains_name(al, id.name)
         MemberAccess(ma) => !has_deref_hops(ma.span, r, ov) and roots_in(ma.receiver, al, r, ov)
@@ -334,9 +325,9 @@ fn has_deref_hops(span: SourceSpan, r: &TypeCheckResult, ov: &InferenceResults?)
     return r.get_receiver_deref(id).is_some()
 }
 
-fn contains_name(al: &Aliases, name: String) bool {
-    for i in 0..al.names.len {
-        if al.names[i] == name {
+fn contains_name(al: &List(String), name: String) bool {
+    for n in al {
+        if n == name {
             return true
         }
     }
@@ -347,26 +338,17 @@ fn contains_name(al: &Aliases, name: String) bool {
 
 // Whether any tracked name appears anywhere inside. Used by the forms the walk does not classify:
 // if the parameter is in there at all, keep the copy.
-fn mentions(e: &Expr, al: &Aliases) bool {
+fn mentions(e: &Expr, al: &List(String)) bool {
     return e.* match {
         Identifier(id) => contains_name(al, id.name)
         Lit(_) => false
-        InterpolatedString(s) => mentions_any_expr_list(&s.parts, al)
-        ArrayLit(a) => mentions_any_expr_list(&a.elements, al)
-            or a.repeat_count match {
-                Some(x) => mentions(&x, al)
-                None => false
-            }
-        TupleLit(t) => mentions_any_expr_list(&t.elements, al)
-        StructLit(s) => {
-            let hit = false
-            for i in 0..s.fields.len {
-                if mentions(s.fields[i].value, al) {
-                    hit = true
-                }
-            }
-            hit
+        InterpolatedString(s) => mentions_interpolation(&s, al)
+        ArrayLit(a) => a.kind match {
+            Elements(es) => mentions_any_expr_list(&es, al)
+            Repeat(rp) => mentions(rp.value, al) or mentions(rp.count, al)
         }
+        TupleLit(t) => mentions_any_expr_list(&t.elements, al)
+        StructLit(s) => mentions_struct_fields(&s.fields, al)
         MemberAccess(ma) => mentions(ma.receiver, al)
         AddressOf(a) => mentions(a.operand, al)
         Dereference(d) => mentions(d.operand, al)
@@ -374,8 +356,8 @@ fn mentions(e: &Expr, al: &Aliases) bool {
         Index(i) => mentions(i.receiver, al) or mentions(i.index, al)
         Call(c) => {
             let hit = mentions(c.callee, al)
-            for i in 0..c.args.len {
-                const arg = c.args[i] match {
+            for &a in c.args {
+                const arg = a.* match {
                     Positional(e2) => e2
                     Named(n) => n.value
                 }
@@ -388,24 +370,20 @@ fn mentions(e: &Expr, al: &Aliases) bool {
         Cast(c) => mentions(c.operand, al)
         Binary(b) => mentions(b.lhs, al) or mentions(b.rhs, al)
         Unary(u) => mentions(u.operand, al)
-        Range(g) => g.start match { Some(x) => mentions(&x, al), None => false }
-            or g.end match { Some(x) => mentions(&x, al), None => false }
+        Range(g) => g.start match { Some(x) => mentions(x, al), None => false }
+            or g.end match { Some(x) => mentions(x, al), None => false }
         Coalesce(c) => mentions(c.lhs, al) or mentions(c.rhs, al)
         Try(t) => mentions(t.operand, al)
         Assignment(a) => mentions(a.lhs, al) or mentions(a.rhs, al)
         Block(b) => mentions_block(&b, al)
-        If(f) => mentions(f.condition, al) or mentions_block(&f.then_branch, al)
-            or f.else_branch match {
-                Some(e2) => mentions(&e2, al)
-                None => false
-            }
+        If(f) => mentions_if(&f, al)
         Match(m) => {
             let hit = mentions(m.scrutinee, al)
-            for i in 0..m.arms.len {
-                if mentions(m.arms[i].body, al) {
+            for &arm in m.arms {
+                if mentions(arm.body, al) {
                     hit = true
                 }
-                m.arms[i].guard match {
+                arm.guard match {
                     Some(g) => {
                         if mentions(g, al) {
                             hit = true
@@ -421,19 +399,17 @@ fn mentions(e: &Expr, al: &Aliases) bool {
     }
 }
 
-fn mentions_block(b: &BlockExpr, al: &Aliases) bool {
-    for i in 0..b.stmts.len {
-        if mentions_stmt(&b.stmts[i], al) {
-            return true
-        }
+fn mentions_block(b: &BlockExpr, al: &List(String)) bool {
+    if mentions_stmts(&b.stmts, al) {
+        return true
     }
     return b.trailing match {
-        Some(e) => mentions(&e, al)
+        Some(e) => mentions(e, al)
         None => false
     }
 }
 
-fn mentions_stmt(s: &Stmt, al: &Aliases) bool {
+fn mentions_stmt(s: &Stmt, al: &List(String)) bool {
     return s.* match {
         Let(l) => l.init match {
             Some(e) => mentions(&e, al)
@@ -444,23 +420,74 @@ fn mentions_stmt(s: &Stmt, al: &Aliases) bool {
             Some(e) => mentions(&e, al)
             None => false
         }
-        Defer(d) => mentions(d.expr, al)
+        Defer(d) => mentions(&d.expr, al)
         Break(_) => false
         Continue(_) => false
         For(f) => mentions(f.iterable, al) or mentions_block(&f.body, al)
         While(w) => mentions(w.condition, al) or mentions_block(&w.body, al)
         Loop(l) => mentions_block(&l.body, al)
-        IfDirective(d) => mentions_block(&d.then_body, al)
-            or d.else_body match {
-                Some(b) => mentions_block(&b, al)
-                None => false
-            }
+        IfDirective(d) => mentions_stmts(&d.then_stmts, al) or mentions_stmts(&d.else_stmts, al)
     }
 }
 
-fn mentions_any_expr_list(xs: &List(Expr), al: &Aliases) bool {
-    for i in 0..xs.len {
-        if mentions(&xs[i], al) {
+fn mentions_stmts(xs: &List(Stmt), al: &List(String)) bool {
+    for &x in xs {
+        if mentions_stmt(x, al) {
+            return true
+        }
+    }
+    return false
+}
+
+// `if` reached through `ElseBranch.If`, which holds the chained `if` by reference.
+fn mentions_if(f: &IfExpr, al: &List(String)) bool {
+    return mentions(f.condition, al) or mentions_block(&f.then_branch, al) or f.else_branch match {
+        NoElse => false
+        Block(b) => mentions_block(&b, al)
+        If(i) => mentions_if(i, al)
+    }
+}
+
+// The holes of an interpolated string, plus the target: `$(cap, &alloc)"..."` and `$sb"..."` both
+// carry expressions of their own.
+fn mentions_interpolation(s: &InterpolatedStringExpr, al: &List(String)) bool {
+    const in_target = s.target match {
+        NewString(args) => mentions_any_expr_list(&args, al)
+        IntoBuilder(b) => mentions(b, al)
+    }
+    if in_target {
+        return true
+    }
+    for &part in s.parts {
+        const hit = part.* match {
+            Text(_) => false
+            Hole(h) => mentions(h.expr, al)
+        }
+        if hit {
+            return true
+        }
+    }
+    return false
+}
+
+// Struct literal fields. Shorthand (`.{ x }`) has no value expression - the field name IS the
+// identifier being read, so it counts as a mention of that name.
+fn mentions_struct_fields(fs: &List(StructFieldInit), al: &List(String)) bool {
+    for &f in fs {
+        const hit = f.value match {
+            Some(v) => mentions(v, al)
+            None => contains_name(al, f.name)
+        }
+        if hit {
+            return true
+        }
+    }
+    return false
+}
+
+fn mentions_any_expr_list(xs: &List(Expr), al: &List(String)) bool {
+    for &x in xs {
+        if mentions(x, al) {
             return true
         }
     }

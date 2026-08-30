@@ -1666,9 +1666,9 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     // keeps value semantics with no name resolution involved (the reference inliner's
     // address-of-parameter bug cannot exist here).
     //
-    // The shadow is emitted only where the body earns it (RFC-026): `param_escape` reads the checked
-    // body first, so a parameter the body only reads is bound to the CALLER'S pointer and no copy
-    // exists at any point. spec §3.2 promises exactly that.
+    // The shadow is emitted only where the body earns it (RFC-026): `param_escape` reads the
+    // checked body first, so a parameter the body only reads is bound to the CALLER'S pointer and
+    // no copy exists at any point. spec §3.2 promises exactly that.
     const shadow = shadowed_params(decl, ctx.result, ctx.overlay, ctx.allocator)
     defer shadow.deinit()
     for i in 0..decl.params.len {
@@ -8067,6 +8067,16 @@ test "handing an aggregate parameter's address to a callee brings its copy back 
     let f = &m.functions[find_fn_starting(&m, "outer__")]
     // The callee is free to retain the pointer; its body is never consulted.
     assert_eq(memcpy_count(f), 1 as usize, "an address reaching a call escapes")
+}
+
+test "the shadow is emitted once, however many times the parameter escapes (RFC-026)" {
+    let unit = analyze(from_view("type Pt = struct { x: i32, y: i32 }\nfn inner(q: &Pt) i32 { return q.x }\nfn outer(p: Pt) i32 { let a = &p\np.x = 9\nreturn inner(a) + inner(&p) + p.x }"),
+        "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "outer__")]
+    // Two escapes and a write, but the parameter has one storage location for the whole body, so
+    // the prologue copy covers all of them. `&p` is not a copy per occurrence.
+    assert_eq(memcpy_count(f), 1 as usize, "one shadow, however many escapes")
 }
 
 test "an escape through an alias chain still brings the copy back (RFC-026)" {
