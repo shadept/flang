@@ -949,7 +949,7 @@ object contention on top), stage-2 = stage-3 byte-identical, 11/11 examples.
 ## Implementation phases
 
 ```
- 0  DONE 2026-08-25: CheckPhases on TypeCheckResult, -t/--timings on the CLI;
+ 0  DONE 2026-08-25: CheckPhases on TypeCheckResult, per-phase times on the CLI;
     numbers in Motivation above
  1  DONE 2026-08-25: stable ids + tombstones; lowering iterates by id
  2  DONE 2026-08-25: Gate A harness (cold vs dirty-and-redemand equivalence)

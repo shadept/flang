@@ -7,7 +7,7 @@
 # Three runs:
 #   A  plain: exact call counts, self/inclusive accuracy, folded-file invariants
 #   B  PROFCHECK_PHASES=1: dump()/reset() window separation
-#   C  FLANG_PROFILE_DEPTH=16: stack overflow must degrade gracefully, never corrupt
+#   C  a rebuild with --profile-depth 16: stack overflow degrades gracefully, never corrupts
 param(
     [string]$Flang = "$PSScriptRoot\..\..\dist\win-x64\flang.exe"
 )
@@ -43,16 +43,15 @@ function Row($rows, $frag) {
     return $hit | Select-Object -First 1
 }
 
+# The profiler's knobs are baked in at build time, so a run needing different ones is a rebuild.
 Write-Host "build (-p)..."
-& $Flang -p -s $stdlib build 2>&1 | Select-Object -Last 1
+& $Flang build -p -s $stdlib --profile-out "$PSScriptRoot\build\check.folded" 2>&1 | Select-Object -Last 1
 if ($LASTEXITCODE -ne 0) { throw "profiled build failed" }
 
 # ---- Run A: plain -------------------------------------------------------
 Write-Host "`nrun A: counts, times, folded"
-$env:FLANG_PROFILE_OUT = "$PSScriptRoot\build\check.folded"
 & .\build\profiler_check.exe 1> build\ground.txt 2> build\profile.txt
 $exitA = $LASTEXITCODE
-$env:FLANG_PROFILE_OUT = $null
 Assert ($exitA -eq 0) "run A exits 0"
 
 $ground = Get-Content build\ground.txt
@@ -119,7 +118,11 @@ foreach ($frag in @(".spin_leaf_a(", ".pong(", ".middle(")) {
 }
 
 # ---- Run B: dump() / reset() window separation --------------------------
+# Built without --profile-out: every dump() writes the folded file when a path is baked in, and the
+# table count below is what this run is asserting.
 Write-Host "`nrun B: phases"
+& $Flang build -p -s $stdlib 2>&1 | Select-Object -Last 1
+if ($LASTEXITCODE -ne 0) { throw "phase build failed" }
 $env:PROFCHECK_PHASES = "1"
 & .\build\profiler_check.exe 1> build\ground2.txt 2> build\profile2.txt
 $exitB = $LASTEXITCODE
@@ -137,10 +140,10 @@ Assert ($null -eq $mf2 -or $mf2.calls -eq 0) "post-reset window excludes window-
 
 # ---- Run C: forced stack overflow ---------------------------------------
 Write-Host "`nrun C: depth overflow degrades gracefully"
-$env:FLANG_PROFILE_DEPTH = "16"
+& $Flang build -p -s $stdlib --profile-depth 16 2>&1 | Select-Object -Last 1
+if ($LASTEXITCODE -ne 0) { throw "depth-limited build failed" }
 & .\build\profiler_check.exe 1> $null 2> build\profile3.txt
 $exitC = $LASTEXITCODE
-$env:FLANG_PROFILE_DEPTH = $null
 Assert ($exitC -eq 0) "run C exits 0 under depth pressure"
 Assert ((Get-Content build\profile3.txt -Raw) -match "TRUNCATED") "truncation is reported, not silent"
 $rows3 = Parse-Table (Get-Content build\profile3.txt)

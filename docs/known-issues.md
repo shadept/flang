@@ -55,7 +55,7 @@ particular leak is gone because `Token` no longer owns anything (trivia is deriv
 see architecture.md §CST storage), so the example no longer reproduces - but the resolution bug it
 exposed is untouched and still applies to any element type that owns memory. Read the pick out of
 the emitted C with `flang test -k`, or reproduce with
-`FLANG_LEAK_TRACE=1 flang test` from `lib/flang_lsp`. Importing `flang_parser.token` at the leaking
+`flang test --stats` from `lib/flang_lsp`. Importing `flang_parser.token` at the leaking
 call site does not change it, nor does importing it in `flang_analysis`'s `analyze.f`, so the
 deciding site is unidentified and plain visibility does not explain it.
 
@@ -1133,9 +1133,9 @@ The self-hosted compiler reaches harness parity on **compilation** (551/0/16 thr
 | program name | identifies itself as `bootstrap`, not `flang` |
 
 `--release` landed 2026-08-25 as `-r/--release`; the self-host also has
-`-k/--keep-c` and `-t/--timings`, which the reference does not. Note that
-self-hosted flags must precede the subcommand — `getopts` stops at the first
-non-option argument.
+`-k/--keep-c` and `-S/--stats`, which the reference does not. Self-hosted
+options are parsed against the command they follow, so the command comes
+first: `flang build -r`, not `flang -r build`.
 
 Both `dotnet test.cs` and `dotnet test-all.cs` now drive `dist/<rid>/flang`.
 

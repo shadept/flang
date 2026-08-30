@@ -11,7 +11,7 @@
 function call is timed into a call-tree trie, and at exit the process writes
 
 1. a flat table (calls, self, inclusive, ns/call) to stderr, and
-2. a folded-stack file (`FLANG_PROFILE_OUT=prof.folded`) that loads directly
+2. a folded-stack file (`flang build -p --profile-out prof.folded`) that loads directly
    into speedscope / inferno / flamegraph.pl as a flamegraph.
 
 Instrumentation is a FIR pass that runs after the shim inliner, so a profile
@@ -117,7 +117,8 @@ time at dump (clamped at 0). Without this, probe overhead masquerades as
 self time in small-function-heavy code.
 
 **Capacity**: node pool and stack depth are fixed (defaults: 64Ki nodes,
-8Ki frames; `FLANG_PROFILE_NODES` / `FLANG_PROFILE_DEPTH` override). Pool
+8Ki frames; `--profile-nodes` / `--profile-depth` override, baked in at
+build time). Pool
 exhaustion routes new edges into a per-parent sink node; stack overflow
 counts depth past the cap and skips timing until it unwinds. Both are
 reported in the dump header so truncation is never silent.
@@ -126,7 +127,7 @@ reported in the dump header so truncation is never silent.
 
 - **Flat table** (stderr, at `atexit` or explicit `std.profile.dump()`):
   sorted by self time; columns calls, self ms, incl ms, ns/call, name.
-- **Folded stacks** (`FLANG_PROFILE_OUT=path`): one line per trie node,
+- **Folded stacks** (`--profile-out <path>`): one line per trie node,
   `main;analyze_project;infer_body 12345` with self time as the count.
   Standard format; speedscope.app renders it as a flamegraph with zero
   tooling on our side.
@@ -171,7 +172,7 @@ lookup on free; opt-in via a separate flag if the overhead warrants it.
    recursive checker otherwise mints one path per depth level - 13M+
    paths for one self-build - exhausting any pool and making folded
    output quadratic in depth), and the folded file keeps the
-   heaviest paths under a byte budget (FLANG_PROFILE_MAX_MB, default 32)
+   heaviest paths under a fixed 32 MB byte budget
    so it can never outgrow what a flamegraph viewer loads, written in
    first-entry order so time-ordered views read left to right. Reports print
    display names (`module.path.name(&Type,u32)`, built at symbol

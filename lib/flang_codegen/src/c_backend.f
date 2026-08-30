@@ -2,7 +2,7 @@
 //
 // Three layers in this file:
 //
-//   1. `translate(&IrModule, &StringBuilder)` - emit C source from FIR.
+//   1. `translate(&IrModule, &StringBuilder, &BuildOptions?)` - emit C source from FIR.
 //      Mechanical 1:1 walk; the mapping table lives in `docs/fir.md`.
 //   2. `discover_compiler(...)` - locate a working C toolchain.
 //      Windows: MSVC via vswhere; POSIX: $CC / clang / cc / gcc;
@@ -38,8 +38,9 @@ import flang_codegen.fir
 // Public API
 // =============================================================================
 
-// Lower the module to a C translation unit. Caller owns `sb`.
-pub fn translate(m: &IrModule, sb: &StringBuilder) {
+// Lower the module to a C translation unit. Caller owns `sb`. `opts` carries the values the entry
+// point hands to the runtime sidecars; without it they keep their own defaults.
+pub fn translate(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = null) {
     emit_preamble(sb)
     // Before the externs that name them: one C struct per by-value aggregate a foreign signature
     // mentions.
@@ -85,10 +86,10 @@ pub fn translate(m: &IrModule, sb: &StringBuilder) {
         if i > 0 {
             sb.append("\n")
         }
-        emit_function(&m.functions[i], &sigs, sb)
+        emit_function(&m.functions[i], &sigs, sb, opts)
     }
     if m.testing {
-        emit_test_runner(m, sb)
+        emit_test_runner(m, sb, opts)
     }
 }
 
@@ -100,7 +101,7 @@ pub fn translate(m: &IrModule, sb: &StringBuilder) {
 // Everything the loop mutates lives at file scope. A local modified between `setjmp` and `longjmp`
 // is indeterminate afterwards (C99 7.13.2.1p3), so counters kept in `main` would be free for an
 // optimizer to mangle on exactly the failure path they are meant to count.
-fn emit_test_runner(m: &IrModule, sb: &StringBuilder) {
+fn emit_test_runner(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = null) {
     sb.append("\n/* flang test runner */\n")
     sb.append("typedef void (*__flang_test_fn)(void);\n")
 
@@ -141,6 +142,7 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder) {
         sb.append("extern size_t __flang_test_epilogue(size_t*);\n")
         sb.append("extern void __flang_test_leak_sites(void);\n")
         sb.append("extern void __flang_test_reset(void);\n")
+        sb.append("extern void __flang_test_set_leak_trace(int);\n")
         sb.append("static size_t __flang_test_leak_bytes = 0;\n")
         sb.append("static size_t __flang_test_leak_blocks = 0;\n")
     }
@@ -148,6 +150,11 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder) {
     sb.append("int main(int __flang_argc_, char** __flang_argv_) {\n")
     sb.append("    __flang_argc = __flang_argc_;\n")
     sb.append("    __flang_argv = __flang_argv_;\n")
+    // Before the tracking allocator is installed, so the first block it hands out already carries a
+    // stack.
+    if tracked and leak_trace_on(opts) {
+        sb.append("    __flang_test_set_leak_trace(1);\n")
+    }
     // Constant initializers first, then the tracking allocator: anything the initializers allocate
     // belongs to the program, not to the first test, and must not be reported as its leak.
     sb.append("    ")
@@ -181,8 +188,9 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder) {
         sb.append("            if (__flang_test_leak_blocks > 0) {\n")
         sb.append("                printf(\"  leaked %zu block(s), %zu byte(s)\\n\",")
         sb.append(" __flang_test_leak_blocks, __flang_test_leak_bytes);\n")
-        // Silent unless FLANG_LEAK_TRACE is set, in which case it walks the ledger the epilogue
-        // left standing and prints the allocation stack behind each group of leaked blocks.
+        // Silent unless the runner armed leak tracing, in which case it walks the ledger the
+        // epilogue left standing and prints the allocation stack behind each group of leaked
+        // blocks.
         sb.append("                __flang_test_leak_sites();\n")
         sb.append("                __flang_test_leaked++;\n")
         sb.append("            }\n")
@@ -223,7 +231,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     const translate_start = monotonic_ns()
     let sb = string_builder(4096, alloc)
     defer sb.deinit()
-    translate(m, &sb)
+    translate(m, &sb, Some(options))
 
     // 2. Pick a place for the .c file. emit_c_path wins if set; otherwise
     //    we drop it next to the output executable with a ".c" extension.
@@ -384,9 +392,22 @@ fn emit_preamble(sb: &StringBuilder) {
     sb.append("    if (index < 0 || index >= __flang_argc) return (unsigned char*)0;\n")
     sb.append("    return (unsigned char*)__flang_argv[index];\n")
     sb.append("}\n")
+    // Declared unconditionally, called only from a profiled build's entry point; the definition
+    // lives in stdlib/std/profile.c, which such a build links.
+    sb.append("extern void __flang_profile_configure(unsigned int, unsigned int, const char*);\n")
+    // MSVC deprecates `getenv` in favour of `_dupenv_s`, which allocates. The view returned here is
+    // borrowed from the CRT's own storage and nothing frees it, so the deprecation is refused
+    // around this one function rather than the whole file.
+    sb.append("#ifdef _MSC_VER\n")
+    sb.append("#pragma warning(push)\n")
+    sb.append("#pragma warning(disable: 4996)\n")
+    sb.append("#endif\n")
     sb.append("unsigned char* __flang_getenv(const unsigned char* name) {\n")
     sb.append("    return (unsigned char*)getenv((const char*)name);\n")
     sb.append("}\n")
+    sb.append("#ifdef _MSC_VER\n")
+    sb.append("#pragma warning(pop)\n")
+    sb.append("#endif\n")
     sb.append("\n")
     emit_test_abort(sb)
 }
@@ -734,7 +755,61 @@ fn emit_fn_decl(f: &Function, sb: &StringBuilder) {
     sb.append(")")
 }
 
-fn emit_function(f: &Function, sigs: &SigIndex, sb: &StringBuilder) {
+// Whether the build asked for allocation stacks behind leaked test blocks.
+fn leak_trace_on(opts: &BuildOptions?) bool {
+    return opts match {
+        Some(o) => o.leak_trace
+        None => false
+    }
+}
+
+// The profiler's pool sizes and folded-stack path, handed over before the first probe fires. The
+// call is emitted only when one of them was set, and only a profiled build sets them - the symbol
+// lives in `stdlib/std/profile.c`, which is linked exactly then.
+fn emit_profile_config(sb: &StringBuilder, opts: &BuildOptions?) {
+    const o = opts match {
+        Some(x) => x
+        None => return
+    }
+    const has_path = o.profile_out.is_some()
+    if o.profile_nodes == 0 and o.profile_depth == 0 and !has_path {
+        return
+    }
+    sb.append("    __flang_profile_configure(")
+    sb.append(o.profile_nodes)
+    sb.append("u, ")
+    sb.append(o.profile_depth)
+    sb.append("u, ")
+    o.profile_out match {
+        Some(p) => {
+            sb.append("\"")
+            emit_c_string_body(p, sb)
+            sb.append("\"")
+        }
+        None => sb.append("0")
+    }
+    sb.append(");\n")
+}
+
+// Every block label some terminator branches to. The entry block is left out: it is reached by
+// falling into the function, never by name.
+fn targeted_labels(f: &Function) Dict(String, bool) {
+    let hit: Dict(String, bool) = dict()
+    for &blk in f.blocks {
+        blk.terminator match {
+            Br(t) => hit.set(t.label, true)
+            BrIf(t) => {
+                hit.set(t.then_target.label, true)
+                hit.set(t.else_target.label, true)
+            }
+            Ret(_) => {}
+            Unreachable => {}
+        }
+    }
+    return hit
+}
+
+fn emit_function(f: &Function, sigs: &SigIndex, sb: &StringBuilder, opts: &BuildOptions? = null) {
     emit_fn_decl(f, sb)
     sb.append(" {\n")
 
@@ -743,6 +818,7 @@ fn emit_function(f: &Function, sigs: &SigIndex, sb: &StringBuilder) {
     if is_entry_point(f) {
         sb.append("    __flang_argc = __flang_argc_;\n")
         sb.append("    __flang_argv = __flang_argv_;\n")
+        emit_profile_config(sb, opts)
     }
 
     // Hoist every non-entry block parameter to a function-scope local - this is what gives us the
@@ -760,12 +836,18 @@ fn emit_function(f: &Function, sigs: &SigIndex, sb: &StringBuilder) {
         }
     }
 
+    // A block no terminator names is unreachable - break, continue and return in expression
+    // position all leave one behind. Its code still has to be emitted, since a later block may name
+    // a value defined in it, but a label nothing jumps to is a warning in every C compiler.
+    let targeted = targeted_labels(f)
+    defer targeted.deinit()
+
     for bi in 0..f.blocks.len {
         const blk = &f.blocks[bi]
         if bi > 0 {
             sb.append("\n")
         }
-        if bi > 0 {
+        if bi > 0 and targeted.get(blk.label).is_some() {
             sb.append(blk.label)
             sb.append(":;\n")
         }

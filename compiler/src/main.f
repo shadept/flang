@@ -1,6 +1,6 @@
 // the FLang compiler, written in FLang.
 //
-//   flang [--help] [--version] [-v|--verbose] <command> [args...]
+//   flang [--help] [--version] <command> [args...]
 //
 //   commands:
 //     build <file.f>        compile a source file
@@ -12,6 +12,7 @@
 // fmt runs in-process on lib/flang_fmt; lsp runs in-process on lib/flang_lsp.
 
 import std.allocator
+import std.conv
 import std.dict
 import std.env
 import std.list
@@ -44,14 +45,18 @@ import flang.frontend
 type Cli = struct {
     show_help: bool
     show_version: bool
-    verbose: bool
     emit_generated: bool
     keep_c: bool
     emit_c_only: bool
-    timings: bool
+    stats: bool
     release: bool
     profile: bool
     profile_all: bool
+    // `--profile-out/-nodes/-depth`: baked into a profiled binary, which has no command line of its
+    // own. An empty path writes no folded stacks; a zero keeps the runtime's own default.
+    profile_out: String
+    profile_nodes: u32
+    profile_depth: u32
     check: bool
     eager: bool
     warn_unused: bool
@@ -71,15 +76,19 @@ type Cli = struct {
 // Everything a build needs beyond the input path: the flags that shape it, plus the values derived
 // once from the CLI (stdlib root, compile-time context) and the clock it started on.
 type BuildOpts = struct {
-    verbose: bool
+    // `--stats`: every instrumentation readout this compiler has - phase times, memory, interner
+    // and allocator counters, the lowering skip report, and leak sites under `test`.
+    stats: bool
     check_only: bool
     emit_generated: bool
     keep_c: bool
     emit_c_only: bool
-    timings: bool
     release: bool
     profile: bool
     profile_all: bool
+    profile_out: String
+    profile_nodes: u32
+    profile_depth: u32
     eager: bool
     warn_unused: bool
     color: ColorChoice
@@ -102,12 +111,23 @@ pub fn deinit(self: &BuildOpts) {
     self.stdlib_path.deinit()
 }
 
+// The compiler's own allocation ledger, wrapped around the global allocator under `--stats`. It
+// sits at file scope because every readout is reached through a different call path and the
+// decorator has to outlive all of them. Without `--stats` nothing is installed and the global
+// allocator is called directly.
+const alloc_counter = counting_allocator(global())
+const counted_global = allocator(&alloc_counter)
+
 pub fn main() i32 {
     let args = get_args()
     defer args.deinit()
     const argv = args.as_slice()
 
     let cli = parse_cli(argv)
+    // Everything after this point allocates through the ledger; argv above is the only exception.
+    if cli.stats {
+        let _prev = set_global_allocator(&counted_global)
+    }
 
     if cli.show_help {
         print_help()
@@ -179,15 +199,15 @@ fn parse_cli(argv: String[]) Cli {
 
 // Options accepted after any command. Kept apart from the per-command sets so a new command starts
 // with these and adds only what it needs.
-const SHARED_OPTS: String = "h(help)V(version)v(verbose)s(stdlib-path):T(target-os):A(target-arch):C(color):"
+const SHARED_OPTS: String = "h(help)V(version)s(stdlib-path):T(target-os):A(target-arch):C(color):"
 
 // What each command accepts on top of `SHARED_OPTS`. An unknown command gets none, and is reported
 // as unknown before the options matter.
 fn command_opts(cmd: String) String {
     return cmd match {
-        "build" => "c(check)g(emit-generated)k(keep-c)E(emit-c-only)t(timings)r(release)p(profile)P(profile-all)e(eager)W(warn-unused)"
-        "test" => "n(name):r(release)k(keep-c)t(timings)e(eager)W(warn-unused)"
-        "check" => "e(eager)W(warn-unused)t(timings)"
+        "build" => "c(check)g(emit-generated)k(keep-c)E(emit-c-only)S(stats)r(release)p(profile)P(profile-all)O(profile-out):N(profile-nodes):D(profile-depth):e(eager)W(warn-unused)"
+        "test" => "n(name):r(release)k(keep-c)S(stats)e(eager)W(warn-unused)"
+        "check" => "e(eager)W(warn-unused)S(stats)"
         "fmt" => "c(check)"
         // LSP clients append `--stdio` to name the transport. The server speaks stdio and nothing
         // else, so the flag parses and is ignored.
@@ -209,9 +229,6 @@ fn apply_opts(cli: &Cli, spec: String, argv: String[]) {
                 if c == 'V' {
                     cli.show_version = true
                 }
-                if c == 'v' {
-                    cli.verbose = true
-                }
                 if c == 'g' {
                     cli.emit_generated = true
                 }
@@ -221,8 +238,8 @@ fn apply_opts(cli: &Cli, spec: String, argv: String[]) {
                 if c == 'E' {
                     cli.emit_c_only = true
                 }
-                if c == 't' {
-                    cli.timings = true
+                if c == 'S' {
+                    cli.stats = true
                 }
                 if c == 'r' {
                     cli.release = true
@@ -255,6 +272,15 @@ fn apply_opts(cli: &Cli, spec: String, argv: String[]) {
                 }
                 if c == 'n' {
                     cli.name_filter = val
+                }
+                if c == 'O' {
+                    cli.profile_out = val
+                }
+                if c == 'N' {
+                    cli.profile_nodes = count_arg(val)
+                }
+                if c == 'D' {
+                    cli.profile_depth = count_arg(val)
                 }
                 if c == 'C' {
                     const choice = color_choice(val)
@@ -314,18 +340,23 @@ fn print_help() {
     println("options (after the command; each command takes the shared set plus its own):")
     println("  -h, --help          show this help")
     println("  -V, --version       show version")
-    println("  -v, --verbose       verbose output")
+    println("  -S, --stats         print every instrumentation readout: phase times, memory,")
+    println("                      allocator counters, the lowering skip report, and (under")
+    println("                      `test`) the allocation stack behind each leaked block")
     println("  -C, --color <when>  colorize diagnostics: auto (default), always, never")
     println("  -g, --emit-generated  write template expansions to <origin>.generated.f (debug)")
     println("  -c, --check         type-check only (no codegen or link)")
     println("  -k, --keep-c        keep the generated C beside the executable")
     println("  -E, --emit-c-only   write the generated C and stop (no compile or link);")
     println("                      with -T/-A this emits C for an OS the host cannot link")
-    println("  -t, --timings       print per-phase wall times")
+
     println("  -r, --release       optimize the generated C (-O2 / /O2)")
     println("  -p, --profile       instrument the project's functions for profiling (implies")
     println("                      --release); the binary prints a profile on exit, see std.profile")
     println("  -P, --profile-all   like --profile, but instrument the stdlib too")
+    println("      --profile-out <path>    also write folded stacks there (flamegraph input)")
+    println("      --profile-nodes <n>     call-path pool size (default 1048576)")
+    println("      --profile-depth <n>     shadow stack depth (default 8192)")
     println("  -e, --eager         type-check every loaded module's bodies, not just the")
     println("                      project's import closure")
     println("  -W, --warn-unused   report unreachable project functions (W1003)")
@@ -422,18 +453,22 @@ fn build_opts(argv: String[], cli: &Cli, force_check: bool, testing: bool) Build
         return null
     }
     let stdlib = effective_stdlib(cli.stdlib_path, argv)
+    const profiling = cli.profile or cli.profile_all
     const opts = BuildOpts {
-        verbose = cli.verbose,
+        stats = cli.stats,
         check_only = cli.check or force_check,
         emit_generated = cli.emit_generated,
         keep_c = cli.keep_c,
         emit_c_only = cli.emit_c_only,
-        timings = cli.timings,
         // Profiling a build the C compiler didn't optimize measures the debug codegen, not the
         // program - `--profile` implies `--release`.
-        release = cli.release or cli.profile or cli.profile_all,
-        profile = cli.profile or cli.profile_all,
+        release = cli.release or profiling,
+        profile = profiling,
         profile_all = cli.profile_all,
+        // The knobs shape the probe runtime, which is linked only by a profiled build.
+        profile_out = if profiling { cli.profile_out } else { "" },
+        profile_nodes = if profiling { cli.profile_nodes } else { 0 as u32 },
+        profile_depth = if profiling { cli.profile_depth } else { 0 as u32 },
         eager = cli.eager,
         warn_unused = cli.warn_unused,
         color = cli.color,
@@ -606,7 +641,7 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
 
     if opts.emit_generated {
         const n = unit.write_generated()
-        if opts.verbose {
+        if opts.stats {
             const gm = $"  wrote {n} generated file(s)"
             defer gm.deinit()
             println(gm.as_view())
@@ -668,7 +703,7 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
     render_project_diagnostics(&unit.diagnostics, &unit.file_paths, &unit.sources, &style)
 
     const errs = project_error_count(unit)
-    if opts.verbose {
+    if opts.stats {
         const v = $"  ({unit.modules.len} modules, {unit.result.node_types.len()} nodes typed)"
         defer v.deinit()
         println(v.as_view())
@@ -681,29 +716,8 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
         const m = $"checked {label} ({unit.modules.len} modules) in {elapsed_ns(opts.start_ns) / 1000000}ms"
         defer m.deinit()
         println(m.as_view())
-        // ponytail: measurement scaffolding for the RFC-024 key rework; drop once the numbers land.
-        if env("FLANG_INTERNER_STATS").is_some() {
-            const st = unit.result.interner.stats_report()
-            defer st.deinit()
-            println(st.as_view())
-            let arenas: usize = 0
-            let arenas_used: usize = 0
-            let pages: usize = 0
-            for &m in unit.modules {
-                arenas = arenas + m.arena.capacity_bytes()
-                arenas_used = arenas_used + m.arena.used_bytes()
-                pages = pages + m.arena.page_count()
-            }
-            let src: usize = 0
-            for &sc in unit.sources {
-                src = src + sc.len
-            }
-            const r = &unit.result
-            const mm = $"memory: arenas={arenas} arenas_used={arenas_used} pages={pages} sources={src} interner={r.interner.capacity_bytes()} node_types={r.node_types.capacity_bytes()} resolved_ops={r.resolved_ops.capacity_bytes()} resolved_targets={r.resolved_targets.capacity_bytes()} instantiated={r.instantiated_types.capacity_bytes()} desugars={r.desugars.capacity_bytes()} default_args={r.default_args.capacity_bytes()} arg_lists={r.arg_lists.capacity_bytes()} receiver_derefs={r.receiver_derefs.capacity_bytes()}"
-            defer mm.deinit()
-            println(mm.as_view())
-        }
-        if opts.timings {
+        if opts.stats {
+            print_memory(unit)
             print_timings(unit, 0, 0, 0, elapsed_ns(opts.start_ns))
         }
         return 0
@@ -739,9 +753,11 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
         name_filter = Some(opts.test_name)
     }
 
+    let prof_out: String? = if opts.profile_out.len > 0 { Some(opts.profile_out) } else { null }
     let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, opts.target,
-        &unit.file_paths, libs, ldflags, opts.verbose, opts.keep_c, opts.release, dm, prof_rt,
-        opts.profile_all, opts.emit_c_only, tests, name_filter)
+        &unit.file_paths, libs, ldflags, opts.stats, opts.keep_c, opts.release, dm, prof_rt,
+        opts.profile_all, prof_out, opts.profile_nodes, opts.profile_depth, opts.emit_c_only, tests,
+        name_filter)
     if result.is_err() {
         report_build_error(&result.unwrap_err(), label)
         return 1
@@ -754,7 +770,8 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
         artifact.executable_path.as_view()
     }
     if opts.testing and !opts.emit_c_only {
-        if opts.timings {
+        if opts.stats {
+            print_memory(unit)
             print_timings(unit, artifact.lower_ns, artifact.translate_ns, artifact.cc_ns,
                 elapsed_ns(opts.start_ns))
         }
@@ -764,7 +781,8 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
     const msg = $"{verb} {built} in {elapsed_ns(opts.start_ns) / 1000000}ms"
     defer msg.deinit()
     println(msg.as_view())
-    if opts.timings {
+    if opts.stats {
+        print_memory(unit)
         print_timings(unit, artifact.lower_ns, artifact.translate_ns, artifact.cc_ns,
             elapsed_ns(opts.start_ns))
     }
@@ -810,9 +828,9 @@ fn run_test_binary(built: String) i32 {
     return code.unwrap()
 }
 
-// `--timings`: where the wall time went, one line per phase, with the typechecker broken into its
-// own phases beneath it. "other" is the remainder - project manifest, glob, diagnostics rendering,
-// teardown - and is the cue that a phase worth naming is still unaccounted for.
+// Under `--stats`: where the wall time went, one line per phase, with the typechecker broken into
+// its own phases beneath it. "other" is the remainder - project manifest, glob, diagnostics
+// rendering, teardown - and is the cue that a phase worth naming is still unaccounted for.
 fn print_timings(unit: &AnalyzedProject, lower_ns: u64, translate_ns: u64, cc_ns: u64,
     total_ns: u64) {
     const p = unit.result.phases
@@ -835,6 +853,54 @@ fn print_timings(unit: &AnalyzedProject, lower_ns: u64, translate_ns: u64, cc_ns
     print_phase("other", if named < total_ns { total_ns - named } else { 0 as u64 }, total_ns,
         false)
     print_phase("total", total_ns, total_ns, false)
+}
+
+// Under `--stats`: what the check is holding, by owner. `arenas` is the AST's capacity against
+// `arenas_used`, the bytes actually handed out; every other figure is a side table's own capacity.
+// Sizes are what each structure took from its allocator, not what its contents asked for.
+fn print_memory(unit: &AnalyzedProject) {
+    const st = unit.result.interner.stats_report()
+    defer st.deinit()
+    println(st.as_view())
+
+    let arenas: usize = 0
+    let arenas_used: usize = 0
+    let pages: usize = 0
+    for &m in unit.modules {
+        arenas = arenas + m.arena.capacity_bytes()
+        arenas_used = arenas_used + m.arena.used_bytes()
+        pages = pages + m.arena.page_count()
+    }
+    let src: usize = 0
+    for &sc in unit.sources {
+        src = src + sc.len
+    }
+    const r = &unit.result
+    const mm = $"memory: arenas={arenas} arenas_used={arenas_used} pages={pages} sources={src} interner={r.interner.capacity_bytes()} node_types={r.node_types.capacity_bytes()} resolved_ops={r.resolved_ops.capacity_bytes()} resolved_targets={r.resolved_targets.capacity_bytes()} instantiated={r.instantiated_types.capacity_bytes()} desugars={r.desugars.capacity_bytes()} default_args={r.default_args.capacity_bytes()} arg_lists={r.arg_lists.capacity_bytes()} receiver_derefs={r.receiver_derefs.capacity_bytes()}"
+    defer mm.deinit()
+    println(mm.as_view())
+
+    // What passed through the global allocator. `live` is what is still out at this point, which
+    // includes everything the readout itself is holding, so it is a floor on the leak rather than
+    // the leak. Arena pages count once here and again as arena capacity above.
+    const c = &alloc_counter
+    const ac = $"allocator: allocs={c.allocs} reallocs={c.reallocs} frees={c.deallocs} live={c.live_bytes} peak={c.peak_bytes} total={c.total_bytes}"
+    defer ac.deinit()
+    println(ac.as_view())
+}
+
+// A count argument for the profiler knobs. Anything that is not a whole number reads as zero, which
+// leaves the runtime's own default in place.
+fn count_arg(val: String) u32 {
+    const r = parse_u32(val)
+    if r.is_err() {
+        return 0
+    }
+    const parsed = r.unwrap()
+    if parsed.1 != val.len {
+        return 0
+    }
+    return parsed.0 as u32
 }
 
 fn print_phase(label: String, ns: u64, total_ns: u64, nested: bool) {
@@ -1055,13 +1121,6 @@ fn report_fmt_error(path: String, e: FmtError) {
 // Spawn the sibling tool with our trailing argv. Tool binaries are expected on PATH (or addressable
 // by relative name); the child inherits our environment so it sees the same workspace context.
 fn spawn_tool(tool: String, cli: &Cli) i32 {
-    const verbose = cli.verbose
-    if verbose {
-        const v = $"flang: spawning `{tool}`"
-        defer v.deinit()
-        println(v.as_view())
-    }
-
     let cmd = command(tool)
     defer cmd.deinit()
     cmd.inherit_env()

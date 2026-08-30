@@ -16,7 +16,7 @@
 // absorb exactly the self time these budgets pin down.
 //
 // stdout carries the ground truth (wall time of the measured region and expected counts) for the
-// checker to parse; the profiler's own output goes to stderr / FLANG_PROFILE_OUT.
+// checker to parse; the profiler's own output goes to stderr and the `--profile-out` path.
 
 import std.env
 import std.option

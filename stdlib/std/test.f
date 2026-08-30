@@ -24,21 +24,29 @@ import std.string_builder
 #foreign fn __flang_test_track_realloc(old_ptr: &u8, new_ptr: &u8, new_size: usize) void
 #foreign fn __flang_test_track_free(ptr: &u8) void
 
+// Built on malloc, so it carries the global allocator's ceiling: a request above `MAX_ALIGN` is
+// declined rather than under-served.
 fn test_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
+    if alignment > MAX_ALIGN {
+        return null
+    }
     const ptr = malloc(size)?
     __flang_test_track_alloc(ptr, size)
     // Wrapped explicitly - see the note in core/range.f::next.
     return Some(slice_from_raw_parts(ptr, size))
 }
 
-fn test_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
+fn test_realloc(impl: &u8, memory: u8[], alignment: usize, new_size: usize) u8[]? {
+    if alignment > MAX_ALIGN {
+        return null
+    }
     const old_ptr = memory.ptr
     const ptr = realloc(Some(old_ptr), new_size)?
     __flang_test_track_realloc(old_ptr, ptr, new_size)
     return Some(slice_from_raw_parts(ptr, new_size))
 }
 
-fn test_dealloc(impl: &u8, memory: u8[]) {
+fn test_dealloc(impl: &u8, memory: u8[], alignment: usize) {
     __flang_test_track_free(memory.ptr)
     free(Some(memory.ptr))
 }

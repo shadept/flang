@@ -21,12 +21,14 @@
  *   - flat table on stderr at process exit (or __flang_prof_dump), sorted
  *     by self time
  *   - folded stacks ("a;b;c <self_ns>" per call path) written to the path
- *     in FLANG_PROFILE_OUT - the input format of speedscope / inferno /
- *     flamegraph.pl
+ *     `flang build --profile-out` baked in - the input format of
+ *     speedscope / inferno / flamegraph.pl
  *
- * Sizing: FLANG_PROFILE_NODES (default 1Mi, 32 MB) caps distinct call
- * paths; FLANG_PROFILE_DEPTH (default 8192) caps live stack depth.
- * FLANG_PROFILE_MAX_MB (default 32) caps the folded file. Overrun never
+ * Sizing comes from the build, through __flang_profile_configure, which the
+ * generated entry point calls before the first probe: `--profile-nodes`
+ * (default 1Mi, 32 MB) caps distinct call paths and `--profile-depth`
+ * (default 8192) caps live stack depth. PROF_FOLDED_MAX_MB caps the folded
+ * file. Overrun never
  * corrupts pairing: an enter that cannot get a node or frame only bumps a
  * skip counter that its exit consumes, and the dump header reports how much
  * was dropped.
@@ -274,16 +276,29 @@ void __flang_prof_exit(void) {
 /* Registration                                                       */
 /* ------------------------------------------------------------------ */
 
-static uint32_t prof_env_u32(const char* name, uint32_t fallback) {
-    const char* v = getenv(name);
-    if (!v || !*v) {
+/* Byte budget for the folded file. Beyond it the heaviest paths are kept
+   and the rest reported as dropped. */
+#define PROF_FOLDED_MAX_MB 32
+
+static uint32_t prof_cfg_nodes = 0;
+static uint32_t prof_cfg_depth = 0;
+static const char* prof_cfg_out = NULL;
+
+/* The build's `-p` knobs, handed over by the generated entry point before
+   any probe fires. A zero keeps the default below; a null path writes no
+   folded output. */
+void __flang_profile_configure(unsigned int nodes, unsigned int depth,
+                               const char* out) {
+    prof_cfg_nodes = (uint32_t)nodes;
+    prof_cfg_depth = (uint32_t)depth;
+    prof_cfg_out = out;
+}
+
+static uint32_t prof_limit(uint32_t configured, uint32_t fallback) {
+    if (configured < 16 || configured > 0x40000000UL) {
         return fallback;
     }
-    unsigned long n = strtoul(v, NULL, 10);
-    if (n < 16 || n > 0x40000000UL) {
-        return fallback;
-    }
-    return (uint32_t)n;
+    return configured;
 }
 
 /* Run probe pairs against the empty tree and time them, so dump() can
@@ -322,8 +337,8 @@ void __flang_prof_register(int64_t count, const void* names, int64_t names_len) 
     prof_names = (const char*)names;
     prof_names_len = names_len;
 
-    prof_pool_cap = prof_env_u32("FLANG_PROFILE_NODES", 1 << 20);
-    prof_stack_cap = prof_env_u32("FLANG_PROFILE_DEPTH", 8192);
+    prof_pool_cap = prof_limit(prof_cfg_nodes, 1 << 20);
+    prof_stack_cap = prof_limit(prof_cfg_depth, 8192);
     prof_pool = (ProfNode*)calloc(prof_pool_cap, sizeof(ProfNode));
     prof_stack = (ProfFrame*)malloc((size_t)prof_stack_cap * sizeof(ProfFrame));
     prof_active = (uint32_t*)calloc(prof_func_count ? prof_func_count : 1, sizeof(uint32_t));
@@ -453,7 +468,7 @@ static int prof_index_cmp(const void* a, const void* b) {
 }
 
 /* Folded lines are independent of each other and of order, so the byte
- * budget (FLANG_PROFILE_MAX_MB) keeps the HEAVIEST paths - what it
+ * budget (PROF_FOLDED_MAX_MB) keeps the HEAVIEST paths - what it
  * drops is the lightest tail, which a flamegraph could not have
  * rendered visibly anyway. The kept lines are then written in pool
  * order: nodes are minted at first entry, so the file reads in the
@@ -466,7 +481,7 @@ static void prof_write_folded(const char* path, const double* self, double ns_pe
         fprintf(stderr, "flang profile: cannot write %s\n", path);
         return;
     }
-    uint64_t budget = (uint64_t)prof_env_u32("FLANG_PROFILE_MAX_MB", 32) * 1024 * 1024;
+    uint64_t budget = (uint64_t)PROF_FOLDED_MAX_MB * 1024 * 1024;
 
     uint32_t* chain = (uint32_t*)malloc((size_t)prof_stack_cap * sizeof(uint32_t));
     uint32_t* order = (uint32_t*)malloc((size_t)prof_pool_used * sizeof(uint32_t));
@@ -533,8 +548,7 @@ static void prof_write_folded(const char* path, const double* self, double ns_pe
 
     fprintf(stderr, "flang profile: %u folded paths written to %s", keep, path);
     if (keep < count) {
-        fprintf(stderr, " (byte budget dropped the %u lightest paths, %.3f ms total;"
-            " raise FLANG_PROFILE_MAX_MB to keep them)",
+        fprintf(stderr, " (byte budget dropped the %u lightest paths, %.3f ms total)",
             count - keep, dropped_ns / 1e6);
     }
     fprintf(stderr, "\n");
@@ -586,7 +600,7 @@ void __flang_prof_dump(void) {
     if (prof_dropped_edges || prof_dropped_frames) {
         fprintf(stderr,
             " (TRUNCATED: %llu enters lost to the node pool, %llu to stack depth;"
-            " raise FLANG_PROFILE_NODES / FLANG_PROFILE_DEPTH)",
+            " raise --profile-nodes / --profile-depth)",
             (unsigned long long)prof_dropped_edges,
             (unsigned long long)prof_dropped_frames);
     }
@@ -609,9 +623,8 @@ void __flang_prof_dump(void) {
             (unsigned long long)rows[i].calls, self_ms, incl_ms, per_call,
             (int)lens[rows[i].func_id], names[rows[i].func_id]);
     }
-    const char* out_path = getenv("FLANG_PROFILE_OUT");
-    if (out_path && *out_path) {
-        prof_write_folded(out_path, self, ns_per_tick, names, lens);
+    if (prof_cfg_out && *prof_cfg_out) {
+        prof_write_folded(prof_cfg_out, self, ns_per_tick, names, lens);
     }
 
 out:

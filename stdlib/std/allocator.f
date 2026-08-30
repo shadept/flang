@@ -53,11 +53,23 @@ pub fn or_global(alloc: &Allocator?) &Allocator {
 // Allocator - interface for memory management
 // =============================================================================
 
-// Function type definitions for the allocator vtable.
+// Function type definitions for the allocator vtable. The alignment `malloc`, `realloc` and `free`
+// guarantee: enough for any type with fundamental alignment, 16 bytes on every target FLang builds
+// for. An allocator built on them declines a request above this rather than returning memory that
+// does not meet it. The bump allocators have no such ceiling - they align their own cursor - so the
+// limit is the global allocator's, not the interface's.
+pub const MAX_ALIGN: usize = 16
+
+// Every entry point carries the alignment, because a stateless allocator cannot recover it from a
+// pointer: a block that moves has to land on the alignment it was allocated with, and a platform
+// whose over-aligned blocks need their own release path (`_aligned_free` on Windows) has to know
+// which kind it is holding. `realloc` and `dealloc` must be given the same alignment the matching
+// `alloc` was. It sits next to `memory`, which it finishes describing, ahead of the new size being
+// asked for.
 pub type AllocatorVTable = struct {
     alloc: fn(&u8, size: usize, alignment: usize) u8[]?
-    realloc: fn(&u8, memory: u8[], new_size: usize) u8[]?
-    dealloc: fn(&u8, memory: u8[]) void
+    realloc: fn(&u8, memory: u8[], alignment: usize, new_size: usize) u8[]?
+    dealloc: fn(&u8, memory: u8[], alignment: usize) void
 }
 
 // Type-erased allocator interface.
@@ -74,16 +86,16 @@ pub fn alloc(allocator: &Allocator, size: usize, alignment: usize) u8[]? {
     return allocator.vtable.alloc(allocator.impl, size, alignment)
 }
 
-// Reallocate an existing allocation to a new size. Returns new pointer or null on failure. Some
-// allocators may not support realloc and return null.
-pub fn realloc(allocator: &Allocator, memory: u8[], new_size: usize) u8[]? {
-    return allocator.vtable.realloc(allocator.impl, memory, new_size)
+// Reallocate an existing allocation to a new size, under the alignment it was allocated with.
+// Returns the new pointer, or null on failure - some allocators do not support realloc at all.
+pub fn realloc(allocator: &Allocator, memory: u8[], alignment: usize, new_size: usize) u8[]? {
+    return allocator.vtable.realloc(allocator.impl, memory, alignment, new_size)
 }
 
-// Free memory previously allocated by this allocator. Some allocators (like FixedBufferAllocator)
-// may do nothing.
-pub fn dealloc(allocator: &Allocator, memory: u8[]) {
-    allocator.vtable.dealloc(allocator.impl, memory)
+// Free memory previously allocated by this allocator, under the alignment it was allocated with.
+// Some allocators (like FixedBufferAllocator) do nothing.
+pub fn dealloc(allocator: &Allocator, memory: u8[], alignment: usize) {
+    allocator.vtable.dealloc(allocator.impl, memory, alignment)
 }
 
 pub fn new(allocator: &Allocator, ty: Type($T)) &T {
@@ -104,7 +116,7 @@ pub fn new(allocator: &Allocator, ty: Type($T)) &T {
 
 pub fn free(allocator: &Allocator, value: &$T) {
     const slice = slice_from_raw_parts(value as &u8, size_of(T))
-    allocator.dealloc(slice)
+    allocator.dealloc(slice, align_of(T))
 }
 
 // Free a typed slice. The slice's `len` is taken as the count of T elements to release (use the
@@ -112,7 +124,7 @@ pub fn free(allocator: &Allocator, value: &$T) {
 // `len`).
 pub fn free(allocator: &Allocator, items: $T[]) {
     const bytes = slice_from_raw_parts(items.ptr as &u8, items.len * size_of(T))
-    allocator.dealloc(bytes)
+    allocator.dealloc(bytes, align_of(T))
 }
 
 // =============================================================================
@@ -124,17 +136,24 @@ pub type GlobalAllocatorState = struct {
     _unused: u8
 }
 
+// `malloc` takes no alignment and meets `MAX_ALIGN`, which covers every alignment the language can
+// currently ask for. A request above it is declined rather than silently under-served; satisfying
+// one means `aligned_alloc` / `_aligned_malloc`, and a matching release path.
 fn global_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
-    // malloc typically returns suitably aligned memory for any type. For now we ignore alignment
-    // and rely on malloc's default alignment.
+    if alignment > MAX_ALIGN {
+        return null
+    }
     return Some(slice_from_raw_parts(malloc(size)?, size))
 }
 
-fn global_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
+fn global_realloc(impl: &u8, memory: u8[], alignment: usize, new_size: usize) u8[]? {
+    if alignment > MAX_ALIGN {
+        return null
+    }
     return Some(slice_from_raw_parts(realloc(Some(memory.ptr), new_size)?, new_size))
 }
 
-fn global_dealloc(impl: &u8, memory: u8[]) {
+fn global_dealloc(impl: &u8, memory: u8[], alignment: usize) {
     free(Some(memory.ptr))
 }
 
@@ -213,10 +232,10 @@ fn counting_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     return got
 }
 
-fn counting_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
+fn counting_realloc(impl: &u8, memory: u8[], alignment: usize, new_size: usize) u8[]? {
     let state = impl as &CountingAllocator
     const old_size = memory.len
-    const got = state.backing.realloc(memory, new_size)
+    const got = state.backing.realloc(memory, alignment, new_size)
     if got.is_none() {
         return null
     }
@@ -229,7 +248,7 @@ fn counting_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     return got
 }
 
-fn counting_dealloc(impl: &u8, memory: u8[]) {
+fn counting_dealloc(impl: &u8, memory: u8[], alignment: usize) {
     let state = impl as &CountingAllocator
     state.deallocs = state.deallocs + 1
     // A free of memory this decorator never handed out clamps the running total at zero; the alloc
@@ -239,7 +258,7 @@ fn counting_dealloc(impl: &u8, memory: u8[]) {
     } else {
         state.live_bytes = state.live_bytes - memory.len
     }
-    state.backing.dealloc(memory)
+    state.backing.dealloc(memory, alignment)
 }
 
 const counting_allocator_vtable = AllocatorVTable {
@@ -265,7 +284,6 @@ pub fn reset_counts(state: &CountingAllocator) {
     state.deallocs = 0
 }
 
-#allow (W2004)
 test "an installed global allocator is what or_global resolves to" {
     let c = counting_allocator(global())
     let a = c.allocator()
@@ -275,11 +293,11 @@ test "an installed global allocator is what or_global resolves to" {
     const resolved = mine.or_global()
     const _block = resolved.alloc(64, 8).unwrap()
     assert_eq(c.allocs, 1 as usize, "an omitted allocator reached the installed one")
-    resolved.dealloc(_block)
+    resolved.dealloc(_block, 8)
 
     const restored = set_global_allocator(prev)
-    assert_true(restored.impl as usize == (&a).impl as usize, "the swap returns what it replaced")
-    assert_true(global().impl as usize == prev.impl as usize, "and the previous one is back")
+    assert_true(restored.impl == (&a).impl, "the swap returns what it replaced")
+    assert_true(global().impl == prev.impl, "and the previous one is back")
 }
 
 test "a counting decorator tracks live bytes back to zero" {
@@ -291,11 +309,11 @@ test "a counting decorator tracks live bytes back to zero" {
     assert_eq(c.live_bytes, 140 as usize, "both allocations are out")
     assert_eq(c.peak_bytes, 140 as usize, "the high-water mark saw both")
 
-    a.dealloc(two)
+    a.dealloc(two, 8)
     assert_eq(c.live_bytes, 100 as usize, "a free gives its bytes back")
     assert_eq(c.peak_bytes, 140 as usize, "the high-water mark does not fall")
 
-    a.dealloc(one)
+    a.dealloc(one, 8)
     assert_eq(c.live_bytes, 0 as usize, "nothing is left out")
     assert_eq(c.allocs, 2 as usize, "two allocations")
     assert_eq(c.deallocs, 2 as usize, "two frees")
@@ -361,35 +379,25 @@ fn fixed_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     return Some(new_memory)
 }
 
-#allow (W2004)
-fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
+fn fixed_realloc(impl: &u8, memory: u8[], alignment: usize, new_size: usize) u8[]? {
     let state = impl as &FixedBufferAllocatorState
 
-    // An empty block is a fresh allocation. `realloc` carries no alignment argument, so the block
-    // takes the strictest alignment `alloc` can be asked for.
+    // An empty block is a fresh allocation.
     if memory.len == 0 {
-        return fixed_alloc(impl, new_size, 16)
+        return fixed_alloc(impl, new_size, alignment)
     }
 
-    // Check if this is the most recent allocation (can extend in place)
-    let mem_start = memory.ptr as usize
-    let mem_end = mem_start + memory.len
-    let buf_start = state.buffer.ptr as usize
-    let current_end = buf_start + state.offset
-
-    if mem_end == current_end {
-        // This is the last allocation, try to extend
-        let new_end = mem_start + new_size
-        let buf_end = buf_start + state.buffer.len
-        if (new_end <= buf_end) {
-            // Can extend in place
-            state.offset = new_end - buf_start
+    // The most recent allocation, the one whose end meets the bump cursor, extends in place.
+    if memory.ptr + memory.len == state.buffer.ptr + state.offset {
+        const start = state.offset - memory.len
+        if start + new_size <= state.buffer.len {
+            state.offset = start + new_size
             return Some(slice_from_raw_parts(memory.ptr, new_size))
         }
     }
 
     // Cannot extend in place - allocate new and copy
-    let new_mem = fixed_alloc(impl, new_size, 16)?
+    let new_mem = fixed_alloc(impl, new_size, alignment)?
 
     // Copy old data
     let copy_size = if memory.len < new_size { memory.len } else { new_size }
@@ -397,7 +405,7 @@ fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     return Some(new_mem)
 }
 
-fn fixed_dealloc(impl: &u8, memory: u8[]) {
+fn fixed_dealloc(impl: &u8, memory: u8[], alignment: usize) {
     // FixedBufferAllocator does not support individual frees. Memory is reclaimed by resetting the
     // allocator.
 }
@@ -458,6 +466,11 @@ pub type ArenaAllocator = struct {
 
 pub const ARENA_MAX_PAGE_SIZE: usize = 131072
 
+// A page holds an `ArenaPage` header followed by whatever the bump cursor aligns for itself, so the
+// page only has to satisfy the header. It is what the backing allocator is told on the way in and
+// on the way out.
+pub const ARENA_PAGE_ALIGN: usize = 8
+
 pub const DEFAULT_ARENA_PAGE_SIZE: usize = 4096
 
 fn arena_new_page(state: &ArenaAllocator, min_size: usize) &ArenaPage? {
@@ -468,7 +481,7 @@ fn arena_new_page(state: &ArenaAllocator, min_size: usize) &ArenaPage? {
         state.next_size = state.next_size * 2
     }
 
-    const raw = state.backing.alloc(total, 8)?
+    const raw = state.backing.alloc(total, ARENA_PAGE_ALIGN)?
     const page = raw.ptr as &ArenaPage
     page.next = null
     page.size = total - header_size
@@ -519,7 +532,7 @@ fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     return Some(slice_from_raw_parts(ptr, size))
 }
 
-fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
+fn arena_realloc(impl: &u8, memory: u8[], alignment: usize, new_size: usize) u8[]? {
     let state = impl as &ArenaAllocator
 
     // The most recent allocation, the one whose end meets the bump cursor, resizes in place: the
@@ -527,7 +540,7 @@ fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     if state.current_page.is_some() {
         const page = state.current_page.unwrap()
         const data = (page as &u8) + size_of(ArenaPage)
-        if (memory.ptr as usize) + memory.len == (data as usize) + page.offset {
+        if memory.ptr + memory.len == data + page.offset {
             const start = page.offset - memory.len
             if start + new_size <= page.size {
                 page.offset = start + new_size
@@ -536,9 +549,8 @@ fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
         }
     }
 
-    // Anything else moves. `realloc` carries no alignment argument, so the replacement takes the
-    // strictest alignment `alloc` can be asked for.
-    let new_mem = arena_alloc(impl, new_size, 16)
+    // Anything else moves, onto the alignment the block was allocated with.
+    let new_mem = arena_alloc(impl, new_size, alignment)
     if new_mem.is_none() {
         return null
     }
@@ -550,7 +562,7 @@ fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     return new_mem
 }
 
-fn arena_dealloc(impl: &u8, memory: u8[]) {
+fn arena_dealloc(impl: &u8, memory: u8[], alignment: usize) {
     // An arena frees everything at once; an individual free is a no-op.
 }
 
@@ -580,7 +592,7 @@ pub fn deinit(state: &ArenaAllocator) {
         let next = p.next
         let total = p.size + header_size
         let raw = slice_from_raw_parts(p as &u8, total)
-        state.backing.dealloc(raw)
+        state.backing.dealloc(raw, ARENA_PAGE_ALIGN)
         page = next
     }
     state.first_page = null

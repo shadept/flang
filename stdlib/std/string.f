@@ -463,10 +463,9 @@ pub fn from_view(s: String, allocator: &Allocator? = null) OwnedString {
     return .{ ptr = buf.ptr, len = s.len, allocator = allocator }
 }
 
-#allow (W2004)
 pub fn deinit(self: &OwnedString) {
     // Idempotent: a second call sees the nulled pointer and no-ops.
-    if self.ptr as usize == 0 {
+    if self.ptr == (0usize as &u8) {
         return
     }
     self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.len))

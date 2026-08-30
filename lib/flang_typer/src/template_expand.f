@@ -11,7 +11,6 @@
 
 import std.allocator
 import std.dict
-import std.env
 import std.path
 import std.list
 import std.option
@@ -351,9 +350,6 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
     emitted.text.append(chunk.as_view())
     emitted.lines = lines_before + count_lines(chunk.as_view())
 
-    if env("FLANG_DEBUG_TEMPLATES").is_some() {
-        println(chunk.as_view())
-    }
     const file_id = sources.len as i32
     sources.push(padded.to_string())
     file_paths.push($"{generated_path(file_paths[item.module].as_view())}")

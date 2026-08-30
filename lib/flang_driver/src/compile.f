@@ -42,29 +42,31 @@ pub fn build_unit(unit: &AnalyzedUnit, output_path: String,
 // platform's `[build.<os>]` entries, already expanded and validated by the caller (env expansion
 // touches the environment, so it stays at the CLI edge). `release` optimizes the generated C.
 // `keep_c` retains the generated C beside the executable instead of deleting it after the link -
-// the input the stage-N fixpoint compares. `verbose` prints the skip report - one line per function
-// lowering refused (directly or transitively), with the reason. TEMPORARY SCAFFOLD like
-// `IrModule.skipped` itself: the frontier report for the self-host milestones; delete together with
-// the skip mechanism. `profile_runtime`, when set, is the path to stdlib/std/profile.c: the module
-// is instrumented for profiling (RFC-025) and that file is linked in as the probe runtime.
-// `profile_all` widens instrumentation from the application's functions to the whole program,
-// stdlib included. `emit_only` stops after writing the generated C - no toolchain runs, so the
-// build may target an OS the host cannot link for. `tests`, when given, builds a test binary
-// instead of the program: it is parallel to `modules` and marks the ones whose `test {}` blocks to
-// run, `name_filter` narrows those by label, and the entry point becomes the generated runner
-// rather than the project's `main`.
+// the input the stage-N fixpoint compares. `stats` prints the skip report - one line per function
+// lowering refused (directly or transitively), with the reason - and arms the test runner's leak
+// sites. The skip report is TEMPORARY SCAFFOLD like `IrModule.skipped` itself: the frontier report
+// for the self-host milestones; delete together with the skip mechanism. `profile_runtime`, when
+// set, is the path to stdlib/std/profile.c: the module is instrumented for profiling (RFC-025) and
+// that file is linked in as the probe runtime. `profile_all` widens instrumentation from the
+// application's functions to the whole program, stdlib included. `profile_out`, `profile_nodes` and
+// `profile_depth` are baked into that binary, which has no command line of its own. `emit_only`
+// stops after writing the generated C - no toolchain runs, so the build may target an OS the host
+// cannot link for. `tests`, when given, builds a test binary instead of the program: it is parallel
+// to `modules` and marks the ones whose `test {}` blocks to run, `name_filter` narrows those by
+// label, and the entry point becomes the generated runner rather than the project's `main`.
 pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult,
     output_path: String, comptime_ctx: ComptimeCtx, source_paths: &List(OwnedString),
-    libs: &List(OwnedString), ldflags: &List(OwnedString), verbose: bool = false,
+    libs: &List(OwnedString), ldflags: &List(OwnedString), stats: bool = false,
     keep_c: bool = false, release: bool = false, demanded: &List(bool)? = null,
-    profile_runtime: String? = null, profile_all: bool = false, emit_only: bool = false,
+    profile_runtime: String? = null, profile_all: bool = false, profile_out: String? = null,
+    profile_nodes: u32 = 0, profile_depth: u32 = 0, emit_only: bool = false,
     tests: &List(bool)? = null, name_filter: String? = null,
     allocator: &Allocator? = null) Result(BuildResult, BuildError) {
     const lower_start = monotonic_ns()
     let m = lower_program(modules, fqns, result, comptime_ctx, demanded, tests, name_filter,
         allocator)
     const lower_ns = elapsed_ns(lower_start)
-    if verbose and m.skip_notes.len > 0 {
+    if stats and m.skip_notes.len > 0 {
         const hdr = $"  {m.functions.len} function(s) emitted, {m.skip_notes.len} skipped:"
         defer hdr.deinit()
         println(hdr.as_view())
@@ -83,17 +85,17 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     if tests.is_none() and is_skipped(&m, "main") {
         println("error: `main` was not emitted - lowering refused it:")
         print_refusal_chain(&m, "main")
-        if !verbose {
-            println("  (build with -v for the full skip report)")
+        if !stats {
+            println("  (build with --stats for the full skip report)")
         }
         m.deinit()
         return Err(BuildError.LowerFailed)
     }
 
-    // Refused USER code always reports, `-v` or not: a function the programmer wrote must never
-    // vanish from the binary in silence. Stdlib skips are the known lowering frontier and stay
-    // behind `-v` (the report above).
-    if !verbose {
+    // Refused USER code always reports, `--stats` or not: a function the programmer wrote must
+    // never vanish from the binary in silence. Stdlib skips are the known lowering frontier and
+    // stay behind `--stats` (the report above).
+    if !stats {
         let announced = false
         for i in 0..m.skip_notes.len {
             const n = m.skip_notes[i].as_view()
@@ -113,6 +115,14 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     let _k = opts.set_keep_temps(keep_c)
     let _r = opts.set_release(release)
     let _e = opts.set_emit_only(emit_only)
+    let _t = opts.set_leak_trace(stats)
+    let _pl = opts.set_profile_limits(profile_nodes, profile_depth)
+    profile_out match {
+        Some(po) => {
+            let _po = opts.set_profile_out(po)
+        }
+        None => {}
+    }
 
     let runtime_c = companion_c_files(source_paths, allocator)
     for i in 0..runtime_c.len {

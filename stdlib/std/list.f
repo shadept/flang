@@ -123,8 +123,8 @@ pub fn as_slice(self: List($T)) T[] {
 // defer l.deinit(); ...; l.to_owned_slice()` pattern.
 //
 // The returned `&Allocator` is the resolved allocator (global by default) - the caller frees the
-// slice via
-// `alloc.dealloc(slice_from_raw_parts(s.ptr as &u8, s.len * size_of(T)))` when done. Element
+// slice via `alloc.free(s)`, or `alloc.dealloc(bytes, align_of(T))` over its byte extent when it
+// has one. Element
 // `deinit()` is *not* called here; callers that own non-trivial elements must walk the slice and
 // deinit each element before freeing the buffer.
 pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
@@ -145,7 +145,7 @@ pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
         const old_bytes = self.cap * elem_size
         const new_bytes = self.len * elem_size
         const old_slice = slice_from_raw_parts(self.ptr as &u8, old_bytes)
-        const resized = alloc.realloc(old_slice, new_bytes)
+        const resized = alloc.realloc(old_slice, align_of(T), new_bytes)
         if resized.is_some() {
             self.ptr = resized.unwrap().ptr as &T
             self.cap = self.len
@@ -177,7 +177,7 @@ pub fn reserve(self: &List($T), capacity: usize) {
     // alloc-copy-free path below is the fallback for a `realloc` that declines.
     if self.cap > 0 {
         const old_bytes = slice_from_raw_parts(self.ptr as &u8, self.cap * elem_size)
-        const grown = self.allocator.or_global().realloc(old_bytes, new_bytes)
+        const grown = self.allocator.or_global().realloc(old_bytes, elem_align, new_bytes)
         if grown.is_some() {
             self.ptr = grown.unwrap().ptr as &T
             self.cap = new_cap

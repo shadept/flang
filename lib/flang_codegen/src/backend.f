@@ -78,6 +78,15 @@ pub type BuildOptions = struct {
     // required env vars (e.g. MSVC INCLUDE/LIB) are *not* synthesised - caller is responsible.
     compiler_override: String?
 
+    // Values the generated entry point hands to the runtime sidecars, which have no command line of
+    // their own. `leak_trace` arms the per-block allocation stacks in `stdlib/std/test.c`; the
+    // `profile_*` trio sizes the profiler's pools and names its folded-stack output
+    // (`stdlib/std/profile.c`). Zero means the sidecar's own default.
+    leak_trace: bool
+    profile_nodes: u32
+    profile_depth: u32
+    profile_out: String?
+
     // Allocator used for everything the backend allocates on behalf of
     // the call (temp strings, argv lists, the result struct, …). Null
     // means the global allocator, resolved at each allocating leaf.
@@ -104,6 +113,10 @@ pub fn build_options(output_path: String, allocator: &Allocator? = null) BuildOp
         keep_temps = false,
         emit_only = false,
         compiler_override = null,
+        leak_trace = false,
+        profile_nodes = 0,
+        profile_depth = 0,
+        profile_out = null,
         allocator = allocator,
     }
 }
@@ -165,6 +178,26 @@ pub fn set_keep_temps(self: &BuildOptions, k: bool) &BuildOptions {
 
 pub fn set_emit_only(self: &BuildOptions, on: bool) &BuildOptions {
     self.emit_only = on
+    return self
+}
+
+// Arm the test runner's leak-site reporting: every tracked block records the native stack that
+// allocated it, and a leaking test prints those stacks grouped.
+pub fn set_leak_trace(self: &BuildOptions, on: bool) &BuildOptions {
+    self.leak_trace = on
+    return self
+}
+
+// Size the profiler's call-path pool and shadow stack, and name the file its folded stacks go to. A
+// zero keeps the runtime's own default; a null path writes no folded output.
+pub fn set_profile_limits(self: &BuildOptions, nodes: u32, depth: u32) &BuildOptions {
+    self.profile_nodes = nodes
+    self.profile_depth = depth
+    return self
+}
+
+pub fn set_profile_out(self: &BuildOptions, p: String) &BuildOptions {
+    self.profile_out = Some(p)
     return self
 }
 

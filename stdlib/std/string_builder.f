@@ -81,7 +81,7 @@ fn reserve(sb: &StringBuilder, additional: usize) {
     }
 
     const resized = sb.allocator.or_global()
-        .realloc(slice_from_raw_parts(sb.ptr, sb.cap), new_cap)
+        .realloc(slice_from_raw_parts(sb.ptr, sb.cap), align_of(u8), new_cap)
     if (resized.is_none()) {
         panic("StringBuilder.reserve: realloc failed")
     }

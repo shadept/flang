@@ -185,7 +185,7 @@ fn _powersort_impl(s: $T[], cmp: $F) {
     const scratch_bytes = alloc.alloc(byte_len, align_of(T))
         .expect("powersort: scratch allocation failed")
     const scratch: T[] = .{ ptr = scratch_bytes.ptr as &T, len = n }
-    defer alloc.dealloc(scratch_bytes)
+    defer alloc.dealloc(scratch_bytes, align_of(T))
 
     // Run stack. Bounded by the number of distinct powers, which for any practical n fits in ~40
     // slots. 64 covers n up to ~2^64.

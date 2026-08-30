@@ -388,8 +388,8 @@ pub type Allocator = struct {
 
 pub type AllocatorVTable = struct {
     alloc: fn(&u8, size: usize, alignment: usize) u8[]?
-    realloc: fn(&u8, memory: u8[], new_size: usize) u8[]?
-    dealloc: fn(&u8, memory: u8[]) void
+    realloc: fn(&u8, memory: u8[], alignment: usize, new_size: usize) u8[]?
+    dealloc: fn(&u8, memory: u8[], alignment: usize) void
 }
 ```
 
@@ -398,6 +398,8 @@ pub type AllocatorVTable = struct {
 1. Types that allocate have an `allocator: &Allocator?` field.
 2. Null allocator falls back to `global_allocator` (wraps `malloc`/`free`) via `or_global()`.
 3. All allocation/realloc/free go through the allocator — never raw `malloc`/`free`.
+3a. **Every entry point carries the alignment**, next to the `memory` it finishes describing and ahead of any new size, and `realloc`/`dealloc` must be given the one the matching `alloc` was: an allocator cannot recover it from a pointer, a block that moves has to land on it, and a platform whose over-aligned blocks need their own release path has to know which kind it holds. The typed helpers (`free(&T)`, `free(T[])`) derive `align_of(T)`; raw byte-slice callers pass it explicitly.
+3b. **`MAX_ALIGN` (16) is the global allocator's ceiling, not the interface's.** It is what `malloc`/`realloc`/`free` guarantee. An allocator built on them declines a request above it — returning null, never memory that does not meet it — and satisfying one means `aligned_alloc`/`_aligned_malloc` with a matching release path. The bump allocators (arena, fixed buffer) align their own cursor and have no such limit.
 4. Types that allocate provide `deinit()` for deterministic cleanup.
 5. Callers use `defer x.deinit()` for scope-based cleanup, registered right after the value is created.
 6. **Every `deinit()` is idempotent**: the first call nulls the value's owning state (pointer/cap/payload), so a second call is a no-op — never a double free. A type either only calls deinits that are themselves safe, or resets its own state so later calls no-op.
