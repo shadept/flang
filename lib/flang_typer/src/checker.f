@@ -4411,7 +4411,48 @@ fn check_cast(self: &Checker, c: &CastExpr) Ty {
     if !open and !cast_valid(self, from, to) {
         push_diag_e(self, c.span, E_INVALID_CAST, from_view("invalid cast between these types"))
     }
+    if !open {
+        report_ref_int_cast(self, c, from, to)
+    }
     return target
+}
+
+// The two directions between a reference and an integer (RFC-026, spec §5.4). Copy-on-write
+// parameters rest on an escape analysis that follows addresses, and an address that becomes an
+// integer leaves it. Reading one out is allowed and warns; building a reference from one is not
+// allowed at all, which is what makes the outbound direction safe: an address can leave, it just
+// cannot come back and be written through.
+fn report_ref_int_cast(self: &Checker, c: &CastExpr, from: Ty, to: Ty) {
+    const f_ref = ty_node(self, from) match { NRef(_) => true, _ => false }
+    const t_ref = ty_node(self, to) match { NRef(_) => true, _ => false }
+    const f_prim = ty_node(self, from) match { NPrim(p) => Some(p), _ => null }
+    const t_prim = ty_node(self, to) match { NPrim(p) => Some(p), _ => null }
+
+    if f_prim.is_some() and t_ref and is_pointer_sized(f_prim.unwrap()) {
+        if !is_zero_literal(c.operand) {
+            push_diag_e(self, c.span, E_INT_TO_REF,
+                from_view("cannot cast an integer to a reference; take the address of a value instead"))
+        }
+        return
+    }
+    if f_ref and t_prim.is_some() and is_pointer_sized(t_prim.unwrap()) {
+        push_diag_w(self, c.span, W_REF_TO_INT,
+            from_view("casting a reference to an integer; the address cannot be cast back"))
+    }
+}
+
+// `0 as &T` is how a null reference is spelled while the language has no null primitive. It is
+// exempt from E2122 because a zero can never be a laundered address: the escape analysis only cares
+// about integers that could carry the address of a live value. Matched on the literal's source
+// text, which is what the AST preserves; a suffix does not change the value.
+fn is_zero_literal(e: &Expr) bool {
+    return e.* match {
+        Lit(l) => l.value match {
+            Int(n) => n.text == "0"
+            _ => false
+        }
+        _ => false
+    }
 }
 
 // Explicit `as` casts only - implicit conversions go through coercion. Mirrors the reference's

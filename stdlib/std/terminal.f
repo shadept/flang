@@ -45,6 +45,56 @@ pub fn get_terminal_size() TerminalSize {
 }
 
 // =============================================================================
+// Capability
+// =============================================================================
+
+#foreign fn isatty(fd: i32) i32
+
+// Windows console API (unused on POSIX - externs emitted but unreferenced)
+#foreign fn GetStdHandle(nStdHandle: u32) usize
+#foreign fn GetConsoleMode(hConsole: usize, lpMode: &u32) i32
+#foreign fn SetConsoleMode(hConsole: usize, dwMode: u32) i32
+
+const WIN_STD_OUTPUT_HANDLE: u32 = 0xFFFFFFF5
+const WIN_STD_ERROR_HANDLE: u32 = 0xFFFFFFF4
+const WIN_ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 4
+
+// Standard stream file descriptors, the numbers `isatty` and the POSIX layer both use.
+pub const STDIN_FD: i32 = 0
+pub const STDOUT_FD: i32 = 1
+pub const STDERR_FD: i32 = 2
+
+// Whether the given descriptor is attached to a terminal. A redirected stream is not, which is the
+// question a caller deciding whether to emit escape sequences is actually asking.
+pub fn is_tty(fd: i32) bool {
+    return isatty(fd) != 0
+}
+
+// Make the console interpret escape sequences. A no-op wherever it already does; on Windows the
+// console starts in a mode that prints them literally, and the flag has to be set per output
+// handle. Safe to call more than once, and safe to call on a redirected stream - a failed
+// `GetConsoleMode` leaves the mode alone.
+pub fn enable_ansi() {
+    #if platform.os == "windows" {
+        enable_vt(WIN_STD_OUTPUT_HANDLE)
+        enable_vt(WIN_STD_ERROR_HANDLE)
+    } else {
+    }
+}
+
+fn enable_vt(handle_id: u32) {
+    #if platform.os == "windows" {
+        const h = GetStdHandle(handle_id)
+        let mode: u32 = 0
+        if GetConsoleMode(h, &mode) == 0 {
+            return
+        }
+        SetConsoleMode(h, mode | WIN_ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+    } else {
+    }
+}
+
+// =============================================================================
 // Cursor Movement
 // =============================================================================
 

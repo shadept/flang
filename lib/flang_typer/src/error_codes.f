@@ -76,6 +76,10 @@ pub const E_NAKED_ENUM_PAYLOAD: String = "E2047"
 pub const E_LITERAL_RANGE: String = "E2029"
 // A literal shift count at or beyond the shifted operand's bit width.
 pub const E_SHIFT_RANGE: String = "E2121"
+// An integer cast to a reference. Fabricating a reference from an address the compiler never
+// tracked defeats the escape analysis behind copy-on-write parameters (RFC-026), so the inbound
+// direction is closed; `&T as usize` stays open under W2004.
+pub const E_INT_TO_REF: String = "E2122"
 // An empty array literal with nothing to fix its element type.
 pub const E_EMPTY_ARRAY: String = "E2026"
 // `&<temporary>` - the reference would outlive the value.
@@ -116,3 +120,8 @@ pub const W_UNUSED_IMPORT: String = "W1004"
 pub const W_DEPRECATED: String = "W2001"
 pub const W_DEPRECATED_FN: String = "W2002"
 pub const W_UNKNOWN_DIRECTIVE: String = "W2003"
+
+// A reference cast to an integer. Reading an address is legitimate - null checks, containment
+// checks, pointer identity - but it is the outbound half of laundering a reference through an
+// integer, so it is called out and suppressed per site with `#allow(W2004)`.
+pub const W_REF_TO_INT: String = "W2004"

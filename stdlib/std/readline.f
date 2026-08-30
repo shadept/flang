@@ -11,13 +11,15 @@
 
 import std.option
 import std.mem
+import std.terminal
 
 // =============================================================================
 // FFI
 // =============================================================================
 
-// Cross-platform
-#foreign fn isatty(fd: i32) i32
+// Cross-platform. `isatty` lives in `std.terminal` - a caller that is not a line editor needs it
+// too. The console-mode calls below stay here: raw mode saves and restores the original modes and
+// clears echo and line input, which is more than making escape sequences work.
 #foreign fn read(fd: i32, buf: &u8, len: usize) isize
 #foreign fn write(fd: i32, buf: &u8, len: usize) isize
 
@@ -205,7 +207,7 @@ fn enable_raw(rl: &Readline) {
     if rl.is_raw {
         return
     }
-    if isatty(0) == 0 {
+    if !is_tty(STDIN_FD) {
         return
     }
 
@@ -383,7 +385,7 @@ fn read_key() Key {
 // =============================================================================
 
 pub fn read_line(rl: &Readline) String? {
-    if isatty(0) == 0 {
+    if !is_tty(STDIN_FD) {
         return read_line_simple(rl)
     }
 

@@ -102,8 +102,7 @@ pub fn deinit(self: &Dict($K, $V)) {
             .free(slice_from_raw_parts(self.entries, self.cap))
     }
 
-    let zero: usize = 0
-    self.entries = zero as &Entry(K, V)
+    self.entries = 0usize as &Entry(K, V)
     self.length = 0
     self.dead = 0
     self.cap = 0

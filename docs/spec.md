@@ -40,17 +40,17 @@ FLang is a statically-typed compiled language designed for explicit control, str
 
 ### 2.2 Composite Types
 
-| Syntax | Meaning |
-|---|---|
-| `[T; N]` | Fixed-size array |
-| `T[]` | Slice — fat pointer `{ ptr: &T, len: usize }` |
-| `&T` | Non-null reference |
-| `T?` | Optional — sugar for `Option(T)` |
-| `&T?` | Nullable reference — sugar for `Option(&T)` |
-| `(A, B)` | Tuple — sugar for anonymous struct `{ _0: A, _1: B }` |
-| `()` | Unit (empty tuple) |
-| `fn(T1, T2) R` | Function type |
-| `Type(T)` | Runtime type descriptor |
+| Syntax         | Meaning                                               |
+| -------------- | ----------------------------------------------------- |
+| `[T; N]`       | Fixed-size array                                      |
+| `T[]`          | Slice — fat pointer `{ ptr: &T, len: usize }`         |
+| `&T`           | Non-null reference                                    |
+| `T?`           | Optional — sugar for `Option(T)`                      |
+| `&T?`          | Nullable reference — sugar for `Option(&T)`           |
+| `(A, B)`       | Tuple — sugar for anonymous struct `{ _0: A, _1: B }` |
+| `()`           | Unit (empty tuple)                                    |
+| `fn(T1, T2) R` | Function type                                         |
+| `Type(T)`      | Runtime type descriptor                               |
 
 **Tuples** desugar to anonymous structs with a double-underscore prefix to avoid collisions with user fields: `(A, B)` → `{ __0: A, __1: B }`, access via `t.0` → `t.__0`. User-defined fields named `_0`, `_1`, etc. remain valid. Trailing comma distinguishes single-element tuple `(x,)` from grouped expression `(x)`.
 
@@ -171,12 +171,12 @@ Three types with explicit ownership. All share layout `{ ptr: &u8, len: usize }`
 
 **StringBuilder** — owning, mutable, growable buffer. `append()` adds content. `to_string()` transfers buffer to OwnedString (move semantics — builder resets). `as_view()` returns non-owning String view.
 
-| From | To | Method | Cost |
-|---|---|---|---|
-| `OwnedString` | `String` | `.as_view()` | Zero-copy |
-| `String` | `OwnedString` | `from_view(s, allocator)` | Allocates + copies |
-| `StringBuilder` | `OwnedString` | `.to_string()` | Zero-copy (move) |
-| `StringBuilder` | `String` | `.as_view()` | Zero-copy (temporary) |
+| From            | To            | Method                    | Cost                  |
+| --------------- | ------------- | ------------------------- | --------------------- |
+| `OwnedString`   | `String`      | `.as_view()`              | Zero-copy             |
+| `String`        | `OwnedString` | `from_view(s, allocator)` | Allocates + copies    |
+| `StringBuilder` | `OwnedString` | `.to_string()`            | Zero-copy (move)      |
+| `StringBuilder` | `String`      | `.as_view()`              | Zero-copy (temporary) |
 
 Conversions are always explicit — no implicit coercions between string types.
 
@@ -220,10 +220,10 @@ The legacy field-access shims (`opt.has_value` / `opt.value`) have been removed;
 
 **Layout:**
 
-| Inner type | Representation | Rationale |
-|---|---|---|
-| `&T` (reference) | `IrPointer(T, IsNullable: true)` — a nullable pointer | Niche: `None` encoded as 0 pointer. Zero overhead vs. raw `&T`. |
-| Anything else | Tagged enum with `None` (tag `0`) and `Some(T)` variants | Generic enum layout. |
+| Inner type       | Representation                                           | Rationale                                                       |
+| ---------------- | -------------------------------------------------------- | --------------------------------------------------------------- |
+| `&T` (reference) | `IrPointer(T, IsNullable: true)` — a nullable pointer    | Niche: `None` encoded as 0 pointer. Zero overhead vs. raw `&T`. |
+| Anything else    | Tagged enum with `None` (tag `0`) and `Some(T)` variants | Generic enum layout.                                            |
 
 **Planned niche for bare enums (not yet implemented):** when `T` is a payload-less enum, shifting discriminants to start at 1 lets `Option(E)` encode `None` as tag 0 in a single-word representation — matching the nullable-pointer trick. This would change discriminant values, which is why FFI code must never hard-code them (see §2.5).
 
@@ -289,17 +289,22 @@ Every named binding has a memory location. `let x = expr` performs a shallow byt
 
 - Caller passes address of each argument (implicit reference).
 - Callee reads through pointer (no copy for read-only access).
-- On first write to a parameter, the compiler inserts a shadow copy (alloca + memcpy). All subsequent accesses use the shadow.
+- The compiler inserts a shadow copy (alloca + memcpy) when the body **writes** to a parameter or lets its **address escape**. All accesses then use the shadow.
+- Escape means: passed as an argument to any call, stored somewhere outliving the expression, or returned as an address. Reading a field, indexing, matching, and returning the value by copy are not escapes.
 - The caller's value is never mutated by the callee.
 
 This is transparent — source code reads as pass-by-value, but large structs avoid unnecessary copies.
 
+`&` in a signature communicates intent to mutate or retain. `fn f(s: S)` and `fn f(s: &S)` emit the same code for a read-only body, because everything already crosses by pointer.
+
+The elision is observable: the address of a read-only parameter equals the caller's. Section 5.4 closes the only way that guarantee could be defeated.
+
 ### 3.3 Return Values
 
-| Return type | Mechanism |
-|---|---|
-| Small values (≤ register size) | Returned in registers |
-| Large structs | Caller allocates slot, passes hidden `__ret` pointer as first argument. Callee writes directly to slot. |
+| Return type                    | Mechanism                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Small values (≤ register size) | Returned in registers                                                                                   |
+| Large structs                  | Caller allocates slot, passes hidden `__ret` pointer as first argument. Callee writes directly to slot. |
 
 This is transparent to the programmer — `return expr` works uniformly.
 
@@ -319,12 +324,12 @@ Every expression is lowered in exactly one of these two modes, and which mode ap
 
 **The place forms.** These, and only these, denote places:
 
-| Form | Place when |
-|---|---|
-| `x` | `x` is a local, parameter, or global |
-| `p.*` | always — the pointer already is the address |
-| `base.field` | `base` is a place, or is a reference |
-| `base[i]` | `base` is a place, or is a reference or slice |
+| Form         | Place when                                    |
+| ------------ | --------------------------------------------- |
+| `x`          | `x` is a local, parameter, or global          |
+| `p.*`        | always — the pointer already is the address   |
+| `base.field` | `base` is a place, or is a reference          |
+| `base[i]`    | `base` is a place, or is a reference or slice |
 
 Everything else — call results, literals, arithmetic, struct literals, `match` results — is an rvalue. An lvalue is also usable as a value, by loading it; an rvalue is not usable as a place.
 
@@ -439,22 +444,22 @@ Zero initialization covers the whole allocation, not just the named fields: aggr
 
 ### 5.1 Precedence (highest to lowest)
 
-| Level | Operators |
-|---|---|
-| 13 | `as` (postfix typed cast) |
-| 12 | `*` `/` `%` |
-| 11 | `+` `-` |
-| 10 | `<<` `>>` `>>>` |
-| 9 | `&` (bitwise AND) |
-| 8 | `^` (XOR) |
-| 7 | `\|` (OR) |
-| 6 | `..` |
-| 5 | `<` `>` `<=` `>=` |
-| 4 | `==` `!=` |
-| 3 | `and` |
-| 2 | `or` |
-| 1 | `??` (right-assoc) |
-| 0 | `match` (postfix, lowest) |
+| Level | Operators                 |
+| ----- | ------------------------- |
+| 13    | `as` (postfix typed cast) |
+| 12    | `*` `/` `%`               |
+| 11    | `+` `-`                   |
+| 10    | `<<` `>>` `>>>`           |
+| 9     | `&` (bitwise AND)         |
+| 8     | `^` (XOR)                 |
+| 7     | `\|` (OR)                 |
+| 6     | `..`                      |
+| 5     | `<` `>` `<=` `>=`         |
+| 4     | `==` `!=`                 |
+| 3     | `and`                     |
+| 2     | `or`                      |
+| 1     | `??` (right-assoc)        |
+| 0     | `match` (postfix, lowest) |
 
 - `as` is a postfix typed operator that binds tighter than every binary operator: `a + b as i32` parses as `a + (b as i32)`.
 - Postfix `match` binds looser than every binary operator: `a + b match { ... }` parses as `(a + b) match { ... }`.
@@ -514,20 +519,20 @@ Regression tests: `tests/harness/eval_order/`.
 
 Operators on primitive types are compiler built-ins, resolved and emitted directly as arithmetic — no function call is involved. For user types, an operator resolves to the corresponding `op_*` function below (recorded on the node by the checker, emitted as an ordinary call by lowering); a user type enables an operator by defining that function.
 
-| Operator | Function |
-|---|---|
-| `+` `-` `*` `/` `%` | `op_add` `op_sub` `op_mul` `op_div` `op_mod` |
-| `==` `!=` `<` `>` `<=` `>=` | `op_eq` `op_ne` `op_lt` `op_gt` `op_le` `op_ge` |
-| `&` `\|` `^` | `op_band` `op_bor` `op_bxor` |
-| `[]` (ref-form) | `op_index_ref` |
-| `[]` read (value-form) / `[]=` write (value-form) | `op_index` / `op_set_index` |
-| `??` | `op_coalesce` |
-| postfix `?` | `op_try` |
-| `=` | `op_assign` |
-| `+=` | `op_add_assign` |
-| unary `-` / `!` / `~` | `op_neg` / `op_not` / `op_bnot` |
-| `.field` (fallback) | `op_deref` |
-| `t(args)` (callable types) | `op_call` |
+| Operator                                          | Function                                        |
+| ------------------------------------------------- | ----------------------------------------------- |
+| `+` `-` `*` `/` `%`                               | `op_add` `op_sub` `op_mul` `op_div` `op_mod`    |
+| `==` `!=` `<` `>` `<=` `>=`                       | `op_eq` `op_ne` `op_lt` `op_gt` `op_le` `op_ge` |
+| `&` `\|` `^`                                      | `op_band` `op_bor` `op_bxor`                    |
+| `[]` (ref-form)                                   | `op_index_ref`                                  |
+| `[]` read (value-form) / `[]=` write (value-form) | `op_index` / `op_set_index`                     |
+| `??`                                              | `op_coalesce`                                   |
+| postfix `?`                                       | `op_try`                                        |
+| `=`                                               | `op_assign`                                     |
+| `+=`                                              | `op_add_assign`                                 |
+| unary `-` / `!` / `~`                             | `op_neg` / `op_not` / `op_bnot`                 |
+| `.field` (fallback)                               | `op_deref`                                      |
+| `t(args)` (callable types)                        | `op_call`                                       |
 
 **`op_call`** (RFC-014): when `t(args)` is invoked and `t`'s type defines `fn op_call(self: T, ...)` or `fn op_call(self: &T, ...)`, the call rewrites to `op_call(t, args...)` (or `op_call(&t, args...)`). Any type can become callable — comparators with state, function objects, iterator-like wrappers, and (Phase 2) capturing closures. Multiple `op_call` overloads on the same type are resolved by the existing overload mechanism. `op_call` resolution chains through `op_deref`: `Owned(F)` is callable when `F` is, no special-casing required. `op_call` dispatch also applies in field position: `h.f(args)` where field `f`'s type defines `op_call` (e.g. a capturing closure stored in a struct field) rewrites to `op_call(&h.f, args...)`, calling in place through the field — no local copy needed.
 
@@ -535,11 +540,11 @@ Operators on primitive types are compiler built-ins, resolved and emitted direct
 
 **Indexing (`[]`)** — two mutually exclusive patterns for user-defined types:
 
-| Pattern | Signature | Enabled syntax |
-|---|---|---|
-| **Ref-form** (lvalue storage) | `fn op_index_ref(self: &Self, idx: Idx) &T` | `x[i]` read, `x[i] = v` write, `&x[i]` address-of |
-| **Value-form** (computed read) | `fn op_index(self, idx: Idx) T` (any return shape: `T`, `T?`, `T[]`, ...) | `x[i]` read only |
-| **Value-form** (optional setter) | `fn op_set_index(self: &Self, idx: Idx, v: V)` | `x[i] = v` write |
+| Pattern                          | Signature                                                                 | Enabled syntax                                    |
+| -------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------- |
+| **Ref-form** (lvalue storage)    | `fn op_index_ref(self: &Self, idx: Idx) &T`                               | `x[i]` read, `x[i] = v` write, `&x[i]` address-of |
+| **Value-form** (computed read)   | `fn op_index(self, idx: Idx) T` (any return shape: `T`, `T?`, `T[]`, ...) | `x[i]` read only                                  |
+| **Value-form** (optional setter) | `fn op_set_index(self: &Self, idx: Idx, v: V)`                            | `x[i] = v` write                                  |
 
 *Dispatch rules:*
 
@@ -589,7 +594,8 @@ Lexer disambiguation: `?.` is a single token (safe member access) and always win
 
 - Numeric: any integer ↔ integer (narrowing truncates, widening sign-extends).
 - Float ↔ integer: `f64 as i32`, `i32 as f64`.
-- Pointer ↔ integer: `&T` ↔ `usize|isize`.
+- Pointer → integer: `&T as usize|isize` reads an address. Warns (W2004); silence it per declaration with `#allow(W2004)`.
+- Integer → pointer: **refused** (E2122). Fabricating a reference from an integer would let a laundered parameter address return and be written through, defeating the copy-on-write analysis of Section 3.2. The literal `0` is exempt — it is how a null reference is spelled, and a zero can never be a real address.
 - Pointer ↔ pointer: `&T` ↔ `&U` (view cast, programmer's responsibility).
 - `String` ↔ `u8[]`: zero-copy binary reinterpretation.
 
@@ -706,9 +712,9 @@ loop {
 
 A `for` loop comes in two forms. They differ in what the loop variable binds, and each resolves its own pair of protocol methods:
 
-| form | resolves | binds | a type joins by defining |
-|---|---|---|---|
-| `for x in xs` | `iter(&xs)` | `x: T` — a copy per iteration | `fn iter(self: &T) Iterator` and `fn next(self: &Iterator) E?` |
+| form           | resolves        | binds                                           | a type joins by defining                                                  |
+| -------------- | --------------- | ----------------------------------------------- | ------------------------------------------------------------------------- |
+| `for x in xs`  | `iter(&xs)`     | `x: T` — a copy per iteration                   | `fn iter(self: &T) Iterator` and `fn next(self: &Iterator) E?`            |
 | `for &x in xs` | `iter_ref(&xs)` | `x: &T` — aliased into the collection's storage | `fn iter_ref(self: &T) RefIterator` and `fn next(self: &RefIterator) &E?` |
 
 `for x in xs.iter_ref()` is the reference form spelled out.
@@ -764,13 +770,13 @@ A binding bound to a *scalar* is a copy in its own slot, so an arm body may assi
 
 Prefixed with `#`, precede declarations:
 
-| Directive | Purpose |
-|---|---|
-| `#foreign` | C FFI function (no body, not mangled) or C-layout-locked struct |
-| `#deprecated("msg")` | Deprecation warning on usage |
-| `#inline` | Inlining hint |
-| `#intrinsic` | Compiler-recognized stdlib intrinsic |
-| `#simd` | SIMD-aligned struct (16+ byte alignment) |
+| Directive            | Purpose                                                         |
+| -------------------- | --------------------------------------------------------------- |
+| `#foreign`           | C FFI function (no body, not mangled) or C-layout-locked struct |
+| `#deprecated("msg")` | Deprecation warning on usage                                    |
+| `#inline`            | Inlining hint                                                   |
+| `#intrinsic`         | Compiler-recognized stdlib intrinsic                            |
+| `#simd`              | SIMD-aligned struct (16+ byte alignment)                        |
 
 Unknown directives produce warning W2003.
 
@@ -849,13 +855,13 @@ the rest is ordinary FLang: `#if cond { }`, no parens required
 A condition must evaluate to a bool — `#if platform.os { }` is an
 error, exactly as `if platform.os { }` is invalid FLang.
 
-| Path | Type | Values |
-|---|---|---|
-| `platform.os` | string | `"windows"`, `"linux"`, `"macos"`, `"unknown"` |
-| `platform.arch` | string | `"x86_64"`, `"arm64"`, `"x86"`, etc. |
-| `runtime.testing` | bool | true when compiling with `test` |
-| `runtime.release` | bool | true when compiling with `--release` |
-| `runtime.env` | dict | Build-time environment variables |
+| Path              | Type   | Values                                         |
+| ----------------- | ------ | ---------------------------------------------- |
+| `platform.os`     | string | `"windows"`, `"linux"`, `"macos"`, `"unknown"` |
+| `platform.arch`   | string | `"x86_64"`, `"arm64"`, `"x86"`, etc.           |
+| `runtime.testing` | bool   | true when compiling with `test`                |
+| `runtime.release` | bool   | true when compiling with `--release`           |
+| `runtime.env`     | dict   | Build-time environment variables               |
 
 `platform.os` / `platform.arch` describe the **target**, which defaults
 to the host; `--target-os` and `--target-arch` override them so any host
@@ -900,12 +906,12 @@ Template `#if` **is** the `#if` directive of §7.7 — the same evaluator, the s
 
 **Built-in generators:**
 
-| Generator | Purpose |
-|---|---|
-| `#derive(T, eq, clone, debug, hash, serialize, deserialize)` | Derive implementations |
-| `#enum_utils(E)` | Generate `to_string`/`from_string` for enum |
-| `#interface(Name, Spec)` | Define vtable-based interface |
-| `#implement(Impl, Iface)` | Implement interface for a type |
+| Generator                                                    | Purpose                                     |
+| ------------------------------------------------------------ | ------------------------------------------- |
+| `#derive(T, eq, clone, debug, hash, serialize, deserialize)` | Derive implementations                      |
+| `#enum_utils(E)`                                             | Generate `to_string`/`from_string` for enum |
+| `#interface(Name, Spec)`                                     | Define vtable-based interface               |
+| `#implement(Impl, Iface)`                                    | Implement interface for a type              |
 
 Expansion runs once, after nominal types are collected and before they are resolved; generated declarations become part of the invoking module. Generated code may contain further definitions and invocations (nesting depth is limited to 8 — E2119). Expansion is in memory; `--emit-generated` writes each module's expansion to `<source>.generated.f` for inspection only.
 

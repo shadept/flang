@@ -77,6 +77,7 @@ import flang_codegen.fir
 import flang_codegen.builder
 import flang_analysis.analyze
 import flang_driver.layout
+import flang_driver.param_escape
 import flang_driver.symbol_table
 
 // Lowering context - everything the walk needs besides the block cursor and the local environment.
@@ -1663,11 +1664,20 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     // to the caller (value semantics). The spill is also what makes `&param` inlining-safe: the
     // slot is an ordinary instruction the shim inliner clones with the body, so the spliced copy
     // keeps value semantics with no name resolution involved (the reference inliner's
-    // address-of-parameter bug cannot exist here); spills that never escape are mem2reg's to
-    // delete, not lowering's to avoid.
+    // address-of-parameter bug cannot exist here).
+    //
+    // The shadow is emitted only where the body earns it (RFC-026): `param_escape` reads the checked
+    // body first, so a parameter the body only reads is bound to the CALLER'S pointer and no copy
+    // exists at any point. spec §3.2 promises exactly that.
+    const shadow = shadowed_params(decl, ctx.result, ctx.overlay, ctx.allocator)
+    defer shadow.deinit()
     for i in 0..decl.params.len {
         let pty = &sig.params[i]
         if is_by_ref(ctx, pty) {
+            if !shadow[i] {
+                env.bind_aggregate(decl.params[i].name, param_ops[i], pty.*)
+                continue
+            }
             let lay = lay_of(ctx, pty.*)
             let slot = cur.stack_slot(lay.size as u64, lay.align as u64)
             cur.memcpy(slot, param_ops[i], Operand.IntConst(lay.size as i64))
@@ -7993,7 +8003,7 @@ fn compares_against(f: &Function, v: i64) bool {
     return false
 }
 
-test "an aggregate parameter arrives by pointer and the callee copies it" {
+test "an aggregate parameter arrives by pointer, and a read-only body copies nothing" {
     let unit = analyze(from_view("type Pt = struct { x: i32, y: i32 }\nfn get_x(p: Pt) i32 { return p.x }\nfn main() i32 { let p = Pt { x = 7, y = 1 } return get_x(p) }"),
         "test.f")
     let m = lower_module(&unit.module, &unit.result)
@@ -8001,7 +8011,8 @@ test "an aggregate parameter arrives by pointer and the callee copies it" {
     assert_true(ci < m.functions.len, "the by-value struct signature is lowerable now")
     let callee = &m.functions[ci]
     assert_eq(callee.params.len, 1 as usize, "one pointer parameter carries the struct")
-    assert_eq(memcpy_count(callee), 1 as usize, "the callee copies the value into its own slot")
+    assert_eq(memcpy_count(callee), 0 as usize,
+        "a body that only reads the parameter binds the caller's pointer (RFC-026)")
 
     let mi = find_fn(&m, "main")
     assert_true(mi < m.functions.len, "the caller lowers")
@@ -8035,9 +8046,46 @@ test "binding an existing aggregate copies it - mutating the copy leaves the sou
         "test.f")
     let m = lower_module(&unit.module, &unit.result)
     let f = &m.functions[find_fn_starting(&m, "f__")]
-    // One copy spills the parameter, one copies it into `q` (value semantics): `q.x = 9` must not
-    // write through into `p`.
-    assert_eq(memcpy_count(f), 2 as usize, "param spill plus the let's own copy")
+    // The `let` is what protects `p`: `q` gets its own bytes, so `q.x = 9` cannot write through.
+    // The parameter itself is only read, so it keeps the caller's pointer.
+    assert_eq(memcpy_count(f), 1 as usize, "the let's own copy, and nothing else")
+}
+
+test "writing to an aggregate parameter brings its copy back (RFC-026)" {
+    let unit = analyze(from_view("type Pt = struct { x: i32, y: i32 }\nfn f(p: Pt) i32 { p.x = 9 return p.x }"),
+        "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "f__")]
+    assert_eq(memcpy_count(f), 1 as usize,
+        "the write is what the shadow copy protects the caller from")
+}
+
+test "handing an aggregate parameter's address to a callee brings its copy back (RFC-026)" {
+    let unit = analyze(from_view("type Pt = struct { x: i32, y: i32 }\nfn inner(q: &Pt) i32 { return q.x }\nfn outer(p: Pt) i32 { return inner(&p) }"),
+        "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "outer__")]
+    // The callee is free to retain the pointer; its body is never consulted.
+    assert_eq(memcpy_count(f), 1 as usize, "an address reaching a call escapes")
+}
+
+test "an escape through an alias chain still brings the copy back (RFC-026)" {
+    let unit = analyze(from_view("type Pt = struct { x: i32, y: i32 }\nfn inner(q: &Pt) i32 { return q.x }\nfn outer(p: Pt) i32 { let a = &p\nlet b = a\nreturn inner(b) }"),
+        "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "outer__")]
+    assert_eq(memcpy_count(f), 1 as usize,
+        "storing the address is an escape, whatever is done with it later")
+}
+
+test "returning an aggregate parameter copies out, not in (RFC-026)" {
+    let unit = analyze(from_view("type Pt = struct { x: i32, y: i32 }\nfn f(p: Pt) Pt { return p }"),
+        "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "f__")]
+    // One copy, into the caller's sret buffer. Reading the parameter's bytes out of it is not an
+    // escape of its address.
+    assert_eq(memcpy_count(f), 1 as usize, "the sret copy, and no prologue spill")
 }
 
 test "a call omitting a defaulted argument materializes the default (M11)" {

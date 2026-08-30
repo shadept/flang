@@ -255,6 +255,29 @@ let f = ptr.field      // auto-deref (recursive through &&T)
 
 Any function with first param `T` or `&T` can be called as `value.func()`. This is how methods work — no `impl` blocks.
 
+`&` in a parameter is a statement of intent, not a mechanism. Every aggregate already crosses by
+pointer, so `fn area(s: Shape)` and `fn area(s: &Shape)` emit the same code for a body that only
+reads. Write `&` when the body mutates the argument or keeps its address; write the plain type
+otherwise. Taking a by-value parameter's address and handing it to a callee is what brings the
+shadow copy back (spec §3.2), so `&` on the outer parameter is also how you say "do not copy this
+on my account".
+
+An address may be read as an integer (`p as usize`, warns W2004) but never rebuilt from one
+(`n as &T` is E2122). `0usize as &T` is the exception, and is how a null reference is spelled.
+
+## Directives
+
+```
+#foreign fn write(fd: i32, buf: &u8, n: usize) isize
+#deprecated("use `bar`") fn foo() {}
+#allow(W2004)
+fn is_null(p: &u8) bool { return p as usize == 0 }
+```
+
+Directives attach to the declaration that follows. `#allow(CODE, ...)` silences those diagnostic
+codes for everything inside that declaration, whichever compiler phase raised them. There is no
+file-level or statement-level form.
+
 ## Imports and Visibility
 
 ```

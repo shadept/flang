@@ -53,6 +53,8 @@ type Cli = struct {
     check: bool
     eager: bool
     warn_unused: bool
+    // `--color=auto|always|never`; `auto` asks stderr.
+    color: ColorChoice
     subcommand: String
     // `test --name <substr>`.
     name_filter: String
@@ -78,6 +80,7 @@ type BuildOpts = struct {
     profile_all: bool
     eager: bool
     warn_unused: bool
+    color: ColorChoice
     // `flang test`: build the project's `test {}` blocks into a runner and execute it, instead of
     // building the program. `test_path` keeps only the blocks in files whose path contains it and
     // `test_name` only those whose label contains it; both empty means every block. The filters
@@ -142,6 +145,7 @@ pub fn main() i32 {
 fn parse_cli(argv: String[]) Cli {
     let cli: Cli
     cli.args = list(0)
+    cli.color = ColorChoice.Auto
     if argv.len < 2 {
         cli.show_help = true
         return cli
@@ -173,7 +177,7 @@ fn parse_cli(argv: String[]) Cli {
 
 // Options accepted after any command. Kept apart from the per-command sets so a new command starts
 // with these and adds only what it needs.
-const SHARED_OPTS: String = "h(help)V(version)v(verbose)s(stdlib-path):T(target-os):A(target-arch):"
+const SHARED_OPTS: String = "h(help)V(version)v(verbose)s(stdlib-path):T(target-os):A(target-arch):C(color):"
 
 // What each command accepts on top of `SHARED_OPTS`. An unknown command gets none, and is reported
 // as unknown before the options matter.
@@ -250,6 +254,17 @@ fn apply_opts(cli: &Cli, spec: String, argv: String[]) {
                 if c == 'n' {
                     cli.name_filter = val
                 }
+                if c == 'C' {
+                    const choice = color_choice(val)
+                    if choice.is_none() {
+                        const msg = $"flang: --color takes `auto`, `always` or `never` (got `{val}`)"
+                        defer msg.deinit()
+                        println(msg.as_view())
+                        cli.show_help = true
+                        return
+                    }
+                    cli.color = choice.unwrap()
+                }
             }
             NonOpt(a) => cli.args.push(a)
             Error(c) => {
@@ -298,6 +313,7 @@ fn print_help() {
     println("  -h, --help          show this help")
     println("  -V, --version       show version")
     println("  -v, --verbose       verbose output")
+    println("  -C, --color <when>  colorize diagnostics: auto (default), always, never")
     println("  -g, --emit-generated  write template expansions to <origin>.generated.f (debug)")
     println("  -c, --check         type-check only (no codegen or link)")
     println("  -k, --keep-c        keep the generated C beside the executable")
@@ -418,6 +434,7 @@ fn build_opts(argv: String[], cli: &Cli, force_check: bool, testing: bool) Build
         profile_all = cli.profile_all,
         eager = cli.eager,
         warn_unused = cli.warn_unused,
+        color = cli.color,
         testing = testing,
         // `test`'s filters: the lone positional narrows by path, `--name` by label.
         test_path = if testing and cli.args.len > 0 { cli.args[0] } else { "" },
@@ -645,7 +662,8 @@ fn expand_all(items: &List(OwnedString), missing: &List(OwnedString)) List(Owned
 // Shared render -> gate -> lower -> link tail for both build modes.
 fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &BuildOpts,
     libs: &List(OwnedString), ldflags: &List(OwnedString)) i32 {
-    render_project_diagnostics(&unit.diagnostics, &unit.file_paths, &unit.sources)
+    const style = resolve_style(opts.color)
+    render_project_diagnostics(&unit.diagnostics, &unit.file_paths, &unit.sources, &style)
 
     const errs = project_error_count(unit)
     if opts.verbose {

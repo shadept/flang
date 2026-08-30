@@ -39,8 +39,7 @@ pub fn deinit(self: &Deque($T)) {
         }
         self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.cap))
     }
-    let zero: usize = 0
-    self.ptr = zero as &T
+    self.ptr = 0usize as &T
     self.cap = 0
     self.head = 0
     self.len = 0
