@@ -1,6 +1,6 @@
 // Diagnostic - the shared error/warning/hint type emitted by every phase of the compiler and
-// consumed by the CLI, the LSP, the formatter, and `flang fix`. Code actions ship attached to the
-// diagnostic so the same fix surfaces in both the CLI and the LSP from a single source.
+// consumed by the CLI, the LSP and the formatter. `flang_core.render` draws the terminal form; the
+// LSP encodes the same values into the protocol's own shape.
 
 import std.string
 import flang_core.span

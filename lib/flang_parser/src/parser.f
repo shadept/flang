@@ -138,14 +138,13 @@ fn synth_eof(self: &Parser) Token {
         return self.tokens[self.tokens.len - 1]
     }
     // Zero-token input - caller misuse. Hand back a degenerate Eof.
-    let zero: usize = 0
     return Token {
         kind = TokenKind.Eof,
         text = "",
         offset = 0,
         line = 0,
-        leading = slice_from_raw_parts(zero as &Trivia, 0),
-        trailing = slice_from_raw_parts(zero as &Trivia, 0),
+        leading = slice_from_raw_parts(0usize as &Trivia, 0),
+        trailing = slice_from_raw_parts(0usize as &Trivia, 0),
         allocator = self.allocator,
     }
 }
@@ -372,6 +371,7 @@ fn parse_top_level(self: &Parser) CstNode {
 // `#string_reader`, …) routes through generator invocation.
 fn is_known_directive(name: String) bool {
     return name == "foreign" or name == "inline" or name == "deprecated" or name == "simd"
+        or name == "allow"
 }
 
 fn recover_unexpected_top_level(self: &Parser, leading: List(CstNode)) CstNode {

@@ -85,7 +85,8 @@ pub type Decl = enum {
 }
 
 // Decl-level attributes. `Foreign`, `Inline`, `Intrinsic`, `Simd` are flag-shaped;
-// `Deprecated(msg?)` carries an optional reason string. Several directives may attach to the same
+// `Deprecated(msg?)` carries an optional reason string; `Allow(codes)` names the diagnostic codes
+// that stay silent within the declaration's span. Several directives may attach to the same
 // declaration; order is source order.
 pub type DeclAttribute = enum {
     Foreign
@@ -93,6 +94,7 @@ pub type DeclAttribute = enum {
     Intrinsic
     Simd
     Deprecated(String?)
+    Allow(List(String))
 }
 
 // Whether a declaration's directives mark it as a SIMD vector type.
@@ -185,6 +187,7 @@ pub type ConstDecl = struct {
 // `test "label" { ... }`
 pub type TestDecl = struct {
     span: SourceSpan
+    directives: List(DeclAttribute)
     label: String
     body: BlockExpr
 }

@@ -446,6 +446,7 @@ pub fn from_view(s: String, allocator: &Allocator? = null) OwnedString {
     return sb.to_string()
 }
 
+#allow (W2004)
 pub fn deinit(self: &OwnedString) {
     // Idempotent: a second call sees the nulled pointer and no-ops.
     if self.ptr as usize == 0 {

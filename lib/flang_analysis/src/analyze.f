@@ -107,6 +107,8 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
         paths.deinit()
     }
 
+    diagnostics = filter_allowed(&diagnostics, &module, allocator)
+
     return .{
         source = source,
         module = module,
@@ -114,6 +116,116 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
         checked = checked,
         diagnostics = diagnostics,
     }
+}
+
+// ── `#allow(CODE, …)` ──────────────────────────────────────────────────
+
+// Drop the diagnostics a declaration asked to be spared. A code named by `#allow` on a declaration
+// is silent for every diagnostic whose span falls within that declaration, whichever phase raised
+// it - the filter runs over the assembled list rather than inside any one of them.
+//
+// Only declaration-level allowance exists. A single site inside a long function is suppressed by
+// naming the code on the enclosing declaration, which is the granularity every current caller
+// wants; a statement-level form arrives when one does not.
+// The survivors, in order. `diags` is left empty: every diagnostic either moved into the result or
+// was freed here, and the old backing buffer is released the way `drain_diagnostics` releases one.
+pub fn filter_allowed(diags: &List(Diagnostic), module: &Module,
+    alloc: &Allocator? = null) List(Diagnostic) {
+    const taken = diags.to_owned_slice()
+    let kept: List(Diagnostic) = list(taken.0.len, alloc)
+    for i in 0..taken.0.len {
+        if is_allowed(&taken.0[i], module) {
+            taken.0[i].deinit()
+            continue
+        }
+        kept.push(taken.0[i])
+    }
+    taken.1.free(taken.0)
+    return kept
+}
+
+// The project-wide form: a diagnostic is matched against the declarations of whichever module its
+// span belongs to, which the file id already selects.
+pub fn filter_allowed_project(diags: &List(Diagnostic), modules: &List(Module),
+    alloc: &Allocator? = null) List(Diagnostic) {
+    const taken = diags.to_owned_slice()
+    let kept: List(Diagnostic) = list(taken.0.len, alloc)
+    for i in 0..taken.0.len {
+        let dropped = false
+        for &m in modules {
+            if is_allowed(&taken.0[i], m) {
+                dropped = true
+                break
+            }
+        }
+        if dropped {
+            taken.0[i].deinit()
+            continue
+        }
+        kept.push(taken.0[i])
+    }
+    taken.1.free(taken.0)
+    return kept
+}
+
+fn is_allowed(d: &Diagnostic, module: &Module) bool {
+    for &decl in module.decls {
+        const sp = decl_span(decl)
+        if sp.is_none() {
+            continue
+        }
+        const span = sp.unwrap()
+        if span.file_id != d.span.file_id {
+            continue
+        }
+        if d.span.start < span.start or d.span.start >= span.start + span.length {
+            continue
+        }
+        if names_code(decl, d.code) {
+            return true
+        }
+    }
+    return false
+}
+
+fn decl_span(decl: &Decl) SourceSpan? {
+    return decl.* match {
+        Function(f) => Some(f.span)
+        Type(t) => Some(t.span)
+        Test(t) => Some(t.span)
+        _ => null
+    }
+}
+
+fn names_code(decl: &Decl, code: String) bool {
+    return decl.* match {
+        Function(f) => directives_allow(&f.directives, code)
+        Type(t) => directives_allow(&t.directives, code)
+        Test(t) => directives_allow(&t.directives, code)
+        _ => false
+    }
+}
+
+fn directives_allow(ds: &List(DeclAttribute), code: String) bool {
+    for &d in ds {
+        const hit = d.* match {
+            Allow(codes) => contains_code(&codes, code)
+            _ => false
+        }
+        if hit {
+            return true
+        }
+    }
+    return false
+}
+
+fn contains_code(codes: &List(String), code: String) bool {
+    for i in 0..codes.len {
+        if codes[i] == code {
+            return true
+        }
+    }
+    return false
 }
 
 pub fn deinit(self: &AnalyzedUnit) {
@@ -385,6 +497,9 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
         drain_diagnostics(&self.diagnostics, &wi)
         wi.deinit()
     }
+
+    // Last, so a code is silenced whichever phase raised it - including the unused warnings above.
+    self.diagnostics = filter_allowed_project(&self.diagnostics, &self.modules, allocator)
 }
 
 // The demand set for a lazy check (RFC-022 §6): the project's own modules, the auto-imported

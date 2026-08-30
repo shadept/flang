@@ -1,7 +1,7 @@
 # RFC-026: Copy-on-write parameters - elide the shadow when nothing writes or escapes
 
 **Type:** Compiler mechanism (lowering) + language rule (casts)
-**Status:** Proposed - `#allow` syntax agreed
+**Status:** Landed 2026-08-30 - all four parts, with three deviations recorded below
 **Depends on:** None
 **Relates to:** spec §3.2 (function arguments), §5.4 (casting), §3.6 (safety model)
 
@@ -212,6 +212,50 @@ escape.
   FLang-vs-Rust disambiguation.
 - `docs/error-codes.md` gains E2122 and W2004.
 
+## What actually landed
+
+Three things differ from the design above.
+
+**The analysis runs on FIR, not on the AST.** `lib/flang_driver/src/param_elision.f` runs on each
+function as the builder finishes it and before it reaches an `IrModule`, so no consumer ever sees a
+body that copies a parameter it only reads. It cannot run earlier: the prologue is emitted before
+the body exists. FIR rather than AST is what makes the classification total - twelve instruction
+forms cover every construct the language has, because desugars, operators, UFCS receivers and
+template expansions all arrive as loads, stores, geps and calls.
+
+The escape table is implemented as written, which makes `let x = &p` a copy: storing a tainted
+address is an escape whatever is done with it later. §2's prose sentence "a local `&p` used only
+for reads is not an escape" contradicts its own table and was not implemented. Tracking taint
+through a local slot is an alias analysis through memory; the table's answer is sound and one
+worklist pass.
+
+**E2122 needed a null exemption.** "One stdlib site breaks" was 161. The dominant pattern is
+`0usize as &T`, which is how a null reference is spelled while the language has no null primitive -
+`List`, `Dict`, `StringBuilder` and `Deque` all null their buffer on teardown. A literal `0` is
+therefore exempt: a zero can never carry the address of a live value, so it cannot defeat the
+analysis. The `let zero: usize = 0` spelling of the same idiom was normalized to the literal across
+the stdlib and the parser. Two sites were genuine laundering and took the pointer-arithmetic fix -
+`allocator.f`'s two, plus `projector.f`'s `slice_str`, which the design did not know about.
+
+A null primitive would retire the exemption. Until one exists, `0 as &T` is load-bearing.
+
+**`#allow` is declaration-level only.** The statement-level form of §4 is not implemented; naming
+the code on the enclosing declaration covers every site in the tree. Several codes per directive
+works as designed.
+
+## Measured
+
+Compiler compiling itself, before and after, on win-x64:
+
+| | before | after |
+|---|---|---|
+| `memcpy` calls in the emitted C | 100071 | 98557 |
+| stage C | 20019420 B | 19840407 B |
+| stage binary | 2406400 B | 2360320 B |
+
+1514 parameter copies removed. `is_none` on an `Option(ComptimeCtx)` reads the tag straight out of
+the caller's pointer, which was the motivating case.
+
 ## Separate bug
 
 A payload-less `None` arm copies the whole scrutinee:
@@ -223,8 +267,11 @@ m_arm9:;
 ```
 
 `None` has no payload and the arm binds nothing, so the copy has no reader.
-Related to fb665d4, which did not cover the no-binding case. Covered by the
-`lower.f:7952` assertion above.
+Related to fb665d4, which did not cover the no-binding case.
+
+RESOLVED. It does not reproduce: `v1` in that snippet was the parameter shadow, so the arm was
+copying out of a slot that no longer exists. A payload-less arm over a local scrutinee emits no copy
+either.
 
 ## Implementation order
 

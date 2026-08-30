@@ -2993,6 +2993,7 @@ Report the issue with sample code that reproduces the error.
 | **E2116** | Directives        | Unknown compile-time name in #if condition   |
 | **E2117** | Directives        | #if condition is not a bool                  |
 | **E2118** | Directives        | Invalid operand in #if condition             |
+| **E2122** | Type Checking     | Integer cast to a reference                  |
 
 ### E2115: Unsupported Pattern Form
 
@@ -3670,6 +3671,35 @@ let x = (b & 0x07) << 18            // error[E2121]: Shift amount `18` is out of
 let y: u32 = (b as u32 & 0x07) << 18  // ok: the operand is u32 before the shift
 ```
 
+### E2122: Integer Cast to a Reference
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+`usize as &T` fabricates a reference from an integer. Copy-on-write parameters (spec §3.2) rest on
+an escape analysis that follows addresses; an address that becomes an integer leaves it, and one
+that comes back could be written through to reach a caller's value the callee only borrowed. The
+outbound direction stays available under W2004, so an address can leave, it just cannot return.
+
+The literal `0` is exempt: it is how a null reference is spelled while the language has no null
+primitive, and a zero can never carry the address of a live value.
+
+#### Example
+
+```flang
+let addr = p as usize               // warning[W2004]: allowed, reads the address
+let back = addr as &i32             // error[E2122]: cannot cast an integer to a reference
+let none: &i32 = 0usize as &i32     // ok: the null-reference idiom
+```
+
+#### Solution
+
+Take the address of a value (`&x`) instead of rebuilding one. For pointer arithmetic use `&T + usize`,
+which stays inside the type system: `base + (header + offset)` rather than
+`(base as usize + header + offset) as &u8`.
+
 ### W1001: Unused Variable
 
 **Category**: Code Quality
@@ -3860,7 +3890,41 @@ fn foo() i32 { return 42 }  // warning[W2003]: unknown directive `#noexist`
 
 #### Solution
 
-Check the directive name for typos. Known directives: `#foreign`, `#deprecated`, `#inline`.
+Check the directive name for typos. Known directives: `#foreign`, `#deprecated`, `#inline`, `#simd`,
+`#allow`.
+
+### W2004: Reference Cast to an Integer
+
+**Category**: Type Checking
+**Severity**: Warning
+
+#### Description
+
+`&T as usize` reads an address as a number. Null checks, containment checks and pointer identity all
+need it, and it stays available - but it is the outbound half of laundering a reference through an
+integer, so the cast is called out where it happens. The return trip is refused for every integer
+except the literal `0` (E2122), which is how a null reference is spelled; a zero cannot carry the
+address of a live value, so `0usize as &T` is not a way back.
+
+#### Example
+
+```flang
+#allow(W2004)
+pub fn deinit(self: &OwnedString) {
+    if self.ptr as usize == 0 {     // silent: the declaration allows W2004
+        return
+    }
+}
+
+fn is_null(p: &u8) bool {
+    return p as usize == 0          // warning[W2004]
+}
+```
+
+#### Solution
+
+If the cast is deliberate, name the code on the enclosing declaration with `#allow(W2004)`. Several
+codes may be listed: `#allow(W2004, W1002)`.
 
 ---
 

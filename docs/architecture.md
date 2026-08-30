@@ -204,6 +204,20 @@ Complex constructs (`for`, `if` expressions, `defer`, `match`) are desugared int
 
 Lowering keys locals by name (`HmAstLowering._locals`). A block is a lexical scope: it tracks the `let`/`const` bindings it introduces and undoes them on exit, so a name shadowed inside a block resolves back to the outer binding afterwards. Parameter copy-on-write promotions and pattern bindings are deliberately function-scoped and survive block exit.
 
+### Parameter copy elision
+
+`lib/flang_driver/src/param_elision.f` runs on each function as the builder finishes it, before it
+reaches an `IrModule`. It removes the prologue shadow copy of a by-value aggregate parameter whose
+body neither writes to it nor lets its address escape, which is what spec §3.2 promises. It is part
+of lowering rather than the optimization pipeline because the elision is a language guarantee, not a
+speed-up: the address of a read-only parameter is observably the caller's, and E2122 exists to keep
+that observation sound.
+
+The analysis is intraprocedural and reads no callee bodies - any tainted address reaching a call
+argument is an escape. Working on FIR is what makes the classification total: twelve instruction
+forms cover every construct the language has, since desugars, operators, UFCS receivers and template
+expansions all arrive as loads, stores, geps and calls.
+
 ## Optimization Passes
 
 Entry point: `IrOptimizer.Run(module)`. The compiler does not manage passes or cascade loops directly — `IrOptimizer` owns the full lifecycle and iterates internally until the module is stable. Adding, removing, or reordering passes is transparent to `Compiler.cs`.
@@ -398,6 +412,24 @@ The server also emits a custom `flang/serverStatus` notification (after `initial
 ## Diagnostics
 
 All phases report errors via `Diagnostic` objects with `SourceSpan` locations. Phases add diagnostics and continue when possible — exceptions are not used for user-facing errors. The CLI aggregates and prints diagnostics before exiting.
+
+**Rendering.** `flang_core.render` turns one `Diagnostic` into the framed form — header, `-->`
+location, gutter, source lines, caret run — and returns it as a string. It is pure: the path, the
+source, a `flang_core.line_index` over it, and a `RenderStyle` all arrive through the signature, so
+the whole layout is covered by ordinary test blocks. Caret columns are display columns, so a line
+carrying tabs or non-ASCII still gets carets under the right characters.
+
+`compiler/src/frontend.f` is the IO edge: it picks the source by the span's file id, builds each
+file's line index once, resolves the style, and writes to **stderr** (build progress goes to
+stdout). Color is decided once per run from `--color=auto|always|never`, where `auto` means stderr
+is a terminal, `NO_COLOR` is unset and `TERM` is not `dumb`; on Windows, saying yes also enables the
+console's escape handling through `std.terminal.enable_ansi`.
+
+The LSP does not use the renderer — it ships structured diagnostics and lets the editor draw them.
+
+**`#allow(CODE, ...)`.** A declaration may name diagnostic codes to silence within its own span.
+The filter runs in `flang_analysis` over the assembled list, after every phase has contributed, so
+one directive covers parse, resolution, type and warning diagnostics alike. Declaration-level only.
 
 ## Testing
 

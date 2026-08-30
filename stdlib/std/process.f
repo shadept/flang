@@ -195,6 +195,7 @@ pub fn stderr_mode(self: &Command, m: Stdio) &Command {
 // Spawning
 // =============================================================================
 
+#allow (W2004)
 pub fn spawn(self: &Command) Result(Child, ProcessError) {
     if self.__args.len == 0 {
         return Err(ProcessError.InvalidArgument)

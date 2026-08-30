@@ -120,10 +120,9 @@ pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
         if self.cap > 0 {
             alloc.free(slice_from_raw_parts(self.ptr, self.cap))
         }
-        let zero: usize = 0
-        self.ptr = zero as &T
+        self.ptr = 0usize as &T
         self.cap = 0
-        const empty: T[] = slice_from_raw_parts(zero as &T, 0)
+        const empty: T[] = slice_from_raw_parts(0usize as &T, 0)
         return (empty, alloc)
     }
 
@@ -139,8 +138,7 @@ pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
     }
 
     const result_slice = slice_from_raw_parts(self.ptr, self.len)
-    let zero: usize = 0
-    self.ptr = zero as &T
+    self.ptr = 0usize as &T
     self.len = 0
     self.cap = 0
     return (result_slice, alloc)

@@ -207,12 +207,13 @@ fn project_directives(self: &Projector, cst: CstNode) List(DeclAttribute) {
     return directives
 }
 
-// `#foreign`, `#inline`, `#intrinsic`, `#simd`, `#deprecated("…")`. Other
+// `#foreign`, `#inline`, `#intrinsic`, `#simd`, `#deprecated("…")`, `#allow(CODE, …)`. Other
 // directive identifiers are flattened to `Inline` as a non-fatal default - validation belongs to a
 // later pass.
 fn project_directive(self: &Projector, cst: CstNode) DeclAttribute {
     let name: String = ""
     let arg_text: String? = null
+    let arg_idents: List(String) = list(0, Some(self.alloc))
     let after_open_paren = false
     for i in 0..cst.children.len {
         cst.children[i] match {
@@ -227,6 +228,9 @@ fn project_directive(self: &Projector, cst: CstNode) DeclAttribute {
                 }
                 if after_open_paren and tok.kind == TokenKind.StringLiteral {
                     arg_text = Some(tok.text)
+                }
+                if after_open_paren and tok.kind == TokenKind.Identifier {
+                    arg_idents.push(tok.text)
                 }
             }
             NodeChild(_) => {}
@@ -246,6 +250,9 @@ fn project_directive(self: &Projector, cst: CstNode) DeclAttribute {
     }
     if name == "deprecated" {
         return DeclAttribute.Deprecated(arg_text)
+    }
+    if name == "allow" {
+        return DeclAttribute.Allow(arg_idents)
     }
     // Unknown directive - fold to Inline so the AST stays in a known shape. The parser already
     // filed a warning for unknown directives.
@@ -649,6 +656,7 @@ fn project_test_decl(self: &Projector, cst: CstNode) TestDecl {
     }
     return .{
         span = self.span_from(cst),
+        directives = self.project_directives(cst),
         label = label,
         body = body,
     }
@@ -3303,8 +3311,7 @@ fn slice_str(s: String, lo: usize, hi: usize) String {
     if hi > s.len {
         return s
     }
-    const ptr_offset = s.ptr as usize + lo
-    return slice_from_raw_parts(ptr_offset as &u8, hi - lo)
+    return slice_from_raw_parts(s.ptr + lo, hi - lo)
 }
 
 // Drop one leading and one trailing byte if they form a matching quote

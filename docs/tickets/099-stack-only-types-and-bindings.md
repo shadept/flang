@@ -1,4 +1,4 @@
-# RFC-025: `#stack` types and stack-only bindings
+# RFC-099: `#stack` types and stack-only bindings
 
 **Type:** Language feature
 **Status:** Draft

@@ -228,8 +228,7 @@ pub fn next_token(self: &Lexer) Token {
 // Empty `Trivia[]` - no allocation, ptr=null, len=0. Used everywhere a token is known to have no
 // leading or trailing trivia (interp boundaries, BadToken recovery exits, the EOF placeholder).
 fn empty_trivia() Trivia[] {
-    let zero: usize = 0
-    return slice_from_raw_parts(zero as &Trivia, 0)
+    return slice_from_raw_parts(0usize as &Trivia, 0)
 }
 
 fn lex_leading_trivia(self: &Lexer) Trivia[] {

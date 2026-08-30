@@ -1,5 +1,4 @@
-// Per-document line index: byte offsets of line starts, plus LSP position conversion under the
-// negotiated encoding.
+// LSP position conversion over a `flang_core` line index.
 //
 // `Position.character` counts units of the negotiated encoding within the line: bytes for utf-8,
 // UTF-16 code units for utf-16. The index itself is encoding-independent. A document that is pure
@@ -16,6 +15,9 @@ import std.list
 import std.option
 import std.string
 import std.test
+// Re-exported: a consumer that wants LSP positions wants the index they are measured against, and
+// importing one module for both is the shape every caller already has.
+pub import flang_core.line_index
 
 pub type PositionEncoding = enum {
     Utf8
@@ -29,59 +31,6 @@ fn is_utf8(enc: PositionEncoding) bool {
 pub type Position = struct {
     line: u32
     character: u32
-}
-
-pub type LineIndex = struct {
-    starts: List(usize) // byte offset of each line start; starts[0] == 0
-    all_ascii: bool
-    text_len: usize
-}
-
-pub fn line_index(text: String, allocator: &Allocator? = null) LineIndex {
-    let starts: List(usize) = list(16, allocator)
-    starts.push(0)
-    for i in 0..text.len {
-        if text[i] == '\n' {
-            starts.push(i + 1)
-        }
-    }
-    return .{ starts = starts, all_ascii = is_ascii(text), text_len = text.len }
-}
-
-pub fn deinit(self: &LineIndex) {
-    self.starts.deinit()
-}
-
-pub fn line_count(self: &LineIndex) usize {
-    return self.starts.len
-}
-
-// Greatest line whose start is <= offset.
-fn line_of(self: &LineIndex, offset: usize) usize {
-    let lo: usize = 0
-    let hi = self.starts.len
-    while hi - lo > 1 {
-        const mid = lo + (hi - lo) / 2
-        if self.starts[mid] <= offset {
-            lo = mid
-        } else {
-            hi = mid
-        }
-    }
-    return lo
-}
-
-// [start, end) of the line's content, terminator excluded.
-fn line_bounds(self: &LineIndex, text: String, line: usize) (usize, usize) {
-    const start = self.starts[line]
-    let end = if line + 1 < self.starts.len { self.starts[line + 1] } else { self.text_len }
-    if end > start and text[end - 1] == '\n' {
-        end = end - 1
-    }
-    if end > start and text[end - 1] == '\r' {
-        end = end - 1
-    }
-    return (start, end)
 }
 
 pub fn to_position(self: &LineIndex, text: String, offset: usize, enc: PositionEncoding) Position {
@@ -147,8 +96,6 @@ test "ascii offsets round-trip" {
     const text = "let x = 1\nlet y = 2\n"
     let idx = line_index(text)
     defer idx.deinit()
-
-    assert_eq(idx.line_count(), 3, "two newlines open a third, empty line")
 
     const p = idx.to_position(text, 14, PositionEncoding.Utf16)
     assert_eq(p.line as usize, 1, "offset 14 is on the second line")

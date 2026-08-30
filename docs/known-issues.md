@@ -150,6 +150,47 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### The formatter does not round-trip a string literal containing a raw newline
+
+**Status:** Open
+**Affected:** `lib/flang_fmt`
+
+The lexer accepts a newline inside a string literal, so this compiles and runs:
+
+```flang
+let src = "type Pt = struct { x: i32 }
+fn f(p: Pt) i32 { return p.x }"
+```
+
+`flang fmt` on a file containing one fails its own verification pass and leaves the file untouched
+("formatter verification failed ... (formatter bug)"), which means such a file can never be
+formatted and any project containing it reports drift forever. It only fires when the file's line
+endings are CRLF, which every checked-out file on Windows has; the same bytes with LF endings format
+cleanly. The escape form (`
+`) is unaffected.
+
+Present in the tree today: `lib/flang_analysis/src/unused.f` and `src/analyze.f` both carry
+multi-line fixtures in their test blocks, so `flang fmt lib/flang_analysis` reports two failures.
+The committed seed fails the same way, so this predates RFC-026.
+
+Either the formatter round-trips the raw form or the lexer rejects it; today the two disagree.
+
+### `0 as &T` is how a null reference is spelled
+
+**Status:** Open - by design until a null primitive exists
+**Affected:** `stdlib/std` (`list.f`, `dict.f`, `deque.f`, `string_builder.f`, `string.f`),
+`lib/flang_parser`
+
+References are non-nullable, and there is no null primitive, so every container spells its empty
+buffer as `0usize as &T` and every teardown nulls its pointer the same way. That is an integer cast
+to a reference, which E2122 otherwise refuses (RFC-026), so the literal `0` is exempt from the
+check - a zero can never carry the address of a live value, so it cannot defeat the escape
+analysis E2122 protects.
+
+The exemption is a hole in a type-system rule, kept open by the absence of the feature that would
+close it. A null primitive (or a nullable-reference representation the containers can use for
+"no buffer") retires both the idiom and the exemption. Around 150 sites depend on it today.
+
 ### Self-hosted: an aggregate pattern binding copied the payload instead of naming it - RESOLVED
 
 **Status:** Resolved 2026-08-28

@@ -174,8 +174,7 @@ pub fn ct_env(ctx: &ComptimeCtx, alloc: &Allocator, lookup: CtLookup) CtEnv {
 }
 
 fn directive_env(ctx: &ComptimeCtx) CtEnv {
-    let zero: usize = 0
-    const lookup: CtLookup = .{ ctx = zero as &u8, resolve = no_lookup }
+    const lookup: CtLookup = .{ ctx = 0usize as &u8, resolve = no_lookup }
     return ct_env(ctx, or_global(null), lookup)
 }
 

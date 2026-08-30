@@ -265,6 +265,7 @@ pub fn reset_counts(state: &CountingAllocator) {
     state.deallocs = 0
 }
 
+#allow (W2004)
 test "an installed global allocator is what or_global resolves to" {
     let c = counting_allocator(global())
     let a = c.allocator()
@@ -360,6 +361,7 @@ fn fixed_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     return Some(new_memory)
 }
 
+#allow (W2004)
 fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     let state = impl as &FixedBufferAllocatorState
 
@@ -486,7 +488,7 @@ fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
         if aligned_offset + size <= page.size {
             // Compute pointer: page base + header + aligned offset
             let base = page as &u8
-            let ptr = (base as usize + header_size + aligned_offset) as &u8
+            let ptr = base + (header_size + aligned_offset)
             page.offset = aligned_offset + size
             return Some(slice_from_raw_parts(ptr, size))
         }
@@ -501,7 +503,7 @@ fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
     let page = new_page.unwrap()
     let aligned_offset = align_up(0, alignment)
     let base = page as &u8
-    let ptr = (base as usize + header_size + aligned_offset) as &u8
+    let ptr = base + (header_size + aligned_offset)
     page.offset = aligned_offset + size
     return Some(slice_from_raw_parts(ptr, size))
 }

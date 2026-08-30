@@ -63,8 +63,7 @@ pub fn deinit(sb: &StringBuilder) {
     if (sb.cap > 0) {
         sb.allocator.or_global().free(slice_from_raw_parts(sb.ptr, sb.cap))
     }
-    let zero: usize = 0
-    sb.ptr = zero as &u8
+    sb.ptr = 0usize as &u8
     sb.len = 0
     sb.cap = 0
 }
@@ -138,8 +137,7 @@ pub fn to_string(sb: &StringBuilder) OwnedString {
 
     const result = OwnedString { ptr = sb.ptr, len = sb.len, allocator = sb.allocator }
 
-    let zero: usize = 0
-    sb.ptr = zero as &u8
+    sb.ptr = 0usize as &u8
     sb.len = 0
     sb.cap = 0
     return result

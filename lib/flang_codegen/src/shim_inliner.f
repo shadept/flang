@@ -385,58 +385,15 @@ fn splice_callee(m: &IrModule, callee_idx: usize, caller: &Function, args: &List
     return result
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Operand / instruction / terminator cloning. Each instruction variant has two cloning paths:
+// ────────────────────────────────────────────────────────────────────
+// Callee-body cloning. `clone_callee_instr` mints a fresh result id via `caller.fresh_value_id()`
+// for every value-producing instruction and records `old_id -> Local(new_id)` in the splice-local
+// substitution map. Operands are remapped first, since SSA forbids forward-references to one's own
+// result.
 //
-//   clone_callee_instr - used while splicing a callee body. Mints a
-//     fresh result id via `caller.fresh_value_id()` for every value-
-//     producing instruction and records `old_id → Local(new_id)` in
-//     the splice-local substitution map. Operands are remapped first
-//     (SSA forbids forward-references to one's own result).
-//
-//   rewrite_instr - used for caller instructions that aren't being
-//     inlined. Preserves result ids; only remaps operands through the
-//     function-scoped result substitution.
-//
-// Both paths always allocate fresh inner lists (call args, variadic type lists, branch-target
-// args). The old block's instruction list gets deinit'd wholesale after the rewrite, so reusing
-// list buffers across new/old would dangle.
-// ─────────────────────────────────────────────────────────────────────
-
-fn remap_operand(op: Operand, subst: &Dict(u32, Operand)) Operand {
-    return op match {
-        Local(id) => {
-            const found = subst.get(id)
-            found match {
-                Some(o) => o
-                None => op
-            }
-        }
-        _ => op
-    }
-}
-
-fn clone_operand_list(args: &List(Operand), subst: &Dict(u32, Operand),
-    alloc: &Allocator?) List(Operand) {
-    let out: List(Operand) = list(args.len, alloc)
-    for i in 0..args.len {
-        out.push(remap_operand(args[i], subst))
-    }
-    return out
-}
-
-fn clone_ir_type_list(tys: &List(IrType), alloc: &Allocator?) List(IrType) {
-    let out: List(IrType) = list(tys.len, alloc)
-    out.push_all(tys.as_slice())
-    return out
-}
-
-fn clone_block_target(t: &BlockTarget, subst: &Dict(u32, Operand), alloc: &Allocator?) BlockTarget {
-    return BlockTarget {
-        label = t.label,
-        args = clone_operand_list(&t.args, subst, alloc),
-    }
-}
+// Caller instructions that are NOT being inlined go through `fir.rewrite_instr` instead, which
+// preserves result ids and only remaps operands.
+// ────────────────────────────────────────────────────────────────────
 
 fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Function,
     alloc: &Allocator?) Instr {
@@ -579,92 +536,6 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
                 cc = c.cc,
             })
         }
-    }
-}
-
-fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator?) Instr {
-    return inst.* match {
-        Binary(b) => Instr.Binary(BinaryInstr {
-            result = b.result, op = b.op, ty = b.ty,
-            lhs = remap_operand(b.lhs, subst),
-            rhs = remap_operand(b.rhs, subst),
-        })
-        Unary(u) => Instr.Unary(UnaryInstr {
-            result = u.result, op = u.op, ty = u.ty,
-            operand = remap_operand(u.operand, subst),
-        })
-        Compare(c) => Instr.Compare(CompareInstr {
-            result = c.result, op = c.op, operand_ty = c.operand_ty,
-            lhs = remap_operand(c.lhs, subst),
-            rhs = remap_operand(c.rhs, subst),
-        })
-        Convert(c) => Instr.Convert(ConvertInstr {
-            result = c.result, op = c.op,
-            source_ty = c.source_ty, result_ty = c.result_ty,
-            operand = remap_operand(c.operand, subst),
-        })
-        StackSlot(s) => Instr.StackSlot(StackSlotInstr {
-            result = s.result, size = s.size, align = s.align,
-        })
-        Load(l) => Instr.Load(LoadInstr {
-            result = l.result, ty = l.ty,
-            ptr = remap_operand(l.ptr, subst), align = l.align,
-        })
-        Store(s) => Instr.Store(StoreInstr {
-            ty = s.ty,
-            value = remap_operand(s.value, subst),
-            ptr = remap_operand(s.ptr, subst),
-            align = s.align,
-        })
-        Gep(g) => Instr.Gep(GepInstr {
-            result = g.result,
-            ptr = remap_operand(g.ptr, subst),
-            offset = remap_operand(g.offset, subst),
-        })
-        Memcpy(mc) => Instr.Memcpy(MemcpyInstr {
-            dst = remap_operand(mc.dst, subst),
-            src = remap_operand(mc.src, subst),
-            size = remap_operand(mc.size, subst),
-        })
-        Memset(ms) => Instr.Memset(MemsetInstr {
-            dst = remap_operand(ms.dst, subst),
-            byte = remap_operand(ms.byte, subst),
-            size = remap_operand(ms.size, subst),
-        })
-        Call(c) => Instr.Call(CallInstr {
-            result = c.result, result_ty = c.result_ty,
-            callee = c.callee,
-            args = clone_operand_list(&c.args, subst, alloc),
-            variadic_arg_types = clone_ir_type_list(&c.variadic_arg_types, alloc),
-        })
-        CallIndirect(c) => Instr.CallIndirect(CallIndirectInstr {
-            result = c.result, result_ty = c.result_ty,
-            fn_ptr = remap_operand(c.fn_ptr, subst),
-            param_types = clone_ir_type_list(&c.param_types, alloc),
-            args = clone_operand_list(&c.args, subst, alloc),
-            variadic_arg_types = clone_ir_type_list(&c.variadic_arg_types, alloc),
-            cc = c.cc,
-        })
-    }
-}
-
-fn rewrite_terminator(t: &Terminator, subst: &Dict(u32, Operand), alloc: &Allocator?) Terminator {
-    return t.* match {
-        Br(target) => Terminator.Br(clone_block_target(&target, subst, alloc))
-        BrIf(b) => Terminator.BrIf(BrIfTerm {
-            cond = remap_operand(b.cond, subst),
-            then_target = clone_block_target(&b.then_target, subst, alloc),
-            else_target = clone_block_target(&b.else_target, subst, alloc),
-        })
-        Ret(v) => {
-            let new_v: Operand? = null
-            v match {
-                Some(op) => new_v = Some(remap_operand(op, subst))
-                None => {}
-            }
-            Terminator.Ret(new_v)
-        }
-        Unreachable => Terminator.Unreachable
     }
 }
 

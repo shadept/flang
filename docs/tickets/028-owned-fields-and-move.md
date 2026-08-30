@@ -1,4 +1,4 @@
-# RFC-027: `owned` fields, non-copyable types, and `move`
+# RFC-028: `owned` fields, non-copyable types, and `move`
 
 **Type:** Language feature (field modifier + expression form) + compiler check
 **Status:** Draft
@@ -504,7 +504,7 @@ record.
 
 `tests/harness/ownership/`, each self-contained with a local
 `type FileHandle = struct { owned fd: i32 }`. Written first as
-`//! SKIP: RFC-027 not implemented`.
+`//! SKIP: RFC-028 not implemented`.
 
 ### E2123 — a consuming site requires `move`
 
