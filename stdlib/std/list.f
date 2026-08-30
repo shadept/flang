@@ -1,6 +1,7 @@
 // Generic dynamic array backed by manually managed heap storage. Uses raw malloc/free for
 // simplicity (allocator support to be added later).
 
+import core.math
 import std.allocator
 import std.dict
 import std.mem
@@ -17,7 +18,22 @@ pub type List = struct(T) {
     allocator: &Allocator?
 }
 
-const DEFAULT_CAPACITY: usize = 16
+// Budget for a list's first allocation, in bytes, and the ceiling on how many elements it buys. The
+// first allocation is sized in BYTES rather than in elements: a fixed element count makes it scale
+// with `size_of(T)`, so a list of 440-byte elements would grab 7 KB to hold one. Rust's
+// `RawVec::MIN_NON_ZERO_CAP` splits its minimum the same way and for the same reason.
+const DEFAULT_CAPACITY_BUDGET: usize = 1024
+const DEFAULT_CAPACITY_MAX: usize = 8
+
+// Elements the first allocation holds, for an element type of `elem_size` bytes: the byte budget's
+// worth, clamped to at least one element and at most `DEFAULT_CAPACITY_MAX`.
+fn default_capacity(elem_size: usize) usize {
+    // A payload-less enum variant is zero-sized; the budget buys as many as the ceiling allows.
+    if elem_size == 0 {
+        return DEFAULT_CAPACITY_MAX
+    }
+    return clamp(DEFAULT_CAPACITY_BUDGET / elem_size, 1, DEFAULT_CAPACITY_MAX)
+}
 
 pub fn list(capacity: usize, allocator: &Allocator) List($T) {
     return list(capacity, Some(allocator))
@@ -149,27 +165,36 @@ pub fn reserve(self: &List($T), capacity: usize) {
         return
     }
 
-    // Calculate new capacity: start with 4, then double
-    let new_cap = if self.cap == 0 { DEFAULT_CAPACITY } else { self.cap * 2 }
+    const elem_size: usize = size_of(T)
+    const elem_align: usize = align_of(T)
+
+    let new_cap = if self.cap == 0 { default_capacity(elem_size) } else { self.cap * 2 }
     if new_cap < capacity {
         new_cap = capacity
     }
-
-    // Allocate new buffer using raw malloc
-    const elem_size: usize = size_of(T)
-    const elem_align: usize = align_of(T)
     const new_bytes: usize = new_cap * elem_size
+
+    // Grow through `realloc`, not alloc-copy-free: an allocator that can extend the block where it
+    // stands does no copy at all, and one that cannot still gets told the old block is dead. The
+    // alloc-copy-free path below is the fallback for allocators whose `realloc` declines.
+    if self.cap > 0 {
+        const old_bytes = slice_from_raw_parts(self.ptr as &u8, self.cap * elem_size)
+        const grown = self.allocator.or_global().realloc(old_bytes, new_bytes)
+        if grown.is_some() {
+            self.ptr = grown.unwrap().ptr as &T
+            self.cap = new_cap
+            return
+        }
+    }
+
     const new_buf = self.allocator.or_global().alloc(new_bytes, elem_align)
         .expect("reserve(List(T), capacity): allocation failed")
     const new_ptr: &T = new_buf.ptr as &T
 
-    // Copy existing elements
     if self.len > 0 {
-        const old_bytes = self.len * elem_size
-        memcpy(new_ptr as &u8, self.ptr as &u8, old_bytes)
+        memcpy(new_ptr as &u8, self.ptr as &u8, self.len * elem_size)
     }
 
-    // Free old buffer if it existed
     if self.cap > 0 {
         self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.cap))
     }

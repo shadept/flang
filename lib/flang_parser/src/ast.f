@@ -146,8 +146,8 @@ pub type FunctionDecl = struct {
     directives: List(DeclAttribute)
     name: String
     params: List(FunctionParam)
-    return_type: TypeExpr?
-    body: BlockExpr?
+    return_type: &TypeExpr?
+    body: &BlockExpr?
 }
 
 // One parameter slot. `is_variadic` is true for the trailing `..xs: T` form. `default_value`
@@ -156,10 +156,10 @@ pub type FunctionDecl = struct {
 pub type FunctionParam = struct {
     span: SourceSpan
     name: String
-    type_expr: TypeExpr
+    type_expr: &TypeExpr
     // The field name avoids `default`, which is a C reserved word and collides at C codegen time
     // after name mangling.
-    default_value: Expr?
+    default_value: &Expr?
     is_variadic: bool
 }
 
@@ -172,7 +172,7 @@ pub type TypeDecl = struct {
     is_pub: bool
     directives: List(DeclAttribute)
     name: String
-    body: TypeExpr
+    body: &TypeExpr
 }
 
 // `[pub] const name(: T)? = value`
@@ -180,8 +180,8 @@ pub type ConstDecl = struct {
     span: SourceSpan
     is_pub: bool
     name: String
-    type_annotation: TypeExpr?
-    value: Expr
+    type_annotation: &TypeExpr?
+    value: &Expr
 }
 
 // `test "label" { ... }`
@@ -189,7 +189,7 @@ pub type TestDecl = struct {
     span: SourceSpan
     directives: List(DeclAttribute)
     label: String
-    body: BlockExpr
+    body: &BlockExpr
 }
 
 // `#define(name, P1: K1, P2: K2, ...) { template body }` The template body is preserved as a CST
@@ -232,7 +232,7 @@ pub type GenIdentArg = struct {
 // `#if cond { decls... } else { decls... }` at file/module level.
 pub type IfDirectiveDecl = struct {
     span: SourceSpan
-    condition: Expr
+    condition: &Expr
     then_decls: List(Decl)
     else_decls: List(Decl)
 }
@@ -270,28 +270,28 @@ pub type LetStmt = struct {
     name: String
     // The name token's own span; equals `span` when error recovery produced no name.
     name_span: SourceSpan
-    type_annotation: TypeExpr?
-    init: Expr?
+    type_annotation: &TypeExpr?
+    init: &Expr?
 }
 
 // A bare expression terminated as a statement; the result is discarded. Includes UFCS calls,
 // assignments, and any other expression used for its side effect.
 pub type ExpressionStmt = struct {
     span: SourceSpan
-    expr: Expr
+    expr: &Expr
 }
 
 // `return expr?` - `value` is None for void-return-position `return`.
 pub type ReturnStmt = struct {
     span: SourceSpan
-    value: Expr?
+    value: &Expr?
 }
 
 // `defer expr` - `expr` is evaluated at the end of the enclosing scope in LIFO order with sibling
 // defers.
 pub type DeferStmt = struct {
     span: SourceSpan
-    expr: Expr
+    expr: &Expr
 }
 
 // Bare `break` / `continue`. FLang has no loop labels.
@@ -314,26 +314,26 @@ pub type ForStmt = struct {
     // `for &x in xs`: iterate through `iter_ref` (elements by reference).
     by_ref: bool
     iterable: &Expr
-    body: BlockExpr
+    body: &BlockExpr
 }
 
 // `while cond { body }` - statement form, evaluates to no value.
 pub type WhileStmt = struct {
     span: SourceSpan
     condition: &Expr
-    body: BlockExpr
+    body: &BlockExpr
 }
 
 // `loop { body }` - unconditional, statement form. Exit via `break` or `return`.
 pub type LoopStmt = struct {
     span: SourceSpan
-    body: BlockExpr
+    body: &BlockExpr
 }
 
 // `#if cond { stmts... } else { stmts... }` inside a function body.
 pub type IfDirectiveStmt = struct {
     span: SourceSpan
-    condition: Expr
+    condition: &Expr
     then_stmts: List(Stmt)
     else_stmts: List(Stmt)
 }
@@ -671,7 +671,7 @@ pub fn deinit(self: &BlockExpr) {}
 pub type IfExpr = struct {
     span: SourceSpan
     condition: &Expr
-    then_branch: BlockExpr
+    then_branch: &BlockExpr
     else_branch: ElseBranch
 }
 
@@ -679,7 +679,7 @@ pub type IfExpr = struct {
 // avoid the unqualified-variant clash against `Option.None` (see docs/known-issues.md).
 pub type ElseBranch = enum {
     NoElse
-    Block(BlockExpr)
+    Block(&BlockExpr)
     If(&IfExpr)
 }
 
@@ -694,7 +694,7 @@ pub type MatchExpr = struct {
 // body`.
 pub type MatchArm = struct {
     span: SourceSpan
-    pattern: Pattern
+    pattern: &Pattern
     guard: &Expr?
     body: &Expr
 }
@@ -705,8 +705,8 @@ pub type MatchArm = struct {
 pub type LambdaExpr = struct {
     span: SourceSpan
     params: List(FunctionParam)
-    return_type: TypeExpr?
-    body: BlockExpr
+    return_type: &TypeExpr?
+    body: &BlockExpr
 }
 
 // Recovery placeholder. The parser produced unrecognised tokens where an expression was expected;
@@ -1004,12 +1004,12 @@ pub type ErrorType = struct {
 // only validated per instantiation) and lowering (templates never emit).
 pub fn declares_generic(decl: &FunctionDecl) bool {
     for i in 0..decl.params.len {
-        if mentions_generic(&decl.params[i].type_expr) {
+        if mentions_generic(decl.params[i].type_expr) {
             return true
         }
     }
     return decl.return_type match {
-        Some(rt) => mentions_generic(&rt)
+        Some(rt) => mentions_generic(rt)
         None => false
     }
 }

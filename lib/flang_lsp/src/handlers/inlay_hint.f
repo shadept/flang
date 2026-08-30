@@ -37,11 +37,11 @@ pub fn module_binders(m: &Module, allocator: &Allocator? = null) List(Binder) {
             Function(f) => {
                 push_params(&out, &f.params, f.span)
                 f.body match {
-                    Some(b) => walk_block(&out, &b, f.span)
+                    Some(b) => walk_block(&out, b, f.span)
                     None => {}
                 }
             }
-            Test(t) => walk_block(&out, &t.body, t.span)
+            Test(t) => walk_block(&out, t.body, t.span)
             _ => {}
         }
     }
@@ -117,7 +117,7 @@ fn push_params(out: &List(Binder), params: &List(FunctionParam), owner: SourceSp
             name = p.name,
             name_span = p.span,
             owner = owner,
-            annotation = Some(type_expr_span(&p.type_expr)),
+            annotation = Some(type_expr_span(p.type_expr)),
             hintable = false,
             intro = "param",
         })
@@ -130,7 +130,7 @@ fn push_let(out: &List(Binder), ls: &LetStmt, owner: SourceSpan) {
         return
     }
     const ann = ls.type_annotation match {
-        Some(t) => Some(type_expr_span(&t))
+        Some(t) => Some(type_expr_span(t))
         None => null
     }
     out.push(.{
@@ -172,26 +172,26 @@ fn walk_stmt(out: &List(Binder), s: &Stmt, owner: SourceSpan) {
         Let(ls) => {
             push_let(out, &ls, owner)
             ls.init match {
-                Some(i) => walk_expr(out, &i, owner)
+                Some(i) => walk_expr(out, i, owner)
                 None => {}
             }
         }
-        Expression(es) => walk_expr(out, &es.expr, owner)
+        Expression(es) => walk_expr(out, es.expr, owner)
         Return(rs) => rs.value match {
-            Some(v) => walk_expr(out, &v, owner)
+            Some(v) => walk_expr(out, v, owner)
             None => {}
         }
-        Defer(ds) => walk_expr(out, &ds.expr, owner)
+        Defer(ds) => walk_expr(out, ds.expr, owner)
         For(fs) => {
             push_for(out, &fs, owner)
             walk_expr(out, fs.iterable, owner)
-            walk_block(out, &fs.body, owner)
+            walk_block(out, fs.body, owner)
         }
         While(ws) => {
             walk_expr(out, ws.condition, owner)
-            walk_block(out, &ws.body, owner)
+            walk_block(out, ws.body, owner)
         }
-        Loop(l) => walk_block(out, &l.body, owner)
+        Loop(l) => walk_block(out, l.body, owner)
         IfDirective(ifd) => {
             for &t in ifd.then_stmts {
                 walk_stmt(out, t, owner)
@@ -305,7 +305,7 @@ fn walk_expr(out: &List(Binder), e: &Expr, owner: SourceSpan) {
         }
         Lambda(l) => {
             push_params(out, &l.params, owner)
-            walk_block(out, &l.body, owner)
+            walk_block(out, l.body, owner)
         }
         Error(_) => {}
     }
@@ -313,9 +313,9 @@ fn walk_expr(out: &List(Binder), e: &Expr, owner: SourceSpan) {
 
 fn walk_if(out: &List(Binder), i: &IfExpr, owner: SourceSpan) {
     walk_expr(out, i.condition, owner)
-    walk_block(out, &i.then_branch, owner)
+    walk_block(out, i.then_branch, owner)
     i.else_branch match {
-        Block(b) => walk_block(out, &b, owner)
+        Block(b) => walk_block(out, b, owner)
         If(next) => walk_if(out, next, owner)
         NoElse => {}
     }

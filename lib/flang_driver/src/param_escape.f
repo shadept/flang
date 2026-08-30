@@ -56,7 +56,7 @@ pub fn shadowed_params(decl: &FunctionDecl, result: &TypeCheckResult, overlay: &
             out.push(true)
             continue
         }
-        out.push(needs_shadow(p.name, &body.unwrap(), result, overlay, allocator))
+        out.push(needs_shadow(p.name, body.unwrap(), result, overlay, allocator))
     }
     return out
 }
@@ -106,18 +106,18 @@ fn stmt_escapes(s: &Stmt, al: &List(String), r: &TypeCheckResult, ov: &Inference
                 true
             } else {
                 l.init match {
-                    Some(e) => expr_escapes(&e, al, r, ov)
+                    Some(e) => expr_escapes(e, al, r, ov)
                     None => false
                 }
             }
         }
-        Expression(e) => expr_escapes(&e.expr, al, r, ov)
+        Expression(e) => expr_escapes(e.expr, al, r, ov)
         // The value is copied into the caller's buffer, so the address does not travel with it.
         Return(rt) => rt.value match {
-            Some(e) => expr_escapes(&e, al, r, ov)
+            Some(e) => expr_escapes(e, al, r, ov)
             None => false
         }
-        Defer(d) => expr_escapes(&d.expr, al, r, ov)
+        Defer(d) => expr_escapes(d.expr, al, r, ov)
         Break(_) => false
         Continue(_) => false
         // The loop variable of `for x in p` names into `p`'s storage.
@@ -125,10 +125,10 @@ fn stmt_escapes(s: &Stmt, al: &List(String), r: &TypeCheckResult, ov: &Inference
             if roots_in(f.iterable, al, r, ov) {
                 al.push(f.var_name)
             }
-            expr_escapes(f.iterable, al, r, ov) or block_escapes(&f.body, al, r, ov)
+            expr_escapes(f.iterable, al, r, ov) or block_escapes(f.body, al, r, ov)
         }
-        While(w) => expr_escapes(w.condition, al, r, ov) or block_escapes(&w.body, al, r, ov)
-        Loop(l) => block_escapes(&l.body, al, r, ov)
+        While(w) => expr_escapes(w.condition, al, r, ov) or block_escapes(w.body, al, r, ov)
+        Loop(l) => block_escapes(l.body, al, r, ov)
         // Both arms are projected away before lowering; whichever survives is walked as itself.
         // They are bare statement lists, not blocks - `#if` introduces no scope.
         IfDirective(d) => stmts_escape(&d.then_stmts, al, r, ov) or stmts_escape(&d.else_stmts, al,
@@ -227,7 +227,7 @@ fn match_escapes(m: &MatchExpr, al: &List(String), r: &TypeCheckResult,
     const from_alias = roots_in(m.scrutinee, al, r, ov)
     for &arm in m.arms {
         if from_alias {
-            collect_bindings(&arm.pattern, al)
+            collect_bindings(arm.pattern, al)
         }
         arm.guard match {
             Some(g) => {
@@ -248,12 +248,12 @@ fn if_escapes(f: &IfExpr, al: &List(String), r: &TypeCheckResult, ov: &Inference
     if expr_escapes(f.condition, al, r, ov) {
         return true
     }
-    if block_escapes(&f.then_branch, al, r, ov) {
+    if block_escapes(f.then_branch, al, r, ov) {
         return true
     }
     return f.else_branch match {
         NoElse => false
-        Block(b) => block_escapes(&b, al, r, ov)
+        Block(b) => block_escapes(b, al, r, ov)
         If(i) => if_escapes(i, al, r, ov)
     }
 }
@@ -394,7 +394,7 @@ fn mentions(e: &Expr, al: &List(String)) bool {
             }
             hit
         }
-        Lambda(l) => mentions_block(&l.body, al)
+        Lambda(l) => mentions_block(l.body, al)
         Error(_) => false
     }
 }
@@ -412,20 +412,20 @@ fn mentions_block(b: &BlockExpr, al: &List(String)) bool {
 fn mentions_stmt(s: &Stmt, al: &List(String)) bool {
     return s.* match {
         Let(l) => l.init match {
-            Some(e) => mentions(&e, al)
+            Some(e) => mentions(e, al)
             None => false
         }
-        Expression(e) => mentions(&e.expr, al)
+        Expression(e) => mentions(e.expr, al)
         Return(rt) => rt.value match {
-            Some(e) => mentions(&e, al)
+            Some(e) => mentions(e, al)
             None => false
         }
-        Defer(d) => mentions(&d.expr, al)
+        Defer(d) => mentions(d.expr, al)
         Break(_) => false
         Continue(_) => false
-        For(f) => mentions(f.iterable, al) or mentions_block(&f.body, al)
-        While(w) => mentions(w.condition, al) or mentions_block(&w.body, al)
-        Loop(l) => mentions_block(&l.body, al)
+        For(f) => mentions(f.iterable, al) or mentions_block(f.body, al)
+        While(w) => mentions(w.condition, al) or mentions_block(w.body, al)
+        Loop(l) => mentions_block(l.body, al)
         IfDirective(d) => mentions_stmts(&d.then_stmts, al) or mentions_stmts(&d.else_stmts, al)
     }
 }
@@ -441,9 +441,9 @@ fn mentions_stmts(xs: &List(Stmt), al: &List(String)) bool {
 
 // `if` reached through `ElseBranch.If`, which holds the chained `if` by reference.
 fn mentions_if(f: &IfExpr, al: &List(String)) bool {
-    return mentions(f.condition, al) or mentions_block(&f.then_branch, al) or f.else_branch match {
+    return mentions(f.condition, al) or mentions_block(f.then_branch, al) or f.else_branch match {
         NoElse => false
-        Block(b) => mentions_block(&b, al)
+        Block(b) => mentions_block(b, al)
         If(i) => mentions_if(i, al)
     }
 }

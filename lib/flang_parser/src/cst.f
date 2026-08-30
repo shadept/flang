@@ -321,6 +321,23 @@ pub fn child_count(self: CstNode) usize {
     return self.children.len as usize
 }
 
+// How many of the children are sub-nodes rather than tokens. Reads the child slots directly instead
+// of going through `child`, which would materialise a `CstNode` per slot only to throw it away.
+//
+// This is an exact upper bound on what projecting those children yields, which is what sizes the
+// projector's lists: they are built in the module arena, where a list that outgrows its buffer
+// abandons it for the arena's lifetime.
+pub fn node_child_count(self: CstNode) usize {
+    let n: usize = 0
+    for i in 0..(self.children.len as usize) {
+        self.cst.children[self.children.start as usize + i] match {
+            NodeSlot(_) => { n = n + 1 }
+            TokenSlot(_) => {}
+        }
+    }
+    return n
+}
+
 // The `i`th child. Out of range is a programming error, not a recoverable one - it panics the same
 // way indexing past a list does.
 pub fn child(self: CstNode, i: usize) CstChild {

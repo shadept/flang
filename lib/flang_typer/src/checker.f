@@ -1088,7 +1088,7 @@ fn slice_of(self: &Checker, elem: Ty) Ty {
 // site - the declaration spells the ELEMENT type (spec 4.2, reference parity); callers pack their
 // surplus arguments into an array that decays to it.
 fn param_ty(self: &Checker, p: &FunctionParam) Ty {
-    let ty = resolve_type_expr(self, &p.type_expr)
+    let ty = resolve_type_expr(self, p.type_expr)
     if p.is_variadic {
         return slice_of(self, ty)
     }
@@ -1451,7 +1451,7 @@ fn collect_one_name(self: &Checker, decl: &Decl, module_path: String) {
             kind match {
                 NkStruct => register_struct_placeholder(self, &td, fqn_owned)
                 NkEnum => register_enum_placeholder(self, &td, fqn_owned)
-                NkAlias => self.aliases.register(fqn_owned, td.body)
+                NkAlias => self.aliases.register(fqn_owned, td.body.*)
             }
         }
         _ => {}
@@ -1478,8 +1478,8 @@ type Nk = enum {
     NkAlias
 }
 
-fn nominal_kind_of(body: TypeExpr) Nk {
-    return body match {
+fn nominal_kind_of(body: &TypeExpr) Nk {
+    return body.* match {
         AnonStruct(_) => Nk.NkStruct
         AnonEnum(_) => Nk.NkEnum
         _ => Nk.NkAlias
@@ -1920,7 +1920,7 @@ fn duplicate_overload(self: &Checker, name: String, sig: &Scheme) bool {
 
 fn register_constant(self: &Checker, cd: &ConstDecl) {
     let ty = cd.type_annotation match {
-        Some(t) => resolve_type_expr(self, &t)
+        Some(t) => resolve_type_expr(self, t)
         None => self.engine.fresh_var()
     }
     let fqn = $"{self.current_module.unwrap()}.{cd.name}"
@@ -1946,16 +1946,16 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
         // diagnostic names the parameter (E2070) rather than surfacing at some unrelated call site.
         p.default_value match {
             Some(dv) => {
-                const dt = check_expr(self, &dv)
+                const dt = check_expr(self, dv)
                 const o = self.engine.unify(dt, pt)
-                report_unify(self, &o, E_DEFAULT_PARAM_TYPE, expr_span(&dv))
+                report_unify(self, &o, E_DEFAULT_PARAM_TYPE, expr_span(dv))
             }
             None => {}
         }
         params.push(pt)
     }
     let ret = fd.return_type match {
-        Some(rt) => resolve_type_expr(self, &rt)
+        Some(rt) => resolve_type_expr(self, rt)
         None => TY_VOID
     }
     let fn_ty = self.engine.mk_func(params, ret)
@@ -2108,7 +2108,7 @@ fn check_test_body(self: &Checker, td: &TestDecl) {
     let frame = FnFrame { name = td.label, return_ty = TY_VOID, decl_span = td.span }
     self.fn_stack.push(frame)
 
-    const _body_ty = check_block(self, &td.body)
+    const _body_ty = check_block(self, td.body)
 
     let _r = self.fn_stack.pop()
     self.engine.exit_level()
@@ -2123,7 +2123,7 @@ fn check_constant_init(self: &Checker, cd: &ConstDecl) {
     // outlives the checker.
     let stable = self.results.add_synth_string(fqn)
     self.results.record_target(self.node_of(cd.span), ResolvedTarget.RtConst(stable))
-    let v = check_expr(self, &cd.value)
+    let v = check_expr(self, cd.value)
     unify_expected(self, v, reg.unwrap(), E_TYPE_MISMATCH, cd.span)
 }
 
@@ -2151,14 +2151,14 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
         params.push(ty)
     }
     let ret = fd.return_type match {
-        Some(rt) => resolve_type_expr(self, &rt)
+        Some(rt) => resolve_type_expr(self, rt)
         None => TY_VOID
     }
 
     let frame = FnFrame { name = fd.name, return_ty = ret, decl_span = fd.span }
     self.fn_stack.push(frame)
 
-    let body_ty = check_block(self, &body)
+    let body_ty = check_block(self, body)
     // Only the implicit-return path is checked here: a block whose final expression is the
     // function's value. A block that ends in an explicit `return` yields Void and is covered by
     // `check_return`, so Void is skipped to avoid a spurious "expected T, got void". A void
@@ -2171,7 +2171,7 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
     // E2049: a value-returning function whose body can fall off the end. `never` returns diverge by
     // definition, and a body whose last statement is an expression is the implicit-return form.
     let ret_is_never = ret == TY_NEVER
-    if !ret_is_void and !ret_is_never and !block_returns(self, &body) {
+    if !ret_is_void and !ret_is_never and !block_returns(self, body) {
         push_diag_e(self, fd.span, E_MISSING_RETURN, $"function `{fd.name}` must return a value")
     }
 
@@ -2208,7 +2208,7 @@ fn block_returns(self: &Checker, block: &BlockExpr) bool {
 fn stmt_returns(self: &Checker, stmt: &Stmt) bool {
     return stmt.* match {
         Return(_) => true
-        Expression(es) => expr_returns(self, &es.expr)
+        Expression(es) => expr_returns(self, es.expr)
         IfDirective(ifd) => directive_branch_returns(self, &ifd)
         _ => false
     }
@@ -2224,11 +2224,11 @@ fn expr_returns(self: &Checker, e: &Expr) bool {
 }
 
 fn if_returns(self: &Checker, ife: &IfExpr) bool {
-    if !block_returns(self, &ife.then_branch) {
+    if !block_returns(self, ife.then_branch) {
         return false
     }
     return ife.else_branch match {
-        Block(b) => block_returns(self, &b)
+        Block(b) => block_returns(self, b)
         If(nested) => if_returns(self, nested)
         NoElse => false
     }
@@ -2249,7 +2249,7 @@ fn match_returns(self: &Checker, m: &MatchExpr) bool {
 // A `#if` diverges exactly when its ACTIVE branch does (the inactive one is not part of the
 // program).
 fn directive_branch_returns(self: &Checker, ifd: &IfDirectiveStmt) bool {
-    eval_condition(&self.comptime, &ifd.condition) match {
+    eval_condition(&self.comptime, ifd.condition) match {
         Active(active) => {
             const stmts: &List(Stmt) = if active { &ifd.then_stmts } else { &ifd.else_stmts }
             for i in 0..stmts.len {
@@ -3055,12 +3055,12 @@ fn check_interp_owned(self: &Checker, interp: &InterpolatedStringExpr, given: &L
         name = name,
         name_span = let_span,
         type_annotation = null,
-        init = Some(ctor),
+        init = Some(self.synth_box(ctor)),
     }))
     let no_args: List(CallArgument) = list(0, self.allocator)
     stmts.push(Stmt.Defer(DeferStmt {
         span = synth_span(self),
-        expr = synth_method_call(self, name, "deinit", no_args),
+        expr = self.synth_box(synth_method_call(self, name, "deinit", no_args)),
     }))
     push_append_stmts(self, &stmts, name, interp)
 
@@ -3140,7 +3140,8 @@ fn push_append_stmts(self: &Checker, stmts: &List(Stmt), name: String,
 }
 
 fn push_expr_stmt(self: &Checker, stmts: &List(Stmt), e: Expr) {
-    stmts.push(Stmt.Expression(ExpressionStmt { span = synth_span(self), expr = e }))
+    stmts.push(Stmt.Expression(ExpressionStmt { span = synth_span(self),
+        expr = self.synth_box(e) }))
 }
 
 // `$(…)` args onto `string_builder(capacity, allocator)`, full arity.
@@ -3322,7 +3323,7 @@ fn check_match(self: &Checker, m: &MatchExpr) Ty {
     let result = TY_NEVER
     for &arm in m.arms {
         self.env.push_scope()
-        check_pattern(self, &arm.pattern, scrutinee)
+        check_pattern(self, arm.pattern, scrutinee)
         arm.guard match {
             Some(g) => { let _g = check_expr(self, g) }
             None => {}
@@ -3368,10 +3369,10 @@ fn check_match_coverage(self: &Checker, m: &MatchExpr, scrutinee: Ty) {
         if arm.guard.is_some() {
             continue
         }
-        if pattern_is_catch_all(self, &arm.pattern, &e) {
+        if pattern_is_catch_all(self, arm.pattern, &e) {
             return
         }
-        collect_covered(self, &arm.pattern, &e, &covered)
+        collect_covered(self, arm.pattern, &e, &covered)
     }
     let missing: List(String) = list(0, self.allocator)
     defer missing.deinit()
@@ -4772,7 +4773,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     for &p in lam.params {
         let unannotated = p.type_expr match { Error(_) => true, _ => false }
         let ty = if unannotated { self.engine.fresh_var() }
-        else { resolve_type_expr(self, &p.type_expr) }
+        else { resolve_type_expr(self, p.type_expr) }
         const p_node = self.node_of(p.span)
         self.results.record_type(p_node, ty)
         self.env.bind(p.name, Binding {
@@ -4784,12 +4785,12 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
         params.push(ty)
     }
     let ret = lam.return_type match {
-        Some(rt) => resolve_type_expr(self, &rt)
+        Some(rt) => resolve_type_expr(self, rt)
         None => self.engine.fresh_var()
     }
 
     self.fn_stack.push(FnFrame { name = "<lambda>", return_ty = ret, decl_span = lam.span })
-    let body_ty = check_block(self, &lam.body)
+    let body_ty = check_block(self, lam.body)
     // The implicit-return rule of `check_function_body`, plus: an unannotated return type with a
     // valueless body settles to void.
     if body_ty == TY_VOID {
@@ -4927,13 +4928,13 @@ fn check_stmt(self: &Checker, stmt: &Stmt) bool {
             let handled = es.expr match {
                 If(ife) => {
                     check_if_stmt(self, &ife)
-                    self.results.record_type(self.node_of(expr_span(&es.expr)), TY_VOID)
+                    self.results.record_type(self.node_of(expr_span(es.expr)), TY_VOID)
                     true
                 }
                 _ => false
             }
             if !handled {
-                let _r = check_expr(self, &es.expr)
+                let _r = check_expr(self, es.expr)
             }
         }
         Return(rs) => {
@@ -4945,12 +4946,12 @@ fn check_stmt(self: &Checker, stmt: &Stmt) bool {
         For(fs) => check_for(self, &fs)
         While(ws) => {
             let _c = check_expr(self, ws.condition)
-            let _b = check_block(self, &ws.body)
+            let _b = check_block(self, ws.body)
         }
-        Loop(ls) => { let _b = check_block(self, &ls.body) }
+        Loop(ls) => { let _b = check_block(self, ls.body) }
         Defer(ds) => {
             self.defer_depth = self.defer_depth + 1
-            let _e = check_expr(self, &ds.expr)
+            let _e = check_expr(self, ds.expr)
             self.defer_depth = self.defer_depth - 1
         }
         IfDirective(ifd) => return check_if_directive_stmt(self, &ifd)
@@ -4964,7 +4965,7 @@ fn check_stmt(self: &Checker, stmt: &Stmt) bool {
 // never validated). Diverges exactly when the active branch diverges - the branch is a statement
 // splice, not a runtime conditional.
 fn check_if_directive_stmt(self: &Checker, ifd: &IfDirectiveStmt) bool {
-    eval_condition(&self.comptime, &ifd.condition) match {
+    eval_condition(&self.comptime, ifd.condition) match {
         Active(active) => {
             const stmts: &List(Stmt) = if active { &ifd.then_stmts } else { &ifd.else_stmts }
             let diverges = false
@@ -4999,7 +5000,7 @@ fn check_for(self: &Checker, fs: &ForStmt) {
         is_const = true,
         is_type_param = false,
     })
-    let _b = check_block(self, &fs.body)
+    let _b = check_block(self, fs.body)
     self.env.pop_scope()
 }
 
@@ -5115,11 +5116,11 @@ fn unify_range_bounds(self: &Checker, start: &Expr?, end: &Expr?, span: SourceSp
 // error.
 fn check_if_stmt(self: &Checker, if_expr: &IfExpr) {
     let _c = check_expr(self, if_expr.condition)
-    let then_ty = check_block(self, &if_expr.then_branch)
+    let then_ty = check_block(self, if_expr.then_branch)
     if_expr.else_branch match {
         NoElse => {}
         Block(b) => {
-            let else_ty = check_block(self, &b)
+            let else_ty = check_block(self, b)
             let probe = self.engine.try_unify(then_ty, else_ty)
             if probe.is_ok() {
                 let _o = self.engine.unify(then_ty, else_ty)
@@ -5141,7 +5142,7 @@ fn check_let(self: &Checker, ls: &LetStmt) {
     if ls.type_annotation.is_none() {
         ls.init match {
             Some(e) => {
-                if is_empty_array_literal(&e) {
+                if is_empty_array_literal(e) {
                     push_diag_e(self, ls.span, E_EMPTY_ARRAY,
                         $"cannot infer the element type of the empty array `{ls.name}` is bound to")
                 }
@@ -5154,11 +5155,11 @@ fn check_let(self: &Checker, ls: &LetStmt) {
         push_diag_e(self, ls.span, E_CONST_NO_INIT, $"`const {ls.name}` must have an initializer")
     }
     let annotated = ls.type_annotation match {
-        Some(t) => Some(resolve_type_expr(self, &t))
+        Some(t) => Some(resolve_type_expr(self, t))
         None => null
     }
     let inferred = ls.init match {
-        Some(e) => Some(check_expr(self, &e))
+        Some(e) => Some(check_expr(self, e))
         None => null
     }
     let bound_ty = annotated match {
@@ -5244,7 +5245,7 @@ fn check_return(self: &Checker, rs: &ReturnStmt) {
     let frame = &self.fn_stack[frame_idx - 1]
     rs.value match {
         Some(e) => {
-            let v = check_expr(self, &e)
+            let v = check_expr(self, e)
             unify_expected(self, v, frame.return_ty, E_RETURN_MISMATCH, rs.span)
         }
         None => {
@@ -6043,9 +6044,9 @@ fn materialize_arg_list(self: &Checker, p: &OverloadPick, pos_exprs: &List(Expr)
         }
         decl_params[pi].default_value match {
             Some(e) => {
-                const t = check_expr(self, &e)
+                const t = check_expr(self, e)
                 unify_expected(self, t, p.params[pi], E_TYPE_MISMATCH, span)
-                exprs.push(e)
+                exprs.push(e.*)
             }
             None => ok = false
         }
@@ -6141,9 +6142,9 @@ fn materialize_default_args(self: &Checker, p: &OverloadPick, supplied: usize, s
         }
         decl_params[i].default_value match {
             Some(e) => {
-                const t = check_expr(self, &e)
+                const t = check_expr(self, e)
                 unify_expected(self, t, p.params[i], E_TYPE_MISMATCH, span)
-                exprs.push(e)
+                exprs.push(e.*)
             }
             None => ok = false
         }
@@ -6980,10 +6981,10 @@ fn unreify_type(self: &Checker, t: Ty) Ty {
 // discarded; with one, the branches must agree.
 fn check_if(self: &Checker, if_expr: &IfExpr) Ty {
     let _r = check_expr(self, if_expr.condition)
-    let then_ty = check_block(self, &if_expr.then_branch)
+    let then_ty = check_block(self, if_expr.then_branch)
     let else_ty = if_expr.else_branch match {
         NoElse => return TY_VOID
-        Block(b) => check_block(self, &b)
+        Block(b) => check_block(self, b)
         If(nested) => {
             // A chained `else if` is a bare `&IfExpr`, not an `Expr`, so `check_expr`'s record
             // never sees it - record its type here or lowering's `node_ty` defaults the join to i32
@@ -9030,7 +9031,7 @@ fn collect_default_texts(self: &Checker, module: &Module,
             Function(fd) => {
                 for &p in fd.params {
                     p.default_value match {
-                        Some(d) => out.push(from_view(default_text_of(sources, expr_span(&d)),
+                        Some(d) => out.push(from_view(default_text_of(sources, expr_span(d)),
                                 self.allocator))
                         None => {}
                     }

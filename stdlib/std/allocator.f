@@ -365,9 +365,11 @@ fn fixed_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
 fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     let state = impl as &FixedBufferAllocatorState
 
-    // If memory is empty, treat as fresh allocation
+    // If memory is empty, treat as fresh allocation. `realloc` carries no alignment argument, so
+    // the block takes the strictest alignment `alloc` can be asked for rather than guessing the
+    // caller's - the same choice `arena_realloc` makes.
     if memory.len == 0 {
-        return fixed_alloc(impl, new_size, 1)
+        return fixed_alloc(impl, new_size, 16)
     }
 
     // Check if this is the most recent allocation (can extend in place)
@@ -388,7 +390,7 @@ fn fixed_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
     }
 
     // Cannot extend in place - allocate new and copy
-    let new_mem = fixed_alloc(impl, new_size, 1)?
+    let new_mem = fixed_alloc(impl, new_size, 16)?
 
     // Copy old data
     let copy_size = if memory.len < new_size { memory.len } else { new_size }
@@ -520,8 +522,25 @@ fn arena_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
 }
 
 fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
-    // Allocate new, copy old data
-    let new_mem = arena_alloc(impl, new_size, 1)
+    let state = impl as &ArenaAllocator
+
+    // The most recent allocation - the one whose end meets the bump cursor - is the single case an
+    // arena can resize without moving anything, because the bytes after it are still unclaimed.
+    if state.current_page.is_some() {
+        const page = state.current_page.unwrap()
+        const data = (page as &u8) + size_of(ArenaPage)
+        if (memory.ptr as usize) + memory.len == (data as usize) + page.offset {
+            const start = page.offset - memory.len
+            if start + new_size <= page.size {
+                page.offset = start + new_size
+                return Some(slice_from_raw_parts(memory.ptr, new_size))
+            }
+        }
+    }
+
+    // Anything else has to move. `realloc` carries no alignment argument, so the replacement takes
+    // the strictest alignment `alloc` can be asked for rather than guessing the caller's.
+    let new_mem = arena_alloc(impl, new_size, 16)
     if new_mem.is_none() {
         return null
     }
@@ -534,7 +553,9 @@ fn arena_realloc(impl: &u8, memory: u8[], new_size: usize) u8[]? {
 }
 
 fn arena_dealloc(impl: &u8, memory: u8[]) {
-    // Arena does not support individual frees - no-op.
+    // Arena does not support individual frees - no-op. Rolling the cursor back over the most recent
+    // allocation is possible but makes a free-then-read a live use-after-free, for no measured
+    // gain.
 }
 
 const arena_allocator_vtable = AllocatorVTable {

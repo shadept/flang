@@ -165,8 +165,26 @@ fn project_decl(self: &Projector, cst: CstNode) Decl {
     }
 }
 
+// Move a projected child into the module arena and keep only the reference. Recursive AST children
+// are stored as `&T` so an enum variant costs a pointer rather than the largest node it can hold:
+// `Stmt` is 104 bytes instead of 440 because `LetStmt` no longer carries an `Expr` inline. The
+// arena owns every boxed child and `Module.deinit` releases the lot in one free - boxing moves
+// bytes within the arena, it does not introduce a lifetime.
+fn boxed(self: &Projector, value: $T) &T {
+    return box(self.alloc, value)
+}
+
+// `boxed` for an optional child: absent stays absent, present is moved into the arena. `&T?` is one
+// pointer - null is the niche - so an absent child costs nothing beyond it.
+fn boxed_opt(self: &Projector, value: $T?) &T? {
+    return value match {
+        Some(v) => Some(box(self.alloc, v))
+        None => null
+    }
+}
+
 fn project_import(self: &Projector, cst: CstNode) ImportDecl {
-    let path: List(String) = list(0, Some(self.alloc))
+    let path: List(String) = list(cst.node_child_count(), Some(self.alloc))
     let seen_import_keyword = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -260,7 +278,7 @@ fn project_directive(self: &Projector, cst: CstNode) DeclAttribute {
 }
 
 fn project_function(self: &Projector, cst: CstNode) FunctionDecl {
-    let params: List(FunctionParam) = list(0, Some(self.alloc))
+    let params: List(FunctionParam) = list(cst.node_child_count(), Some(self.alloc))
     let return_type: TypeExpr? = null
     let body: BlockExpr? = null
     for i in 0..cst.child_count() {
@@ -283,8 +301,8 @@ fn project_function(self: &Projector, cst: CstNode) FunctionDecl {
         directives = self.project_directives(cst),
         name = self.function_name(cst),
         params = params,
-        return_type = return_type,
-        body = body,
+        return_type = self.boxed_opt(return_type),
+        body = self.boxed_opt(body),
     }
 }
 
@@ -344,8 +362,8 @@ fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
     return .{
         span = self.span_from(cst),
         name = name,
-        type_expr = type_expr,
-        default_value = default_value,
+        type_expr = self.boxed(type_expr),
+        default_value = self.boxed_opt(default_value),
         is_variadic = is_variadic,
     }
 }
@@ -353,7 +371,7 @@ fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
 fn project_struct_decl(self: &Projector, cst: CstNode) TypeDecl {
     let generics: List(GenericParam) = list(0, Some(self.alloc))
     self.collect_generic_params_from_balanced(cst, &generics)
-    let fields: List(StructField) = list(0, Some(self.alloc))
+    let fields: List(StructField) = list(cst.node_child_count(), Some(self.alloc))
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
@@ -374,14 +392,14 @@ fn project_struct_decl(self: &Projector, cst: CstNode) TypeDecl {
         is_pub = has_token(cst, TokenKind.Pub),
         directives = self.project_directives(cst),
         name = self.type_decl_name(cst),
-        body = body,
+        body = self.boxed(body),
     }
 }
 
 fn project_enum_decl(self: &Projector, cst: CstNode) TypeDecl {
     let generics: List(GenericParam) = list(0, Some(self.alloc))
     self.collect_generic_params_from_balanced(cst, &generics)
-    let variants: List(EnumVariant) = list(0, Some(self.alloc))
+    let variants: List(EnumVariant) = list(cst.node_child_count(), Some(self.alloc))
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
@@ -402,7 +420,7 @@ fn project_enum_decl(self: &Projector, cst: CstNode) TypeDecl {
         is_pub = has_token(cst, TokenKind.Pub),
         directives = self.project_directives(cst),
         name = self.type_decl_name(cst),
-        body = body,
+        body = self.boxed(body),
     }
 }
 
@@ -427,7 +445,7 @@ fn project_type_alias(self: &Projector, cst: CstNode) TypeDecl {
         is_pub = has_token(cst, TokenKind.Pub),
         directives = self.project_directives(cst),
         name = self.type_decl_name(cst),
-        body = body,
+        body = self.boxed(body),
     }
 }
 
@@ -512,17 +530,16 @@ fn project_struct_field(self: &Projector, cst: CstNode) StructField {
             }
         }
     }
-    const a = self.alloc
     return .{
         span = self.span_from(cst),
         name = name,
-        type_expr = box(a, type_expr),
+        type_expr = self.boxed(type_expr),
     }
 }
 
 fn project_enum_variant(self: &Projector, cst: CstNode) EnumVariant {
     let name: String = ""
-    let payloads: List(TypeExpr) = list(0, Some(self.alloc))
+    let payloads: List(TypeExpr) = list(cst.node_child_count(), Some(self.alloc))
     let explicit_tag: Expr? = null
     let in_payload = false
     let saw_equals = false
@@ -580,10 +597,9 @@ fn project_enum_variant(self: &Projector, cst: CstNode) EnumVariant {
             }
         }
     }
-    const a = self.alloc
     let boxed_tag: &Expr? = null
     explicit_tag match {
-        Some(e) => { boxed_tag = Some(box(a, e)) }
+        Some(e) => { boxed_tag = Some(self.boxed(e)) }
         None => {}
     }
     return .{
@@ -628,8 +644,8 @@ fn project_const_decl(self: &Projector, cst: CstNode) ConstDecl {
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
         name = name,
-        type_annotation = type_annotation,
-        value = value,
+        type_annotation = self.boxed_opt(type_annotation),
+        value = self.boxed(value),
     }
 }
 
@@ -658,7 +674,7 @@ fn project_test_decl(self: &Projector, cst: CstNode) TestDecl {
         span = self.span_from(cst),
         directives = self.project_directives(cst),
         label = label,
-        body = body,
+        body = self.boxed(body),
     }
 }
 
@@ -820,8 +836,8 @@ fn project_if_directive_condition(self: &Projector, cst: CstNode) Expr {
 }
 
 fn project_if_directive_decl(self: &Projector, cst: CstNode) IfDirectiveDecl {
-    let then_decls: List(Decl) = list(0, Some(self.alloc))
-    let else_decls: List(Decl) = list(0, Some(self.alloc))
+    let then_decls: List(Decl) = list(cst.node_child_count(), Some(self.alloc))
+    let else_decls: List(Decl) = list(cst.node_child_count(), Some(self.alloc))
     let blocks_seen: usize = 0
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -848,7 +864,7 @@ fn project_if_directive_decl(self: &Projector, cst: CstNode) IfDirectiveDecl {
     }
     return .{
         span = self.span_from(cst),
-        condition = self.project_if_directive_condition(cst),
+        condition = self.boxed(self.project_if_directive_condition(cst)),
         then_decls = then_decls,
         else_decls = else_decls,
     }
@@ -884,7 +900,7 @@ fn project_expr_as_stmt(self: &Projector, cst: CstNode) Stmt? {
     let expr = self.project_expr(cst)
     return Some(Stmt.Expression(ExpressionStmt {
         span = self.span_from(cst),
-        expr = expr,
+        expr = self.boxed(expr),
     }))
 }
 
@@ -930,8 +946,8 @@ fn project_let_stmt(self: &Projector, cst: CstNode) LetStmt {
         is_const = is_const,
         name = name,
         name_span = name_span,
-        type_annotation = type_annotation,
-        init = init,
+        type_annotation = self.boxed_opt(type_annotation),
+        init = self.boxed_opt(init),
     }
 }
 
@@ -948,7 +964,7 @@ fn project_expression_stmt(self: &Projector, cst: CstNode) ExpressionStmt {
             TokenChild(_) => {}
         }
     }
-    return .{ span = self.span_from(cst), expr = expr }
+    return .{ span = self.span_from(cst), expr = self.boxed(expr) }
 }
 
 fn project_return_stmt(self: &Projector, cst: CstNode) ReturnStmt {
@@ -963,7 +979,7 @@ fn project_return_stmt(self: &Projector, cst: CstNode) ReturnStmt {
             TokenChild(_) => {}
         }
     }
-    return .{ span = self.span_from(cst), value = value }
+    return .{ span = self.span_from(cst), value = self.boxed_opt(value) }
 }
 
 fn project_defer_stmt(self: &Projector, cst: CstNode) DeferStmt {
@@ -979,7 +995,7 @@ fn project_defer_stmt(self: &Projector, cst: CstNode) DeferStmt {
             TokenChild(_) => {}
         }
     }
-    return .{ span = self.span_from(cst), expr = expr }
+    return .{ span = self.span_from(cst), expr = self.boxed(expr) }
 }
 
 fn project_for_stmt(self: &Projector, cst: CstNode) ForStmt {
@@ -1021,14 +1037,13 @@ fn project_for_stmt(self: &Projector, cst: CstNode) ForStmt {
             }
         }
     }
-    const a = self.alloc
     return .{
         span = self.span_from(cst),
         var_name = var_name,
         var_span = var_span,
         by_ref = by_ref,
-        iterable = box(a, iterable),
-        body = body,
+        iterable = self.boxed(iterable),
+        body = self.boxed(body),
     }
 }
 
@@ -1053,11 +1068,10 @@ fn project_while_stmt(self: &Projector, cst: CstNode) WhileStmt {
             TokenChild(_) => {}
         }
     }
-    const a = self.alloc
     return .{
         span = self.span_from(cst),
-        condition = box(a, condition),
-        body = body,
+        condition = self.boxed(condition),
+        body = self.boxed(body),
     }
 }
 
@@ -1077,12 +1091,12 @@ fn project_loop_stmt(self: &Projector, cst: CstNode) LoopStmt {
             TokenChild(_) => {}
         }
     }
-    return .{ span = self.span_from(cst), body = body }
+    return .{ span = self.span_from(cst), body = self.boxed(body) }
 }
 
 fn project_if_directive_stmt(self: &Projector, cst: CstNode) IfDirectiveStmt {
-    let then_stmts: List(Stmt) = list(0, Some(self.alloc))
-    let else_stmts: List(Stmt) = list(0, Some(self.alloc))
+    let then_stmts: List(Stmt) = list(cst.node_child_count(), Some(self.alloc))
+    let else_stmts: List(Stmt) = list(cst.node_child_count(), Some(self.alloc))
     let blocks_seen: usize = 0
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -1098,7 +1112,7 @@ fn project_if_directive_stmt(self: &Projector, cst: CstNode) IfDirectiveStmt {
     }
     return .{
         span = self.span_from(cst),
-        condition = self.project_if_directive_condition(cst),
+        condition = self.boxed(self.project_if_directive_condition(cst)),
         then_stmts = then_stmts,
         else_stmts = else_stmts,
     }
@@ -1355,12 +1369,11 @@ fn project_binary_expr(self: &Projector, cst: CstNode) Expr {
             }
         }
     }
-    const a = self.alloc
     return Expr.Binary(BinaryExpr {
         span = self.span_from(cst),
         op = op,
-        lhs = box(a, lhs),
-        rhs = box(a, rhs),
+        lhs = self.boxed(lhs),
+        rhs = self.boxed(rhs),
     })
 }
 
@@ -1408,11 +1421,10 @@ fn project_unary_expr(self: &Projector, cst: CstNode) Expr {
             NodeChild(child) => { operand = self.project_expr(child) }
         }
     }
-    const a = self.alloc
     return Expr.Unary(UnaryExpr {
         span = self.span_from(cst),
         op = op,
-        operand = box(a, operand),
+        operand = self.boxed(operand),
     })
 }
 
@@ -1422,10 +1434,9 @@ fn project_address_of(self: &Projector, cst: CstNode) Expr {
         Some(child) => { operand = self.project_expr(child) }
         None => {}
     }
-    const a = self.alloc
     return Expr.AddressOf(AddressOfExpr {
         span = self.span_from(cst),
-        operand = box(a, operand),
+        operand = self.boxed(operand),
     })
 }
 
@@ -1435,10 +1446,9 @@ fn project_dereference(self: &Projector, cst: CstNode) Expr {
         Some(child) => { operand = self.project_expr(child) }
         None => {}
     }
-    const a = self.alloc
     return Expr.Dereference(DereferenceExpr {
         span = self.span_from(cst),
-        operand = box(a, operand),
+        operand = self.boxed(operand),
     })
 }
 
@@ -1466,10 +1476,9 @@ fn project_member_access(self: &Projector, cst: CstNode) Expr {
             NodeChild(_) => {}
         }
     }
-    const a = self.alloc
     return Expr.MemberAccess(MemberAccessExpr {
         span = self.span_from(cst),
-        receiver = box(a, receiver),
+        receiver = self.boxed(receiver),
         member = member,
     })
 }
@@ -1496,10 +1505,9 @@ fn project_null_propagation(self: &Projector, cst: CstNode) Expr {
             NodeChild(_) => {}
         }
     }
-    const a = self.alloc
     return Expr.NullPropagation(NullPropagationExpr {
         span = self.span_from(cst),
-        receiver = box(a, receiver),
+        receiver = self.boxed(receiver),
         member = member,
     })
 }
@@ -1515,11 +1523,10 @@ fn project_index(self: &Projector, cst: CstNode) Expr {
         Some(child) => { index = self.project_expr(child) }
         None => {}
     }
-    const a = self.alloc
     return Expr.Index(IndexExpr {
         span = self.span_from(cst),
-        receiver = box(a, receiver),
-        index = box(a, index),
+        receiver = self.boxed(receiver),
+        index = self.boxed(index),
     })
 }
 
@@ -1527,7 +1534,7 @@ fn project_index(self: &Projector, cst: CstNode) Expr {
 // is NodeChild(a.b) + Dot + Identifier(method). Rebuild from everything before the first `(` so the
 // function name and UFCS method name don't get dropped.
 fn project_call(self: &Projector, cst: CstNode) Expr {
-    let args: List(CallArgument) = list(0, Some(self.alloc))
+    let args: List(CallArgument) = list(cst.node_child_count(), Some(self.alloc))
     // Split children at the first `(`: callee tokens before, args after.
     let paren_idx: usize = cst.child_count()
     for i in 0..cst.child_count() {
@@ -1631,11 +1638,10 @@ fn project_named_argument(self: &Projector, cst: CstNode) NamedCallArgument {
             }
         }
     }
-    const a = self.alloc
     return .{
         span = self.span_from(cst),
         name = name,
-        value = box(a, value),
+        value = self.boxed(value),
     }
 }
 
@@ -1656,11 +1662,10 @@ fn project_cast(self: &Projector, cst: CstNode) Expr {
             TokenChild(_) => {}
         }
     }
-    const a = self.alloc
     return Expr.Cast(CastExpr {
         span = self.span_from(cst),
-        operand = box(a, operand),
-        target = box(a, target),
+        operand = self.boxed(operand),
+        target = self.boxed(target),
     })
 }
 
@@ -1684,11 +1689,10 @@ fn project_assignment(self: &Projector, cst: CstNode) Expr {
             TokenChild(_) => {}
         }
     }
-    const a = self.alloc
     return Expr.Assignment(AssignmentExpr {
         span = self.span_from(cst),
-        lhs = box(a, lhs),
-        rhs = box(a, rhs),
+        lhs = self.boxed(lhs),
+        rhs = self.boxed(rhs),
     })
 }
 
@@ -1712,11 +1716,10 @@ fn project_coalesce(self: &Projector, cst: CstNode) Expr {
             TokenChild(_) => {}
         }
     }
-    const a = self.alloc
     return Expr.Coalesce(CoalesceExpr {
         span = self.span_from(cst),
-        lhs = box(a, lhs),
-        rhs = box(a, rhs),
+        lhs = self.boxed(lhs),
+        rhs = self.boxed(rhs),
     })
 }
 
@@ -1726,10 +1729,9 @@ fn project_try(self: &Projector, cst: CstNode) Expr {
         Some(child) => { operand = self.project_expr(child) }
         None => {}
     }
-    const a = self.alloc
     return Expr.Try(TryExpr {
         span = self.span_from(cst),
-        operand = box(a, operand),
+        operand = self.boxed(operand),
     })
 }
 
@@ -1764,15 +1766,14 @@ fn project_range(self: &Projector, cst: CstNode) Expr {
             }
         }
     }
-    const a = self.alloc
     let start_ref: &Expr? = null
     start match {
-        Some(e) => { start_ref = Some(box(a, e)) }
+        Some(e) => { start_ref = Some(self.boxed(e)) }
         None => {}
     }
     let end_ref: &Expr? = null
     end match {
-        Some(e) => { end_ref = Some(box(a, e)) }
+        Some(e) => { end_ref = Some(self.boxed(e)) }
         None => {}
     }
     return Expr.Range(RangeExpr {
@@ -1786,7 +1787,7 @@ fn project_range(self: &Projector, cst: CstNode) Expr {
 // `[1, 2, 3]` or `[v; n]`. The semicolon between value and count distinguishes the two forms.
 fn project_array_literal(self: &Projector, cst: CstNode) Expr {
     let saw_semicolon = false
-    let exprs: List(Expr) = list(0, Some(self.alloc))
+    let exprs: List(Expr) = list(cst.node_child_count(), Some(self.alloc))
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -1801,7 +1802,6 @@ fn project_array_literal(self: &Projector, cst: CstNode) Expr {
             }
         }
     }
-    const a = self.alloc
     if saw_semicolon and exprs.len >= 2 {
         const value: Expr = exprs[0]
         const count: Expr = exprs[1]
@@ -1809,8 +1809,8 @@ fn project_array_literal(self: &Projector, cst: CstNode) Expr {
             span = self.span_from(cst),
             kind = ArrayLiteralKind.Repeat(RepeatLiteral {
                 span = self.span_from(cst),
-                value = box(a, value),
-                count = box(a, count),
+                value = self.boxed(value),
+                count = self.boxed(count),
             }),
         })
     }
@@ -1859,7 +1859,7 @@ fn project_anon_struct_or_tuple(self: &Projector, cst: CstNode) Expr {
         }
     }
     if leads_with_paren {
-        let elements: List(Expr) = list(0, Some(self.alloc))
+        let elements: List(Expr) = list(cst.node_child_count(), Some(self.alloc))
         for i in 0..cst.child_count() {
             cst.child(i) match {
                 NodeChild(child) => {
@@ -1885,7 +1885,7 @@ fn project_struct_construction(self: &Projector, cst: CstNode) Expr {
 // `nominal` is true when the construction names a type (`Point { ... }`, `Type(T) { ... }`); false
 // for the anonymous `.{ ... }` form.
 fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
-    let fields: List(StructFieldInit) = list(0, Some(self.alloc))
+    let fields: List(StructFieldInit) = list(cst.node_child_count(), Some(self.alloc))
     let type_expr_opt: TypeExpr? = null
     if nominal {
         type_expr_opt = self.struct_construction_type(cst)
@@ -1961,10 +1961,9 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
     if pending_active {
         fields.push(self.make_struct_field_init(pending_name, pending_span, pending_value))
     }
-    const a = self.alloc
     let type_ref: &TypeExpr? = null
     type_expr_opt match {
-        Some(t) => { type_ref = Some(box(a, t)) }
+        Some(t) => { type_ref = Some(self.boxed(t)) }
         None => {}
     }
     return Expr.StructLit(StructLiteralExpr {
@@ -1976,10 +1975,9 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
 
 fn make_struct_field_init(self: &Projector, name: String, span: SourceSpan,
     value: Expr?) StructFieldInit {
-    const a = self.alloc
     let v_ref: &Expr? = null
     value match {
-        Some(e) => { v_ref = Some(box(a, e)) }
+        Some(e) => { v_ref = Some(self.boxed(e)) }
         None => {}
     }
     return .{
@@ -1994,7 +1992,7 @@ fn make_struct_field_init(self: &Projector, name: String, span: SourceSpan,
 fn struct_construction_type(self: &Projector, cst: CstNode) TypeExpr? {
     let name: String = ""
     let name_span = self.span_from(cst)
-    let generic_args: List(TypeExpr) = list(0, Some(self.alloc))
+    let generic_args: List(TypeExpr) = list(cst.node_child_count(), Some(self.alloc))
     let in_generic = false
     let depth: i32 = 0
     for i in 0..cst.child_count() {
@@ -2075,7 +2073,7 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
     if cst.kind == NodeKind.CallExpr {
         let name: String = ""
         let span = self.span_from(cst)
-        let args: List(TypeExpr) = list(0, Some(self.alloc))
+        let args: List(TypeExpr) = list(cst.node_child_count(), Some(self.alloc))
         for i in 0..cst.child_count() {
             cst.child(i) match {
                 TokenChild(tok) => {
@@ -2108,7 +2106,7 @@ fn project_block_node(self: &Projector, cst: CstNode) BlockExpr? {
     if cst.kind != NodeKind.BlockExpr {
         return null
     }
-    let stmts: List(Stmt) = list(0, Some(self.alloc))
+    let stmts: List(Stmt) = list(cst.node_child_count(), Some(self.alloc))
     let trailing: Expr? = null
     // First pass: identify the last NodeChild - candidate for trailing.
     let last_child_idx: usize = 0
@@ -2226,30 +2224,28 @@ fn project_if_expr(self: &Projector, cst: CstNode) IfExpr {
                     if child.kind == NodeKind.BlockExpr {
                         const b = self.project_block_node(child)
                         b match {
-                            Some(blk) => { else_branch = ElseBranch.Block(blk) }
+                            Some(blk) => { else_branch = ElseBranch.Block(self.boxed(blk)) }
                             None => {}
                         }
                     } else if child.kind == NodeKind.IfExpr {
-                        const a = self.alloc
                         const inner = self.project_if_expr(child)
-                        else_branch = ElseBranch.If(box(a, inner))
+                        else_branch = ElseBranch.If(self.boxed(inner))
                     }
                 }
             }
         }
     }
-    const a = self.alloc
     return IfExpr {
         span = self.span_from(cst),
-        condition = box(a, condition),
-        then_branch = then_branch,
+        condition = self.boxed(condition),
+        then_branch = self.boxed(then_branch),
         else_branch = else_branch,
     }
 }
 
 fn project_match_expr(self: &Projector, cst: CstNode) MatchExpr {
     let scrutinee: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let arms: List(MatchArm) = list(0, Some(self.alloc))
+    let arms: List(MatchArm) = list(cst.node_child_count(), Some(self.alloc))
     let scrutinee_seen = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -2266,10 +2262,9 @@ fn project_match_expr(self: &Projector, cst: CstNode) MatchExpr {
             TokenChild(_) => {}
         }
     }
-    const a = self.alloc
     return .{
         span = self.span_from(cst),
-        scrutinee = box(a, scrutinee),
+        scrutinee = self.boxed(scrutinee),
         arms = arms,
     }
 }
@@ -2279,7 +2274,7 @@ fn project_match_expr(self: &Projector, cst: CstNode) MatchExpr {
 // sub-node BEFORE `=>`. We extract: pattern from tokens, guard from the optional sub-node preceding
 // `=>`, body from the sub-node AFTER `=>`.
 fn project_match_arm(self: &Projector, cst: CstNode) MatchArm {
-    let pattern_tokens: List(Token) = list(0, Some(self.alloc))
+    let pattern_tokens: List(Token) = list(cst.node_child_count(), Some(self.alloc))
     let guard: Expr? = null
     let body: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
     let saw_arrow = false
@@ -2336,22 +2331,21 @@ fn project_match_arm(self: &Projector, cst: CstNode) MatchArm {
         }
     }
     const pattern = self.project_pattern_from_tokens(pattern_tokens, pattern_start, pattern_end)
-    const a = self.alloc
     let guard_ref: &Expr? = null
     guard match {
-        Some(e) => { guard_ref = Some(box(a, e)) }
+        Some(e) => { guard_ref = Some(self.boxed(e)) }
         None => {}
     }
     return .{
         span = self.span_from(cst),
-        pattern = pattern,
+        pattern = self.boxed(pattern),
         guard = guard_ref,
-        body = box(a, body),
+        body = self.boxed(body),
     }
 }
 
 fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
-    let params: List(FunctionParam) = list(0, Some(self.alloc))
+    let params: List(FunctionParam) = list(cst.node_child_count(), Some(self.alloc))
     let return_type: TypeExpr? = null
     let body: BlockExpr = .{
         span = self.span_from(cst),
@@ -2426,7 +2420,7 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
                     params.push(FunctionParam {
                         span = pending_span,
                         name = pending_name,
-                        type_expr = t,
+                        type_expr = self.boxed(t),
                         default_value = null,
                         is_variadic = false,
                     })
@@ -2438,8 +2432,8 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
     return .{
         span = self.span_from(cst),
         params = params,
-        return_type = return_type,
-        body = body,
+        return_type = self.boxed_opt(return_type),
+        body = self.boxed(body),
     }
 }
 
@@ -2447,14 +2441,14 @@ fn make_lambda_param(self: &Projector, name: String, span: SourceSpan) FunctionP
     return .{
         span = span,
         name = name,
-        type_expr = TypeExpr.Error(ErrorType { span = span }),
+        type_expr = self.boxed(TypeExpr.Error(ErrorType { span = span })),
         default_value = null,
         is_variadic = false,
     }
 }
 
 fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr {
-    let parts: List(InterpolationPart) = list(0, Some(self.alloc))
+    let parts: List(InterpolationPart) = list(cst.node_child_count(), Some(self.alloc))
     let target_args: List(Expr) = list(0, Some(self.alloc))
     let into_builder: Expr? = null
     let after_dollar = false
@@ -2522,10 +2516,9 @@ fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr 
             NodeChild(child) => {
                 if in_body and is_expr_kind(child.kind) {
                     const e = self.project_expr(child)
-                    const a = self.alloc
                     parts.push(InterpolationPart.Hole(InterpolationHole {
                         span = self.span_from(child),
-                        expr = box(a, e),
+                        expr = self.boxed(e),
                         format = null,
                     }))
                     continue
@@ -2544,8 +2537,7 @@ fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr 
     let target: InterpolationTarget = InterpolationTarget.NewString(target_args)
     into_builder match {
         Some(e) => {
-            const a = self.alloc
-            target = InterpolationTarget.IntoBuilder(box(a, e))
+            target = InterpolationTarget.IntoBuilder(self.boxed(e))
         }
         None => {}
     }
@@ -2586,7 +2578,7 @@ fn project_type_expr(self: &Projector, cst: CstNode) TypeExpr {
 fn project_named_type(self: &Projector, cst: CstNode) TypeExpr {
     let saw_dollar = false
     let name: String = ""
-    let generic_args: List(TypeExpr) = list(0, Some(self.alloc))
+    let generic_args: List(TypeExpr) = list(cst.node_child_count(), Some(self.alloc))
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -2626,10 +2618,9 @@ fn project_reference_type(self: &Projector, cst: CstNode) TypeExpr {
             } }
         None => {}
     }
-    const a = self.alloc
     return TypeExpr.Reference(ReferenceType {
         span = self.span_from(cst),
-        inner = box(a, inner),
+        inner = self.boxed(inner),
     })
 }
 
@@ -2641,10 +2632,9 @@ fn project_optional_type(self: &Projector, cst: CstNode) TypeExpr {
             } }
         None => {}
     }
-    const a = self.alloc
     return TypeExpr.Optional(OptionalType {
         span = self.span_from(cst),
-        inner = box(a, inner),
+        inner = self.boxed(inner),
     })
 }
 
@@ -2665,11 +2655,10 @@ fn project_array_type(self: &Projector, cst: CstNode) TypeExpr {
             TokenChild(_) => {}
         }
     }
-    const a = self.alloc
     return TypeExpr.Array(ArrayType {
         span = self.span_from(cst),
-        element = box(a, element),
-        length = box(a, length),
+        element = self.boxed(element),
+        length = self.boxed(length),
     })
 }
 
@@ -2681,15 +2670,14 @@ fn project_slice_type(self: &Projector, cst: CstNode) TypeExpr {
             } }
         None => {}
     }
-    const a = self.alloc
     return TypeExpr.Slice(SliceType {
         span = self.span_from(cst),
-        element = box(a, element),
+        element = self.boxed(element),
     })
 }
 
 fn project_tuple_type(self: &Projector, cst: CstNode) TypeExpr {
-    let elements: List(TypeExpr) = list(0, Some(self.alloc))
+    let elements: List(TypeExpr) = list(cst.node_child_count(), Some(self.alloc))
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
@@ -2707,7 +2695,7 @@ fn project_tuple_type(self: &Projector, cst: CstNode) TypeExpr {
 }
 
 fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
-    let params: List(TypeExpr) = list(0, Some(self.alloc))
+    let params: List(TypeExpr) = list(cst.node_child_count(), Some(self.alloc))
     let param_names: List(String) = list(0, Some(self.alloc))
     let return_type: TypeExpr? = null
     let in_params = false
@@ -2753,10 +2741,9 @@ fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
             }
         }
     }
-    const a = self.alloc
     let ret_ref: &TypeExpr? = null
     return_type match {
-        Some(t) => { ret_ref = Some(box(a, t)) }
+        Some(t) => { ret_ref = Some(self.boxed(t)) }
         None => {}
     }
     return TypeExpr.Function(FunctionType {
@@ -2773,7 +2760,7 @@ fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
 fn project_anon_struct_type(self: &Projector, cst: CstNode) TypeExpr {
     let generics: List(GenericParam) = list(0, Some(self.alloc))
     self.collect_generic_params_from_balanced(cst, &generics)
-    let fields: List(StructField) = list(0, Some(self.alloc))
+    let fields: List(StructField) = list(cst.node_child_count(), Some(self.alloc))
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
@@ -2794,7 +2781,7 @@ fn project_anon_struct_type(self: &Projector, cst: CstNode) TypeExpr {
 fn project_anon_enum_type(self: &Projector, cst: CstNode) TypeExpr {
     let generics: List(GenericParam) = list(0, Some(self.alloc))
     self.collect_generic_params_from_balanced(cst, &generics)
-    let variants: List(EnumVariant) = list(0, Some(self.alloc))
+    let variants: List(EnumVariant) = list(cst.node_child_count(), Some(self.alloc))
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
@@ -3008,7 +2995,7 @@ fn struct_pattern_from_tokens(self: &Projector, tokens: List(Token), span: Sourc
     }
     return Pattern.Struct(StructPattern {
         span = span,
-        type_expr = box(a, TypeExpr.Named(NamedType {
+        type_expr = self.boxed(TypeExpr.Named(NamedType {
             span = self.span_from_token(&tokens[0]),
             name = name,
             generic_args = list(0, Some(a)),
@@ -3023,7 +3010,6 @@ fn push_struct_pattern_field(self: &Projector, fields: &List(StructPatternField)
     if hi <= lo {
         return
     }
-    const a = self.alloc
     const fspan = self.span_from_token(&tokens[lo])
     if tokens[lo].kind == TokenKind.DotDot {
         has_rest.* = true
@@ -3043,14 +3029,13 @@ fn push_struct_pattern_field(self: &Projector, fields: &List(StructPatternField)
         return
     }
     const sub = self.payload_pattern_slice(tokens, lo + 2, hi)
-    fields.push(StructPatternField { span = fspan, name = fname, binding = Some(box(a, sub)) })
+    fields.push(StructPatternField { span = fspan, name = fname, binding = Some(self.boxed(sub)) })
 }
 
 // `lo..hi` in pattern position: at most one literal token on either side of the range token;
 // anything fancier degrades to Error (E2115 at check time) rather than guess.
 fn range_pattern_from(self: &Projector, tokens: List(Token), dd: usize, inclusive: bool,
     span: SourceSpan) Pattern {
-    const a = self.alloc
     let start_ref: &Expr? = null
     let end_ref: &Expr? = null
     if dd > 0 {
@@ -3061,7 +3046,7 @@ fn range_pattern_from(self: &Projector, tokens: List(Token), dd: usize, inclusiv
         if b.is_none() {
             return Pattern.Error(ErrorPattern { span = span })
         }
-        start_ref = Some(box(a, b.unwrap()))
+        start_ref = Some(self.boxed(b.unwrap()))
     }
     if dd + 1 < tokens.len {
         if dd + 2 != tokens.len {
@@ -3071,7 +3056,7 @@ fn range_pattern_from(self: &Projector, tokens: List(Token), dd: usize, inclusiv
         if b2.is_none() {
             return Pattern.Error(ErrorPattern { span = span })
         }
-        end_ref = Some(box(a, b2.unwrap()))
+        end_ref = Some(self.boxed(b2.unwrap()))
     }
     return Pattern.Range(RangePattern {
         span = span,

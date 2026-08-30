@@ -125,7 +125,7 @@ type LowerCtx = struct {
     // module's arena), `defer_marks` the stack depth at each open block scope. Normal scope exit
     // emits and pops its own suffix; `return`, `break`, `continue` and `?` emit down to their
     // target depth WITHOUT popping - they traverse scopes the owning blocks still close themselves.
-    defers: List(Expr)
+    defers: List(&Expr)
     defer_marks: List(usize)
     // True while a defer flush is being emitted. An escaping construct inside a deferred expression
     // (`defer { return }`, `?` in a defer - E2091 in the reference) would recurse into the flush
@@ -377,7 +377,7 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult,
     let globals: List(Global) = list(0, allocator)
     let const_blobs: List(List(u8)) = list(0, allocator)
     let const_relocs: List(List(Reloc)) = list(0, allocator)
-    let defer_stack: List(Expr) = list(0, allocator)
+    let defer_stack: List(&Expr) = list(0, allocator)
     let defer_marks: List(usize) = list(0, allocator)
     let ctx = LowerCtx {
         result = result,
@@ -444,7 +444,7 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     let globals: List(Global) = list(0, allocator)
     let const_blobs: List(List(u8)) = list(0, allocator)
     let const_relocs: List(List(Reloc)) = list(0, allocator)
-    let defer_stack: List(Expr) = list(0, allocator)
+    let defer_stack: List(&Expr) = list(0, allocator)
     let defer_marks: List(usize) = list(0, allocator)
     // The BUILD's compile-time context, not the host's: a cross-target build (`--target-os`) must
     // lower the same `#if` branch the checker checked, or the emitted C is the host's branch of a
@@ -788,7 +788,7 @@ fn lower_test_block(m: &IrModule, ctx: &LowerCtx, td: &TestDecl, fqn: String) {
     ctx.sret = null
     ctx.ret_size = 0u64
 
-    const r = lower_block(ctx, &cur, &env, &td.body, null)
+    const r = lower_block(ctx, &cur, &env, td.body, null)
     if !r.terminated {
         cur.ret_void()
     }
@@ -944,7 +944,7 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
         return
     }
     let fqn = fqn_opt.unwrap()
-    let tyo = ctx_type(ctx, node_id_of(expr_span(&cd.value)))
+    let tyo = ctx_type(ctx, node_id_of(expr_span(cd.value)))
     if tyo.is_none() {
         m.skip_notes.push($"{fqn}: const initializer unchecked")
         return
@@ -961,7 +961,7 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
     // It needs no init function and no call from `main`.
     let blob: List(u8) = filled_list(lay.size, 0u8, ctx.allocator)
     let rel: List(Reloc) = list(0, ctx.allocator)
-    if const_bytes(ctx, &t, &cd.value, &blob, &rel, 0) {
+    if const_bytes(ctx, &t, cd.value, &blob, &rel, 0) {
         let bytes = blob.as_slice()
         let rs = rel.as_slice()
         ctx.const_blobs.push(blob)
@@ -982,7 +982,7 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
     ctx.blocked = false
     ctx.blocked_note = null
     ctx.blocked_subject = null
-    let v = lower_expr(ctx, &cur, &env, &cd.value)
+    let v = lower_expr(ctx, &cur, &env, cd.value)
     if is_by_ref(ctx, &t) {
         cur.memcpy(Operand.GlobalRef(gsym), v, Operand.IntConst(lay.size as i64))
     } else {
@@ -1447,8 +1447,8 @@ fn foreign_decl_of(decl: &FunctionDecl, allocator: &Allocator?) ForeignDecl? {
         let rt = decl.return_type.unwrap()
         // `never` (e.g. `#foreign fn exit(code: i32) never`) yields no value - the extern declares
         // as void, same as no return type.
-        if !type_expr_is_never(&rt) {
-            let r = type_expr_to_ir(&rt)
+        if !type_expr_is_never(rt) {
+            let r = type_expr_to_ir(rt)
             if r.is_none() {
                 return null
             }
@@ -1462,7 +1462,7 @@ fn foreign_decl_of(decl: &FunctionDecl, allocator: &Allocator?) ForeignDecl? {
             variadic = true
             continue
         }
-        let pir = type_expr_to_ir(&p.type_expr)
+        let pir = type_expr_to_ir(p.type_expr)
         if pir.is_none() {
             ptys.deinit()
             return null
@@ -1701,7 +1701,7 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     if returns_value {
         implicit_ret = Some(sig.ret)
     }
-    let r = lower_block(ctx, &cur, &env, &body, implicit_ret)
+    let r = lower_block(ctx, &cur, &env, body, implicit_ret)
     if !r.terminated {
         if ctx.sret.is_some() {
             // The trailing expression is the return value; copy it into the caller's buffer. No
@@ -1797,7 +1797,7 @@ fn lower_block(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, block: &BlockExpr,
                 // last-statement `LowerExpression`.
                 es.expr match {
                     If(ife) => r.value = Some(lower_if(ctx, bb, env, &ife, implicit_ret))
-                    _ => r.value = Some(lower_expr(ctx, bb, env, &es.expr))
+                    _ => r.value = Some(lower_expr(ctx, bb, env, es.expr))
                 }
             }
             _ => {}
@@ -1850,7 +1850,7 @@ fn emit_defers_down_to(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, target: usi
     let i = ctx.defers.len
     while i > target {
         i = i - 1
-        let _v = lower_expr(ctx, bb, env, &ctx.defers[i])
+        let _v = lower_expr(ctx, bb, env, ctx.defers[i])
     }
     ctx.flushing = prev
 }
@@ -1873,7 +1873,7 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
         }
         Let(l) => lower_let(ctx, bb, env, &l)
         Expression(e) => {
-            let _u = lower_expr(ctx, bb, env, &e.expr)
+            let _u = lower_expr(ctx, bb, env, e.expr)
         }
         While(w) => lower_while(ctx, bb, env, &w)
         Loop(l) => lower_loop(ctx, bb, env, &l)
@@ -1883,7 +1883,7 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
 
         // `defer expr` - registered on the schedule; it fires at the enclosing scope's exit and at
         // every escaping jump that passes through it (`return`, `break`, `continue`, `?`). The
-        // pushed node is a copy; its children live in the module's arena.
+        // schedule holds the arena's `&Expr` directly, so registering a defer copies nothing.
         Defer(d) => ctx.defers.push(d.expr)
 
         // Not lowered yet - named rather than caught by a wildcard, so adding a `Stmt` variant is a
@@ -1893,7 +1893,7 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
         // condition; re-evaluate against the same host context and splice the active branch's
         // statements in place.
         IfDirective(ifd) => {
-            eval_condition(&ctx.comptime, &ifd.condition) match {
+            eval_condition(&ctx.comptime, ifd.condition) match {
                 Active(active) => {
                     const stmts: &List(Stmt) = if active { &ifd.then_stmts } else { &ifd.else_stmts }
                     for i in 0..stmts.len {
@@ -1946,7 +1946,7 @@ fn lower_return(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, r: &ReturnStmt) {
     }
     if r.value.is_some() {
         let e = r.value.unwrap()
-        let v = lower_expr(ctx, bb, env, &e)
+        let v = lower_expr(ctx, bb, env, e)
         // An aggregate return value is an address; copy its bytes into the caller's sret buffer and
         // return void - the FIR signature has no return slot for it.
         if ctx.sret.is_some() {
@@ -2023,14 +2023,14 @@ fn lower_let(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, l: &LetStmt) {
     // Adapted like a call argument: an array-typed initializer bound at a slice type decays to a
     // `{ptr, len}` view (`let xs: i32[] = [...]`) - binding the raw array bytes as a slice read a
     // garbage length.
-    let v = lower_adapted(ctx, bb, env, &e, &ty)
+    let v = lower_adapted(ctx, bb, env, e, &ty)
     if is_by_ref(ctx, &ty) {
         // The initializer's operand is an address. When it points at an existing place - another
         // local, a field inside one - binding it directly would alias: `let a = b` then `a.x = 1`
         // must not write `b.x`. The local gets its own storage and a copy (value semantics). A
         // FRESH temporary (a struct literal's slot, a call's sret buffer) has no other name, so the
         // binding takes it over and the copy is elided.
-        if !init_is_fresh(&e) {
+        if !init_is_fresh(e) {
             let lay = lay_of(ctx, ty)
             let slot = bb.stack_slot(lay.size as u64, lay.align as u64)
             bb.memcpy(slot, v, Operand.IntConst(lay.size as i64))
@@ -2163,7 +2163,7 @@ fn lower_if(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ife: &IfExpr, want: Ty
     bb.br_if(cond, then_bb.label(), else_bb.label())
 
     bb.move_to(&then_bb)
-    let tr = lower_block(ctx, bb, env, &ife.then_branch)
+    let tr = lower_block(ctx, bb, env, ife.then_branch)
     join_from(ctx, bb, join.label(), yields, &tr)
 
     bb.move_to(&else_bb)
@@ -2192,7 +2192,7 @@ fn join_from(ctx: &LowerCtx, bb: &BlockBuilder, label: String, yields: bool, r: 
 
 fn lower_else(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, eb: &ElseBranch) BlockResult {
     return eb.* match {
-        Block(b) => lower_block(ctx, bb, env, &b)
+        Block(b) => lower_block(ctx, bb, env, b)
         If(i) => BlockResult { terminated = false, value = Some(lower_if(ctx, bb, env, i)) }
         NoElse => BlockResult { terminated = false, value = null }
     }
@@ -2232,7 +2232,7 @@ fn lower_while(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, w: &WhileStmt) {
     bb.move_to(&body)
     ctx.loops.push(LoopFrame { latch = head.label(), exit = exit.label(),
         defer_depth = ctx.defers.len })
-    let r = lower_block(ctx, bb, env, &w.body)
+    let r = lower_block(ctx, bb, env, w.body)
     let _f = ctx.loops.pop()
     if !r.terminated {
         bb.br(head.label())
@@ -2252,7 +2252,7 @@ fn lower_loop(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, l: &LoopStmt) {
     bb.move_to(&head)
     ctx.loops.push(LoopFrame { latch = head.label(), exit = exit.label(),
         defer_depth = ctx.defers.len })
-    let r = lower_block(ctx, bb, env, &l.body)
+    let r = lower_block(ctx, bb, env, l.body)
     let _f = ctx.loops.pop()
     if !r.terminated {
         bb.br(head.label())
@@ -2389,7 +2389,7 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
     }
     ctx.loops.push(LoopFrame { latch = head.label(), exit = exit.label(),
         defer_depth = ctx.defers.len })
-    let r = lower_block(ctx, bb, env, &f.body)
+    let r = lower_block(ctx, bb, env, f.body)
     let _f = ctx.loops.pop()
     env.release(scope)
     if !r.terminated {
@@ -2445,7 +2445,7 @@ fn lower_for_range(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt, rn
     env.bind_slot(f.var_name, iv_slot, ir, ity)
     ctx.loops.push(LoopFrame { latch = latch.label(), exit = exit.label(),
         defer_depth = ctx.defers.len })
-    let r = lower_block(ctx, bb, env, &f.body)
+    let r = lower_block(ctx, bb, env, f.body)
     let _fr = ctx.loops.pop()
     env.release(scope)
     if !r.terminated {
@@ -3800,7 +3800,7 @@ fn lower_field_init(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, fi: &StructFie
 
 fn lower_match(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, m: &MatchExpr) Operand {
     for i in 0..m.arms.len {
-        if !pattern_supported(ctx, &m.arms[i].pattern) {
+        if !pattern_supported(ctx, m.arms[i].pattern) {
             return unlowerable_why(ctx, "unsupported match pattern")
         }
     }
@@ -3824,12 +3824,12 @@ fn lower_match(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, m: &MatchExpr) Oper
         let arm_bb = fb.block(fb.fresh_label("m_arm"))
         let next_bb = fb.block(fb.fresh_label("m_next"))
 
-        let matched = pattern_test(ctx, bb, env, &arm.pattern, scrut, &scrut_ty)
+        let matched = pattern_test(ctx, bb, env, arm.pattern, scrut, &scrut_ty)
         bb.br_if(matched, arm_bb.label(), next_bb.label())
 
         bb.move_to(&arm_bb)
         let scope = env.mark()
-        bind_pattern(ctx, bb, env, &arm.pattern, scrut, &scrut_ty)
+        bind_pattern(ctx, bb, env, arm.pattern, scrut, &scrut_ty)
 
         // A guard runs with the arm's bindings in scope and, when it fails, falls through to the
         // next arm exactly as a failed test does.

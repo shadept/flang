@@ -132,6 +132,30 @@ touching a disk. The two functions that did read the world, `cwd` and
 - **Top-down only.** No parent pointers. Context is passed down during traversal, never looked up.
 - **Two-phase properties:** Parser creates immutable syntactic data (names, operators, structure). `HmTypeChecker` later writes mutable semantic fields (resolved types, targets, operators). Semantic fields are nullable, null until type checking.
 - **Analysis logic lives in dedicated solvers/visitors**, never in AST node methods.
+- **Recursive children are `&T` into the module arena.** A category enum is as
+  large as its largest arm, and an arm is as large as the nodes it stores by
+  value, so one fat field sets the price of every node in the category: a bare
+  `break` used to cost 440 bytes because `LetStmt` carried an `Expr` (240) and
+  a `TypeExpr?` (112) inline. Every recursive child - `Expr`, `TypeExpr`,
+  `Pattern`, `BlockExpr` - is therefore stored as a reference, boxed into the
+  module arena at projection time (`Projector.boxed` / `boxed_opt`). Boxing
+  moves bytes *within* the arena; it introduces no lifetime and no free
+  obligation, and `Module.deinit` still reclaims everything in one call.
+
+  | | before | after |
+  |---|---|---|
+  | `Expr` | 240 | 104 |
+  | `Stmt` | 440 | 104 |
+  | `Decl` | 408 | 136 |
+  | `FunctionParam` | 400 | 64 |
+  | `LetStmt` | 432 | 88 |
+  | `ExpressionStmt` | 264 | 32 |
+  | `IfExpr` | 168 | 56 |
+  | `LambdaExpr` | 232 | 72 |
+
+  `Expr`'s floor is now `InterpolatedStringExpr` (96) and `Stmt`'s is
+  `IfDirectiveStmt` (96); both are `List`-shaped, so the next move on either is
+  the list header, not another box.
 
 ## Type System
 
@@ -221,6 +245,35 @@ while a large fixed page wastes most of the only page a small module ever
 allocates. On a compiler self-check the growth curve cuts end-of-page slack
 from 32 MB to 11 MB and page allocations from 33,181 to 1,778, while a
 module small enough to fit one page still costs 4 KB.
+
+**Arena list growth.** An arena that never reclaims turns `List` growth into
+a leak: `reserve` used to allocate a new buffer and free the old one, and
+`arena_dealloc` was a no-op, so every buffer a list outgrew stayed for the
+arena's lifetime. Three changes remove it.
+
+- `DEFAULT_CAPACITY` is budgeted in **bytes**, not elements
+  (`default_capacity`, `list.f`): 1 KB worth of elements, clamped to
+  `[1, 8]`. A fixed element count makes the first allocation scale with
+  `size_of(T)` - at 16 slots a `List(Stmt)` grabbed 7 KB to hold one
+  statement. Rust's `RawVec::MIN_NON_ZERO_CAP` splits its minimum on
+  element size for the same reason.
+- `reserve` grows through `realloc` rather than alloc-copy-free, and
+  `arena_realloc`/`arena_dealloc` handle the block at the bump cursor in
+  place - the last allocation grows, shrinks, or is released by moving
+  `page.offset`, copying nothing. `fixed_realloc` already did this; the
+  arena was the outlier. (`realloc` carries no alignment argument, so a
+  block that has to move takes 16-byte alignment rather than guessing the
+  caller's.)
+- The projector sizes each list from the CST up front
+  (`child_capacity` over `node_child_count`, `projector.f`): the node
+  children are an exact upper bound on the elements projected out of them,
+  so a list is filled without ever growing. Counting the slots directly
+  rather than through `child` keeps it under 1% of check time.
+
+On a compiler self-check these take AST arena bytes from 155 MB to 66 MB,
+peak RSS from 374 MB to 250 MB, and `flang check` from 717 ms to 413 ms.
+With the boxed AST above the arena lands at 33 MB, RSS at 209 MB, and the
+check at 388 ms.
 
 **Interned types (RFC-024).** In the self-hosted checker `Ty` is a
 4-byte handle (`pub type Ty = u32`) into a `TypeInterner` - one `TyNode`

@@ -644,7 +644,7 @@ pub fn type_info_of_decl(env: &CtEnv, td: &TypeDecl) CtTypeInfo {
         AnonEnum(_) => CtTypeInfo { name = td.name, kind = KIND_ENUM,
             source = CtTypeSource.FromDecl(td) }
         // `type X = Y` alias: the alias resolves to its target's shape.
-        _ => type_info_of(env, &td.body)
+        _ => type_info_of(env, td.body)
     }
 }
 
@@ -681,7 +681,7 @@ fn void_type_info() CtTypeInfo {
 
 fn type_syntax(t: &CtTypeInfo) &TypeExpr? {
     return t.source match {
-        FromDecl(td) => Some(&td.body)
+        FromDecl(td) => Some(td.body)
         FromSyntax(te) => Some(te)
         NoSource => null
     }
@@ -1039,7 +1039,7 @@ fn splice_decls(decls: &List(Decl), ctx: &ComptimeCtx, diags: &List(Diagnostic),
     for i in 0..decls.len {
         decls[i] match {
             IfDirective(ifd) => {
-                eval_condition(ctx, &ifd.condition) match {
+                eval_condition(ctx, ifd.condition) match {
                     Active(active) => {
                         const branch: &List(Decl) = if active { &ifd.then_decls } else { &ifd.else_decls }
                         splice_decls(branch, ctx, diags, out)

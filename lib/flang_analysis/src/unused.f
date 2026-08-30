@@ -690,7 +690,7 @@ fn exports_invisibles(m: &Module) bool {
         d.* match {
             GenDef(_) => return true
             Type(td) => {
-                if td.is_pub and is_alias_body(&td.body) {
+                if td.is_pub and is_alias_body(td.body) {
                     return true
                 }
             }
