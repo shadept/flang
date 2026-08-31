@@ -1,0 +1,8 @@
+# The working tree is LF everywhere, on every platform.
+#
+# Without this, `core.autocrlf` decides per clone, and a checkout that rewrites CRLF into the tree
+# rewrites it inside multi-line string literals too - the content of a program, not its layout.
+* text=auto eol=lf
+
+# Not text. Keep git out of its bytes.
+*.DS_Store binary
