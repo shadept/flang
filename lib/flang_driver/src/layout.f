@@ -409,15 +409,25 @@ fn enum_layout_impl(it: &TypeInterner, def: &EnumDef, args: &List(Ty), reg: &Nom
     }
 
     if !any_payload {
-        return .{ size = tag_size, align = 4, tag_size = tag_size, payload_offset = 0,
-            is_niche = false }
+        return .{
+            size = tag_size,
+            align = 4,
+            tag_size = tag_size,
+            payload_offset = 0,
+            is_niche = false,
+        }
     }
 
     let align = if max_palign > 4 { max_palign } else { 4 }
     let payload_offset = align_up(tag_size, max_palign)
     let size = align_up(payload_offset + largest, align)
-    return .{ size = size, align = align, tag_size = tag_size, payload_offset = payload_offset,
-        is_niche = false }
+    return .{
+        size = size,
+        align = align,
+        tag_size = tag_size,
+        payload_offset = payload_offset,
+        is_niche = false,
+    }
 }
 
 fn is_option_niche(it: &TypeInterner, def: &EnumDef, args: &List(Ty)) bool {
@@ -584,10 +594,15 @@ test "auto layout reorders fields by alignment to minimise padding" {
     fields.push(Field { name = "b", ty = prim_of(PrimitiveKind.I64), decl_span = none_span() }) // decl 1, align 8
     fields.push(Field { name = "c", ty = prim_of(PrimitiveKind.I16), decl_span = none_span() }) // decl 2, align 2
     let def = StructDef {
-        fqn = "T", module = "", is_pub = true,
-        type_params = list(0), fields = fields,
-        decl_span = none_span(), deprecation = null,
-        is_simd = false, is_foreign = false,
+        fqn = "T",
+        module = "",
+        is_pub = true,
+        type_params = list(0),
+        fields = fields,
+        decl_span = none_span(),
+        deprecation = null,
+        is_simd = false,
+        is_foreign = false,
     }
     let no_args: List(Ty) = list(0)
     let sl = struct_layout(&it, &def, &no_args, &reg)
@@ -609,10 +624,15 @@ test "C repr keeps declaration order and C padding" {
     fields.push(Field { name = "b", ty = prim_of(PrimitiveKind.I64), decl_span = none_span() })
     fields.push(Field { name = "c", ty = prim_of(PrimitiveKind.I16), decl_span = none_span() })
     let def = StructDef {
-        fqn = "T", module = "", is_pub = true,
-        type_params = list(0), fields = fields,
-        decl_span = none_span(), deprecation = null,
-        is_simd = false, is_foreign = true,
+        fqn = "T",
+        module = "",
+        is_pub = true,
+        type_params = list(0),
+        fields = fields,
+        decl_span = none_span(),
+        deprecation = null,
+        is_simd = false,
+        is_foreign = true,
     }
     let no_args: List(Ty) = list(0)
     let sl = struct_layout(&it, &def, &no_args, &reg)
@@ -631,15 +651,26 @@ test "generic struct substitutes type parameters" {
     params.push(0u32)
     params.push(1u32)
     let fields: List(Field) = list(2)
-    fields.push(Field { name = "first", ty = it.var_of(.{ id = 0u32, level = 0u32 }),
-        decl_span = none_span() })
-    fields.push(Field { name = "second", ty = it.var_of(.{ id = 1u32, level = 0u32 }),
-        decl_span = none_span() })
+    fields.push(Field {
+        name = "first",
+        ty = it.var_of(.{ id = 0u32, level = 0u32 }),
+        decl_span = none_span(),
+    })
+    fields.push(Field {
+        name = "second",
+        ty = it.var_of(.{ id = 1u32, level = 0u32 }),
+        decl_span = none_span(),
+    })
     let def = StructDef {
-        fqn = "Pair", module = "", is_pub = true,
-        type_params = params, fields = fields,
-        decl_span = none_span(), deprecation = null,
-        is_simd = false, is_foreign = false,
+        fqn = "Pair",
+        module = "",
+        is_pub = true,
+        type_params = params,
+        fields = fields,
+        decl_span = none_span(),
+        deprecation = null,
+        is_simd = false,
+        is_foreign = false,
     }
     let args: List(Ty) = list(2)
     args.push(prim_of(PrimitiveKind.I64))
@@ -664,9 +695,14 @@ test "tagged enum reserves a tag plus the largest payload" {
     variants.push(VariantDef { name = "B", payloads = p_b, decl_span = none_span() })
     variants.push(VariantDef { name = "C", payloads = list(0), decl_span = none_span() })
     let def = EnumDef {
-        fqn = "E", module = "", is_pub = true,
-        type_params = list(0), variants = variants,
-        tag_values = null, decl_span = none_span(), deprecation = null,
+        fqn = "E",
+        module = "",
+        is_pub = true,
+        type_params = list(0),
+        variants = variants,
+        tag_values = null,
+        decl_span = none_span(),
+        deprecation = null,
     }
     let no_args: List(Ty) = list(0)
     let el = enum_layout(&it, &def, &no_args, &reg)
@@ -684,9 +720,14 @@ test "payloadless enum is just the tag" {
     variants.push(VariantDef { name = "A", payloads = list(0), decl_span = none_span() })
     variants.push(VariantDef { name = "B", payloads = list(0), decl_span = none_span() })
     let def = EnumDef {
-        fqn = "Flag", module = "", is_pub = true,
-        type_params = list(0), variants = variants,
-        tag_values = null, decl_span = none_span(), deprecation = null,
+        fqn = "Flag",
+        module = "",
+        is_pub = true,
+        type_params = list(0),
+        variants = variants,
+        tag_values = null,
+        decl_span = none_span(),
+        deprecation = null,
     }
     let no_args: List(Ty) = list(0)
     let el = enum_layout(&it, &def, &no_args, &reg)
@@ -726,9 +767,14 @@ test "Option of a reference uses the pointer niche" {
     let params: List(VarId) = list(1)
     params.push(0)
     let def = EnumDef {
-        fqn = FQN_OPTION, module = "core.option", is_pub = true,
-        type_params = params, variants = variants,
-        tag_values = null, decl_span = none_span(), deprecation = null,
+        fqn = FQN_OPTION,
+        module = "core.option",
+        is_pub = true,
+        type_params = params,
+        variants = variants,
+        tag_values = null,
+        decl_span = none_span(),
+        deprecation = null,
     }
 
     let niche_args: List(Ty) = list(1)

@@ -127,8 +127,12 @@ fn is_base_char(c: u8) bool {
 // "08X"
 fn parse_int_spec(spec: String) FormatSpec {
     let result = FormatSpec {
-        base = 10, uppercase = false,
-        width = 0, fill = ' ', align = '>', pad_zero = false,
+        base = 10,
+        uppercase = false,
+        width = 0,
+        fill = ' ',
+        align = '>',
+        pad_zero = false,
     }
     if spec.len == 0 {
         return result
@@ -301,9 +305,12 @@ type FloatFormatSpec = struct {
 // Parse float format spec: [fill][align][0][width][.precision]
 fn parse_float_spec(spec: String) FloatFormatSpec {
     let result = FloatFormatSpec {
-        precision = 6, has_precision = false,
-        width = 0, pad_zero = false,
-        fill = ' ', align = '>',
+        precision = 6,
+        has_precision = false,
+        width = 0,
+        pad_zero = false,
+        fill = ' ',
+        align = '>',
     }
     if spec.len == 0 {
         return result

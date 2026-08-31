@@ -235,8 +235,11 @@ fn index_module(state: &TemplateState, module: &Module, m: usize, decl_base: usi
                     file_id = module.span.file_id,
                 }
             }
-            GenInvoke(inv) => { work.push(WorkItem { module = m, inv = inv,
-                    generation = generation }) }
+            GenInvoke(inv) => { work.push(WorkItem {
+                    module = m,
+                    inv = inv,
+                    generation = generation,
+                }) }
             Type(td) => {
                 state.syntax[$"{path}.{td.name}"] = DeclRef { module = m, decl = decl_base + j }
             }
@@ -273,8 +276,13 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
     let a = arena.allocator()
 
     chk.set_current_module(paths[item.module])
-    let ectx: ExpandCtx = .{ chk = chk, state = state, modules = modules,
-        vis = current_visibility(chk), alloc = &a }
+    let ectx: ExpandCtx = .{
+        chk = chk,
+        state = state,
+        modules = modules,
+        vis = current_visibility(chk),
+        alloc = &a,
+    }
     defer ectx.vis.visible.deinit()
     const lookup: CtLookup = .{ ctx = &ectx as &u8, resolve = resolve_type_decl }
     let env = ct_env(&chk.comptime, &a, lookup)
@@ -313,8 +321,11 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
     expand_template(&env, &nodes, &raw) match {
         Ok(_) => {}
         Err(e) => {
-            const sp: SourceSpan = .{ file_id = def.file_id, start = def.base + e.span.start,
-                length = e.span.length }
+            const sp: SourceSpan = .{
+                file_id = def.file_id,
+                start = def.base + e.span.start,
+                length = e.span.length,
+            }
             push_diag_e(chk, sp, e.code, $"{e.message} (while expanding `#{inv.name}`)")
             return Outcome.Failed
         }
@@ -387,8 +398,11 @@ fn bind_arg(chk: &Checker, env: &CtEnv, param: &GenParam, arg: &GenArg, gen_name
                 if !type_is_collected(chk, id.name) {
                     return Err(Outcome.UnknownType)
                 }
-                const named: TypeExpr = TypeExpr.Named(NamedType { span = id.span, name = id.name,
-                    generic_args = list(0, Some(a)) })
+                const named: TypeExpr = TypeExpr.Named(NamedType {
+                    span = id.span,
+                    name = id.name,
+                    generic_args = list(0, Some(a)),
+                })
                 Ok(CtValue.TypeInfo(type_info_of(env, box(a, named))))
             }
         }

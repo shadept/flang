@@ -639,10 +639,16 @@ fn ct_type_member(env: &CtEnv, t: &CtTypeInfo, member: String, span: SourceSpan)
 
 pub fn type_info_of_decl(env: &CtEnv, td: &TypeDecl) CtTypeInfo {
     return td.body match {
-        AnonStruct(_) => CtTypeInfo { name = td.name, kind = KIND_STRUCT,
-            source = CtTypeSource.FromDecl(td) }
-        AnonEnum(_) => CtTypeInfo { name = td.name, kind = KIND_ENUM,
-            source = CtTypeSource.FromDecl(td) }
+        AnonStruct(_) => CtTypeInfo {
+            name = td.name,
+            kind = KIND_STRUCT,
+            source = CtTypeSource.FromDecl(td),
+        }
+        AnonEnum(_) => CtTypeInfo {
+            name = td.name,
+            kind = KIND_ENUM,
+            source = CtTypeSource.FromDecl(td),
+        }
         // `type X = Y` alias: the alias resolves to its target's shape.
         _ => type_info_of(env, td.body)
     }
@@ -657,20 +663,35 @@ pub fn type_info_of(env: &CtEnv, te: &TypeExpr) CtTypeInfo {
                     None => {}
                 }
                 if is_primitive_name(n.name) {
-                    return CtTypeInfo { name = n.name, kind = KIND_PRIMITIVE,
-                        source = CtTypeSource.NoSource }
+                    return CtTypeInfo {
+                        name = n.name,
+                        kind = KIND_PRIMITIVE,
+                        source = CtTypeSource.NoSource,
+                    }
                 }
             }
             CtTypeInfo { name = spell_type(env, te), kind = -1, source = CtTypeSource.NoSource }
         }
-        Function(_) => CtTypeInfo { name = spell_type(env, te), kind = KIND_FUNCTION,
-            source = CtTypeSource.FromSyntax(te) }
-        Array(_) => CtTypeInfo { name = spell_type(env, te), kind = KIND_ARRAY,
-            source = CtTypeSource.NoSource }
-        AnonStruct(_) => CtTypeInfo { name = spell_type(env, te), kind = KIND_STRUCT,
-            source = CtTypeSource.FromSyntax(te) }
-        AnonEnum(_) => CtTypeInfo { name = spell_type(env, te), kind = KIND_ENUM,
-            source = CtTypeSource.FromSyntax(te) }
+        Function(_) => CtTypeInfo {
+            name = spell_type(env, te),
+            kind = KIND_FUNCTION,
+            source = CtTypeSource.FromSyntax(te),
+        }
+        Array(_) => CtTypeInfo {
+            name = spell_type(env, te),
+            kind = KIND_ARRAY,
+            source = CtTypeSource.NoSource,
+        }
+        AnonStruct(_) => CtTypeInfo {
+            name = spell_type(env, te),
+            kind = KIND_STRUCT,
+            source = CtTypeSource.FromSyntax(te),
+        }
+        AnonEnum(_) => CtTypeInfo {
+            name = spell_type(env, te),
+            kind = KIND_ENUM,
+            source = CtTypeSource.FromSyntax(te),
+        }
         _ => CtTypeInfo { name = spell_type(env, te), kind = -1, source = CtTypeSource.NoSource }
     }
 }

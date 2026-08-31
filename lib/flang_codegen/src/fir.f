@@ -737,30 +737,42 @@ pub fn clone_block_target(t: &BlockTarget, subst: &Dict(u32, Operand),
 pub fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator?) Instr {
     return inst.* match {
         Binary(b) => Instr.Binary(BinaryInstr {
-            result = b.result, op = b.op, ty = b.ty,
+            result = b.result,
+            op = b.op,
+            ty = b.ty,
             lhs = remap_operand(b.lhs, subst),
             rhs = remap_operand(b.rhs, subst),
         })
         Unary(u) => Instr.Unary(UnaryInstr {
-            result = u.result, op = u.op, ty = u.ty,
+            result = u.result,
+            op = u.op,
+            ty = u.ty,
             operand = remap_operand(u.operand, subst),
         })
         Compare(c) => Instr.Compare(CompareInstr {
-            result = c.result, op = c.op, operand_ty = c.operand_ty,
+            result = c.result,
+            op = c.op,
+            operand_ty = c.operand_ty,
             lhs = remap_operand(c.lhs, subst),
             rhs = remap_operand(c.rhs, subst),
         })
         Convert(c) => Instr.Convert(ConvertInstr {
-            result = c.result, op = c.op,
-            source_ty = c.source_ty, result_ty = c.result_ty,
+            result = c.result,
+            op = c.op,
+            source_ty = c.source_ty,
+            result_ty = c.result_ty,
             operand = remap_operand(c.operand, subst),
         })
         StackSlot(s) => Instr.StackSlot(StackSlotInstr {
-            result = s.result, size = s.size, align = s.align,
+            result = s.result,
+            size = s.size,
+            align = s.align,
         })
         Load(l) => Instr.Load(LoadInstr {
-            result = l.result, ty = l.ty,
-            ptr = remap_operand(l.ptr, subst), align = l.align,
+            result = l.result,
+            ty = l.ty,
+            ptr = remap_operand(l.ptr, subst),
+            align = l.align,
         })
         Store(s) => Instr.Store(StoreInstr {
             ty = s.ty,
@@ -784,13 +796,15 @@ pub fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator
             size = remap_operand(ms.size, subst),
         })
         Call(c) => Instr.Call(CallInstr {
-            result = c.result, result_ty = c.result_ty,
+            result = c.result,
+            result_ty = c.result_ty,
             callee = c.callee,
             args = clone_operand_list(&c.args, subst, alloc),
             variadic_arg_types = clone_ir_type_list(&c.variadic_arg_types, alloc),
         })
         CallIndirect(c) => Instr.CallIndirect(CallIndirectInstr {
-            result = c.result, result_ty = c.result_ty,
+            result = c.result,
+            result_ty = c.result_ty,
             fn_ptr = remap_operand(c.fn_ptr, subst),
             param_types = clone_ir_type_list(&c.param_types, alloc),
             args = clone_operand_list(&c.args, subst, alloc),

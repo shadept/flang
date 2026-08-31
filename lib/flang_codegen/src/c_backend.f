@@ -2266,13 +2266,23 @@ test "emits each foreign symbol at most once" {
     defer m.deinit()
     let p1 = list(1)
     p1.push(IrType.I32)
-    m.add_foreign(ForeignDecl { name = "isatty", return_ty = Some(IrType.I32), param_types = p1,
-        variadic = false, cc = CallConv.C })
+    m.add_foreign(ForeignDecl {
+        name = "isatty",
+        return_ty = Some(IrType.I32),
+        param_types = p1,
+        variadic = false,
+        cc = CallConv.C,
+    })
     let p2 = list(2)
     p2.push(IrType.I32)
     p2.push(IrType.I32)
-    m.add_foreign(ForeignDecl { name = "isatty", return_ty = Some(IrType.I32), param_types = p2,
-        variadic = false, cc = CallConv.C })
+    m.add_foreign(ForeignDecl {
+        name = "isatty",
+        return_ty = Some(IrType.I32),
+        param_types = p2,
+        variadic = false,
+        cc = CallConv.C,
+    })
 
     let sb = string_builder(256)
     defer sb.deinit()

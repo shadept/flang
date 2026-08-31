@@ -402,7 +402,11 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
             const new_id = caller.fresh_value_id()
             subst.set(b.result, Operand.Local(new_id))
             Instr.Binary(BinaryInstr {
-                result = new_id, op = b.op, ty = b.ty, lhs = lhs, rhs = rhs,
+                result = new_id,
+                op = b.op,
+                ty = b.ty,
+                lhs = lhs,
+                rhs = rhs,
             })
         }
         Unary(u) => {
@@ -419,8 +423,11 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
             const new_id = caller.fresh_value_id()
             subst.set(c.result, Operand.Local(new_id))
             Instr.Compare(CompareInstr {
-                result = new_id, op = c.op, operand_ty = c.operand_ty,
-                lhs = lhs, rhs = rhs,
+                result = new_id,
+                op = c.op,
+                operand_ty = c.operand_ty,
+                lhs = lhs,
+                rhs = rhs,
             })
         }
         Convert(c) => {
@@ -428,8 +435,10 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
             const new_id = caller.fresh_value_id()
             subst.set(c.result, Operand.Local(new_id))
             Instr.Convert(ConvertInstr {
-                result = new_id, op = c.op,
-                source_ty = c.source_ty, result_ty = c.result_ty,
+                result = new_id,
+                op = c.op,
+                source_ty = c.source_ty,
+                result_ty = c.result_ty,
                 operand = operand,
             })
         }

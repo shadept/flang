@@ -535,8 +535,13 @@ fn probe_spec(function_id: u32, name: String) Specialization {
     let no_dirs: List(DeclAttribute) = list(0)
     let no_decl_params: List(FunctionParam) = list(0)
     let decl = FunctionDecl {
-        span = none_span(), is_pub = false, directives = no_dirs,
-        name = name, params = no_decl_params, return_type = null, body = null,
+        span = none_span(),
+        is_pub = false,
+        directives = no_dirs,
+        name = name,
+        params = no_decl_params,
+        return_type = null,
+        body = null,
     }
     let it = type_interner()
     defer it.deinit()

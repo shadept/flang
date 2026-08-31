@@ -14,7 +14,7 @@
 //   - spacing and indentation are recomputed on every line
 //   - blank-line runs collapse to `max_blank_lines`
 //   - no trailing whitespace; exactly one final newline
-//   - the file's prevailing line ending (LF or CRLF) is detected and kept,
+//   - the file's prevailing line ending (LF or CRLF) is detected once and written at every break,
 //     so a checkout's eol convention never counts as a formatting change
 //
 // Line breaks: a newline can end a statement in FLang, so structural breaks (between statements,
@@ -239,8 +239,9 @@ fn format_once(source: String, cfg: &FmtConfig) Result(OwnedString, FmtError) {
         return Err(FmtError.ParseFailed(parse_errors))
     }
 
-    const raw_owned = render_module(&cst, cfg)
-    const out = normalize(raw_owned.as_view(), source, cfg)
+    const eol = line_ending_of(source)
+    const raw_owned = render_module(&cst, cfg, eol)
+    const out = normalize(raw_owned.as_view(), cfg, eol)
     raw_owned.deinit()
 
     if !verify_output(&p.tree.tokens, &cst, out.as_view()) {
@@ -287,6 +288,10 @@ type Renderer = struct {
     out: StringBuilder
     line: StringBuilder
     cfg: &FmtConfig
+    // The source's own line ending, written at every break. Never a post-pass: a token's text is
+    // emitted verbatim, and a blanket rewrite cannot tell a break in the layout from a newline
+    // inside a string literal.
+    eol: String
     // Break opportunities on the current line, in order.
     wrap_points: List(WrapPoint)
     // Nesting state while streaming tokens.
@@ -327,11 +332,12 @@ type Renderer = struct {
     prev_end: usize
 }
 
-fn render_module(cst: &CstNode, cfg: &FmtConfig) OwnedString {
+fn render_module(cst: &CstNode, cfg: &FmtConfig, eol: String) OwnedString {
     let r = Renderer {
         out = string_builder(cst.end + 16),
         line = string_builder(128),
         cfg = cfg,
+        eol = eol,
         wrap_points = list(0),
         brace_depth = 0,
         group_depth = 0,
@@ -876,7 +882,7 @@ fn maybe_wrap(r: &Renderer, incoming: usize) bool {
 
     const view = r.line.as_view()
     r.out.append(view[0..wp.offset])
-    r.out.append_byte('\n' as u8)
+    r.out.append(r.eol)
     let s = wp.offset
     while s < view.len and view[s] == ' ' {
         s = s + 1
@@ -973,7 +979,7 @@ fn emit_line_break(r: &Renderer, next: TokenKind) {
     r.line_has_comment = false
     flush_line(r)
     for n in 0..(blanks + 1) {
-        r.out.append_byte('\n' as u8)
+        r.out.append(r.eol)
     }
 
     let depth = r.brace_depth
@@ -1287,19 +1293,14 @@ fn is_comma_child(child: &CstChild) bool {
 // Line hygiene + blank lines
 // ─────────────────────────────────────────────────────────────────────────
 
-// The renderer emits LF-only text with no final newline guarantee; this reflows comment prose, adds
-// the single trailing newline, and re-expands to CRLF when the original file used it.
-fn normalize(rendered: String, original: String, cfg: &FmtConfig) OwnedString {
+// The renderer writes the file's own line ending but guarantees nothing about the last one; this
+// reflows comment prose and settles the single trailing newline.
+fn normalize(rendered: String, cfg: &FmtConfig, eol: String) OwnedString {
     const reflow_width = if cfg.reflow_comments { cfg.max_width } else { 0usize }
-    const reflowed = reflow_comments(rendered, reflow_width)
-    const unix = ensure_single_trailing_newline(reflowed.as_view())
+    const reflowed = reflow_comments(rendered, reflow_width, eol)
+    const out = ensure_single_trailing_newline(reflowed.as_view(), eol)
     reflowed.deinit()
-    if !uses_crlf(original) {
-        return unix
-    }
-    const final = expand_crlf(unix.as_view())
-    unix.deinit()
-    return final
+    return out
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1326,7 +1327,7 @@ fn normalize(rendered: String, original: String, cfg: &FmtConfig) OwnedString {
 // mark, which keeps refilled output stable under a second reflow.
 // ─────────────────────────────────────────────────────────────────────────
 
-fn reflow_comments(text: String, width: usize) OwnedString {
+fn reflow_comments(text: String, width: usize, eol: String) OwnedString {
     if width == 0 {
         return from_view(text)
     }
@@ -1344,7 +1345,13 @@ fn reflow_comments(text: String, width: usize) OwnedString {
         while nl < text.len and text[nl] != '\n' {
             nl = nl + 1
         }
-        const line = text[pos..nl]
+        // A CRLF break leaves its carriage return at the end of the slice; the line's text is what
+        // precedes it, and the break itself is re-emitted as `eol`.
+        let stop = nl
+        if stop > pos and text[stop - 1] == '\r' {
+            stop = stop - 1
+        }
+        const line = text[pos..stop]
         const has_nl = nl < text.len
 
         const parsed = parse_comment_line(line)
@@ -1354,23 +1361,23 @@ fn reflow_comments(text: String, width: usize) OwnedString {
             and !last_colon
         if parsed.2 and is_comment_prose(parsed.1, mid) {
             if words.len > 0 and (parsed.0 != para_indent or last_len <= threshold) {
-                flush_paragraph(&sb, &words, para_indent, width, threshold)
+                flush_paragraph(&sb, &words, para_indent, width, threshold, eol)
             }
             para_indent = parsed.0
             push_words(&words, parsed.1)
             last_len = line.len
             last_colon = parsed.1.len > 0 and parsed.1[parsed.1.len - 1] == ':'
         } else {
-            flush_paragraph(&sb, &words, para_indent, width, threshold)
+            flush_paragraph(&sb, &words, para_indent, width, threshold, eol)
             sb.append(line)
             if has_nl {
-                sb.append_byte('\n' as u8)
+                sb.append(eol)
             }
             last_colon = false
         }
         pos = nl + 1
     }
-    flush_paragraph(&sb, &words, para_indent, width, threshold)
+    flush_paragraph(&sb, &words, para_indent, width, threshold, eol)
     return sb.to_string()
 }
 
@@ -1456,7 +1463,7 @@ fn push_words(words: &List(String), content: String) {
 // passing `threshold` - a huge word may push a line over `width` instead of leaving a short line
 // behind.
 fn flush_paragraph(sb: &StringBuilder, words: &List(String), indent: usize, width: usize,
-    threshold: usize) {
+    threshold: usize, eol: String) {
     if words.len == 0 {
         return
     }
@@ -1467,7 +1474,7 @@ fn flush_paragraph(sb: &StringBuilder, words: &List(String), indent: usize, widt
             open_comment_line(sb, indent)
             col = indent + 2
         } else if col + 1 + w.len > width and col > threshold {
-            sb.append_byte('\n' as u8)
+            sb.append(eol)
             open_comment_line(sb, indent)
             col = indent + 2
         }
@@ -1475,7 +1482,7 @@ fn flush_paragraph(sb: &StringBuilder, words: &List(String), indent: usize, widt
         sb.append(w)
         col = col + 1 + w.len
     }
-    sb.append_byte('\n' as u8)
+    sb.append(eol)
     words.clear()
 }
 
@@ -1487,41 +1494,30 @@ fn open_comment_line(sb: &StringBuilder, indent: usize) {
 }
 
 // The file's prevailing line ending, decided by its first newline. A file with no newline defaults
-// to LF.
-fn uses_crlf(source: String) bool {
+// to LF. Every break the formatter writes uses this, so no pass ever rewrites endings after the
+// fact - one that did could not tell a break in the layout from a newline inside a string literal,
+// and would corrupt the literal.
+fn line_ending_of(source: String) String {
     let i = 0usize
     while i < source.len {
         if source[i] == '\n' {
-            return i > 0 and source[i - 1] == '\r'
+            return if i > 0 and source[i - 1] == '\r' { "\r\n" } else { "\n" }
         }
         i = i + 1
     }
-    return false
+    return "\n"
 }
 
-fn expand_crlf(source: String) OwnedString {
-    let sb = string_builder(source.len + source.len / 16)
-    let i = 0usize
-    while i < source.len {
-        if source[i] == '\n' {
-            sb.append_byte('\r' as u8)
-        }
-        sb.append_byte(source[i])
-        i = i + 1
-    }
-    return sb.to_string()
-}
-
-fn ensure_single_trailing_newline(source: String) OwnedString {
+fn ensure_single_trailing_newline(source: String, eol: String) OwnedString {
     let end = source.len
-    while end > 0 and (source[end - 1] == ' ' or source[end - 1] == '\t'
-        or source[end - 1] == '\n') {
+    while end > 0 and (source[end - 1] == ' ' or source[end - 1] == '	' or source[end - 1] == '\n'
+        or source[end - 1] == '\r') {
         end = end - 1
     }
-    let sb = string_builder(end + 1)
+    let sb = string_builder(end + 2)
     sb.append(source[0..end])
     if end > 0 {
-        sb.append_byte('\n' as u8)
+        sb.append(eol)
     }
     return sb.to_string()
 }
@@ -1549,6 +1545,17 @@ test "crlf files stay crlf, lf files stay lf" {
     let outl = rl.unwrap()
     defer outl.deinit()
     assert_true(outl.as_view() == "fn a() {}\nfn b() {}\n", "first ending wins")
+}
+
+test "a multi-line string literal in a crlf file keeps its own endings" {
+    const cfg = default_config()
+    // The literal's newlines belong to the program, not to the layout. Expanding endings across the
+    // whole output would write a second carriage return into it and change what it says.
+    const src = "pub fn main() i32 {\r\n    const s = \"a\r\nb\"\r\n    return 0i32\r\n}\r\n"
+    const r = format_source(src, &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == src, "a crlf file with a multi-line literal round-trips")
 }
 
 test "blank lines collapse to max_blank_lines" {

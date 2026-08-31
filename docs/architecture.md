@@ -510,8 +510,11 @@ Design:
   `max-width` joins with its successor, so deliberate short lines stay
   put. Comments trailing code are never reflowed.
 - **Line endings.** The file's prevailing ending (first newline: LF or CRLF)
-  is detected and preserved, so a checkout's eol convention is never a
-  formatting change.
+  is detected once and written at every break the renderer emits, so a
+  checkout's eol convention is never a formatting change. It is never applied
+  as a pass over finished output: a token's text is emitted verbatim, so a
+  blanket rewrite cannot tell a break in the layout from a newline inside a
+  multi-line string literal, and would change what the program says.
 
 Configuration lives in a `[fmt]` table in `flang.toml`, parsed by
 `flang_analysis/project.f` into verbatim key/value entries and applied via

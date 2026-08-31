@@ -228,7 +228,11 @@ fn binary(self: &BlockBuilder, op: BinaryOp, ty: IrType, lhs: Operand, rhs: Oper
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Binary(BinaryInstr {
-        result = id, op = op, ty = ty, lhs = lhs, rhs = rhs,
+        result = id,
+        op = op,
+        ty = ty,
+        lhs = lhs,
+        rhs = rhs,
     }))
     return Operand.Local(id)
 }
@@ -311,7 +315,11 @@ fn compare(self: &BlockBuilder, op: CompareOp, operand_ty: IrType, lhs: Operand,
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Compare(CompareInstr {
-        result = id, op = op, operand_ty = operand_ty, lhs = lhs, rhs = rhs,
+        result = id,
+        op = op,
+        operand_ty = operand_ty,
+        lhs = lhs,
+        rhs = rhs,
     }))
     return Operand.Local(id)
 }
@@ -361,7 +369,11 @@ fn convert(self: &BlockBuilder, op: ConvertOp, src: IrType, dst: IrType, v: Oper
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Convert(ConvertInstr {
-        result = id, op = op, source_ty = src, result_ty = dst, operand = v,
+        result = id,
+        op = op,
+        source_ty = src,
+        result_ty = dst,
+        operand = v,
     }))
     return Operand.Local(id)
 }

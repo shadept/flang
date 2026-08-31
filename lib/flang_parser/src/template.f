@@ -105,16 +105,22 @@ fn error_at(self: &TemplateParser, index: usize, code: String, message: OwnedStr
         start = self.tokens[index].offset
         length = self.tokens[index].text.len
     }
-    self.diags.push(error(code, message, .{ file_id = self.file_id, start = self.base + start,
-        length = length }))
+    self.diags.push(error(code, message, .{
+        file_id = self.file_id,
+        start = self.base + start,
+        length = length,
+    }))
 }
 
 // Move body-relative parser diagnostics out, shifted to file offsets.
 fn shift_diags(self: &TemplateParser, from: &List(Diagnostic)) {
     const taken = from.to_owned_slice()
     for &d in taken.0 {
-        const sp: SourceSpan = .{ file_id = self.file_id, start = self.base + d.span.start,
-            length = d.span.length }
+        const sp: SourceSpan = .{
+            file_id = self.file_id,
+            start = self.base + d.span.start,
+            length = d.span.length,
+        }
         self.diags.push(error(d.code, d.message, sp))
     }
     taken.1.free(taken.0)
@@ -286,8 +292,11 @@ fn parse_string_holes(self: &TemplateParser, tok: Token, out: &List(TemplateNode
         if p.token_index() < toks.len and toks[p.token_index()].kind == TokenKind.CloseParenthesis {
             close_end = (toks[p.token_index()].offset + 1) as u32
         } else {
-            self.diags.push(error("E1002", $"expected `)` to close `#(` inside a string literal",
-                    .{ file_id = self.file_id, start = self.base + cst.end, length = 0 }))
+            self.diags.push(error("E1002", $"expected `)` to close `#(` inside a string literal", .{
+                file_id = self.file_id,
+                start = self.base + cst.end,
+                length = 0,
+            }))
         }
         self.shift_diags(&p.diagnostics)
         out.push(TemplateNode.Interp(TemplateInterp { expr = e, in_string = true }))
