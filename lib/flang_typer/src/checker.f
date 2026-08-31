@@ -878,6 +878,7 @@ fn resolve_anon_struct_type(self: &Checker, a: &AnonStructType) Ty {
             name = a.fields[i].name,
             ty = resolve_type_expr(self, a.fields[i].type_expr),
             decl_span = a.fields[i].span,
+            owned = a.fields[i].owned,
         })
     }
     return anon_struct_ty(self, fields, a.span)
@@ -1567,7 +1568,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
                 $"duplicate field `{f.name}` in struct `{td.name}`")
             continue
         }
-        fields.push(Field { name = f.name, ty = ty, decl_span = f.span })
+        fields.push(Field { name = f.name, ty = ty, decl_span = f.span, owned = f.owned })
     }
     self.env.pop_scope()
 
@@ -1599,12 +1600,63 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
 // cycle (`&Node` is pointer-sized), which is how linked structures are written. The walk is
 // transitive so mutual recursion is caught too, and `seen` keeps it terminating.
 fn check_recursive_nominal(self: &Checker, id: NominalId, name: String, span: SourceSpan) {
+    const cut = cut_back_edges(self, id)
+    if cut.is_none() {
+        return
+    }
+    const noun = if cut.unwrap().1 { "variant" } else { "field" }
+    push_diag_e(self, span, E_RECURSIVE_TYPE,
+        $"recursive type `{name}` has infinite size - {noun} `{cut.unwrap().0}` reaches back to it; break the cycle with a reference")
+}
+
+// Poison every by-value member that reaches back to `id`, and report whether any did.
+//
+// Reporting alone would leave a definition of infinite size in the registry for every pass that
+// runs after, so each one would need a cycle guard of its own to walk fields at all. Cutting the
+// edge makes the definition finite in the data instead: `Error` unifies with anything and cascades
+// no diagnostic, so the rest of the type still checks and the member that closed the loop is the
+// only one that stops carrying a type. Mutual recursion terminates the same way - cutting `A`'s
+// back-edge breaks the loop, and `B` cuts its own when its turn comes.
+//
+// Returns the first member cut and whether it is an enum variant rather than a struct field, so the
+// diagnostic can name what closed the loop.
+fn cut_back_edges(self: &Checker, id: NominalId) (String, bool)? {
     let seen: Set(NominalId) = set(self.allocator)
     defer seen.deinit()
-    if nominal_contains(self, id, id, &seen) {
-        push_diag_e(self, span, E_RECURSIVE_TYPE,
-            $"recursive type `{name}` has infinite size - break the cycle with a reference")
+    let hit: (String, bool)? = null
+    let def = self.nominals.get(id)
+    def.* match {
+        NomStruct(sd) => {
+            for i in 0..sd.fields.len {
+                seen.clear()
+                if ty_contains_nominal(self, sd.fields[i].ty, id, &seen) {
+                    if hit.is_none() {
+                        hit = Some((sd.fields[i].name, false))
+                    }
+                    sd.fields[i] = Field {
+                        name = sd.fields[i].name,
+                        ty = TY_ERROR,
+                        decl_span = sd.fields[i].decl_span,
+                        owned = sd.fields[i].owned,
+                    }
+                }
+            }
+        }
+        NomEnum(ed) => {
+            for vi in 0..ed.variants.len {
+                for pi in 0..ed.variants[vi].payloads.len {
+                    seen.clear()
+                    if ty_contains_nominal(self, ed.variants[vi].payloads[pi], id, &seen) {
+                        if hit.is_none() {
+                            hit = Some((ed.variants[vi].name, true))
+                        }
+                        ed.variants[vi].payloads[pi] = TY_ERROR
+                    }
+                }
+            }
+        }
     }
+    return hit
 }
 
 // Whether `target` is reachable from `current`'s by-value members.
@@ -2400,8 +2452,11 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
             fr.deps.push(SpecDep { span = p.span, function_id = p.function_id, id = id.unwrap() })
         }
     } else if self.site_log_on and id.is_some() {
-        self.slot_sites.push(SpecDep { span = p.span, function_id = p.function_id,
-            id = id.unwrap() })
+        self.slot_sites.push(SpecDep {
+            span = p.span,
+            function_id = p.function_id,
+            id = id.unwrap(),
+        })
     }
     if id.is_none() {
         return
@@ -2436,8 +2491,11 @@ fn resolve_against(self: &Checker, p: &PendingSpec, key: OwnedString, params: Li
         let ok = pick_concrete(self, p, &params, ret)
         if ok {
             let trial: Set(SpecId) = set(self.allocator)
-            const pos = StreamPos { v = self.engine.var_counter, s = self.next_synth,
-                l = self.next_lambda }
+            const pos = StreamPos {
+                v = self.engine.var_counter,
+                s = self.next_synth,
+                l = self.next_lambda,
+            }
             ok = spec_probe(self, sid, pos, &trial).is_some()
             trial.deinit()
         }
@@ -2566,8 +2624,12 @@ fn resolve_anon_literals(self: &Checker) {
         if unpinned {
             let fields: List(Field) = list(pa.fields.len, self.allocator)
             for &rec in pa.fields {
-                fields.push(Field { name = rec.name, ty = self.engine.zonk(rec.ty),
-                    decl_span = rec.span })
+                fields.push(Field {
+                    name = rec.name,
+                    ty = self.engine.zonk(rec.ty),
+                    decl_span = rec.span,
+                    owned = false,
+                })
             }
             let span = if pa.fields.len > 0 { pa.fields[0].span } else { synth_span(self) }
             const o = self.engine.unify(pa.ty, anon_struct_ty(self, fields, span))
@@ -2936,6 +2998,7 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
         Cast(c) => check_cast(self, &c)
         Assignment(a) => check_assignment(self, &a)
         AddressOf(a) => check_address_of(self, &a)
+        Move(m) => check_move(self, &m)
         Dereference(d) => check_deref(self, &d)
         Match(m) => check_match(self, &m)
         Index(ix) => check_index(self, &ix)
@@ -3473,8 +3536,11 @@ fn check_pattern(self: &Checker, pat: &Pattern, expected: Ty, is_sub: bool = fal
                 if pick.is_some() {
                     let p = pick.unwrap()
                     self.results.record_operator(self.node_of(l.span), ResolvedOperator {
-                        function_id = p.id, negate_result = false,
-                        cmp_derived_op = null, is_ref_form = false, spec_id = null,
+                        function_id = p.id,
+                        negate_result = false,
+                        cmp_derived_op = null,
+                        is_ref_form = false,
+                        spec_id = null,
                     })
                     note_pending(self, l.span, true, &p)
                 }
@@ -3853,14 +3919,24 @@ fn try_set_index_assignment(self: &Checker, a: &AssignmentExpr, ix: &IndexExpr) 
     }
     const p = pick.unwrap()
     self.results.record_operator(self.node_of(a.span), ResolvedOperator {
-        function_id = p.id, negate_result = false,
-        cmp_derived_op = null, is_ref_form = true, spec_id = null,
+        function_id = p.id,
+        negate_result = false,
+        cmp_derived_op = null,
+        is_ref_form = true,
+        spec_id = null,
     })
     note_pending(self, a.span, true, &p)
     return true
 }
 
-// `&operand` - a reference to whatever the operand is.
+// `&operand` - a reference to whatever the operand is. `move operand` yields the operand's own
+// type. The transfer it marks is checked in a later phase (RFC-028); here the keyword is
+// transparent, so annotating a moved binding still works and a `move` in any position type-checks
+// exactly as the bare operand does.
+fn check_move(self: &Checker, m: &MoveExpr) Ty {
+    return check_expr(self, m.operand)
+}
+
 fn check_address_of(self: &Checker, a: &AddressOfExpr) Ty {
     let inner = check_expr(self, a.operand)
     // A reference to a value with no storage would outlive it (E2040).
@@ -4056,8 +4132,11 @@ fn check_try(self: &Checker, t: &TryExpr) Ty {
         E_RETURN_MISMATCH, t.span)
 
     self.results.record_operator(self.node_of(t.span), ResolvedOperator {
-        function_id = p.id, negate_result = false,
-        cmp_derived_op = null, is_ref_form = false, spec_id = null,
+        function_id = p.id,
+        negate_result = false,
+        cmp_derived_op = null,
+        is_ref_form = false,
+        spec_id = null,
     })
     note_pending(self, t.span, true, &p)
     return self.engine.interner.child_at(n.args, 0)
@@ -4101,8 +4180,11 @@ fn user_deref(self: &Checker, t: Ty, span: SourceSpan) Ty {
         _ => return self.engine.fresh_var()
     }
     self.results.record_operator(self.node_of(span), ResolvedOperator {
-        function_id = p.id, negate_result = false,
-        cmp_derived_op = null, is_ref_form = true, spec_id = null,
+        function_id = p.id,
+        negate_result = false,
+        cmp_derived_op = null,
+        is_ref_form = true,
+        spec_id = null,
     })
     note_pending(self, span, true, &p)
     return inner
@@ -4229,8 +4311,11 @@ fn check_index(self: &Checker, idx: &IndexExpr) Ty {
             if pick.is_some() {
                 let p = pick.unwrap()
                 self.results.record_operator(self.node_of(idx.span), ResolvedOperator {
-                    function_id = p.id, negate_result = false,
-                    cmp_derived_op = null, is_ref_form = false, spec_id = null,
+                    function_id = p.id,
+                    negate_result = false,
+                    cmp_derived_op = null,
+                    is_ref_form = false,
+                    spec_id = null,
                 })
                 note_pending(self, idx.span, true, &p)
                 return p.ret
@@ -4283,8 +4368,11 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty:
             _ => self.engine.fresh_var()
         }
         self.results.record_operator(self.node_of(idx.span), ResolvedOperator {
-            function_id = p.id, negate_result = false,
-            cmp_derived_op = null, is_ref_form = true, spec_id = null,
+            function_id = p.id,
+            negate_result = false,
+            cmp_derived_op = null,
+            is_ref_form = true,
+            spec_id = null,
         })
         note_pending(self, idx.span, true, &p)
         return inner
@@ -4304,8 +4392,11 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty:
     if value_pick.is_some() {
         let p = value_pick.unwrap()
         self.results.record_operator(self.node_of(idx.span), ResolvedOperator {
-            function_id = p.id, negate_result = false,
-            cmp_derived_op = null, is_ref_form = false, spec_id = null,
+            function_id = p.id,
+            negate_result = false,
+            cmp_derived_op = null,
+            is_ref_form = false,
+            spec_id = null,
         })
         note_pending(self, idx.span, true, &p)
         return p.ret
@@ -4639,7 +4730,10 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
         // overload once the slot's Func shape settles (ticket 019 §4).
         let slot = self.engine.fresh_var()
         self.pending_fn_names.push(PendingFnName {
-            span = id.span, ty = slot, name = id.name, module = self.current_module,
+            span = id.span,
+            ty = slot,
+            name = id.name,
+            module = self.current_module,
         })
         return slot
     }
@@ -4845,8 +4939,12 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     let module_name = self.current_module.unwrap_or("__synthetic")
     let fields: List(Field) = list(frame.captures.len, self.allocator)
     for i in 0..frame.captures.len {
-        fields.push(Field { name = frame.captures[i].name, ty = frame.captures[i].ty,
-            decl_span = none_span() })
+        fields.push(Field {
+            name = frame.captures[i].name,
+            ty = frame.captures[i].ty,
+            decl_span = none_span(),
+            owned = false,
+        })
     }
     let empty_tps: List(VarId) = list(0, self.allocator)
     let sd = StructDef {
@@ -5045,8 +5143,11 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     }
     let p = ip.unwrap()
     self.results.record_operator(self.node_of(fs.body.span), ResolvedOperator {
-        function_id = p.id, negate_result = false,
-        cmp_derived_op = null, is_ref_form = false, spec_id = null,
+        function_id = p.id,
+        negate_result = false,
+        cmp_derived_op = null,
+        is_ref_form = false,
+        spec_id = null,
     })
     note_pending(self, fs.body.span, true, &p)
 
@@ -5066,8 +5167,11 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     }
     let n = np.unwrap()
     self.results.record_operator(self.node_of(fs.span), ResolvedOperator {
-        function_id = n.id, negate_result = false,
-        cmp_derived_op = null, is_ref_form = false, spec_id = null,
+        function_id = n.id,
+        negate_result = false,
+        cmp_derived_op = null,
+        is_ref_form = false,
+        spec_id = null,
     })
     note_pending(self, fs.span, true, &n)
 
@@ -5351,8 +5455,11 @@ fn arithmetic(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
     }
     let p = pick.unwrap()
     self.results.record_operator(self.node_of(bin.span), ResolvedOperator {
-        function_id = p.id, negate_result = false,
-        cmp_derived_op = null, is_ref_form = false, spec_id = null,
+        function_id = p.id,
+        negate_result = false,
+        cmp_derived_op = null,
+        is_ref_form = false,
+        spec_id = null,
     })
     note_pending(self, bin.span, true, &p)
     return p.ret
@@ -5414,8 +5521,11 @@ fn comparison(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
     if direct.is_some() {
         let p = direct.unwrap()
         self.results.record_operator(self.node_of(bin.span), ResolvedOperator {
-            function_id = p.id, negate_result = false,
-            cmp_derived_op = null, is_ref_form = false, spec_id = null,
+            function_id = p.id,
+            negate_result = false,
+            cmp_derived_op = null,
+            is_ref_form = false,
+            spec_id = null,
         })
         note_pending(self, bin.span, true, &p)
         return p.ret
@@ -5427,8 +5537,11 @@ fn comparison(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
         if neg.is_some() {
             let p = neg.unwrap()
             self.results.record_operator(self.node_of(bin.span), ResolvedOperator {
-                function_id = p.id, negate_result = true,
-                cmp_derived_op = null, is_ref_form = false, spec_id = null,
+                function_id = p.id,
+                negate_result = true,
+                cmp_derived_op = null,
+                is_ref_form = false,
+                spec_id = null,
             })
             note_pending(self, bin.span, true, &p)
             return p.ret
@@ -5439,8 +5552,11 @@ fn comparison(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
     if cmp.is_some() {
         let p = cmp.unwrap()
         self.results.record_operator(self.node_of(bin.span), ResolvedOperator {
-            function_id = p.id, negate_result = false,
-            cmp_derived_op = Some(bod_of(bin.op)), is_ref_form = false, spec_id = null,
+            function_id = p.id,
+            negate_result = false,
+            cmp_derived_op = Some(bod_of(bin.op)),
+            is_ref_form = false,
+            spec_id = null,
         })
         note_pending(self, bin.span, true, &p)
         return prim_of(PrimitiveKind.Bool)
@@ -7546,6 +7662,7 @@ fn zonk_closures(self: &Checker) {
                         name = sd.fields[i].name,
                         ty = self.engine.zonk(sd.fields[i].ty),
                         decl_span = sd.fields[i].decl_span,
+                        owned = sd.fields[i].owned,
                     })
                 }
                 let updated = StructDef {

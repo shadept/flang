@@ -1729,16 +1729,27 @@ enum Status {
 
 #### Description
 
-An enum variant directly contains the enum type itself without using a reference. This would create an infinitely-sized
-type.
+A struct field or enum variant payload contains its own type by value, directly or through a chain of other types.
+This would create an infinitely-sized type. The message names the member that closes the loop.
+
+Detection cuts the cycle rather than only reporting it: the offending member's type becomes the poison type, so the
+definition is finite for every pass that runs afterwards and no later walk needs a cycle guard of its own. The rest of
+the type still checks, and reading the cut member produces no further diagnostic.
+
+One cycle reports once, on the declaration that closes it - which is the last one of the cycle in declaration order.
+`A` containing `B` containing `A` reports whichever of the two is written second.
 
 #### Example
 
 ```flang
-enum Bad {
+type Bad = enum {
     Value(i32)
     Recursive(Bad)  // ERROR: recursive types must use references
 }
+```
+
+```
+error[E2035]: recursive type `Bad` has infinite size - variant `Recursive` reaches back to it; break the cycle with a reference
 ```
 
 #### Solution
@@ -1746,7 +1757,7 @@ enum Bad {
 Use a reference (`&`) or nullable reference (`&?`) for recursive types:
 
 ```flang
-enum Good {
+type Good = enum {
     Value(i32)
     Recursive(&Good)  // OK: reference provides indirection
 }
