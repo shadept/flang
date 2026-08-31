@@ -487,6 +487,16 @@ Design:
   the two parse trees must have the same shape. A mismatch discards the
   output (`VerifyFailed`). Files with parse errors are refused, not
   formatted.
+- **The layout shows the parse.** FLang has no statement terminator and the
+  parser is greedy, so a line opening with a binary operator, `.`, `(` or
+  `[` continues the line above rather than starting a statement. Three of
+  those tokens - `-`, `(` and `[` - could equally open a statement, so a
+  break in front of one draws two statements where the parse has one; they
+  are joined back onto the line they continue. The rest cannot be misread
+  at the start of a line and keep their authored break, rendered one step
+  deeper than statement indent. Joining is conditional on the previous
+  token being able to end an expression: after an open brace, `(` opens a
+  statement of its own and is left alone.
 - **Structure is authored, layout is width-driven.** A newline can end a
   statement, so breaks between statements and inside brace bodies always
   stand, as do blank lines and comment placement. Breaks inside `(`/`[`

@@ -817,7 +817,11 @@ fn render_token(r: &Renderer, tok: &Token, parent: NodeKind) {
 // layout. Only a lone newline qualifies (blank lines and comment-carrying breaks are the author's),
 // and only where the wrap pass could put a break back:
 //   - inside an open `(` / `[` group (commas and operators re-break), or
-//   - before `and` / `or`, whose continuation style wrap reproduces.
+//   - before `and` / `or`, whose continuation style wrap reproduces, or
+//   - before `-`, `(` or `[` continuing the expression above. These three are the tokens that could
+//     equally open a statement of their own, so a break in front of one draws two statements where
+//     the parse has one. Joining is what removes the ambiguity; `.`, `and` and the rest cannot be
+//     misread at the start of a line and keep their authored break.
 // A brace body resets the group count, so statements inside a lambda or block passed as an argument
 // are never merged.
 fn joinable(r: &Renderer, next: TokenKind, parent: NodeKind) bool {
@@ -839,6 +843,10 @@ fn joinable(r: &Renderer, next: TokenKind, parent: NodeKind) bool {
     const eff = r.group_depth - open_groups_at_brace(r)
     if eff > 0 {
         return true
+    }
+    if next == TokenKind.OpenParenthesis or next == TokenKind.OpenBracket
+        or next == TokenKind.Minus {
+        return ends_expression(r.prev_kind)
     }
     return next == TokenKind.And or next == TokenKind.Or
 }
@@ -979,7 +987,7 @@ fn emit_line_break(r: &Renderer, next: TokenKind) {
         groups = groups - 1
     }
     let extra = groups
-    if extra == 0 and is_continuation_start(next) {
+    if extra == 0 and is_continuation_start(next, r.prev_kind) {
         extra = 1
     }
     const spaces = (depth + extra) * r.cfg.indent
@@ -1024,7 +1032,16 @@ fn update_depths(r: &Renderer, kind: TokenKind) {
 
 // A line starting with one of these continues the previous line's expression and indents one extra
 // step.
-fn is_continuation_start(kind: TokenKind) bool {
+//
+// `(` and `[` continue only what could already be a complete expression. The parser is greedy: with
+// no statement terminator, a bracket opening a line joins the line above as a call or an index, so
+// drawing it at statement indent would show two statements where the parse has one. After a token
+// that cannot end an expression - an open brace, most obviously - the same bracket opens a
+// statement of its own.
+fn is_continuation_start(kind: TokenKind, prev: TokenKind) bool {
+    if kind == TokenKind.OpenParenthesis or kind == TokenKind.OpenBracket {
+        return ends_expression(prev)
+    }
     return kind == TokenKind.Dot or kind == TokenKind.QuestionDot
         or kind == TokenKind.QuestionQuestion or kind == TokenKind.And or kind == TokenKind.Or
         or kind == TokenKind.Pipe or kind == TokenKind.Plus or kind == TokenKind.Minus
@@ -1593,6 +1610,43 @@ test "group newlines join and re-wrap at width" {
     defer out.deinit()
     assert_true(out.as_view() == "fn f() {\n    ggg(aaaaaaaa,\n        bbbbbbbb,\n        cccccccc)\n}\n",
         "rewrapped")
+}
+
+test "a call split before its argument list is joined" {
+    const cfg = default_config()
+    const r = format_source("fn f() i32 {\n    let b = take\n    (4)\n    return b\n}\n", &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == "fn f() i32 {\n    let b = take(4)\n    return b\n}\n",
+        "the parser reads one call, so the layout shows one")
+}
+
+test "a continuing minus is joined" {
+    const cfg = default_config()
+    const r = format_source("fn f() i32 {\n    let a = one()\n    - 3\n    return a\n}\n", &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == "fn f() i32 {\n    let a = one() - 3\n    return a\n}\n",
+        "a leading `-` continues the line above and reads as a statement otherwise")
+}
+
+test "a paren opening a statement is left alone" {
+    const cfg = default_config()
+    const src = "fn f() i32 {\n    if c {\n        (a ?? b).len()\n    }\n    return 0\n}\n"
+    const r = format_source(src, &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == src, "nothing precedes it that could end an expression")
+}
+
+test "join-lines false indents the continuation instead" {
+    let cfg = default_config()
+    assert_true(set_option(&cfg, "join-lines", "false"), "knob set")
+    const r = format_source("fn f() i32 {\n    let b = take\n    (4)\n    return b\n}\n", &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == "fn f() i32 {\n    let b = take\n        (4)\n    return b\n}\n",
+        "the break is kept, so the indent carries the parse")
 }
 
 test "join-lines false keeps authored breaks" {
