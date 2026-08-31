@@ -3,6 +3,7 @@
 //! STDOUT: Point(3, 4)
 
 import std.string_builder
+import std.io.writer
 import std.string
 import core.io
 
@@ -11,12 +12,12 @@ type Point = struct {
     y: i32
 }
 
-pub fn format(self: Point, sb: &StringBuilder, spec: String) {
-    sb.append("Point(")
-    sb.append(self.x)
-    sb.append(", ")
-    sb.append(self.y)
-    sb.append(")")
+pub fn format(self: Point, w: Writer, spec: String) {
+    w.write_str("Point(")
+    self.x.format(w, "")
+    w.write_str(", ")
+    self.y.format(w, "")
+    w.write_str(")")
 }
 
 pub fn main() i32 {

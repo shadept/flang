@@ -278,8 +278,7 @@ pub fn stringify_pretty(value: &JsonValue, w: Writer, indent: usize = 2) {
 }
 
 // Format protocol - compact by default, "p" for pretty.
-pub fn format(self: JsonValue, sb: &StringBuilder, spec: String) {
-    let w = sb.writer()
+pub fn format(self: JsonValue, w: Writer, spec: String) {
     if spec == "p" {
         stringify_pretty(&self, w)
     }

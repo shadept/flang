@@ -15,7 +15,7 @@ type Pair = struct {
 pub fn main() i32 {
     let p = Pair { a = 10, b = 20 }
     let sb = string_builder()
-    p.format(&sb, "")
+    p.format(sb.writer(), "")
     let s = sb.to_string()
 
     // Expected: "Pair { a = 10, b = 20, }"

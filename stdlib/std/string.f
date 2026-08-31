@@ -9,6 +9,8 @@ import std.list
 import std.option
 import std.mem
 import std.string_reader
+import std.io.writer
+import std.format
 
 // =============================================================================
 // String stdlib functions
@@ -471,6 +473,11 @@ pub fn deinit(self: &OwnedString) {
     self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.len))
     self.ptr = 0usize as &u8
     self.len = 0
+}
+
+// Reads `self`. Consuming an owned temporary is `append`'s behaviour, not this one's.
+pub fn format(self: OwnedString, w: Writer, spec: String) {
+    self.as_view().format(w, spec)
 }
 
 pub fn as_view(self: OwnedString) String {

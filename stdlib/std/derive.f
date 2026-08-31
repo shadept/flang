@@ -2,13 +2,17 @@
 //
 // #derive(T, eq)          - field-by-field equality (op_eq)
 // #derive(T, clone)       - field-by-field copy
-// #derive(T, debug)       - format(self, sb, spec) for StringBuilder integration
+// #derive(T, debug)       - format(self, w, spec) writing each field to the sink
 // #derive(T, hash)        - recursive FNV-1a hash combining field hashes
 // #derive(T, serialize)   - encode struct fields to an Encoder
 // #derive(T, deserialize) - decode struct fields from a Decoder
 // #derive(T, eq, clone)   - multiple traits via variadic params
 //
 // serialize/deserialize require: import std.encoding.codec
+
+// Re-exported so a `#derive(T, debug)` expansion carries its own dependency: the generated `format`
+// writes to a `Writer`, which the deriving file would otherwise have to import.
+pub import std.io.writer
 
 #define(derive, T: Type, ..Traits: Ident) {
     #for Trait in Traits {
@@ -28,14 +32,14 @@
                 }
             }
         } #elif Trait.text == "debug" {
-            pub fn format(self: &#(T.name), sb: &StringBuilder, spec: String) {
-                sb.append("#(T.name) { ")
+            pub fn format(self: &#(T.name), w: Writer, spec: String) {
+                w.write_str("#(T.name) { ")
                 #for field in T.fields {
-                    sb.append("#(field.name) = ")
-                    sb.append(self.#(field.name))
-                    sb.append(", ")
+                    w.write_str("#(field.name) = ")
+                    self.#(field.name).format(w, "")
+                    w.write_str(", ")
                 }
-                sb.append("}")
+                w.write_str("}")
             }
         } #elif Trait.text == "hash" {
             pub fn hash(self: #(T.name)) usize {

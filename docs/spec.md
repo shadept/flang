@@ -180,7 +180,15 @@ Three types with explicit ownership. All share layout `{ ptr: &u8, len: usize }`
 
 Conversions are always explicit — no implicit coercions between string types.
 
-**Formattable protocol**: Types implement `fn format(self: T, sb: &StringBuilder, spec: String)` to produce text. Users call `sb.append(value)` — primitive overloads write directly, generic fallback dispatches to `format()`.
+**Formattable protocol**: `fn format(self: T, w: Writer, spec: String)` writes a value's text to a sink — printf's job with the printing taken out. The sink is any `Writer`: a socket, a file, a `StringBuilder`. Building a string is one use of `format`, not the shape of it.
+
+Every type has one, builtins included, so a generic body can format whatever it was handed. A type declares itself formattable by declaring the function, and it belongs in the file that declares the type — the same rule `deinit` follows. `std.format` holds the two sets with nowhere else to live: the primitives, which have no declaring file, and `String`, declared in `core` where `Writer` cannot be named.
+
+A `format` body writes literals with `w.write_str(...)` and delegates values to their own `format`. `StringBuilder.append(value)` and `append(value, spec)` are the string-building front door and forward to `format` through the builder's own `writer()`.
+
+What reaches the sink is the value's *text*: `42i32.format(w, "")` writes the bytes `4` and `2`, not the four bytes of the integer. Serializing a value's representation is a different job with a different protocol (`std.encoding.codec`).
+
+Text reaches a sink as UTF-8, matching `String`'s in-memory encoding. A destination needing other bytes on the wire transcodes in its own writer; nothing above the sink knows or cares.
 
 **String interpolation** (RFC-004): `$"..."`, `$(args)"..."`, and `$sb"..."` are pure syntactic sugar over `StringBuilder.append` and `to_string`. The forms desugar as follows:
 
@@ -195,6 +203,16 @@ Conversions are always explicit — no implicit coercions between string types.
 - `$(args)"..."` forwards `args` to `string_builder(capacity: usize = 0, allocator: &Allocator? = null)`. A lone `&alloc` argument routes to the `allocator` slot; any other single positional arg lands in `capacity`. An `&alloc` allocator argument (lone, positional, or `allocator=&alloc`) is wrapped in `Some(...)` by the desugar — the sugar owes its user the explicit wrap now that there is no implicit `T -> Option(T)` coercion.
 - `$sb"seg0{e1}seg1"` becomes `({ sb.append("seg0"); sb.append(e1); sb.append("seg1") })` — type `void`. Works with any receiver that has a matching `append` overload (including a `Writer`).
 - A hole `{expr:spec}` desugars to `sb.append(expr, "spec")`, dispatching to the primitive or generic `append` overload for `expr`'s type.
+
+**Format specs**: the text after a hole's `:` is passed verbatim as the `spec` argument. Three grammars share a fill/align/width prefix, where `align` is `<` (left), `>` (right, the default) or `^` (centered), a leading `0` selects zero as the fill, and `width` is a minimum measured in bytes:
+
+| Family | Grammar |
+|---|---|
+| Integers | `[fill][align][0][width][type]`, `type` one of `x` `X` `b` `o` |
+| Floats | `[fill][align][0][width][.precision][type]`, `type` one of `e` `E` `a` |
+| Text - `String`, `OwnedString`, `StringBuilder`, `char` | `[fill][align][0][width]` |
+
+Content at least as wide as `width` is emitted whole; the spec never truncates. A type char has no meaning for text and is ignored. A user type receives the spec unparsed and decides what it means.
 
 ### 2.7 Option and Nullability
 
@@ -266,6 +284,7 @@ let a = align_of(Point)
 - Scientific notation: `1.5e10`, `3e-4`.
 - A suffixed literal **is** its suffix's type: `0u32` is a `u32` value, and unifying it against an incompatible expected type is an error.
 - Unsuffixed integers and floats are inferred from context. A bare literal as a cast operand takes the cast's target type (`0xFFFF_FFFF as u64` is a `u64` constant, not an `i32` converted). A literal that no context ever pins is an error (**E2001**).
+- **An unsuffixed numeric literal never defaults to a concrete type.** It carries a candidate set, not a type, and nothing settles it but the program: an annotation, a suffix, a cast target, or a parameter it is passed to. Where the candidate set holds more than one type and nothing chooses, that is **E2011**, not a silent pick - `sb.append(3)` is an error and `sb.append(3i32)` is how it is written. This is a deliberate and permanent rule, not a gap awaiting a default: a defaulted literal decides a type the program never states, and the signed/unsigned reading of the same bits is exactly what the program must say out loud. A char literal is the one case with a preferred type (`char` over `u8`), because `'a'` already names it.
 
 ### 2.12 Trailing Commas
 
@@ -728,6 +747,7 @@ Which types iterate, and how:
 - **`List` and slices** — both forms; they ship `iter_ref` alongside `iter`.
 - **Iterator types** — every iterator is itself iterable, so adapters chain: `xs.iter().enumerate()`.
 - **Fixed arrays `[T; N]`** — decay to a slice, so both forms work: `iter(&T[])` and `iter_ref(&T[])`. `for &el in arr { el.* = ... }` mutates the array in place.
+- **A slice does not decay to a reference.** `T[]` in a `&T` slot is an error (**E2011**), including at a `#foreign` boundary: `&T` is non-null by type where a slice's `ptr` need not be, and the length would be dropped with nothing in the syntax marking it. Pass `s.ptr`, or the address of an element.
 - **`String`** — **not** iterable by itself. Bytes or characters is a choice only the caller can make; index it instead.
 
 ### 7.5 Match Expression
