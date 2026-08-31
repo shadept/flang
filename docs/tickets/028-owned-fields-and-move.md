@@ -103,13 +103,12 @@ the caller regardless of whether a shadow is materialised.
 ## `move`
 
 `move` is a prefix operator over an lvalue. It marks that lvalue's binding moved
-from that point on and emits no code. An rvalue operand is `E2124`: there is no
+from that point on and emits no code. An rvalue operand is `E2125`: there is no
 storage to take, and nothing would be left behind to mark.
 
 ```flang
 let b = move a          // rebinding
 close(move h)           // by-value argument
-(move h).close()        // UFCS receiver
 Wrapper { h = move h }  // struct literal field
 xs[i] = move h          // element store
 return move h           // by-value return of a local
@@ -139,7 +138,7 @@ returns. That is the `p.*` case, and it is unchecked for the same reason.
 
 `base.field` carries one rule and no tracking: **moving a field requires the same
 rights as writing one** — the module that declares the type (§scoped mutability,
-`E2114`). Outside it, the move is `E2126`. Inside it, nothing further is checked
+`E2114`). Outside it, the move is `E2127`. Inside it, nothing further is checked
 in v1: the base is not marked, the field is not tracked, and the base stays
 usable.
 
@@ -154,8 +153,8 @@ type Session = struct {
 }
 
 fn deinit(self: Session) {
-    (move self.conn).deinit()
-    (move self.log).deinit()        // both fine: same module, nothing marked
+    deinit(move self.conn)
+    deinit(move self.log)           // both fine: same module, nothing marked
 }
 ```
 
@@ -188,15 +187,15 @@ places.
 A site **consumes** when its destination is a by-value slot of a non-copyable
 type, or a parameter declared `move`. The two rules are symmetric:
 
-- `move` missing at a consuming site is `E2123`.
-- `move` written at a site that does not consume is `W2004`. It does nothing —
+- `move` missing at a consuming site is `E2124`.
+- `move` written at a site that does not consume is `W2005`. It does nothing —
   a warning, not an error, so a `move` that survives a type changing from
   non-copyable to copyable does not break the build.
 
 A `move` parameter therefore consumes a copyable type, and its call sites are
 required to say so — the keyword is doing work there, not describing the type.
 
-The exception to `W2004` is a **type parameter**: in a generic body, `move value`
+The exception to `W2005` is a **type parameter**: in a generic body, `move value`
 where `value: T` is written once and serves every instantiation. It is diagnosed
 against the type as written, so a `T` that resolves to `i32` at one
 instantiation is not an error there.
@@ -208,23 +207,63 @@ fn push(self: &List($T), value: T) {
 }
 
 let n = 3
-let m = move n                          // warning W2004: `i32` is copyable
+let m = move n                          // warning W2005: `i32` is copyable
 ```
 
 ### Where it is required
 
-**`move` is required at every site that would otherwise be a copy** — rebinding,
-by-value argument, UFCS receiver, struct literal field, element store, by-value
-return of a local. A copy of a non-copyable value without it is `E2123`.
+**`move` is required at every site that would otherwise be a copy** - rebinding,
+by-value argument, struct literal field, element store, by-value return of a
+local. A copy of a non-copyable value without it is `E2124`.
 
 A later phase makes the keyword omittable where a signature already states the
-transfer — a by-value parameter and a `return` type. Relaxing a requirement
+transfer - a by-value parameter and a `return` type. Relaxing a requirement
 never invalidates existing source; the strict form comes first for that reason.
 
 **Always accepted where a move happens.** The set of positions the LSP renders
 a ghost `move` on and the set the parser accepts an explicit `move` in are the
-same set. The UFCS receiver is written `(move h).close()`, which is therefore
-the ordinary spelling for a consuming method.
+same set. The receiver is not in either set; see below.
+
+### The receiver never consumes
+
+**A by-value receiver of a non-copyable type is not reachable through UFCS.**
+Write the call in free-function form and move the argument:
+
+```flang
+close(move h)                   // ok
+h.close()                       // error E2128: `close` consumes its receiver
+(move h).close()                // error E2128: the receiver position, still
+```
+
+The rule is about the receiver position, not about `move`. A consuming call
+spells its transfer one way everywhere - `move` in an argument of a plain call -
+and the parenthesised receiver form does not exist. `move` is a prefix operator
+over an lvalue in argument, binding, field, element and return position, and
+nowhere else.
+
+It reads off the callee's first parameter and the receiver's copyable bit, and
+nothing else. An **rvalue** receiver is refused on the same test: `open("f")`
+carries no move obligation, but `open("f").close()` is still a consuming call
+written in receiver position, and admitting it would make the rule "no consuming
+receiver unless the receiver happens to be a temporary". Write
+`close(open("f"))`.
+
+Nothing changes for a copyable type. `s.trim()`, `opt.map(f)`, `xs.iter()` and
+`c.is_digit()` keep their by-value receivers: a copy of a copyable value is
+unchecked, so the receiver is not a consuming site. Value-mode UFCS chains are
+what `String`, `Option` and the primitives are built on, and `&` on those
+receivers would be a second indirection to read a tag or a length.
+
+What the rule costs is the method spelling of a consuming function, for
+non-copyable types only. `deinit` is the whole of it in tree.
+
+The knock-on is that a **read-only** method must take `&T` to stay reachable on
+a non-copyable receiver, which is step 1's conversion applied to `Option` and
+`Result`: `is_some`, `is_none`, `is_ok` and `is_err` become `&`. The consuming
+members do not move: `unwrap`, `expect`, `ok`, `err`, `unwrap_err`, `op_try`,
+`map`, `flat_map`, `filter` and `and_then` all take the payload out, so exactly
+one owner survives and the by-value receiver is what states it. `unwrap(move opt)`
+is the spelling for a non-copyable payload.
 
 ### Parameter side
 
@@ -244,16 +283,16 @@ A binding of a non-copyable type is in one of two states: **live** or **moved**.
 It starts live at its initializer, `move` takes it to moved, and an assignment
 takes it back to live.
 
-- Use of a moved binding is `E2122`.
-- Assignment over a **live** binding is `E2125`: the old value is overwritten
+- Use of a moved binding is `E2123`.
+- Assignment over a **live** binding is `E2126`: the old value is overwritten
   and whatever it held is leaked.
 - Assignment over a **moved** binding reinitializes it.
 
 ```flang
 let h = open("a")
-h = open("b")           // error E2125: `h` is live
+h = open("b")           // error E2126: `h` is live
 close(move h)
-h.fd                    // error E2122: `h` was moved
+h.fd                    // error E2123: `h` was moved
 h = open("b")           // ok: reinitializes a moved binding
 h.fd                    // ok
 ```
@@ -263,7 +302,7 @@ value moved on some paths into a merge is moved at the merge.
 
 ```flang
 if c { close(move h) }
-h.fd                    // error E2122: `h` moved on one path
+h.fd                    // error E2123: `h` moved on one path
 ```
 
 ### Defer
@@ -284,10 +323,10 @@ body moves it again or only reads it:
 
 ```flang
 let h = open("f")
-defer (move h).deinit()
+defer deinit(move h)
 return move h
 //     ^^^^^^ `h` is moved here, before the defer runs
-// error E2122: `h` was moved and cannot be used
+// error E2123: `h` was moved and cannot be used
 //   moved at line 3 by the return expression
 //   the deferred call on line 2 runs after it
 ```
@@ -295,7 +334,7 @@ return move h
 ```flang
 let h = open("f")
 defer log(h.fd)                 // reads `h` at scope exit
-return move h                   // error E2122: same reason
+return move h                   // error E2123: same reason
 ```
 
 This is spec §4.1's prose warning ("don't defer-deinit a value you're returning
@@ -314,7 +353,7 @@ unaffected, because they borrow:
 
 ```flang
 let sb = string_builder(64)
-defer (move sb).deinit()
+defer deinit(move sb)
 return sb.to_string()           // `to_string` takes `&StringBuilder`
 ```
 
@@ -322,8 +361,8 @@ return sb.to_string()           // `to_string` takes `&StringBuilder`
 earlier ones see its effects:
 
 ```flang
-defer (move h).deinit()         // runs second — error E2122
-defer (move h).deinit()         // runs first
+defer deinit(move h)            // runs second - error E2123
+defer deinit(move h)            // runs first
 ```
 
 **A defer registered after a move.** The binding is already moved when the body
@@ -331,7 +370,7 @@ runs, so the body is checked against that state:
 
 ```flang
 close(move h)
-defer (move h).deinit()         // error E2122
+defer deinit(move h)            // error E2123
 ```
 
 **Block scope.** A defer fires at the end of its own block, not the function's,
@@ -340,7 +379,7 @@ so a move in a nested block's defer is confined to that block:
 ```flang
 {
     let h = open("f")
-    defer (move h).deinit()     // fires here
+    defer deinit(move h)        // fires here
 }
 ```
 
@@ -350,7 +389,7 @@ binding declared outside the loop moves it more than once:
 ```flang
 let h = open("f")
 for _i in 0..2 {
-    defer (move h).deinit()     // error E2122 on the second iteration
+    defer deinit(move h)        // error E2123 on the second iteration
 }
 ```
 
@@ -367,17 +406,18 @@ exit of its own to reason about.
 
 ## Deinit
 
-`deinit` takes its receiver by value and consumes it. Releasing a resource makes
-the value unusable, and the by-value parameter is what states that.
+`deinit` takes its first parameter by value and consumes it. Releasing a
+resource makes the value unusable, and the by-value parameter is what states
+that. It has no receiver form, so every call is written `deinit(move x)`.
 
 ```flang
 fn deinit(self: FileHandle)
 
-(move h).deinit()               // moves `h`
-defer (move h).deinit()        // the move happens at scope end
+deinit(move h)                  // moves `h`
+defer deinit(move h)            // the move happens at scope end
 ```
 
-`defer (move h).deinit()` is therefore the terminal move of `h`, which makes the
+`defer deinit(move h)` is therefore the terminal move of `h`, which makes the
 discipline in spec §4.1 ("don't defer-deinit a value you're returning by
 value") a diagnostic rather than a comment. See Liveness below for the rule.
 
@@ -386,7 +426,7 @@ A container's element loop deinits through a pointer:
 ```flang
 for i in 0..self.len {
     const elem: &T = self.ptr + i
-    (move elem.*).deinit()
+    deinit(move elem.*)
 }
 ```
 
@@ -409,7 +449,7 @@ Two consequences for RFC-016:
   no longer reaches the caller. It does not need to: a second `deinit` on a live
   binding is a compile error. Invariants 1 and 3 hold only for the unchecked
   lanes.
-- `#auto_deinit`'s inserted `defer (move x).deinit()` is a move. The follow-up must
+- `#auto_deinit`'s inserted `defer deinit(move x)` is a move. The follow-up must
   define the insertion so that the consuming call does not itself schedule a
   deinit of its own parameter.
 
@@ -418,26 +458,37 @@ Two consequences for RFC-016:
 The error on use after move names the move site and the derivation chain:
 
 ```
-error[E2122]: `h` was moved and cannot be used
+error[E2123]: `h` was moved and cannot be used
   moved at line 12: `close(move h)`
   `FileHandle` is not copyable: field `fd` is `owned`
 ```
 
 ```
-error[E2123]: `h` cannot be copied here — use `move h`
+error[E2124]: `h` cannot be copied here — use `move h`
   `FileHandle` is not copyable: field `fd` is `owned`
+```
+
+```
+error[E2128]: `close` consumes its argument and has no receiver form
+  `close(self: FileHandle)` takes `FileHandle` by value
+  `FileHandle` is not copyable: field `fd` is `owned`
+  write `close(move h)`
 ```
 
 New codes:
 
-- `E2122` — use of a moved value.
-- `E2123` — a consuming site requires `move`.
-- `E2124` — `move` operand is not an lvalue.
-- `E2125` — assignment over a live non-copyable binding.
-- `E2126` — partial move outside the module declaring the type.
-- `W2004` — `move` at a site that does not consume (warning).
+- `E2123` - use of a moved value.
+- `E2124` - a consuming site requires `move`.
+- `E2125` - `move` operand is not an lvalue.
+- `E2126` - assignment over a live non-copyable binding.
+- `E2127` - partial move outside the module declaring the type.
+- `E2128` - a consuming call written in receiver position.
+- `W2005` - `move` at a site that does not consume (warning).
 
-The derivation chain is required on `E2123` as well: virality is unreadable
+`E2123` and `W2005` were `E2122` and `W2004` in an earlier draft; both are taken
+by RFC-026's cast rules (`docs/error-codes.md`), so the block starts one higher.
+
+The derivation chain is required on `E2124` as well: virality is unreadable
 without it. For a type that is non-copyable transitively, the chain names every
 hop:
 
@@ -453,7 +504,9 @@ the stdlib frame as a note.
 ## LSP
 
 - Ghost `move` inlay at every derived move position, rendered distinctly from a
-  written one.
+  written one. The receiver is not one of them: a consuming call has no receiver
+  form, so there is no position to render an inlay on.
+- Quick fix on `E2128`: rewrite `h.close()` as `close(move h)`.
 - Ghost `owned` on fields whose type is non-copyable, rendered distinctly from a
   declared one, plus the bit on the struct header.
 
@@ -469,33 +522,60 @@ the stdlib frame as a note.
 
 ## Sequencing
 
-1. **Convert read-only by-value signatures to `&`.** `Dict.len/is_empty/get/`
-   `get_ref/contains/get_or/get_or_else`, `List.as_slice/get/get_ref/op_index/`
-   `first/last/contains/index_of`, `Set.len/is_empty/contains`,
+1. **Convert read-only by-value signatures to `&`.** `Dict.len/is_empty/`
+   `op_index/get/get_ref/contains/get_or/get_or_else`,
+   `List.as_slice/get/get_ref/op_index/first/last/contains/index_of`,
+   `Set.len/is_empty/contains`,
    `Stack.len/is_empty/peek/as_slice`, `Deque.is_empty/peek_front/peek_back`,
    `OwnedString.as_view/op_eq/hash/bytes/chars`, `test.assert_seq_eq/`
    `assert_set_eq`. ~44 signatures. Independently justified by RFC-026; no
    semantic change.
+
+   `OwnedString.op_eq` is blocked: operator dispatch has no reference form, so
+   `op_eq(&OwnedString, &OwnedString)` is E2017 at every `==`. It must land
+   before step 6 annotates `OwnedString.ptr`. `OwnedString.hash` is converted,
+   with `Dict.hash_key` and `derive` calling through the UFCS form to reach it -
+   a free call does not adapt a value argument to a `&T` parameter. Both defects
+   are recorded in `docs/known-issues.md`.
+
+   The receiver rule adds `Option.is_some/is_none` and `Result.is_ok/is_err` to
+   this step: a read-only method must take `&T` to stay reachable once its
+   receiver type is non-copyable. The consuming members of both stay by-value.
 2. **Lazy `$"..."`** producing a struct implementing `format`; delete
    `print`/`println(OwnedString)`. An rvalue argument carries no move
    obligation, so a consuming function called on a temporary is otherwise
-   unchecked.
-3. **Seed promote:** parse `owned` and `move`, derive the bit, expose
-   `T.copyable`. No enforcement.
-4. **Enforcement**, warning first, then error.
-5. **Annotate leaf resource types** — `File.fd`, `OwnedString.ptr`. `List` and
+   unchecked. **Dropped as a prerequisite.**
+3. **Parse `owned` and `move`, derive the bit** on the compiler's `Ty`. No
+   enforcement, and no seed promote: the compiler gains a feature its own
+   sources do not yet use, which is not one of the promote gates
+   (`docs/architecture.md` §Bootstrap Seed).
+4. **Enforcement**, warning first, then error. `E2128` (a consuming call in
+   receiver position) lands with the rest: it is decided by the callee's
+   parameter shape and the receiver's copyable bit, both of which the pick
+   already carries, so it needs no analysis of its own. Spec 7.2 ("Any function
+   with first parameter `T` or `&T` can be called as `value.func(args)`") gains
+   the exception in the same commit.
+5. **Seed promote.** The gate is step 6: stdlib source is about to contain
+   `owned`, so the seed has to parse it first.
+6. **Annotate leaf resource types** — `File.fd`, `OwnedString.ptr`. `List` and
    `Dict` last.
-6. **Per-specialization element `deinit` resolution**; retire the blanket.
-7. **Remove what the check rejects for non-copyable `T`:** `get`, `first`,
+7. **Per-specialization element `deinit` resolution**; retire the blanket.
+8. **Remove what the check rejects for non-copyable `T`:** `get`, `first`,
    `last`, `peek`, `peek_front`, `peek_back`, `get_or`, `get_or_else` — the
    element stays in the container, so the return is a second owner.
+   `Option.unwrap/expect/ok` and `Result.unwrap/unwrap_err/err` stay for the
+   same reason `pop` does: the payload leaves the wrapper, so exactly one owner
+   survives. They become free-call sites on a non-copyable payload
+   (`unwrap(move opt)`).
    `pop`, `pop_front`, `pop_back`, `remove`, `take_last`, `to_owned_slice`
    stay: the element left the container.
    Also removed: `filled_list`, the `list(source)` memcpy constructor, the Dict
    fake-key.
 
-Adding `copyable` to `core.rtti.TypeInfo` changes its layout and is its own
-promote commit. `TypeInfo` is materialised at lowering with a depth cap that
+Exposing `copyable` on `core.rtti.TypeInfo` is independent of all of the above
+and can land whenever `derive` needs it: the check reads the bit off the
+compiler's `Ty`, never off a materialised record. It changes `TypeInfo`'s layout,
+so it is a runtime/ABI change and carries its own promote commit. `TypeInfo` is materialised at lowering with a depth cap that
 nulls nested `type_info` pointers, so the bit is computed from the compiler's
 `Ty` and filled at every level, never derived by walking the materialised
 record.
@@ -506,20 +586,20 @@ record.
 `type FileHandle = struct { owned fd: i32 }`. Written first as
 `//! SKIP: RFC-028 not implemented`.
 
-### E2123 — a consuming site requires `move`
+### E2124 — a consuming site requires `move`
 
 `copy_let_binding`, `copy_assignment_after_move`, `copy_call_argument`,
-`copy_ufcs_receiver`, `copy_struct_literal_field`, `copy_element_store`,
+`copy_struct_literal_field`, `copy_element_store`,
 `copy_array_literal_element`, `copy_tuple_element`, `copy_return_local`,
 `copy_via_list_get`, `copy_via_by_value_loop`, `copy_transitive_chain`.
 
 The last two pin diagnostic attribution: the copy happens inside `list.f`, and
 the error must name the caller's line.
 
-### E2122 — use of a moved value
+### E2123 — use of a moved value
 
 Straight line: `use_after_move_let`, `use_after_move_arg`,
-`use_after_move_receiver`, `use_after_move_deinit`, `move_twice_one_call`,
+`use_after_move_deinit`, `move_twice_one_call`,
 `move_then_address_of`, `move_then_ref_param`.
 
 Control flow: `use_after_move_if_branch`, `use_after_move_if_else_both`,
@@ -542,24 +622,37 @@ Defer, all following from "the body runs at scope exit":
 `defer_nested_block_scope`, `defer_unrelated_value`,
 `defer_move_on_break_path`, `defer_borrowing_return`.
 
-### E2124 — `move` operand is not an lvalue
+### E2125 — `move` operand is not an lvalue
 
 `move_call_result`, `move_literal`, `move_arithmetic`, `move_match_result`.
 
-### E2126 — partial move outside the declaring module
+### E2128 — a consuming call in receiver position
+
+`consuming_receiver_plain` (`h.close()`), `consuming_receiver_parenthesised`
+(`(move h).close()` - refused for the position, not the `move`),
+`consuming_receiver_deinit` (`h.deinit()`), and
+`consuming_receiver_chained` (`open("f").close()`, an rvalue receiver: also
+refused, so the rule needs no lvalue test of its own).
+
+Positives that must keep working: `copyable_receiver_by_value`
+(`s.trim()`, `c.is_digit()`), `copyable_receiver_chain`
+(`opt.map(f).unwrap_or(d)` on a copyable payload), and
+`read_only_receiver_on_noncopyable` (`opt.is_some()` through the `&` signature).
+
+### E2127 — partial move outside the declaring module
 
 `move_field_outside_module`, `move_field_inside_module` (positive),
 `move_field_two_owned_fields` (positive — the `Session` shape),
-`move_field_through_reference` (also E2126 outside the module).
+`move_field_through_reference` (also E2127 outside the module).
 
 Index operands are lvalues and unchecked: `move_index_element`.
 
-### E2125 — assignment over a live binding
+### E2126 — assignment over a live binding
 
 `assign_over_live_binding`, `assign_over_moved_binding_ok`,
 `assign_over_live_in_loop`.
 
-### W2004 — `move` at a site that does not consume
+### W2005 — `move` at a site that does not consume
 
 `move_on_copyable`, `move_copyable_field`, `move_copyable_struct`.
 
@@ -567,7 +660,7 @@ Index operands are lvalues and unchecked: `move_index_element`.
 
 `copyable_field_read`, `borrow_stays_live`, `rvalue_argument`,
 `move_param_on_copyable`, `pattern_binding_borrows`,
-`for_ref_loop`, `move_deref`, `move_index_element`, `receiver_paren_form`,
+`for_ref_loop`, `move_deref`, `move_index_element`, `free_call_consuming_form`,
 `derived_bit_leaves`, `derived_bit_transitive`, `owned_fields_copyable_types`,
 `move_in_both_branches_unused_after`, `reinit_after_move`.
 
