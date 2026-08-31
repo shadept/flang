@@ -204,6 +204,46 @@ instantiation either bind the element's own `deinit` or emit nothing when the ty
 
 ---
 
+### The LSP Retains ~9.5 KB Per Keystroke
+
+**Status:** Open - measured, unattributed
+**Affected:** `lib/flang_lsp`, `lib/flang_parser` (per-edit re-parse), `lib/flang_typer`
+
+Driving `flang lsp --stdio` from a script - initialize, `didOpen` on `stdlib/std/format.f`
+(29 KB, 1062 lines), then full-sync `didChange` edits with the working set sampled every 100:
+
+```
+spawned, no initialize        6.0 MB    0.00 s cpu
+initialized, no document      6.1 MB    0.02 s cpu
+didOpen format.f             60.2 MB    0.16 s cpu   (2.2s to settle)
+after  100 edits             62.1 MB    (+1.94 MB, 19.9 KB/edit)
+after  200 edits             63.1 MB    (+0.95 MB,  9.7 KB/edit)
+after  300 edits             64.0 MB    (+0.89 MB,  9.1 KB/edit)
+after  400 edits             64.9 MB    (+0.95 MB,  9.8 KB/edit)
+after  500 edits             65.7 MB    (+0.83 MB,  8.5 KB/edit)
+after  600 edits             66.7 MB    (+0.96 MB,  9.8 KB/edit)
+```
+
+Growth is linear after the first batch - five consecutive batches between 8.5 and 9.8 KB/edit, which
+is a leak rather than a heap settling toward its high-water mark. A 3-second quiet period reclaims
+none of it. Extrapolated over a day's editing it dominates the 60 MB baseline.
+
+Roughly a third of the document per re-parse, and 24x the ~400 bytes/keystroke the `parse_doc` entry
+above records - so that leak is at most a small part of this one. The shape points at CST, token or
+trivia structures retained per parse.
+
+**What the same run rules out.** Idle costs nothing: 0.00 s CPU across a 12-second window after the
+last edit, and 6.0 MB before `initialize`, so nothing polls and nothing re-analyses speculatively.
+Per-keystroke work is syntax-tier as designed - 649 `publishDiagnostics` for 600 edits at 0.23 s
+total CPU, about 2 ms each, a re-lex and re-parse rather than a semantic re-check.
+
+**Not yet done:** a `didClose` probe, to confirm the growth is not reclaimed with the document, and
+attribution. `flang lsp` has no `--stats` (its `-S` is `--stdio`), so attribution needs the ledger
+wired into the LSP path, or the edit loop reproduced under the test runner where `FLANG_LEAK_TRACE`
+already prints allocation stacks.
+
+---
+
 ### `parse_doc` Leaks the Flattened Declaration List
 
 **Status:** Open
@@ -429,7 +469,11 @@ still prefer registry overloads. Regression test:
 
 ### Checker leaks ~129 MB per cold check, ~24 MB per re-demand
 
-**Status:** Open - reduced from 250 MB / 60 MB, residual unattributed
+**Status:** Open - reduced from 250 MB / 60 MB, residual unattributed. The figures below came from
+instrumentation since removed from the CLI and cannot be reproduced as written; they are also a
+live-at-exit accounting, which is not the working set a running server holds. For the LSP path the
+measured numbers are in "The LSP Retains ~9.5 KB Per Keystroke" above - 60 MB after opening a
+stdlib file, not 129 MB, and the figure that matters is the per-edit growth rather than the open
 **Affected:** `lib/flang_typer/src/checker.f` and the demand path generally
 
 Measured with the `FLANG_REDEMAND` probe and `--mem`, both since removed
