@@ -122,7 +122,7 @@ pub fn write(w: &BufferedWriter, data: u8[]) usize {
 
         if remaining <= space {
             // Fits in buffer without flushing
-            memcpy(w.buf[w.pos..], data.ptr + written, remaining)
+            memcpy(w.buf.ptr + w.pos, data.ptr + written, remaining)
             w.pos = w.pos + remaining
             written = written + remaining
             break
