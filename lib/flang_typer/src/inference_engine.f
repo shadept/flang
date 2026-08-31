@@ -609,10 +609,6 @@ fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
             if r5.is_some() {
                 return r5
             }
-            let r6 = try_slice_to_reference(it, from, to, reg, self.allocator)
-            if r6.is_some() {
-                return r6
-            }
             let r7 = try_nominal_to_type(it, from, to, reg, self.allocator)
             if r7.is_some() {
                 return r7

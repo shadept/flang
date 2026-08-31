@@ -295,24 +295,6 @@ fn decay_to_ref(to: Ty, target_inner: Ty, elem: Ty, allocator: &Allocator?) Coer
     return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = side })
 }
 
-// `Slice(T) → &T` - extract the pointer from a slice.
-pub fn try_slice_to_reference(it: &TypeInterner, from: Ty, to: Ty, reg: &NominalRegistry,
-    allocator: &Allocator? = null) Coercion? {
-    let fn_n = nominal_node_of(it, from) match { Some(n) => n, None => return null }
-    let ref_inner = it.node(to) match { NRef(inner) => inner, _ => return null }
-    let slice_id = lookup_well_known(reg, FQN_SLICE)
-    slice_id match {
-        Some(sid) => if sid != fn_n.id { return null }
-        None => return null
-    }
-    if fn_n.args.len != 1 {
-        return null
-    }
-    let side = list(1, allocator)
-    side.push(Constraint { a = it.child_ids(fn_n.args)[0], b = ref_inner })
-    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = side })
-}
-
 // `T → Type(T)` for RTTI handles. The result wraps `from` in a
 // freshly-instantiated `Type(T)`. The instantiation is recorded by the engine so codegen knows
 // which RTTI tables to emit.
