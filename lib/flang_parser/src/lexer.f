@@ -750,88 +750,37 @@ fn lex_identifier_or_keyword(self: &Lexer) TokenKind {
 }
 
 fn keyword_or_identifier(word: String) TokenKind {
-    if word == "pub" {
-        return TokenKind.Pub
+    return word match {
+        "pub" => TokenKind.Pub
+        "fn" => TokenKind.Fn
+        "return" => TokenKind.Return
+        "let" => TokenKind.Let
+        "const" => TokenKind.Const
+        "if" => TokenKind.If
+        "else" => TokenKind.Else
+        "for" => TokenKind.For
+        "loop" => TokenKind.Loop
+        "while" => TokenKind.While
+        "in" => TokenKind.In
+        "break" => TokenKind.Break
+        "continue" => TokenKind.Continue
+        "defer" => TokenKind.Defer
+        "move" => TokenKind.Move
+        "import" => TokenKind.Import
+        "struct" => TokenKind.Struct
+        "enum" => TokenKind.Enum
+        "match" => TokenKind.Match
+        "as" => TokenKind.As
+        "test" => TokenKind.Test
+        "type" => TokenKind.Type
+        "and" => TokenKind.And
+        "or" => TokenKind.Or
+        "true" => TokenKind.True
+        "false" => TokenKind.False
+        "null" => TokenKind.Null
+        "_" => TokenKind.Underscore
+        _ => TokenKind.Identifier
     }
-    if word == "fn" {
-        return TokenKind.Fn
-    }
-    if word == "return" {
-        return TokenKind.Return
-    }
-    if word == "let" {
-        return TokenKind.Let
-    }
-    if word == "const" {
-        return TokenKind.Const
-    }
-    if word == "if" {
-        return TokenKind.If
-    }
-    if word == "else" {
-        return TokenKind.Else
-    }
-    if word == "for" {
-        return TokenKind.For
-    }
-    if word == "loop" {
-        return TokenKind.Loop
-    }
-    if word == "while" {
-        return TokenKind.While
-    }
-    if word == "in" {
-        return TokenKind.In
-    }
-    if word == "break" {
-        return TokenKind.Break
-    }
-    if word == "continue" {
-        return TokenKind.Continue
-    }
-    if word == "defer" {
-        return TokenKind.Defer
-    }
-    if word == "import" {
-        return TokenKind.Import
-    }
-    if word == "struct" {
-        return TokenKind.Struct
-    }
-    if word == "enum" {
-        return TokenKind.Enum
-    }
-    if word == "match" {
-        return TokenKind.Match
-    }
-    if word == "as" {
-        return TokenKind.As
-    }
-    if word == "test" {
-        return TokenKind.Test
-    }
-    if word == "type" {
-        return TokenKind.Type
-    }
-    if word == "and" {
-        return TokenKind.And
-    }
-    if word == "or" {
-        return TokenKind.Or
-    }
-    if word == "true" {
-        return TokenKind.True
-    }
-    if word == "false" {
-        return TokenKind.False
-    }
-    if word == "null" {
-        return TokenKind.Null
-    }
-    if word == "_" {
-        return TokenKind.Underscore
-    }
-    return TokenKind.Identifier
 }
 
 // ─────────────────────────────────────────────────────────────────────────

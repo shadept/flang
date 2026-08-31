@@ -505,16 +505,43 @@ fn collect_generic_params_from_balanced(self: &Projector, cst: CstNode, out: &Li
     }
 }
 
+// True when the field declares `owned`. The parser emits the modifier as a bare identifier token
+// ahead of the field's own name, so a field carrying one has two identifiers before the colon.
+fn leading_owned(cst: CstNode) bool {
+    let idents: usize = 0
+    for i in 0..cst.child_count() {
+        cst.child(i) match {
+            TokenChild(tok) => {
+                if tok.kind == TokenKind.Colon {
+                    return idents > 1usize
+                }
+                if tok.kind == TokenKind.Identifier {
+                    idents = idents + 1usize
+                }
+            }
+            NodeChild(_) => {}
+        }
+    }
+    return false
+}
+
 fn project_struct_field(self: &Projector, cst: CstNode) StructField {
     let name: String = ""
     let type_expr: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
     let saw_colon = false
     let type_seen = false
+    const owned = leading_owned(cst)
+    let idents: usize = 0
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
-                if tok.kind == TokenKind.Identifier and name.len == 0 {
-                    name = tok.text
+                if tok.kind == TokenKind.Identifier {
+                    idents = idents + 1usize
+                    // With a modifier present the field's own name is the second identifier.
+                    const is_name = if owned { idents == 2usize } else { idents == 1usize }
+                    if is_name {
+                        name = tok.text
+                    }
                 }
                 if tok.kind == TokenKind.Colon {
                     saw_colon = true
@@ -532,6 +559,7 @@ fn project_struct_field(self: &Projector, cst: CstNode) StructField {
         span = self.span_from(cst),
         name = name,
         type_expr = self.boxed(type_expr),
+        owned = owned,
     }
 }
 
@@ -799,8 +827,10 @@ fn project_generator_invocation(self: &Projector, cst: CstNode) GenInvoke {
                     continue
                 }
                 // A bare identifier argument (see parse_generator_arg_into).
-                args.push(GenArg.IdentArg(GenIdentArg { span = self.span_from_token(tok),
-                    name = tok.text }))
+                args.push(GenArg.IdentArg(GenIdentArg {
+                    span = self.span_from_token(tok),
+                    name = tok.text,
+                }))
             }
             NodeChild(child) => {
                 if is_type_kind(child.kind) {
@@ -1151,21 +1181,43 @@ fn has_else_token(cst: CstNode) bool {
 }
 
 fn is_expr_kind(kind: NodeKind) bool {
-    return kind == NodeKind.ParenExpr or kind == NodeKind.BinaryExpr or kind == NodeKind.UnaryExpr
-        or kind == NodeKind.AddressOfExpr or kind == NodeKind.DereferenceExpr
-        or kind == NodeKind.MemberAccessExpr or kind == NodeKind.IndexExpr
-        or kind == NodeKind.CallExpr or kind == NodeKind.CastExpr or kind == NodeKind.AssignmentExpr
-        or kind == NodeKind.CoalesceExpr or kind == NodeKind.NullPropagationExpr
-        or kind == NodeKind.TryExpr or kind == NodeKind.RangeExpr
-        or kind == NodeKind.ArrayLiteralExpr or kind == NodeKind.AnonymousStructExpr
-        or kind == NodeKind.StructConstructionExpr or kind == NodeKind.BlockExpr
-        or kind == NodeKind.IfExpr or kind == NodeKind.ForLoopExpr or kind == NodeKind.LoopExpr
-        or kind == NodeKind.WhileExpr or kind == NodeKind.MatchExpr or kind == NodeKind.LambdaExpr
-        or kind == NodeKind.InterpolatedStringExpr or kind == NodeKind.IdentifierExpr
-        or kind == NodeKind.IntegerLiteralExpr or kind == NodeKind.FloatLiteralExpr
-        or kind == NodeKind.StringLiteralExpr or kind == NodeKind.CharLiteralExpr
-        or kind == NodeKind.ByteLiteralExpr or kind == NodeKind.BooleanLiteralExpr
-        or kind == NodeKind.NullLiteralExpr
+    return kind match {
+        NodeKind.ParenExpr => true
+        NodeKind.BinaryExpr => true
+        NodeKind.UnaryExpr => true
+        NodeKind.AddressOfExpr => true
+        NodeKind.MoveExpr => true
+        NodeKind.DereferenceExpr => true
+        NodeKind.MemberAccessExpr => true
+        NodeKind.IndexExpr => true
+        NodeKind.CallExpr => true
+        NodeKind.CastExpr => true
+        NodeKind.AssignmentExpr => true
+        NodeKind.CoalesceExpr => true
+        NodeKind.NullPropagationExpr => true
+        NodeKind.TryExpr => true
+        NodeKind.RangeExpr => true
+        NodeKind.ArrayLiteralExpr => true
+        NodeKind.AnonymousStructExpr => true
+        NodeKind.StructConstructionExpr => true
+        NodeKind.BlockExpr => true
+        NodeKind.IfExpr => true
+        NodeKind.ForLoopExpr => true
+        NodeKind.LoopExpr => true
+        NodeKind.WhileExpr => true
+        NodeKind.MatchExpr => true
+        NodeKind.LambdaExpr => true
+        NodeKind.InterpolatedStringExpr => true
+        NodeKind.IdentifierExpr => true
+        NodeKind.IntegerLiteralExpr => true
+        NodeKind.FloatLiteralExpr => true
+        NodeKind.StringLiteralExpr => true
+        NodeKind.CharLiteralExpr => true
+        NodeKind.ByteLiteralExpr => true
+        NodeKind.BooleanLiteralExpr => true
+        NodeKind.NullLiteralExpr => true
+        else => false
+    }
 }
 
 // Project one expression CST outside a module (template expressions). `allocator` must outlive the
@@ -1194,6 +1246,7 @@ fn project_expr(self: &Projector, cst: CstNode) Expr {
         BinaryExpr => self.project_binary_expr(cst)
         UnaryExpr => self.project_unary_expr(cst)
         AddressOfExpr => self.project_address_of(cst)
+        MoveExpr => self.project_move(cst)
         DereferenceExpr => self.project_dereference(cst)
         MemberAccessExpr => self.project_member_access(cst)
         NullPropagationExpr => self.project_null_propagation(cst)
@@ -1433,6 +1486,18 @@ fn project_address_of(self: &Projector, cst: CstNode) Expr {
         None => {}
     }
     return Expr.AddressOf(AddressOfExpr {
+        span = self.span_from(cst),
+        operand = self.boxed(operand),
+    })
+}
+
+fn project_move(self: &Projector, cst: CstNode) Expr {
+    let operand: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
+    nth_node(cst, 0) match {
+        Some(child) => { operand = self.project_expr(child) }
+        None => {}
+    }
+    return Expr.Move(MoveExpr {
         span = self.span_from(cst),
         operand = self.boxed(operand),
     })
@@ -3072,16 +3137,22 @@ fn range_bound_expr(self: &Projector, tok: Token) Expr? {
         const split = split_numeric_suffix(tok.text, false)
         return Some(Expr.Lit(LiteralExpr {
             span = span,
-            value = LiteralValue.Int(IntLiteral { span = span, text = split.body,
-                suffix = split.suffix }),
+            value = LiteralValue.Int(IntLiteral {
+                span = span,
+                text = split.body,
+                suffix = split.suffix,
+            }),
         }))
     }
     if tok.kind == TokenKind.Float {
         const split = split_numeric_suffix(tok.text, true)
         return Some(Expr.Lit(LiteralExpr {
             span = span,
-            value = LiteralValue.Float(FloatLiteral { span = span, text = split.body,
-                suffix = split.suffix }),
+            value = LiteralValue.Float(FloatLiteral {
+                span = span,
+                text = split.body,
+                suffix = split.suffix,
+            }),
         }))
     }
     if tok.kind == TokenKind.CharLiteral {
@@ -3108,16 +3179,22 @@ fn literal_pattern_for(self: &Projector, tok: Token, span: SourceSpan) Pattern {
         const split = split_numeric_suffix(tok.text, false)
         return Pattern.Literal(LiteralPattern {
             span = span,
-            value = LiteralValue.Int(IntLiteral { span = span, text = split.body,
-                suffix = split.suffix }),
+            value = LiteralValue.Int(IntLiteral {
+                span = span,
+                text = split.body,
+                suffix = split.suffix,
+            }),
         })
     }
     if tok.kind == TokenKind.Float {
         const split = split_numeric_suffix(tok.text, true)
         return Pattern.Literal(LiteralPattern {
             span = span,
-            value = LiteralValue.Float(FloatLiteral { span = span, text = split.body,
-                suffix = split.suffix }),
+            value = LiteralValue.Float(FloatLiteral {
+                span = span,
+                text = split.body,
+                suffix = split.suffix,
+            }),
         })
     }
     if tok.kind == TokenKind.StringLiteral {
