@@ -45,7 +45,7 @@ pub fn deinit(self: &Deque($T)) {
     self.len = 0
 }
 
-pub fn is_empty(self: Deque($T)) bool {
+pub fn is_empty(self: &Deque($T)) bool {
     return self.len == 0
 }
 
@@ -127,7 +127,7 @@ pub fn pop_back(self: &Deque($T)) T? {
 }
 
 // Read the front element without removing it.
-pub fn peek_front(self: Deque($T)) T? {
+pub fn peek_front(self: &Deque($T)) T? {
     if self.len == 0 {
         return null
     }
@@ -136,7 +136,7 @@ pub fn peek_front(self: Deque($T)) T? {
 }
 
 // Read the back element without removing it.
-pub fn peek_back(self: Deque($T)) T? {
+pub fn peek_back(self: &Deque($T)) T? {
     if self.len == 0 {
         return null
     }

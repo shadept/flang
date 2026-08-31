@@ -119,7 +119,7 @@ fn probe_slot(h: usize, i: usize, cap: usize) usize {
 // with custom hash semantics (e.g. String, OwnedString) provide their own hash() overload, so Dict
 // automatically uses content-aware hashing.
 fn hash_key(key: $K) usize {
-    const h = hash(key)
+    const h = key.hash()
     if h < 2 {
         return h + 2
     }
@@ -127,12 +127,12 @@ fn hash_key(key: $K) usize {
 }
 
 // Returns the number of key-value pairs in the dict.
-pub fn len(self: Dict($K, $V)) usize {
+pub fn len(self: &Dict($K, $V)) usize {
     return self.length
 }
 
 // Returns true if the dict is empty.
-pub fn is_empty(self: Dict($K, $V)) bool {
+pub fn is_empty(self: &Dict($K, $V)) bool {
     return self.length == 0
 }
 
@@ -266,7 +266,7 @@ pub fn set(self: &Dict(OwnedString, $V), key: String, value: V) {
     panic("dict: set failed - table full")
 }
 
-pub fn op_index(self: Dict($K, $V), key: K) V? {
+pub fn op_index(self: &Dict($K, $V), key: K) V? {
     return self.get(key)
 }
 
@@ -275,12 +275,12 @@ pub fn op_set_index(self: &Dict($K, $V), key: K, value: V) {
 }
 
 // Get the value associated with a key, or null if not found.
-pub fn get(self: Dict($K, $V), key: K) V? {
+pub fn get(self: &Dict($K, $V), key: K) V? {
     return Some((self.get_ref(key)?).*)
 }
 
 // Get a reference to the value associated with a key, or null if not found.
-pub fn get_ref(self: Dict($K, $V), key: K) &V? {
+pub fn get_ref(self: &Dict($K, $V), key: K) &V? {
     if self.cap == 0 {
         return null
     }
@@ -307,17 +307,17 @@ pub fn get_ref(self: Dict($K, $V), key: K) &V? {
     return null
 }
 
-pub fn get(self: Dict(OwnedString, $V), key: String) V? {
+pub fn get(self: &Dict(OwnedString, $V), key: String) V? {
     return Some((self.get_ref(key)?).*)
 }
 
-pub fn get_ref(self: Dict(OwnedString, $V), key: String) &V? {
+pub fn get_ref(self: &Dict(OwnedString, $V), key: String) &V? {
     const fake = OwnedString { ptr = key.ptr, len = key.len, allocator = null }
     return get_ref(self, fake)
 }
 
 // Check if a key exists in the dict.
-pub fn contains(self: Dict($K, $V), key: K) bool {
+pub fn contains(self: &Dict($K, $V), key: K) bool {
     if self.cap == 0 {
         return false
     }
@@ -342,7 +342,7 @@ pub fn contains(self: Dict($K, $V), key: K) bool {
     return false
 }
 
-pub fn contains(self: Dict(OwnedString, $V), key: String) bool {
+pub fn contains(self: &Dict(OwnedString, $V), key: String) bool {
     const fake = OwnedString { ptr = key.ptr, len = key.len, allocator = null }
     return contains(self, fake)
 }
@@ -609,7 +609,7 @@ pub fn count(self: &Dict($K, $V), pred: $F) usize {
 }
 
 // The value for `key`, or `fallback` when absent.
-pub fn get_or(self: Dict($K, $V), key: K, fallback: V) V {
+pub fn get_or(self: &Dict($K, $V), key: K, fallback: V) V {
     let v = self.get(key)
     if v.is_some() {
         return v.unwrap()
@@ -619,7 +619,7 @@ pub fn get_or(self: Dict($K, $V), key: K, fallback: V) V {
 
 // The value for `key`, or `make()` when absent - the lazy counterpart of `get_or`, for fallbacks
 // that are expensive (or effectful) to build.
-pub fn get_or_else(self: Dict($K, $V), key: K, make: $F) V {
+pub fn get_or_else(self: &Dict($K, $V), key: K, make: $F) V {
     let v = self.get(key)
     if v.is_some() {
         return v.unwrap()

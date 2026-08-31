@@ -26,12 +26,12 @@ pub fn deinit(self: &Stack($T)) {
 }
 
 // Number of elements currently on the stack.
-pub fn len(self: Stack($T)) usize {
+pub fn len(self: &Stack($T)) usize {
     return self.__inner.len
 }
 
 // True when the stack holds no elements.
-pub fn is_empty(self: Stack($T)) bool {
+pub fn is_empty(self: &Stack($T)) bool {
     return self.__inner.len == 0
 }
 
@@ -46,7 +46,7 @@ pub fn pop(self: &Stack($T)) T? {
 }
 
 // Return the top element without removing it, or `null` when empty.
-pub fn peek(self: Stack($T)) T? {
+pub fn peek(self: &Stack($T)) T? {
     if self.__inner.len == 0 {
         return null
     }
@@ -69,7 +69,7 @@ pub fn clear(self: &Stack($T)) {
 
 // View the stack's storage as a slice in bottom-to-top order. Iterating the slice in reverse visits
 // elements top-down.
-pub fn as_slice(self: Stack($T)) T[] {
+pub fn as_slice(self: &Stack($T)) T[] {
     return self.__inner.as_slice()
 }
 

@@ -3347,3 +3347,66 @@ overload resolution. Every foreign `memcpy` / `memset` / `memmove` site in the t
 `&buf[0]` or `.ptr`; the one site relying on the decay was this bug.
 
 **Related tests:** `tests/harness/errors/slice_where_pointer_expected.f`
+
+---
+
+### A Free Call Does Not Adapt a Value Argument to a `&T` Parameter
+
+**Status:** Open.
+**Affected:** `lib/flang_typer/src/checker.f` (`resolve_overload`), `stdlib/core/hash.f`
+
+`resolve_overload` adapts between the value and reference shapes for a UFCS
+receiver only - `alt_recv` rides along per candidate and covers argument 0 of a
+member-access call. Every other argument, and every argument of a free call,
+must match its parameter shape as written. An overload declared over `&T` is
+therefore invisible to a free call passing a `T`:
+
+```flang
+type Box = struct { a: usize }
+pub fn hash(b: &Box) usize { return 111usize }
+
+let b = Box { a = 7 }
+hash(b)                 // 5465015992139406178 - the blanket `hash($T)`
+b.hash()                // 111
+```
+
+The ranking is not what decides this: the concrete overload never probes
+successfully, so it is not in the candidate set to be ranked. Declaring the same
+overload `hash(b: Box)` makes the free call find it.
+
+The failure is silent - no ambiguity, no diagnostic, a plausible number - and it
+is reached by any blanket-plus-concrete pair. `stdlib/core/hash.f` is the one in
+tree: with `hash($T)` present, a `hash(&U)` a type provides for itself is dead
+code at every free call site, and a `Dict` keyed on `U` hashes the raw bytes of
+the value instead. For `OwnedString` those bytes are `{ptr, len}`, so two equal
+strings in different allocations land in different slots and the dict silently
+holds duplicates.
+
+`Dict.hash_key` and `derive`'s generated `hash` call through the UFCS form for
+that reason. That is a workaround at the call site, not a fix: the next
+ref-form overload someone writes is dead again.
+
+---
+
+### Operator Dispatch Has No Reference Form
+
+**Status:** Open.
+**Affected:** `lib/flang_typer/src/checker.f` (`operator_pick_2`), `lib/flang_driver/src/lower.f` (`lower_operator_binary`)
+
+`a op b` resolves `op_eq`, `op_cmp`, `op_add` and friends against the operand
+types exactly. There is no value <-> reference adaptation, so an operator
+declared over `&T` is never found and the comparison reports E2017:
+
+```flang
+pub fn op_eq(a: &OwnedString, b: &OwnedString) bool { ... }
+// error[E2017]: no `op_eq` (or `op_cmp`) implementation for these operand types
+```
+
+UFCS calls adapt their receiver, so every other read-only signature can take `&`;
+operators cannot. `lower_operator_binary` refuses the shape too - its
+`repr_compatible` check rejects a `T` operand against a `&T` parameter, where an
+aggregate's address is already what `lower_expr` yields.
+
+Adding the adaptation to `operator_pick_2` alone is not enough: a flipped
+operand still unifies with a blanket operator's type variable, so the retry
+picks the blanket over the concrete overload it was added to reach.

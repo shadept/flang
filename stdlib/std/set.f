@@ -26,12 +26,12 @@ pub fn deinit(self: &Set($T)) {
 }
 
 // Number of distinct elements currently in the set.
-pub fn len(self: Set($T)) usize {
+pub fn len(self: &Set($T)) usize {
     return self.__inner.len()
 }
 
 // True when the set holds no elements.
-pub fn is_empty(self: Set($T)) bool {
+pub fn is_empty(self: &Set($T)) bool {
     return self.__inner.is_empty()
 }
 
@@ -43,7 +43,7 @@ pub fn add(self: &Set($T), value: T) {
 }
 
 // Test membership.
-pub fn contains(self: Set($T), value: T) bool {
+pub fn contains(self: &Set($T), value: T) bool {
     return self.__inner.contains(value)
 }
 
@@ -68,7 +68,7 @@ pub fn add(self: &Set(OwnedString), value: String) {
     self.__inner.set(value, 1u8)
 }
 
-pub fn contains(self: Set(OwnedString), value: String) bool {
+pub fn contains(self: &Set(OwnedString), value: String) bool {
     return self.__inner.contains(value)
 }
 

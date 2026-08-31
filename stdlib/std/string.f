@@ -480,7 +480,7 @@ pub fn format(self: OwnedString, w: Writer, spec: String) {
     self.as_view().format(w, spec)
 }
 
-pub fn as_view(self: OwnedString) String {
+pub fn as_view(self: &OwnedString) String {
     return .{ ptr = self.ptr, len = self.len }
 }
 
@@ -502,7 +502,7 @@ pub fn op_eq(a: OwnedString, b: OwnedString) bool {
     return op_eq(a.as_view(), b.as_view())
 }
 
-pub fn hash(s: OwnedString) usize {
+pub fn hash(s: &OwnedString) usize {
     return hash(s.as_view())
 }
 
@@ -523,7 +523,7 @@ pub fn bytes(s: String) Bytes {
     return .{ buf = slice, idx = 0 }
 }
 
-pub fn bytes(s: OwnedString) Bytes {
+pub fn bytes(s: &OwnedString) Bytes {
     // TODO fix String to Slice(u8) coersion
     const slice = slice_from_raw_parts(s.ptr, s.len)
     return .{ buf = slice, idx = 0 }
@@ -559,7 +559,7 @@ pub fn chars(s: String) Chars {
     return .{ buf = slice, idx = 0 }
 }
 
-pub fn chars(s: OwnedString) Chars {
+pub fn chars(s: &OwnedString) Chars {
     // TODO fix String to Slice(u8) coersion
     const slice = slice_from_raw_parts(s.ptr, s.len)
     return .{ buf = slice, idx = 0 }

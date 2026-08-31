@@ -113,7 +113,7 @@ pub fn deinit(self: &List($T)) {
     self.cap = 0
 }
 
-pub fn as_slice(self: List($T)) T[] {
+pub fn as_slice(self: &List($T)) T[] {
     return slice_from_raw_parts(self.ptr, self.len)
 }
 
@@ -257,7 +257,7 @@ pub fn pop(list: &List($T)) T? {
 }
 
 // Get the element at the given index.
-pub fn get(list: List($T), index: usize) T? {
+pub fn get(list: &List($T), index: usize) T? {
     if index >= list.len {
         return null
     }
@@ -266,7 +266,7 @@ pub fn get(list: List($T), index: usize) T? {
 }
 
 // Get the element at the given index.
-pub fn get_ref(list: List($T), index: usize) &T? {
+pub fn get_ref(list: &List($T), index: usize) &T? {
     if index >= list.len {
         return null
     }
@@ -299,7 +299,7 @@ pub fn op_index_ref(list: &List($T), index: usize) &T {
 // Range indexing: returns a sub-slice of the list's live elements. Out-of-bounds indices are
 // clamped; an invalid range yields an empty slice. Value-form overload (returns a new slice);
 // distinct idx type from the scalar ref-form below, so the two coexist without ambiguity.
-pub fn op_index(list: List($T), range: Range(usize)) T[] {
+pub fn op_index(list: &List($T), range: Range(usize)) T[] {
     let start = range.start
     let end = range.end
     if start > list.len {
@@ -518,7 +518,7 @@ pub fn fold_right(self: &List($T), init: $A, f: $F) A {
 // require an element type that supports it.
 
 // First element, or null when empty.
-pub fn first(self: List($T)) T? {
+pub fn first(self: &List($T)) T? {
     if self.len == 0 {
         return null
     }
@@ -526,7 +526,7 @@ pub fn first(self: List($T)) T? {
 }
 
 // Last element, or null when empty.
-pub fn last(self: List($T)) T? {
+pub fn last(self: &List($T)) T? {
     if self.len == 0 {
         return null
     }
@@ -534,12 +534,12 @@ pub fn last(self: List($T)) T? {
 }
 
 // Whether any element equals `value`.
-pub fn contains(self: List($T), value: T) bool {
+pub fn contains(self: &List($T), value: T) bool {
     return self.index_of(value).is_some()
 }
 
 // Index of the first element equal to `value`, or null.
-pub fn index_of(self: List($T), value: T) usize? {
+pub fn index_of(self: &List($T), value: T) usize? {
     for i in 0..self.len {
         if self[i] == value {
             return Some(i)

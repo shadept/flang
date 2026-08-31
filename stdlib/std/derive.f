@@ -45,7 +45,7 @@ pub import std.io.writer
             pub fn hash(self: #(T.name)) usize {
                 let h: usize = 14695981039346656037
                 #for field in T.fields {
-                    h = (h ^ hash(self.#(field.name))) * 1099511628211
+                    h = (h ^ self.#(field.name).hash()) * 1099511628211
                 }
                 return h
             }
