@@ -36,6 +36,13 @@ You own and maintain these docs. They are the source of truth for the project. W
 - **Library layout.** `flang.toml [project].name` is the import namespace; files under `src/` sit directly in it. `lib/flang_parser/src/ast.f` is `import flang_parser.ast`. Never nest a `src/<name>/` folder.
 - **Harness tests are the exception: annotate.** A test should pin the types it means, so a failure reports the behaviour under test rather than an inference change somewhere upstream. Tests whose subject IS inference are written the other way round, leaving the types to be worked out.
 
+## Anti-Patterns to Avoid
+
+- **Blind implementation:** Never write code based on assumptions about what exists. Always verify first.
+- **Pattern guessing:** Don't assume a codebase follows common patterns. Read actual code to confirm.
+- **Inventing APIs:** Never call methods/classes that might not exist. Search for them first.
+- **Copying from memory:** Don't reproduce code from similar projects. This project has its own patterns.
+
 ## Core Priorities
 
 - **Performance first.** Keep compile times in check, avoid unnecessary allocations in hot paths, and watch for accidental O(n²) behavior in compiler passes and generated C.
