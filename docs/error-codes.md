@@ -1526,6 +1526,9 @@ An integer literal value exceeds the valid range for the target type it was infe
 - A literal value is used in a context that requires a smaller integer type
 - An array with comptime_int elements is passed to a function expecting a slice of a smaller type
 
+The check reads the literal before negation, so a negative literal at an unsigned annotation is not
+currently caught - see `docs/known-issues.md`.
+
 #### Examples
 
 ```flang

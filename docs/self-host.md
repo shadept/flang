@@ -10,14 +10,10 @@ a behavior was specified while the two compilers coexisted; the reference
 is no longer present to compare against, and the last release carrying it
 is tagged `v0.1.6-alpha`.
 
-**Current state.** The lit-style harness is **573 / 0 / 18 skipped of
-591**, the stage-2 = stage-3 fixpoint holds on all three targets, and the
+**Current state.** The lit-style harness is **595 / 0 / 94 skipped of
+689**, the stage-2 = stage-3 fixpoint holds on all three targets, and the
 cold start from seed is green in CI. `dotnet test-all.cs` (colocated
-`test {}` blocks) is **8 of 10** projects.
-
-Three known failures remain, all recorded in docs/known-issues.md:
-`stdlib/std` test 49 (dict capacity constructor), and `flang_lsp` tests
-31 and 35 (`documentSymbol` outline, `workspace/symbol` containers).
+`test {}` blocks) is **10 of 10** projects.
 
 The "milestone" names (M1–M6) used in commit messages were invented as
 the work went along; this document supersedes them as the roadmap.

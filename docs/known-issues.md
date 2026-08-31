@@ -14,6 +14,140 @@ When you discover a bug or limitation:
 
 ---
 
+### `unused.f` Cannot Be Formatted
+
+**Status:** Open
+**Affected:** `lib/flang_fmt/src/fmt.f`, `lib/flang_analysis/src/unused.f`
+
+`flang fmt` in `lib/flang_analysis` refuses the file: `formatter verification failed on
+`src/unused.f` (formatter bug) - file left untouched`. The verify gate re-parses the rendered output
+and compares trees, so something in it does not parse back to the same shape. The project cannot be
+brought to a formatted state.
+
+Reproduces on the committed formatter. `unused.f` has no line opening with a bracket, so the
+offending form is one the renderer produces while wrapping, not one an author wrote.
+
+---
+
+### A Negative Literal Is Accepted at an Unsigned Annotation
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f`
+
+E2029 rejects an integer literal too large for its target and misses one too small:
+
+```flang
+let a: u8 = 300     // error[E2029]: integer literal `300` is out of range for `u8`
+let b: u64 = -3     // accepted; reads back as 18446744073709551613
+let c: u32 = -1     // accepted
+```
+
+The range check sees the literal `3`, which fits `u64`, and the unary minus is applied after it,
+where nothing re-checks. The same omission covers every unsigned target.
+
+Nothing below the type checker can catch this. FIR has no unsigned types - `IrType` is
+`I8 I16 I32 I64 F32 F64 Ptr Agg` - so signedness is a typer-level reading of one bit pattern, applied
+per operation when C is emitted:
+
+```c
+int64_t v0 = (int64_t)(0u - ((uint64_t)3));       // let b: u64 = -3
+int64_t v2 = (int64_t)(0u - ((uint64_t)3));       // let s: i64 = -3, identical storage
+int64_t v5 = (int64_t)(((uint64_t)v4) / ((uint64_t)2));   // the cast rides the operator
+```
+
+Both annotations produce the same bytes; only the operators applied later differ. The fix is a range
+check over the negated value at the annotation, which is above FIR and needs nothing from it.
+
+**Related tests:** `tests/harness/errors/negative_literal_into_unsigned.f` (SKIP)
+
+---
+
+### Goto-Definition Falls Back to Any Same-Named Declaration
+
+**Status:** Open
+**Affected:** `lib/flang_lsp/src/server.f`
+
+`on_definition`'s third tier, `registry_decl_spans`, is a bare `by_name` lookup: every declaration
+in the project whose name matches, filtered only by `retired` and whether the span sits in a real
+file. Neither the receiver's type nor the call site's imports narrow it. `encode_index_matches`
+behind it is wider still - every workspace symbol of that name, across every project.
+
+The tier exists because the first two miss whenever the checker recorded no resolution, and a call
+inside a generic body is exactly that case: the pick only exists per specialization. So the fallback
+fires precisely where it has the least to go on, and answers with a guess:
+
+```flang
+// stdlib/std/string_builder.f - `val` is a type variable here
+pub fn append(sb: &StringBuilder, val: $T, spec: String) {
+    val.format(sb, spec)        // jumps to `format(self: JsonValue, ...)`
+}
+```
+
+`string_builder.f` does not import `std.encoding.json`, so that declaration is not reachable from
+the call. With one candidate in the project the editor jumps straight to it and nothing signals that
+the answer was a name match rather than a resolution.
+
+Filtering both tiers through `flang_typer/visibility.f`'s reachable-from-module check makes the
+wrong answers disappear and leaves an unresolved generic call answering null, which is the honest
+result. Hover and signature help read the same tier - `server.f`'s hover path documents itself as
+mirroring definition's registry tier - so all three are affected and all three are fixed by the same
+filter.
+
+---
+
+### A Missing `format` Is Reported Inside the Stdlib
+
+**Status:** Open
+**Affected:** `stdlib/std/string_builder.f`, `lib/flang_typer/src/checker.f`
+
+`append(sb, val: $T, spec: String)` is the only dispatcher for the `format` convention, so a value
+whose type has no `format` fails inside the generic's body rather than at the append that caused it:
+
+```
+error[E2004]: unresolved function `format`
+  --> stdlib/std/string_builder.f:652:5
+     |
+ 651 | pub fn append(sb: &StringBuilder, val: $T, spec: String) {
+ 652 |     val.format(sb, spec)
+```
+
+The reader is sent into the stdlib for a mistake in their own source, with nothing naming the type
+that lacked the impl. The general shape - a failure raised inside a generic body belongs at the
+instantiation site, with the generic's frame as a note - is the same one RFC-028 specifies for
+rejected copies.
+
+---
+
+### A Struct Wrapping a Closure Cannot Be Returned
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f`
+
+A closure's nominal is synthesized and has no source spelling, so a struct holding one can be named
+in a signature only where a parameter binds the type variable. `fn adder(f: $F) Adder(F)` works
+because `f` binds `F`. A function that builds the closure in its own body has nothing to bind, and
+the return type is unwritable:
+
+```flang
+fn make_adder(base: i32) Adder($F) {
+    return .{ f = fn(x: i32) i32 { base + x } }
+}
+```
+
+The free variable never resolves and the field stays untyped. The diagnostic misdescribes it:
+`error[E2011]: `f` is a field of this type, not a callable method`, raised at the call `a.f(5)`
+rather than at the unbindable return type. A reader is told the field is not callable when the real
+problem is that the function's return type names a variable nothing can instantiate.
+
+The consequence for any deferred-formatting value built on a closure: it works in expression
+position, as a local, and as a generic argument, but can never be a declared return type, a struct
+field, or a container element. Those positions need a materialized string.
+
+**Related tests:** `tests/harness/closures/closure_struct_returned.f`,
+`tests/harness/closures/closure_struct_through_generic.f`
+
+---
+
 ### `FunctionScheme` Leaks Its Quantified Set
 
 **Status:** Open
@@ -3150,3 +3284,22 @@ Ruled out: the tracking allocator (the crash reproduces with
 with `--name "initialize negotiates"` alone).
 
 Not yet diagnosed.
+
+---
+
+### A Slice Was Accepted Where a Signature Says `&u8` - RESOLVED
+
+**Status:** Resolved. The `Slice(T) -> &T` coercion is deleted; a slice in a reference slot is E2011.
+**Affected:** `lib/flang_typer/src/coercion.f`, `lib/flang_typer/src/inference_engine.f`
+
+`memcpy(dst[0..], src.ptr, 2usize)` type-checked and wrote nowhere. `coercion.f` declared
+`Slice(T) -> &T` and the inference engine applied it, but lowering only ever implemented the
+array-to-slice direction: a slice source fell through `lower_adapted` to `lower_expr`, which yields
+the view's own address, so the callee received `&{ptr, len}`.
+
+The coercion was deleted rather than completed. `&T` is non-null by type where a slice's `ptr` need
+not be, the length was dropped with nothing marking the crossing, and at cost 1 it competed in
+overload resolution. Every foreign `memcpy` / `memset` / `memmove` site in the tree passes
+`&buf[0]` or `.ptr`; the one site relying on the decay was this bug.
+
+**Related tests:** `tests/harness/errors/slice_where_pointer_expected.f`
