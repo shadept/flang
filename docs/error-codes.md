@@ -2358,26 +2358,35 @@ fn compute(x: i32) i32 {
 
 **Category**: Semantic Analysis
 **Severity**: Error
-**Status**: Reserved (RFC-006 — strict struct construction; not yet enforced)
 
 #### Description
 
-Every field of a struct must be assigned in a struct literal. Reserved by RFC-006 for the strict-construction check; the type checker today still permits partial literals (missing fields are zero-initialised) and tracks this as an open item alongside RFC-007's Option enum migration.
+Every field of a struct must be assigned in a struct literal, in both the named form and the
+anonymous `.{ ... }` form. A field left out would take whatever its slot's zero bytes mean - a
+value nobody wrote - and a field added to the type later would take them at every site already
+written, without a word.
 
-#### Example (Future Error)
+There is no exemption for an optional field: `T?` is a field like any other and is spelled
+`f = null`. Exempting it would restore the silent zero-fill for exactly the field types most likely
+to be added to a struct later.
+
+Field-level defaults, which would let a declaration say what an omitted field means, are a separate
+feature and do not exist yet.
+
+#### Example
 
 ```flang
 type Point = struct { x: i32, y: i32 }
 
 pub fn main() i32 {
-    let p = Point { x = 10 }   // E2050 (planned): struct literal missing field `y`
+    let p = Point { x = 10 }   // error[E2050]: struct literal missing field `y`
     return p.x
 }
 ```
 
 #### Solution
 
-Assign every field, or — once field-level defaults land as a separate feature — declare a default for the omitted field.
+Assign every field. An optional field is written `f = null`.
 
 ---
 

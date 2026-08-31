@@ -2636,13 +2636,20 @@ fn resolve_anon_literals(self: &Checker) {
             report_unify(self, &o, E_TYPE_MISMATCH, span)
             continue
         }
+        let present: List(String) = list(pa.fields.len, self.allocator)
+        defer present.deinit()
         for &rec in pa.fields {
+            present.push(rec.name)
             let fty = struct_field_lookup(self, z, rec.name)
             if fty.is_some() {
                 const o = self.engine.unify(rec.ty, fty.unwrap())
                 report_unify(self, &o, E_TYPE_MISMATCH, rec.span)
             }
         }
+        // An unpinned literal IS its own record type, so it cannot be missing a field; only one the
+        // context bound to a declared nominal can.
+        const aspan = if pa.fields.len > 0 { pa.fields[0].span } else { synth_span(self) }
+        report_missing_fields(self, z, &present, aspan)
     }
     self.pending_anons.clear()
 }
@@ -7168,7 +7175,39 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
             report_unify(self, &o, E_TYPE_MISMATCH, fi.span)
         }
     }
+    let present: List(String) = list(lit.fields.len, self.allocator)
+    defer present.deinit()
+    for &fi2 in lit.fields {
+        present.push(fi2.name)
+    }
+    report_missing_fields(self, ty, &present, lit.span)
     return ty
+}
+
+// Strict construction (spec 2): every field of a struct is assigned by the literal. A field left
+// out would take whatever its slot's zero bytes mean - a value nobody wrote - and a field added to
+// the type later would do that at every site already written, silently.
+fn report_missing_fields(self: &Checker, ty: Ty, present: &List(String), span: SourceSpan) {
+    let nn = ty_node(self, ty) match {
+        NNominal(n) => n
+        _ => return
+    }
+    let sd = self.nominals.get(nn.id).* match {
+        NomStruct(st) => st
+        _ => return
+    }
+    for i in 0..sd.fields.len {
+        let found = false
+        for j in 0..present.len {
+            if present[j] == sd.fields[i].name {
+                found = true
+            }
+        }
+        if !found {
+            push_diag_e(self, span, E_MISSING_FIELD,
+                $"struct literal missing field `{sd.fields[i].name}`")
+        }
+    }
 }
 
 // The struct's display name when `ty` is a nominal struct instantiated with fewer (or more) type

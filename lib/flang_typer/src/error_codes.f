@@ -70,6 +70,10 @@ pub const E_CANNOT_DEREF: String = "E2012"
 pub const E_INVALID_CAST: String = "E2020"
 // Struct-literal syntax on a type that is not a struct.
 pub const E_NOT_A_STRUCT: String = "E2018"
+
+// A struct literal that leaves a field out. The slot's zero bytes are a value the author never
+// wrote, and a field added later would take them at every existing site without a word.
+pub const E_MISSING_FIELD: String = "E2050"
 // A naked enum (explicit integer tags) may not carry payloads.
 pub const E_NAKED_ENUM_PAYLOAD: String = "E2047"
 // An integer / float literal outside its (resolved) type's range.

@@ -300,7 +300,7 @@ pub type JsonEncoder = struct {
 }
 
 pub fn json_encoder(w: Writer, pretty: bool = false, indent: usize = 2) JsonEncoder {
-    return .{ w = w, pretty = pretty, indent = indent }
+    return .{ w = w, stack = [0u8; 64], stack_len = 0, pretty = pretty, indent = indent }
 }
 
 fn write_separator(self: &JsonEncoder) {
@@ -470,7 +470,18 @@ pub type JsonDecoder = struct {
 }
 
 pub fn json_decoder(r: Reader, allocator: &Allocator? = null) JsonDecoder {
-    return .{ reader = r, allocator = allocator }
+    return .{
+        reader = r,
+        buf = [0u8; 256],
+        buf_pos = 0,
+        buf_end = 0,
+        peeked = null,
+        pos = 0,
+        allocator = allocator,
+        error = null,
+        stack = [0u8; 64],
+        stack_len = 0,
+    }
 }
 
 pub fn get_error(self: &JsonDecoder) JsonError? { return self.error }

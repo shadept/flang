@@ -3410,3 +3410,29 @@ aggregate's address is already what `lower_expr` yields.
 Adding the adaptation to `operator_pick_2` alone is not enough: a flipped
 operand still unifies with a blanket operator's type variable, so the retry
 picks the blanket over the concrete overload it was added to reach.
+
+---
+
+### An `import` After a Declaration Hangs the Compiler
+
+**Status:** Open.
+**Affected:** the parser or the module loader; not yet narrowed to one.
+
+An `import` that follows any declaration does not terminate. No diagnostic, no progress, no exit:
+
+```flang
+type Config = struct {
+    value: i32
+}
+
+import std.option
+
+pub fn main() i32 {
+    return 0i32
+}
+```
+
+`flang check` on that file runs until it is killed. Moving the `import` above the declaration
+compiles it immediately. The grammar puts imports at the top of a file, so the input is malformed -
+but malformed input is meant to produce a diagnostic, not a spin, and this one is easy to write by
+hand while adding an import to a file that already has declarations.

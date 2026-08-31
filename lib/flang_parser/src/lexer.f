@@ -79,6 +79,7 @@ pub fn lexer(source: String, allocator: &Allocator? = null, start: usize = 0) Le
     return .{
         source = source,
         position = start,
+        line = 1,
         allocator = allocator,
         interp_stack = list(0, allocator),
         mark_next_string_interp = false,

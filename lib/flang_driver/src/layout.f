@@ -499,6 +499,7 @@ fn subst_record(it: &TypeInterner, rec: &NRecordNode, params: &List(VarId), args
             name = it.rec_name(rec, i),
             ty = subst(it, it.rec_ty(rec, i), params, args),
             decl_span = it.rec_span(rec, i),
+            owned = false,
         })
     }
     return it.record_of(&fs)
@@ -590,9 +591,12 @@ test "auto layout reorders fields by alignment to minimise padding" {
     let reg = nominal_registry()
     defer reg.deinit()
     let fields: List(Field) = list(3)
-    fields.push(Field { name = "a", ty = prim_of(PrimitiveKind.I8), decl_span = none_span() }) // decl 0, align 1
-    fields.push(Field { name = "b", ty = prim_of(PrimitiveKind.I64), decl_span = none_span() }) // decl 1, align 8
-    fields.push(Field { name = "c", ty = prim_of(PrimitiveKind.I16), decl_span = none_span() }) // decl 2, align 2
+    fields.push(Field { name = "a", ty = prim_of(PrimitiveKind.I8), decl_span = none_span(),
+        owned = false }) // decl 0, align 1
+    fields.push(Field { name = "b", ty = prim_of(PrimitiveKind.I64), decl_span = none_span(),
+        owned = false }) // decl 1, align 8
+    fields.push(Field { name = "c", ty = prim_of(PrimitiveKind.I16), decl_span = none_span(),
+        owned = false }) // decl 2, align 2
     let def = StructDef {
         fqn = "T",
         module = "",
@@ -620,9 +624,12 @@ test "C repr keeps declaration order and C padding" {
     let reg = nominal_registry()
     defer reg.deinit()
     let fields: List(Field) = list(3)
-    fields.push(Field { name = "a", ty = prim_of(PrimitiveKind.I8), decl_span = none_span() })
-    fields.push(Field { name = "b", ty = prim_of(PrimitiveKind.I64), decl_span = none_span() })
-    fields.push(Field { name = "c", ty = prim_of(PrimitiveKind.I16), decl_span = none_span() })
+    fields.push(Field { name = "a", ty = prim_of(PrimitiveKind.I8), decl_span = none_span(),
+        owned = false })
+    fields.push(Field { name = "b", ty = prim_of(PrimitiveKind.I64), decl_span = none_span(),
+        owned = false })
+    fields.push(Field { name = "c", ty = prim_of(PrimitiveKind.I16), decl_span = none_span(),
+        owned = false })
     let def = StructDef {
         fqn = "T",
         module = "",
@@ -655,11 +662,13 @@ test "generic struct substitutes type parameters" {
         name = "first",
         ty = it.var_of(.{ id = 0u32, level = 0u32 }),
         decl_span = none_span(),
+        owned = false,
     })
     fields.push(Field {
         name = "second",
         ty = it.var_of(.{ id = 1u32, level = 0u32 }),
         decl_span = none_span(),
+        owned = false,
     })
     let def = StructDef {
         fqn = "Pair",

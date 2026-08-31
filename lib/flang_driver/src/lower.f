@@ -1027,6 +1027,7 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
         size = lay.size as u64,
         align = lay.align as u64,
         init_bytes = null,
+        relocs = null,
     })
     ctx.consts.set(fqn, ConstInfo { sym = gsym, init_sym = Some(isym), ty = t })
     ctx.const_inits.push(isym)
