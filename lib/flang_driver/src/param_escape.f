@@ -135,6 +135,9 @@ fn expr_escapes(e: &Expr, al: &List(String), r: &TypeCheckResult, ov: &Inference
         // The address itself leaves.
         AddressOf(a) => roots_in(a.operand, al, r, ov) or expr_escapes(a.operand, al, r, ov)
 
+        // `move` is a marker, not an operation: it reads its operand and emits nothing.
+        Move(m) => expr_escapes(m.operand, al, r, ov)
+
         // A write through the parameter, or through anything aliasing it.
         Assignment(a) => roots_in(a.lhs, al, r, ov) or expr_escapes(a.lhs, al, r, ov)
             or expr_escapes(a.rhs, al, r, ov)
@@ -323,6 +326,7 @@ fn mentions(e: &Expr, al: &List(String)) bool {
         StructLit(s) => mentions_struct_fields(&s.fields, al)
         MemberAccess(ma) => mentions(ma.receiver, al)
         AddressOf(a) => mentions(a.operand, al)
+        Move(m) => mentions(m.operand, al)
         Dereference(d) => mentions(d.operand, al)
         NullPropagation(n) => mentions(n.receiver, al)
         Index(i) => mentions(i.receiver, al) or mentions(i.index, al)

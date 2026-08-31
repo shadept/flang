@@ -257,6 +257,7 @@ fn walk_expr(out: &List(Binder), e: &Expr, owner: SourceSpan) {
         Identifier(_) => {}
         MemberAccess(ma) => walk_expr(out, ma.receiver, owner)
         AddressOf(ao) => walk_expr(out, ao.operand, owner)
+        Move(m) => walk_expr(out, m.operand, owner)
         Dereference(de) => walk_expr(out, de.operand, owner)
         NullPropagation(np) => walk_expr(out, np.receiver, owner)
         Index(ix) => {

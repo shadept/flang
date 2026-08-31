@@ -41,9 +41,12 @@ followed by an identifier, a field name when followed by `:`.
 Ownership originates on struct fields only. An enum variant payload propagates
 the bit but cannot declare it — wrap a scalar resource in a struct.
 
-`owned` is part of the type's identity: two structs differing only in `owned`
-are different types and participate in the canonical rendering used by the type
-interner (RFC-024).
+`owned` needs nothing from the type interner. It appears only on a declared
+struct field, and a nominal's identity is already `(NominalId, args)`, so two
+declarations are two types whatever their fields say. An anonymous record has no
+declaration site to write it on, and `record_of` keys on `(name, ty)` pairs, so
+the structural key never sees it. What the derivation chain does need is `owned`
+in the *rendering* of a struct field, which is the printer's business.
 
 ## The derived bit
 

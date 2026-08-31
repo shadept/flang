@@ -59,6 +59,7 @@ pub type TokenKind = enum {
     Type
     And
     Or
+    Move
 
     // ─────────────────────────────────────────────────────────────────────
     // Operators
@@ -151,33 +152,34 @@ pub type Token = struct {
 
 // True for any keyword token.
 pub fn is_keyword(kind: TokenKind) bool {
-    kind match {
-        TokenKind.Pub => return true
-        TokenKind.Fn => return true
-        TokenKind.Return => return true
-        TokenKind.Let => return true
-        TokenKind.Const => return true
-        TokenKind.If => return true
-        TokenKind.Else => return true
-        TokenKind.For => return true
-        TokenKind.Loop => return true
-        TokenKind.While => return true
-        TokenKind.In => return true
-        TokenKind.Break => return true
-        TokenKind.Continue => return true
-        TokenKind.Defer => return true
-        TokenKind.Import => return true
-        TokenKind.Struct => return true
-        TokenKind.Enum => return true
-        TokenKind.Match => return true
-        TokenKind.As => return true
-        TokenKind.Test => return true
-        TokenKind.Type => return true
-        TokenKind.And => return true
-        TokenKind.Or => return true
-        TokenKind.True => return true
-        TokenKind.False => return true
-        TokenKind.Null => return true
-        else => return false
+    return kind match {
+        TokenKind.Pub => true
+        TokenKind.Fn => true
+        TokenKind.Return => true
+        TokenKind.Let => true
+        TokenKind.Const => true
+        TokenKind.If => true
+        TokenKind.Else => true
+        TokenKind.For => true
+        TokenKind.Loop => true
+        TokenKind.While => true
+        TokenKind.In => true
+        TokenKind.Break => true
+        TokenKind.Continue => true
+        TokenKind.Defer => true
+        TokenKind.Import => true
+        TokenKind.Struct => true
+        TokenKind.Enum => true
+        TokenKind.Match => true
+        TokenKind.As => true
+        TokenKind.Test => true
+        TokenKind.Type => true
+        TokenKind.And => true
+        TokenKind.Or => true
+        TokenKind.Move => true
+        TokenKind.True => true
+        TokenKind.False => true
+        TokenKind.Null => true
+        else => false
     }
 }

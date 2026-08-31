@@ -35,6 +35,8 @@ import flang_typer.coercion
 import flang_typer.nominal_registry
 import flang_typer.well_known
 import std.test
+import std.string_builder
+import flang_core.span
 
 // ─────────────────────────────────────────────────────────────────────
 // UnifyOutcome - structured result, no diagnostics
@@ -405,6 +407,7 @@ fn zonk_record(self: &Engine, rec: &NRecordNode) Ty {
             name = self.interner.rec_name(rec, i),
             ty = self.zonk(self.interner.rec_ty(rec, i)),
             decl_span = self.interner.rec_span(rec, i),
+            owned = false,
         })
     }
     return self.interner.record_of(&fs)
@@ -459,6 +462,7 @@ fn substitute_record(self: &Engine, rec: &NRecordNode, subst: &Dict(VarId, Ty)) 
             name = self.interner.rec_name(rec, i),
             ty = self.substitute_shared(self.interner.rec_ty(rec, i), subst),
             decl_span = self.interner.rec_span(rec, i),
+            owned = false,
         })
     }
     return self.interner.record_of(&fs)
@@ -468,6 +472,110 @@ fn substitute_nominal(self: &Engine, nn: &NNominalNode, subst: &Dict(VarId, Ty))
     let as_ = substitute_span(self, nn.args, subst)
     defer as_.deinit()
     return self.interner.nominal_of(nn.id, &as_)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Copyability - the derived bit behind `owned` (RFC-028)
+// ─────────────────────────────────────────────────────────────────────
+
+// A type is non-copyable when releasing a resource rides in it: a field declared `owned`, or a
+// field whose own type is non-copyable. Enum variant payloads count as fields; the payload
+// propagates the bit but cannot declare it.
+//
+// References and function types are the leaves. A reference is how FLang shares a value rather than
+// holds it, so it carries no release responsibility - which also makes the walk a post-order with
+// no fixpoint: `check_recursive_nominal` poisons a by-value field cycle at E2035, so none survives
+// into a walk, and every other cycle passes through a reference. `Slice` and `String` need no rule
+// of their own: their only field of interest is a `&T`, so they come out copyable by the same
+// reason a slice is a view.
+//
+// ponytail: recomputed per call, and every nominal hop builds a substitution dict. Nothing calls
+// this on a hot path yet - memoize on a `List(u8)` parallel to the interner's nodes when
+// enforcement (RFC-028 step 4) starts asking at every consuming site.
+pub fn is_copyable(self: &Engine, ty: Ty) bool {
+    return copyable_walk(self, ty)
+}
+
+fn copyable_walk(self: &Engine, ty: Ty) bool {
+    const t = self.resolve(ty)
+    return self.ty_node(t) match {
+        NRef(_) => true
+        NFunc(_) => true
+        // A type variable is diagnosed at the instantiation that pins it, never in the generic
+        // body.
+        NVar(_) => true
+        NArray(arr) => copyable_walk(self, arr.elem)
+        NTuple(span) => copyable_span(self, span)
+        NRecord(rec) => copyable_span(self, rec.tys)
+        NNominal(nn) => copyable_nominal(self, &nn)
+        _ => true
+    }
+}
+
+fn copyable_span(self: &Engine, span: ChildSpan) bool {
+    for i in 0..span.len {
+        if !copyable_walk(self, self.interner.child_at(span, i)) {
+            return false
+        }
+    }
+    return true
+}
+
+fn copyable_nominal(self: &Engine, nn: &NNominalNode) bool {
+    const reg = self.nominals match {
+        Some(r) => r
+        None => return true
+    }
+    return reg.get(nn.id).* match {
+        NomStruct(sd) => copyable_struct(self, &sd, nn)
+        NomEnum(ed) => copyable_enum(self, &ed, nn)
+    }
+}
+
+fn copyable_struct(self: &Engine, sd: &StructDef, nn: &NNominalNode) bool {
+    for i in 0..sd.fields.len {
+        if sd.fields[i].owned {
+            return false
+        }
+    }
+    let subst = param_subst(self, &sd.type_params, nn.args)
+    defer subst.deinit()
+    for i in 0..sd.fields.len {
+        const ft = self.substitute_shared(sd.fields[i].ty, &subst)
+        if !copyable_walk(self, ft) {
+            return false
+        }
+    }
+    return true
+}
+
+fn copyable_enum(self: &Engine, ed: &EnumDef, nn: &NNominalNode) bool {
+    let subst = param_subst(self, &ed.type_params, nn.args)
+    defer subst.deinit()
+    for vi in 0..ed.variants.len {
+        for pi in 0..ed.variants[vi].payloads.len {
+            const pt = self.substitute_shared(ed.variants[vi].payloads[pi], &subst)
+            if !copyable_walk(self, pt) {
+                return false
+            }
+        }
+    }
+    return true
+}
+
+// A declaration's field types are written against its own type parameters, so the instantiation's
+// arguments have to go in before the walk sees `&FileHandle` where the source says `&$T`. A
+// partially-applied nominal (fewer arguments than parameters) maps only what it has; the rest stay
+// variables, which the walk treats as leaves.
+fn param_subst(self: &Engine, params: &List(VarId), args: ChildSpan) Dict(VarId, Ty) {
+    let subst: Dict(VarId, Ty) = dict(params.len, self.allocator)
+    for i in 0..params.len {
+        if i >= args.len {
+            break
+        }
+        subst.set(params[i], self.interner.child_at(args, i))
+    }
+    return subst
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1241,4 +1349,168 @@ test "zonk is the identity on ground types and collapses bound vars" {
     const z = eng.zonk(r)
     assert_eq(z, eng.mk_ref(ty_i32()), "zonk collapses the bound var to one canonical node")
     assert_eq(eng.zonk(z), z, "zonk of a ground shape is the identity")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Tests - copyability (RFC-028)
+// ─────────────────────────────────────────────────────────────────────
+
+fn cp_struct(params: List(VarId), fields: List(Field)) StructDef {
+    return StructDef {
+        fqn = "",
+        module = "m",
+        is_pub = true,
+        type_params = params,
+        fields = fields,
+        decl_span = none_span(),
+        deprecation = null,
+        is_simd = false,
+        is_foreign = false,
+    }
+}
+
+fn cp_field(name: String, ty: Ty, owned: bool) Field {
+    return Field { name = name, ty = ty, decl_span = none_span(), owned = owned }
+}
+
+fn cp_nominal(eng: &Engine, id: NominalId, args: List(Ty)) Ty {
+    const t = eng.interner.nominal_of(id, &args)
+    args.deinit()
+    return t
+}
+
+// `type Handle = struct { owned fd: i32 }` - the leaf resource every case below is built from.
+fn cp_handle(reg: &NominalRegistry) NominalId {
+    let fs: List(Field) = list(1)
+    fs.push(cp_field("fd", prim_of(PrimitiveKind.I32), true))
+    return reg.register(NominalDef.NomStruct(cp_struct(list(0), fs)), $"m.Handle")
+}
+
+test "an owned field clears the bit, and nothing else does" {
+    let reg = nominal_registry()
+    defer reg.deinit()
+    let eng = engine()
+    defer eng.deinit()
+    eng.set_nominal_registry(&reg)
+
+    let plain: List(Field) = list(1)
+    plain.push(cp_field("fd", prim_of(PrimitiveKind.I32), false))
+    const p = reg.register(NominalDef.NomStruct(cp_struct(list(0), plain)), $"m.Plain")
+    const h = cp_handle(&reg)
+
+    assert_true(eng.is_copyable(cp_nominal(&eng, p, list(0))),
+        "the same shape without `owned` stays copyable")
+    assert_true(!eng.is_copyable(cp_nominal(&eng, h, list(0))),
+        "a field declared `owned` makes the type non-copyable")
+}
+
+test "the bit is transitive through by-value fields, and stops at a reference" {
+    let reg = nominal_registry()
+    defer reg.deinit()
+    let eng = engine()
+    defer eng.deinit()
+    eng.set_nominal_registry(&reg)
+
+    const h = cp_handle(&reg)
+    const handle = cp_nominal(&eng, h, list(0))
+
+    // `struct { h: Handle }` holds the resource; `struct { h: &Handle }` only views it.
+    let by_value: List(Field) = list(1)
+    by_value.push(cp_field("h", handle, false))
+    const owner = reg.register(NominalDef.NomStruct(cp_struct(list(0), by_value)), $"m.Owner")
+
+    let by_ref: List(Field) = list(1)
+    by_ref.push(cp_field("h", eng.mk_ref(handle), false))
+    const viewer = reg.register(NominalDef.NomStruct(cp_struct(list(0), by_ref)), $"m.Viewer")
+
+    assert_true(!eng.is_copyable(cp_nominal(&eng, owner, list(0))),
+        "a non-copyable field type is inherited")
+    assert_true(eng.is_copyable(cp_nominal(&eng, viewer, list(0))),
+        "a reference is a leaf: it shares the value rather than holding it")
+    assert_true(eng.is_copyable(eng.mk_ref(handle)), "`&Handle` is itself copyable")
+    assert_true(!eng.is_copyable(eng.mk_array(handle, 2)), "an array of them is not")
+}
+
+test "the bit follows the instantiation, not the declaration" {
+    let reg = nominal_registry()
+    defer reg.deinit()
+    let eng = engine()
+    defer eng.deinit()
+    eng.set_nominal_registry(&reg)
+
+    const h = cp_handle(&reg)
+    const handle = cp_nominal(&eng, h, list(0))
+
+    // `type Box($T) = struct { v: T }` - the field type is the parameter, so the answer can only
+    // come from substituting the instantiation's argument in.
+    const tv: VarId = 1u32
+    let params: List(VarId) = list(1)
+    params.push(tv)
+    let fs: List(Field) = list(1)
+    fs.push(cp_field("v", eng.interner.var_of(TyVar { id = tv, level = 0u32 }), false))
+    const box = reg.register(NominalDef.NomStruct(cp_struct(params, fs)), $"m.Box")
+
+    let with_handle: List(Ty) = list(1)
+    with_handle.push(handle)
+    let with_int: List(Ty) = list(1)
+    with_int.push(prim_of(PrimitiveKind.I32))
+
+    assert_true(!eng.is_copyable(cp_nominal(&eng, box, with_handle)), "Box(Handle) is not copyable")
+    assert_true(eng.is_copyable(cp_nominal(&eng, box, with_int)), "Box(i32) is")
+}
+
+test "a view over a non-copyable element stays copyable" {
+    let reg = nominal_registry()
+    defer reg.deinit()
+    let eng = engine()
+    defer eng.deinit()
+    eng.set_nominal_registry(&reg)
+
+    const h = cp_handle(&reg)
+    const handle = cp_nominal(&eng, h, list(0))
+
+    // `Slice` and `String` are this shape. They need no rule of their own - the walk reaches a
+    // reference and stops, which is the same reason a slice is a view.
+    const tv: VarId = 2u32
+    let params: List(VarId) = list(1)
+    params.push(tv)
+    let fs: List(Field) = list(2)
+    fs.push(cp_field("ptr", eng.mk_ref(eng.interner.var_of(TyVar { id = tv, level = 0u32 })),
+            false))
+    fs.push(cp_field("len", prim_of(PrimitiveKind.USize), false))
+    const view = reg.register(NominalDef.NomStruct(cp_struct(params, fs)), $"m.View")
+
+    let args: List(Ty) = list(1)
+    args.push(handle)
+    assert_true(eng.is_copyable(cp_nominal(&eng, view, args)), "View(Handle) views, so it copies")
+}
+
+test "an enum variant payload propagates the bit" {
+    let reg = nominal_registry()
+    defer reg.deinit()
+    let eng = engine()
+    defer eng.deinit()
+    eng.set_nominal_registry(&reg)
+
+    const h = cp_handle(&reg)
+    const handle = cp_nominal(&eng, h, list(0))
+
+    let payload: List(Ty) = list(1)
+    payload.push(handle)
+    let variants: List(VariantDef) = list(2)
+    variants.push(VariantDef { name = "None", payloads = list(0), decl_span = none_span() })
+    variants.push(VariantDef { name = "Some", payloads = payload, decl_span = none_span() })
+    const maybe = reg.register(NominalDef.NomEnum(EnumDef {
+        fqn = "",
+        module = "m",
+        is_pub = true,
+        type_params = list(0),
+        variants = variants,
+        tag_values = null,
+        decl_span = none_span(),
+        deprecation = null,
+    }), $"m.Maybe")
+
+    assert_true(!eng.is_copyable(cp_nominal(&eng, maybe, list(0))),
+        "a payload carries the bit even though it cannot declare `owned`")
 }

@@ -136,6 +136,10 @@ pub type Field = struct {
     name: String
     ty: Ty
     decl_span: SourceSpan
+    // Declared `owned`: the field holds a resource the value is responsible for releasing. A claim,
+    // not a verified fact. Only a nominal struct field can carry it - an anonymous record has no
+    // declaration site to write it on, so every record field is false.
+    owned: bool
 }
 
 // ─────────────────────────────────────────────────────────────────────

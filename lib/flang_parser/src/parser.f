@@ -771,6 +771,12 @@ fn parse_struct_body_into(self: &Parser, b: &NodeBuilder) {
 
 fn parse_struct_field(self: &Parser) CstNodeId {
     let b = self.open(NodeKind.StructField)
+    // `owned` is contextual: a modifier when another identifier follows, the field's own name when
+    // a colon does. Eating it here leaves the name as the field's second identifier token.
+    if self.current_kind() == TokenKind.Identifier and self.current().text == "owned"
+        and self.peek_kind(1) == TokenKind.Identifier {
+        self.eat_into(&b)
+    }
     if self.current_kind() == TokenKind.Identifier {
         self.eat_into(&b)
     } else {
@@ -1390,6 +1396,14 @@ fn parse_unary_expression(self: &Parser) CstNodeId {
     const k = self.current_kind()
     if k == TokenKind.Ampersand {
         let b = self.open(NodeKind.AddressOfExpr)
+        self.eat_into(&b)
+        const inner = self.parse_unary_expression()
+        const tail = self.parse_postfix_chain(inner)
+        self.push_node_into(&b, tail)
+        return self.finish(b)
+    }
+    if k == TokenKind.Move {
+        let b = self.open(NodeKind.MoveExpr)
         self.eat_into(&b)
         const inner = self.parse_unary_expression()
         const tail = self.parse_postfix_chain(inner)

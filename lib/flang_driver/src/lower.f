@@ -449,14 +449,34 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     // The BUILD's compile-time context, not the host's: a cross-target build (`--target-os`) must
     // lower the same `#if` branch the checker checked, or the emitted C is the host's branch of a
     // program that type-checked as the target's.
-    let ctx = LowerCtx { result = result, it = &result.interner, overlay = null, syms = &syms,
-        allocator = allocator, loops = loop_stack, sret = null, ret_size = 0u64, strings = interner,
-        globals = globals, const_blobs = const_blobs, const_relocs = const_relocs,
-        defers = defer_stack, defer_marks = defer_marks,
-        flushing = false, blocked = false, blocked_note = null, blocked_subject = null,
-        pending_lambdas = list(0, allocator), comptime = comptime_ctx, consts = dict(allocator),
-        const_inits = list(0, allocator), owned_syms = list(0, allocator),
-        lay_cache = layout_cache(allocator), testing = tests.is_some(), next_test = 0 }
+    let ctx = LowerCtx {
+        result = result,
+        it = &result.interner,
+        overlay = null,
+        syms = &syms,
+        allocator = allocator,
+        loops = loop_stack,
+        sret = null,
+        ret_size = 0u64,
+        strings = interner,
+        globals = globals,
+        const_blobs = const_blobs,
+        const_relocs = const_relocs,
+        defers = defer_stack,
+        defer_marks = defer_marks,
+        flushing = false,
+        blocked = false,
+        blocked_note = null,
+        blocked_subject = null,
+        pending_lambdas = list(0, allocator),
+        comptime = comptime_ctx,
+        consts = dict(allocator),
+        const_inits = list(0, allocator),
+        owned_syms = list(0, allocator),
+        lay_cache = layout_cache(allocator),
+        testing = tests.is_some(),
+        next_test = 0,
+    }
     // A module outside the demand set (RFC-022 §6) was never body-checked: it has no node types to
     // lower, and nothing demanded can reach its functions or constants - identifier, operator and
     // constant resolution are import-scoped. Its foreign declarations still lower: a `#foreign`
@@ -966,8 +986,13 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
         let rs = rel.as_slice()
         ctx.const_blobs.push(blob)
         ctx.const_relocs.push(rel)
-        ctx.globals.push(Global { name = gsym, size = lay.size as u64, align = lay.align as u64,
-            init_bytes = Some(bytes), relocs = Some(rs) })
+        ctx.globals.push(Global {
+            name = gsym,
+            size = lay.size as u64,
+            align = lay.align as u64,
+            init_bytes = Some(bytes),
+            relocs = Some(rs),
+        })
         ctx.consts.set(fqn, ConstInfo { sym = gsym, init_sym = null, ty = t })
         return
     }
@@ -997,8 +1022,12 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
         return
     }
     m.add_function(fb.finish())
-    ctx.globals.push(Global { name = gsym, size = lay.size as u64, align = lay.align as u64,
-        init_bytes = null })
+    ctx.globals.push(Global {
+        name = gsym,
+        size = lay.size as u64,
+        align = lay.align as u64,
+        init_bytes = null,
+    })
     ctx.consts.set(fqn, ConstInfo { sym = gsym, init_sym = Some(isym), ty = t })
     ctx.const_inits.push(isym)
 }
@@ -1587,8 +1616,10 @@ fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
     let no_args: List(Ty) = list(0, ctx.allocator)
     let cty = ctx.it.nominal_of(cid, &no_args)
     no_args.deinit()
-    lower_function_body(m, ctx, &decl, pl.info.symbol.as_view(), &sig,
-        Some(LoweredClosure { ty = cty, captures = &pl.info.captures }))
+    lower_function_body(m, ctx, &decl, pl.info.symbol.as_view(), &sig, Some(LoweredClosure {
+        ty = cty,
+        captures = &pl.info.captures,
+    }))
 }
 
 fn bind_closure_captures(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &LoweredClosure,
@@ -2070,6 +2101,8 @@ fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand
         Identifier(id) => lower_identifier(ctx, bb, env, &id)
         Assignment(a) => lower_assignment(ctx, bb, env, &a)
         AddressOf(a) => lower_address_of(ctx, bb, env, &a)
+        // `move` emits nothing - the operand IS the value, marked at the type level.
+        Move(m) => lower_expr(ctx, bb, env, m.operand)
         Dereference(d) => lower_deref(ctx, bb, env, &d)
         Binary(b) => lower_binary(ctx, bb, env, &b)
         Unary(u) => lower_unary(ctx, bb, env, &u)
@@ -2229,8 +2262,11 @@ fn lower_while(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, w: &WhileStmt) {
     bb.br_if(cond, body.label(), exit.label())
 
     bb.move_to(&body)
-    ctx.loops.push(LoopFrame { latch = head.label(), exit = exit.label(),
-        defer_depth = ctx.defers.len })
+    ctx.loops.push(LoopFrame {
+        latch = head.label(),
+        exit = exit.label(),
+        defer_depth = ctx.defers.len,
+    })
     let r = lower_block(ctx, bb, env, w.body)
     let _f = ctx.loops.pop()
     if !r.terminated {
@@ -2249,8 +2285,11 @@ fn lower_loop(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, l: &LoopStmt) {
 
     bb.br(head.label())
     bb.move_to(&head)
-    ctx.loops.push(LoopFrame { latch = head.label(), exit = exit.label(),
-        defer_depth = ctx.defers.len })
+    ctx.loops.push(LoopFrame {
+        latch = head.label(),
+        exit = exit.label(),
+        defer_depth = ctx.defers.len,
+    })
     let r = lower_block(ctx, bb, env, l.body)
     let _f = ctx.loops.pop()
     if !r.terminated {
@@ -2386,8 +2425,11 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
             env.bind_slot(f.var_name, slot, ir, ety)
         }
     }
-    ctx.loops.push(LoopFrame { latch = head.label(), exit = exit.label(),
-        defer_depth = ctx.defers.len })
+    ctx.loops.push(LoopFrame {
+        latch = head.label(),
+        exit = exit.label(),
+        defer_depth = ctx.defers.len,
+    })
     let r = lower_block(ctx, bb, env, f.body)
     let _f = ctx.loops.pop()
     env.release(scope)
@@ -2442,8 +2484,11 @@ fn lower_for_range(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt, rn
     let iv_slot = alloc_slot(bb, ir)
     bb.store(ir, iv, iv_slot)
     env.bind_slot(f.var_name, iv_slot, ir, ity)
-    ctx.loops.push(LoopFrame { latch = latch.label(), exit = exit.label(),
-        defer_depth = ctx.defers.len })
+    ctx.loops.push(LoopFrame {
+        latch = latch.label(),
+        exit = exit.label(),
+        defer_depth = ctx.defers.len,
+    })
     let r = lower_block(ctx, bb, env, f.body)
     let _fr = ctx.loops.pop()
     env.release(scope)
@@ -3130,8 +3175,10 @@ fn receiver_place_mem(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr)
                         RtConst(fqn) => {
                             let ci = ctx.consts.get(fqn)
                             ci match {
-                                Some(c) => Some(PlaceMem { addr = Operand.GlobalRef(c.sym),
-                                    ty = c.ty })
+                                Some(c) => Some(PlaceMem {
+                                    addr = Operand.GlobalRef(c.sym),
+                                    ty = c.ty,
+                                })
                                 None => null
                             }
                         }
@@ -5684,8 +5731,11 @@ fn resolve_struct(ctx: &LowerCtx, ty: &Ty, reg: &NominalRegistry,
                     reg.get(ti.unwrap()).* match {
                         NomStruct(ts) => {
                             args.clear()
-                            return Some(StructTarget { def = ts,
-                                layout = st_layout(ctx, &ts, &args), args = args })
+                            return Some(StructTarget {
+                                def = ts,
+                                layout = st_layout(ctx, &ts, &args),
+                                args = args,
+                            })
                         }
                         _ => {}
                     }

@@ -81,6 +81,9 @@ pub type NodeKind = enum {
     UnaryExpr
     // `&a`.
     AddressOfExpr
+    // `move a` - a transfer rather than a copy. Binds the postfix chain: `move a.b` names the
+    // field, `move a[i]` the element.
+    MoveExpr
     // `a.*`.
     DereferenceExpr
     // `a.b` and `a.b()` - field access or UFCS method dispatch.

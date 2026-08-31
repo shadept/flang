@@ -504,7 +504,12 @@ test "a carried copy keeps ids, holes and bodies" {
 
     // Give `m.B` a body, as `resolve_nominal_bodies` would.
     let fields: List(Field) = list(1)
-    fields.push(Field { name = "x", ty = prim_of(PrimitiveKind.I32), decl_span = none_span() })
+    fields.push(Field {
+        name = "x",
+        ty = prim_of(PrimitiveKind.I32),
+        decl_span = none_span(),
+        owned = false,
+    })
     let bd = reg.get(b).* match { NomStruct(s) => s, _ => probe_struct() }
     bd.fields = fields
     reg.put(b, NominalDef.NomStruct(bd))
@@ -536,9 +541,14 @@ fn probe_struct() StructDef {
     let no_params: List(VarId) = list(0)
     let no_fields: List(Field) = list(0)
     return StructDef {
-        fqn = "", module = "m", is_pub = true,
-        type_params = no_params, fields = no_fields,
-        decl_span = none_span(), deprecation = null,
-        is_simd = false, is_foreign = false,
+        fqn = "",
+        module = "m",
+        is_pub = true,
+        type_params = no_params,
+        fields = no_fields,
+        decl_span = none_span(),
+        deprecation = null,
+        is_simd = false,
+        is_foreign = false,
     }
 }

@@ -356,6 +356,7 @@ pub type Expr = enum {
     Identifier(IdentifierExpr)
     MemberAccess(MemberAccessExpr)
     AddressOf(AddressOfExpr)
+    Move(MoveExpr)
     Dereference(DereferenceExpr)
     NullPropagation(NullPropagationExpr)
     Index(IndexExpr)
@@ -539,6 +540,12 @@ pub type MemberAccessExpr = struct {
 
 // `&operand` - address-of, producing a reference value.
 pub type AddressOfExpr = struct {
+    span: SourceSpan
+    operand: &Expr
+}
+
+// `move operand` - a transfer, not a copy. Emits nothing; the operand's own type is the result.
+pub type MoveExpr = struct {
     span: SourceSpan
     operand: &Expr
 }
@@ -758,6 +765,7 @@ pub fn expr_span(e: &Expr) SourceSpan {
         Identifier(x) => x.span
         MemberAccess(x) => x.span
         AddressOf(x) => x.span
+        Move(x) => x.span
         Dereference(x) => x.span
         NullPropagation(x) => x.span
         Index(x) => x.span
@@ -957,11 +965,13 @@ pub type AnonStructType = struct {
 }
 
 // One field declaration inside a struct type. FLang struct fields have no default initializer -
-// `name: T` is the only shape.
+// `name: T` and `owned name: T` are the only shapes.
 pub type StructField = struct {
     span: SourceSpan
     name: String
     type_expr: &TypeExpr
+    // `owned name: T` - the field holds a resource the value must release (RFC-028).
+    owned: bool
 }
 
 // `enum(T) { Variant, Variant(T) }` - generics optional. Same node whether named (RHS of TypeDecl)

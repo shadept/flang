@@ -629,6 +629,7 @@ test "a duplicate allocates nothing lasting; teardown returns the storage" {
         name = "x",
         ty = it.ref_of(prim_of(PrimitiveKind.I64)),
         decl_span = none_span(),
+        owned = false,
     })
     defer fields.deinit()
 
