@@ -1,7 +1,6 @@
 //! TEST: copy_return_local
-//! COMPILE-ERROR: E2123
+//! COMPILE-ERROR: E2124
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -17,7 +16,7 @@ fn close(h: FileHandle) i32 {
 
 fn make() FileHandle {
     let h = open(3)
-    return h                       // error E2123: needs `move h`
+    return h                       // error E2124: needs `move h`
 }
 
 pub fn main() i32 {

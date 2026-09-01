@@ -331,6 +331,7 @@ fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
     let type_expr: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
     let default_value: Expr? = null
     let is_variadic = has_token(cst, TokenKind.DotDot)
+    let is_move = has_token(cst, TokenKind.Move)
     let saw_colon = false
     let saw_equals = false
     let type_seen = false
@@ -363,6 +364,7 @@ fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
         type_expr = self.boxed(type_expr),
         default_value = self.boxed_opt(default_value),
         is_variadic = is_variadic,
+        is_move = is_move,
     }
 }
 
@@ -2486,6 +2488,7 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
                         type_expr = self.boxed(t),
                         default_value = null,
                         is_variadic = false,
+                        is_move = false,
                     })
                     pending_active = false
                 }
@@ -2507,6 +2510,7 @@ fn make_lambda_param(self: &Projector, name: String, span: SourceSpan) FunctionP
         type_expr = self.boxed(TypeExpr.Error(ErrorType { span = span })),
         default_value = null,
         is_variadic = false,
+        is_move = false,
     }
 }
 

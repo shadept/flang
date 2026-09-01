@@ -1,6 +1,5 @@
 //! TEST: owned_fields_copyable_types
 //! EXIT: 3
-//! SKIP: RFC-027 not implemented
 
 type HandleBundle = struct {
     owned a: u32
@@ -22,6 +21,6 @@ fn deinit(self: HandleBundle) {
 
 pub fn main() i32 {
     let hb = HandleBundle { a = 7u32, b = 8u32 }
-    (move hb).deinit()
+    deinit(move hb)
     return closed + 1
 }

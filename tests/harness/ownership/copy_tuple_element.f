@@ -1,7 +1,6 @@
 //! TEST: copy_tuple_element
-//! COMPILE-ERROR: E2123
+//! COMPILE-ERROR: E2124
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -17,6 +16,6 @@ fn close(h: FileHandle) i32 {
 
 pub fn main() i32 {
     let h = open(3)
-    let t: (FileHandle, i32) = (h, 1)        // error E2123: needs `move h`
+    let t: (FileHandle, i32) = (h, 1)        // error E2124: needs `move h`
     return 0
 }

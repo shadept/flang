@@ -1,7 +1,6 @@
 //! TEST: copy_via_by_value_loop
-//! COMPILE-ERROR: E2123 copy_via_by_value_loop.f
+//! COMPILE-ERROR: E2124 copy_via_by_value_loop.f
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 import std.list
 
@@ -17,8 +16,8 @@ fn close(h: FileHandle) i32 {
     return h.fd
 }
 
-// The copy happens inside `next()`. The error must name the loop, not the
-// iterator's source.
+// The copy happens inside a `std.list` body. The error must name a line in this
+// file, not the container's source.
 pub fn main() i32 {
     let xs: List(FileHandle) = list(2)
     xs.push(open(3))

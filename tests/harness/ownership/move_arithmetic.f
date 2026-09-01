@@ -1,7 +1,6 @@
 //! TEST: move_arithmetic
-//! COMPILE-ERROR: E2124
+//! COMPILE-ERROR: E2125
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -18,6 +17,6 @@ fn close(h: FileHandle) i32 {
 pub fn main() i32 {
     let a = 1
     let b = 2
-    let n = move (a + b)               // error E2124
+    let n = move (a + b)               // error E2125
     return 0
 }

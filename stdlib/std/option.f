@@ -16,15 +16,17 @@ pub fn deinit(self: &Option($T)) {
     self.* = None
 }
 
-pub fn is_some(self: Option($T)) bool {
-    return self match {
+// Read-only, so the receiver is a reference: a by-value receiver of a non-copyable type has no
+// receiver form at all (RFC-028), and `opt.is_some()` has to keep working for every payload.
+pub fn is_some(self: &Option($T)) bool {
+    return self.* match {
         Some(_) => true
         None => false
     }
 }
 
-pub fn is_none(self: Option($T)) bool {
-    return self match {
+pub fn is_none(self: &Option($T)) bool {
+    return self.* match {
         Some(_) => false
         None => true
     }

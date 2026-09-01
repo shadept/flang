@@ -1,6 +1,5 @@
 //! TEST: derived_bit_leaves
 //! EXIT: 3
-//! SKIP: RFC-027 not implemented
 
 type Owner = struct {
     owned ptr: &u8

@@ -1,7 +1,6 @@
 //! TEST: assign_over_live_binding
-//! COMPILE-ERROR: E2125 is live
+//! COMPILE-ERROR: E2126 is live
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -17,6 +16,6 @@ fn close(h: FileHandle) i32 {
 
 pub fn main() i32 {
     let h = open(3)
-    h = open(4)                        // error E2125: `h` is live, the old value leaks
+    h = open(4)                        // error E2126: `h` is live, the old value leaks
     return 0
 }

@@ -165,6 +165,21 @@ touching a disk. The two functions that did read the world, `cwd` and
 - **`TypeLayoutService`** computes memory layouts (alignment, offsets) for struct types, used by lowering for implicit reference passing of large values.
 - **`op_deref` fallback:** When `ResolveFieldAccess()` can't find a field on a nominal type, or when UFCS call resolution fails, the compiler tries `TryResolveOperator("op_deref", [&Type])`. For field access, the resolved function is appended to `MemberAccessExpressionNode.OpDerefChain`. For UFCS calls, the chain is stored in `CallExpressionNode.UfcsOpDerefChain`. Lowering replays the chain as function calls before the field GEP or function call.
 
+**Ownership pass.** After a body is checked, `own_check_body` walks it a
+second time to decide liveness for non-copyable values (RFC-028). It is a
+separate walk because it needs facts inference produces - every node's
+type and every call's target - and because it visits a loop body twice
+where inference visits it once. It is an abstract interpretation over the
+AST rather than a built CFG: the lattice is the set of moved bindings,
+keyed by the declaration node a name resolves to; branches take the union
+of the paths that reach the merge, and a loop takes the union of its entry
+with what its back edge carries, silently, before the reporting pass runs
+from that state. `defer` bodies are held per open scope and walked where
+they fire, on every path that exits: falling off the block, `return`,
+`break` and `continue`. Nothing in it unifies, and it reports at the
+outermost open instantiation, so a copy rejected inside a generic body
+names the caller's line.
+
 **Self-host side tables.** The self-hosted checker has no mutable AST
 fields, so every semantic decision lands in `InferenceResults`, keyed by
 node id (a span fingerprint). Beyond node types, resolved targets and

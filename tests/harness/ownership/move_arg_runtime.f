@@ -1,6 +1,5 @@
 //! TEST: move_arg_runtime
 //! EXIT: 3
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32

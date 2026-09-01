@@ -1,7 +1,6 @@
 //! TEST: move_literal
-//! COMPILE-ERROR: E2124
+//! COMPILE-ERROR: E2125
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -16,6 +15,6 @@ fn close(h: FileHandle) i32 {
 }
 
 pub fn main() i32 {
-    let n = move 3                     // error E2124
+    let n = move 3                     // error E2125
     return 0
 }

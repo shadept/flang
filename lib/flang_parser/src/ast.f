@@ -161,6 +161,10 @@ pub type FunctionParam = struct {
     // after name mangling.
     default_value: &Expr?
     is_variadic: bool
+    // `move x: T` - the slot consumes its argument. A by-value slot of a non-copyable type consumes
+    // on its own; this is what makes a copyable one consume too, and it is what the call site has
+    // to spell `move` against.
+    is_move: bool
 }
 
 // `[pub] [directives] type Name = TypeExpr`

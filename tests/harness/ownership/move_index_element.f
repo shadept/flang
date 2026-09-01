@@ -1,6 +1,6 @@
 //! TEST: move_index_element
 //! EXIT: 3
-//! SKIP: RFC-027 not implemented
+//! SKIP: RFC-028 step 6 - std.list stores its element without `move`
 
 import std.list
 

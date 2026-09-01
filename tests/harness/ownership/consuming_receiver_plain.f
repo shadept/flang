@@ -1,7 +1,6 @@
-//! TEST: use_after_move_receiver
-//! COMPILE-ERROR: E2122
+//! TEST: consuming_receiver_plain
+//! COMPILE-ERROR: E2128 has no receiver form
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -17,6 +16,5 @@ fn close(h: FileHandle) i32 {
 
 pub fn main() i32 {
     let h = open(3)
-    (move h).close()
-    return h.fd                        // error E2122
+    return h.close()               // error E2128: write `close(move h)`
 }

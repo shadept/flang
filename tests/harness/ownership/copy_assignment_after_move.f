@@ -1,7 +1,6 @@
 //! TEST: copy_assignment_after_move
-//! COMPILE-ERROR: E2123
+//! COMPILE-ERROR: E2124
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -19,6 +18,6 @@ pub fn main() i32 {
     let h = open(3)
     let b = open(4)
     close(move b)
-    b = h                              // error E2123: `h` is copied, needs `move`
+    b = h                              // error E2124: `h` is copied, needs `move`
     return 0
 }

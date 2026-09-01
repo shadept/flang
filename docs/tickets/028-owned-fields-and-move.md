@@ -91,7 +91,9 @@ Copies of a non-copyable type — the lvalue sites:
 Not copies:
 
 - Every rvalue — call results, literals, struct literals, `match` and `if`
-  results.
+  results. A nullary variant constructor is one of them: `None` builds its value
+  where it stands rather than reading it out of storage, so binding it owes no
+  `move` however non-copyable the enum's other variants are.
 - An lvalue whose own type is copyable — `h.fd`, `&cfg.name`.
 - Aggregate pattern bindings. Per §7.5 they name the scrutinee's storage, so
   `opt match { Some(v) => ... }` binds `v` to an existing lvalue rather than
@@ -270,8 +272,9 @@ is the spelling for a non-copyable payload.
 
 ### Parameter side
 
-`move` on a parameter is legal and additive: it makes a by-value parameter
-consuming for a **copyable** type. It is never required, and it is redundant on
+`move` on a parameter is written after the colon - `fn consume(t: move Token)` -
+and is legal and additive: it makes a by-value parameter consuming for a
+**copyable** type. It is never required, and it is redundant on
 a parameter whose type is already non-copyable.
 
 > A by-value parameter consumes if its type is non-copyable **or** it is
@@ -544,6 +547,7 @@ the stdlib frame as a note.
    The receiver rule adds `Option.is_some/is_none` and `Result.is_ok/is_err` to
    this step: a read-only method must take `&T` to stay reachable once its
    receiver type is non-copyable. The consuming members of both stay by-value.
+   Landed with step 4.
 2. **Lazy `$"..."`** producing a struct implementing `format`; delete
    `print`/`println(OwnedString)`. An rvalue argument carries no move
    obligation, so a consuming function called on a temporary is otherwise
@@ -552,12 +556,29 @@ the stdlib frame as a note.
    enforcement, and no seed promote: the compiler gains a feature its own
    sources do not yet use, which is not one of the promote gates
    (`docs/architecture.md` §Bootstrap Seed).
-4. **Enforcement**, warning first, then error. `E2128` (a consuming call in
-   receiver position) lands with the rest: it is decided by the callee's
-   parameter shape and the receiver's copyable bit, both of which the pick
-   already carries, so it needs no analysis of its own. Spec 7.2 ("Any function
-   with first parameter `T` or `&T` can be called as `value.func(args)`") gains
-   the exception in the same commit.
+4. **Enforcement** - done. `E2125` and `E2127` are local to the `move` node and
+   settle in `check_move`; `E2128` reads the picked overload's first parameter
+   in `commit_pick`; `E2123`, `E2124`, `E2126` and `W2005` come off the
+   ownership pass (`own_check_body`, `docs/architecture.md`). Spec 7.2 gained
+   the receiver exception. The corpus sweep found nothing to flip: no type in
+   tree is non-copyable yet, so only `E2125` and `W2005` can fire at all, and
+   neither does outside `tests/harness/ownership/`.
+
+   Step 1's remainder came with it: `Option.is_some/is_none` and
+   `Result.is_ok/is_err` now take `&self`, so a read-only method stays reachable
+   on a non-copyable receiver, and their free-call sites moved to the receiver
+   form. That conversion exposed a lowering bug, fixed in the same pass: a
+   pointer-niche `Option(&T)` is an aggregate by shape and a scalar by
+   representation, and `lower_receiver` keyed its scalar path on `is_prim`, so a
+   niche receiver adapting to `&T` was LOADED rather than addressed and the
+   callee dereferenced the payload pointer. The predicate is `!is_by_ref` now;
+   `ufcs_niche_option_ref_receiver` pins it.
+
+   One leftover stands, sequenced later: `std.list.push` stores its element
+   without `move`, so any `List(<non-copyable>)` is `E2124` at the
+   instantiation. The fix is a `move` in stdlib source, which the seed has to
+   parse first - step 5, then 6. `for_ref_loop` and `move_index_element` are
+   skipped on it, which makes step 5 gated by step 4 as well as by step 6.
 5. **Seed promote.** The gate is step 6: stdlib source is about to contain
    `owned`, so the seed has to parse it first.
 6. **Annotate leaf resource types** — `File.fd`, `OwnedString.ptr`. `List` and
@@ -636,6 +657,11 @@ Defer, all following from "the body runs at scope exit":
 `consuming_receiver_deinit` (`h.deinit()`), and
 `consuming_receiver_chained` (`open("f").close()`, an rvalue receiver: also
 refused, so the rule needs no lvalue test of its own).
+
+The receiver rule superseded three tests written before it:
+`copy_ufcs_receiver` and `receiver_paren_form` became
+`consuming_receiver_plain` and `free_call_consuming_form`, and
+`use_after_move_receiver` became `consuming_receiver_deinit`.
 
 Positives that must keep working: `copyable_receiver_by_value`
 (`s.trim()`, `c.is_digit()`), `copyable_receiver_chain`

@@ -9,11 +9,11 @@ pub fn main() i32 {
 
     // Test is_ok / is_err
     let ok_check: i32 = 0
-    if (is_ok(ok_result)) {
+    if (ok_result.is_ok()) {
         ok_check = 1
     }
     let err_check: i32 = 0
-    if (is_err(err_result)) {
+    if (err_result.is_err()) {
         err_check = 1
     }
 

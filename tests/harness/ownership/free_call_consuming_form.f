@@ -1,6 +1,5 @@
-//! TEST: defer_move_then_return
-//! COMPILE-ERROR: E2123 was moved
-//! EXIT: 1
+//! TEST: free_call_consuming_form
+//! EXIT: 3
 
 type FileHandle = struct {
     owned fd: i32
@@ -16,8 +15,11 @@ fn close(h: FileHandle) i32 {
 
 fn deinit(self: FileHandle) {}
 
+// The one spelling a consuming call has.
 pub fn main() i32 {
     let h = open(3)
-    defer deinit(move h)
-    return close(move h)           // error E2123: `h` is moved twice
+    let n = close(move h)
+    let g = open(4)
+    deinit(move g)
+    return n
 }

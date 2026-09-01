@@ -1,7 +1,6 @@
 //! TEST: use_after_move_if_branch
-//! COMPILE-ERROR: E2122 was moved
+//! COMPILE-ERROR: E2123 was moved
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -20,5 +19,5 @@ pub fn main() i32 {
     if h.fd > 0 {
         close(move h)
     }
-    return h.fd                        // error E2122: moved on one path
+    return h.fd                        // error E2123: moved on one path
 }

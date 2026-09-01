@@ -563,6 +563,104 @@ fn copyable_enum(self: &Engine, ed: &EnumDef, nn: &NNominalNode) bool {
     return true
 }
 
+// One hop of the derivation that cleared a type's copyable bit: the aggregate, the field that
+// cleared it, and whether that field says `owned` itself or inherited the bit from its own type.
+pub type CopyBlame = struct {
+    owner: Ty
+    field: String
+    // The field's own type, or null when the field is declared `owned` and its type is beside the
+    // point.
+    field_ty: Ty?
+    // The hop is an enum variant payload rather than a struct field.
+    variant: bool
+}
+
+// The hops that made `ty` non-copyable, outermost first; nothing appended when `ty` is copyable.
+// Virality is unreadable without them: a type three hops from any `owned` still refuses to be
+// copied, and the chain is the only thing that says why.
+//
+// The probe at each field is `copyable_walk`, so the two answers cannot disagree.
+pub fn copy_blame(self: &Engine, ty: Ty, out: &List(CopyBlame)) {
+    const t = self.resolve(ty)
+    self.ty_node(t) match {
+        NArray(arr) => self.copy_blame(arr.elem, out)
+        NTuple(span) => blame_span(self, span, out)
+        NRecord(rec) => blame_span(self, rec.tys, out)
+        NNominal(nn) => blame_nominal(self, t, &nn, out)
+        _ => {}
+    }
+}
+
+fn blame_span(self: &Engine, span: ChildSpan, out: &List(CopyBlame)) {
+    for i in 0..span.len {
+        const el = self.interner.child_at(span, i)
+        if !copyable_walk(self, el) {
+            self.copy_blame(el, out)
+            return
+        }
+    }
+}
+
+fn blame_nominal(self: &Engine, ty: Ty, nn: &NNominalNode, out: &List(CopyBlame)) {
+    const reg = self.nominals match {
+        Some(r) => r
+        None => return
+    }
+    reg.get(nn.id).* match {
+        NomStruct(sd) => blame_struct(self, ty, &sd, nn, out)
+        NomEnum(ed) => blame_enum(self, ty, &ed, nn, out)
+    }
+}
+
+fn blame_struct(self: &Engine, ty: Ty, sd: &StructDef, nn: &NNominalNode, out: &List(CopyBlame)) {
+    let subst = param_subst(self, &sd.type_params, nn.args)
+    defer subst.deinit()
+    for i in 0..sd.fields.len {
+        if sd.fields[i].owned {
+            out.push(CopyBlame {
+                owner = ty,
+                field = sd.fields[i].name,
+                field_ty = null,
+                variant = false,
+            })
+            return
+        }
+    }
+    for i in 0..sd.fields.len {
+        const ft = self.substitute_shared(sd.fields[i].ty, &subst)
+        if !copyable_walk(self, ft) {
+            out.push(CopyBlame {
+                owner = ty,
+                field = sd.fields[i].name,
+                field_ty = Some(ft),
+                variant = false,
+            })
+            self.copy_blame(ft, out)
+            return
+        }
+    }
+}
+
+fn blame_enum(self: &Engine, ty: Ty, ed: &EnumDef, nn: &NNominalNode, out: &List(CopyBlame)) {
+    let subst = param_subst(self, &ed.type_params, nn.args)
+    defer subst.deinit()
+    for vi in 0..ed.variants.len {
+        for pi in 0..ed.variants[vi].payloads.len {
+            const pt = self.substitute_shared(ed.variants[vi].payloads[pi], &subst)
+            if !copyable_walk(self, pt) {
+                out.push(CopyBlame {
+                    owner = ty,
+                    field = ed.variants[vi].name,
+                    field_ty = Some(pt),
+                    variant = true,
+                })
+                self.copy_blame(pt, out)
+                return
+            }
+        }
+    }
+}
+
 // A declaration's field types are written against its own type parameters, so the instantiation's
 // arguments have to go in before the walk sees `&FileHandle` where the source says `&$T`. A
 // partially-applied nominal (fewer arguments than parameters) maps only what it has; the rest stay

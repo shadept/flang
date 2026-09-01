@@ -1,9 +1,9 @@
 //! TEST: copy_via_list_get
-//! COMPILE-ERROR: E2123 copy_via_list_get.f
+//! COMPILE-ERROR: E2124 copy_via_list_get.f
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 import std.list
+import std.option
 
 type FileHandle = struct {
     owned fd: i32
@@ -17,8 +17,8 @@ fn close(h: FileHandle) i32 {
     return h.fd
 }
 
-// `get` returns the element by value while it stays in the list, so the result
-// is a second owner. The error must name THIS line, not `stdlib/std/list.f`.
+// The copy happens inside a `std.list` body, instantiated at `FileHandle` from
+// here. The error must name THIS line, not `stdlib/std/list.f`.
 pub fn main() i32 {
     let xs: List(FileHandle) = list(2)
     xs.push(open(3))

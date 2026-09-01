@@ -1,6 +1,5 @@
 //! TEST: defer_read_captured_before_return
 //! EXIT: 3
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32

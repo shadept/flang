@@ -1,6 +1,6 @@
 //! TEST: container_element_deinit_runs
 //! EXIT: 2
-//! SKIP: RFC-027 not implemented
+//! SKIP: RFC-028 step 7 - the blanket `deinit(&$T)` wins over the element's own
 
 import std.list
 
@@ -27,6 +27,6 @@ pub fn main() i32 {
     let xs: List(FileHandle) = list(2)
     xs.push(open(3))
     xs.push(open(4))
-    (move xs).deinit()
+    xs.deinit()
     return calls
 }

@@ -1,6 +1,6 @@
-//! TEST: receiver_paren_form
-//! EXIT: 3
-//! SKIP: RFC-027 not implemented
+//! TEST: consuming_receiver_deinit
+//! COMPILE-ERROR: E2128
+//! EXIT: 1
 
 type FileHandle = struct {
     owned fd: i32
@@ -14,8 +14,10 @@ fn close(h: FileHandle) i32 {
     return h.fd
 }
 
-// The explicit spelling for a consuming method call.
+fn deinit(self: FileHandle) {}
+
 pub fn main() i32 {
     let h = open(3)
-    return (move h).close()
+    h.deinit()                     // error E2128: write `deinit(move h)`
+    return 0
 }

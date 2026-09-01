@@ -3723,6 +3723,181 @@ Take the address of a value (`&x`) instead of rebuilding one. For pointer arithm
 which stays inside the type system: `base + (header + offset)` rather than
 `(base as usize + header + offset) as &u8`.
 
+### E2123: Use of a Moved Value
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+A binding of a non-copyable type is either live or moved. `move` takes it to moved; using it after
+that reads storage whose contents someone else is now responsible for releasing. An assignment takes
+it back to live.
+
+The check runs over the control-flow graph, and a value moved on *any* path into a merge is moved at
+the merge - there are no drop flags. A `defer` body is checked where it *runs*, at scope exit, on
+every path that leaves the scope; a `return expr` evaluates `expr` first (spec 4.1), so a return
+that moves the value a defer touches leaves the defer reading a moved binding.
+
+#### Example
+
+```flang
+let h = open("a")
+close(move h)
+return h.fd                     // error[E2123]: `h` was moved and cannot be used
+
+if c { close(move h2) }
+h2.fd                           // error[E2123]: moved on one path
+```
+
+#### Solution
+
+Move once. Where two consumers each need the value, give each its own; where one needs to read after
+the other consumes, read first - arguments evaluate left to right, so `f(h.fd, move h)` compiles and
+`f(move h, h.fd)` does not.
+
+---
+
+### E2124: A Consuming Site Requires `move`
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+A copy is reading an lvalue into a second location: the original keeps its storage and the result
+gets its own, so for a non-copyable type both are responsible for one resource. The lvalue sites are
+a rebinding, a by-value argument, a by-value return of a local, a struct-literal field and an
+element store. Writing `move` says the use is a transfer.
+
+An rvalue is never a copy - it has no storage of its own, so nothing is duplicated when it is bound,
+passed or stored, and `close(open("f"))` needs no `move`.
+
+The message names the derivation chain, because virality is unreadable without it: a type several
+hops from any `owned` still refuses to be copied.
+
+#### Example
+
+```flang
+let h = open("f")
+let b = h                       // error[E2124]: `FileHandle` is not copyable: field `fd` is `owned`
+let c = move h                  // ok
+```
+
+#### Solution
+
+Write `move`, or borrow instead: `&h` reads the lvalue without duplicating it, and so does anything
+reached through a `&T` parameter.
+
+---
+
+### E2125: `move` Operand Is Not an Lvalue
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+`move` is a prefix operator over a place - the operand grammar is the grammar of an assignment
+target (spec 3.4.1). An expression with no storage of its own leaves nothing behind to mark moved,
+so there is nothing for the keyword to say.
+
+#### Example
+
+```flang
+let n = move open(3)            // error[E2125]: a call result has no place to move from
+let m = move 3                  // error[E2125]
+let g = move h                  // ok
+```
+
+#### Solution
+
+Drop the `move`. A temporary is already a transfer.
+
+---
+
+### E2126: Assignment Over a Live Binding
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+Assigning to a binding of a non-copyable type that still holds a value overwrites it, and whatever
+it held is leaked. Assignment over a *moved* binding reinitializes it, and is fine.
+
+#### Example
+
+```flang
+let h = open("a")
+h = open("b")                   // error[E2126]: `h` is live
+close(move h)
+h = open("b")                   // ok: reinitializes a moved binding
+```
+
+#### Solution
+
+Consume the old value first.
+
+---
+
+### E2127: Partial Move Outside the Declaring Module
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+Moving a field takes the same rights as writing one: the module that declares a type owns its
+invariants (spec 8, E2114). Inside that module a partial move is unchecked - the base is not marked
+and stays usable, which is what lets a type disassemble itself in its own `deinit`. Outside it, the
+move is refused, so a consuming library cannot take a resource out of someone else's value.
+
+#### Example
+
+```flang
+// outside std.list
+let p = move l.ptr              // error[E2127]: `List` is declared in std.list
+```
+
+#### Solution
+
+Ask the declaring module for a function that takes the value apart.
+
+---
+
+### E2128: A Consuming Call in Receiver Position
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+A by-value receiver of a non-copyable type is not reachable through UFCS (spec 7.2). A consuming
+call spells its transfer one way everywhere - `move` in an argument of a plain call - and the
+parenthesised receiver form does not exist. The test is the callee's first parameter and nothing
+else, so a temporary in receiver position is refused on the same grounds; admitting it would make
+the rule "no consuming receiver unless the receiver happens to be one".
+
+Nothing changes for a copyable type: a copy of a copyable value is unchecked, so its by-value
+receiver is not a consuming site.
+
+#### Example
+
+```flang
+h.close()                       // error[E2128]
+(move h).close()                // error[E2128]: the receiver position, still
+open("f").close()               // error[E2128]: an rvalue receiver, still
+close(move h)                   // ok
+```
+
+#### Solution
+
+Write the free-function form. A read-only function on a non-copyable type takes `&T` instead, which
+keeps its receiver form.
+
+---
+
 ### W1001: Unused Variable
 
 **Category**: Code Quality
@@ -3948,6 +4123,37 @@ fn is_null(p: &u8) bool {
 
 If the cast is deliberate, name the code on the enclosing declaration with `#allow(W2004)`. Several
 codes may be listed: `#allow(W2004, W1002)`.
+
+---
+
+### W2005: `move` at a Site That Does Not Consume
+
+**Category**: Semantic Analysis
+**Severity**: Warning
+
+#### Description
+
+A site consumes when its destination is a by-value slot of a non-copyable type, or a parameter
+declared `move`. Written anywhere else the keyword does nothing. It is a warning rather than an
+error so a `move` that outlives its type becoming copyable does not break the build.
+
+A type parameter is the exception: in a generic body `move value` where `value: T` is written once
+and serves every instantiation, so it is diagnosed against the type as written.
+
+#### Example
+
+```flang
+let n = 3
+let m = move n                  // warning[W2005]: `i32` is copyable
+
+fn consume(t: move Token) i32   // a `move` parameter consumes a copyable type ...
+let t = Token { id = 3 }
+consume(move t)                 // ... so its call sites are required to say so
+```
+
+#### Solution
+
+Drop the `move`, or declare the parameter `move` if the slot is meant to consume.
 
 ---
 

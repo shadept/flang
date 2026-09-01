@@ -1,7 +1,6 @@
 //! TEST: move_in_short_circuit
-//! COMPILE-ERROR: E2122
+//! COMPILE-ERROR: E2123
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -18,5 +17,5 @@ fn close(h: FileHandle) i32 {
 pub fn main() i32 {
     let h = open(3)
     let ok = h.fd > 0 and close(move h) > 0
-    return h.fd                        // error E2122: moved on one path
+    return h.fd                        // error E2123: moved on one path
 }

@@ -1,6 +1,5 @@
 //! TEST: deinit_runs_once
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -23,7 +22,7 @@ fn deinit(self: FileHandle) {
 pub fn main() i32 {
     {
         let h = open(3)
-        defer (move h).deinit()
+        defer deinit(move h)
     }
     return calls
 }

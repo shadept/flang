@@ -1,7 +1,6 @@
 //! TEST: move_then_address_of
-//! COMPILE-ERROR: E2122
+//! COMPILE-ERROR: E2123
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -18,6 +17,6 @@ fn close(h: FileHandle) i32 {
 pub fn main() i32 {
     let h = open(3)
     close(move h)
-    let p = &h                         // error E2122
+    let p = &h                         // error E2123
     return 0
 }

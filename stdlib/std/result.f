@@ -19,17 +19,17 @@ pub fn op_try(self: Result($T, $E)) TryResult(T, Result($U, E)) {
     }
 }
 
-// Check if the result is Ok
-pub fn is_ok(self: Result($T, $E)) bool {
-    return self match {
+// Read-only, so the receiver is a reference: a by-value receiver of a non-copyable type has no
+// receiver form at all (RFC-028), and `r.is_ok()` has to keep working for every payload.
+pub fn is_ok(self: &Result($T, $E)) bool {
+    return self.* match {
         Ok(_) => true
         Err(_) => false
     }
 }
 
-// Check if the result is Err
-pub fn is_err(self: Result($T, $E)) bool {
-    return self match {
+pub fn is_err(self: &Result($T, $E)) bool {
+    return self.* match {
         Ok(_) => false
         Err(_) => true
     }
@@ -128,14 +128,14 @@ pub fn unwrap_err(self: Result($T, $E)) E {
 
 // Assert that a Result is Ok, panic with message if Err
 pub fn assert_ok(r: Result($T, $E), msg: String) {
-    if (is_err(r)) {
+    if (r.is_err()) {
         panic(msg)
     }
 }
 
 // Assert that a Result is Err, panic with message if Ok
 pub fn assert_err(r: Result($T, $E), msg: String) {
-    if (is_ok(r)) {
+    if (r.is_ok()) {
         panic(msg)
     }
 }
@@ -146,14 +146,14 @@ pub fn assert_err(r: Result($T, $E), msg: String) {
 
 test "Result.Ok construction and is_ok" {
     let r: Result(i32, i32) = Result.Ok(42)
-    assert_true(is_ok(r), "Ok should return true for is_ok")
-    assert_true(is_err(r) == false, "Ok should return false for is_err")
+    assert_true(r.is_ok(), "Ok should return true for is_ok")
+    assert_true(r.is_err() == false, "Ok should return false for is_err")
 }
 
 test "Result.Err construction and is_err" {
     let r: Result(i32, i32) = Result.Err(99)
-    assert_true(is_err(r), "Err should return true for is_err")
-    assert_true(is_ok(r) == false, "Err should return false for is_ok")
+    assert_true(r.is_err(), "Err should return true for is_err")
+    assert_true(r.is_ok() == false, "Err should return false for is_ok")
 }
 
 test "unwrap_or returns value on Ok" {

@@ -632,6 +632,10 @@ fn parse_function_param(self: &Parser) CstNodeId {
         self.record_expected(TokenKind.Identifier, "E1002")
     }
     self.expect_into(&b, TokenKind.Colon, "E1002")
+    // `name: move T` - the slot consumes whatever fills it, whether or not its type says so.
+    if self.current_kind() == TokenKind.Move {
+        self.eat_into(&b)
+    }
     const t = self.parse_type()
     self.push_node_into(&b, t)
     // Optional default value

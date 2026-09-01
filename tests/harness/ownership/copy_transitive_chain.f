@@ -1,7 +1,6 @@
 //! TEST: copy_transitive_chain
-//! COMPILE-ERROR: E2123 field `inner` is `Inner`
+//! COMPILE-ERROR: E2124 field `inner` is `Inner`
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type Inner = struct {
     owned fd: i32

@@ -681,6 +681,8 @@ Two names are exempt and keep their source spelling, because something outside t
 
 Any function with first parameter `T` or `&T` can be called as `value.func(args)`. If the function expects `&T`, the receiver is automatically referenced. This is how methods work — no `impl` blocks.
 
+**Exception: the receiver never consumes.** A function whose first parameter is a `T` that is *not copyable* (RFC-028) has no receiver form at all — `h.close()` is E2128, whatever the receiver is. A consuming call spells its transfer one way everywhere, `move` in an argument of a plain call, so the free-function form `close(move h)` is the only spelling, and `(move h).close()` is refused for the position rather than for the `move`. Nothing changes for a copyable type: `s.trim()`, `opt.map(f)` and `c.is_digit()` keep their by-value receivers, because a copy of a copyable value is unchecked and the receiver is therefore not a consuming site. A read-only function on a non-copyable type must take `&T` to stay reachable as a method.
+
 ### 7.3 Lambdas
 
 `fn(x: i32, y: i32) i32 { x + y }` — anonymous. A lambda with no captured names desugars to a synthesised module-level function (effectively a bare function pointer). A lambda that references names from the enclosing scope is a **capturing closure** (RFC-014): the compiler synthesises an anonymous `__Closure_N` struct holding the captures *by value* and an `op_call(self: &__Closure_N, ...)` body that projects each capture reference through `self`.

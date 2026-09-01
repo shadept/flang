@@ -1,7 +1,6 @@
 //! TEST: defer_move_on_break_path
-//! COMPILE-ERROR: E2122
+//! COMPILE-ERROR: E2123
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -21,10 +20,10 @@ fn deinit(self: FileHandle) {}
 pub fn main() i32 {
     let h = open(3)
     loop {
-        defer (move h).deinit()
+        defer deinit(move h)
         if h.fd > 0 {
             break
         }
     }
-    return close(move h)           // error E2122
+    return close(move h)           // error E2123
 }

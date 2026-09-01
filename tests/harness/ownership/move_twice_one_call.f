@@ -1,7 +1,6 @@
 //! TEST: move_twice_one_call
-//! COMPILE-ERROR: E2122
+//! COMPILE-ERROR: E2123
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -21,5 +20,5 @@ fn pair(a: FileHandle, b: FileHandle) i32 {
 
 pub fn main() i32 {
     let h = open(3)
-    return pair(move h, move h)    // error E2122 on the second
+    return pair(move h, move h)    // error E2123 on the second
 }

@@ -1,7 +1,6 @@
 //! TEST: move_then_read_in_arg_list
-//! COMPILE-ERROR: E2122
+//! COMPILE-ERROR: E2123
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -23,5 +22,5 @@ fn take(h: FileHandle, n: i32) i32 {
 // binding.
 pub fn main() i32 {
     let h = open(3)
-    return take(move h, h.fd)      // error E2122
+    return take(move h, h.fd)      // error E2123
 }

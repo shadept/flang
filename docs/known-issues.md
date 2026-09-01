@@ -3436,3 +3436,30 @@ pub fn main() i32 {
 compiles it immediately. The grammar puts imports at the top of a file, so the input is malformed -
 but malformed input is meant to produce a diagnostic, not a spin, and this one is easy to write by
 hand while adding an import to a file that already has declarations.
+
+---
+
+### A Call Directly Before a Bare Block Parses as a Generic Struct Construction
+
+**Status:** Open.
+**Affected:** `parse_identifier_primary` in `lib/flang_parser/src/parser.f`.
+
+`Type(T) { ... }` is generic struct construction, and the parser reaches that shape from
+`name(args)` followed by `{`. A call statement whose next statement is a bare block matches it, so
+the block's contents are parsed as a field list:
+
+```flang
+pub fn main() i32 {
+    let outer = open(3)
+    {
+        let inner = open(4)
+    }
+    return outer
+}
+```
+
+produces `error[E1002]: expected `Identifier`, found `let``. The two forms are not distinguishable
+at the `{`: the parser cannot tell a type argument from a value argument. A literal initializer is
+unaffected (`let outer = 3` followed by a block parses), so the trigger is specifically a call.
+
+Workarounds: put the block first, or give the binding a non-call initializer.

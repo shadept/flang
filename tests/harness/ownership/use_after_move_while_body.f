@@ -1,7 +1,6 @@
 //! TEST: use_after_move_while_body
-//! COMPILE-ERROR: E2122
+//! COMPILE-ERROR: E2123
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -19,7 +18,7 @@ pub fn main() i32 {
     let h = open(3)
     let i = 0
     while i < 2 {
-        close(move h)                  // error E2122 on the second iteration
+        close(move h)                  // error E2123 on the second iteration
         i = i + 1
     }
     return 0

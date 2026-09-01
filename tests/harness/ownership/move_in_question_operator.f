@@ -1,7 +1,6 @@
 //! TEST: move_in_question_operator
-//! COMPILE-ERROR: E2122
+//! COMPILE-ERROR: E2123
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 import std.result
 
@@ -24,7 +23,7 @@ fn checked(h: FileHandle) Result(i32, i32) {
 fn run() Result(i32, i32) {
     let h = open(3)
     let n = checked(move h)?
-    return Ok(h.fd + n)            // error E2122
+    return Ok(h.fd + n)            // error E2123
 }
 
 pub fn main() i32 {

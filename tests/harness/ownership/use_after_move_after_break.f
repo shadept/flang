@@ -1,7 +1,6 @@
 //! TEST: use_after_move_after_break
-//! COMPILE-ERROR: E2122
+//! COMPILE-ERROR: E2123
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -21,5 +20,5 @@ pub fn main() i32 {
         close(move h)
         break
     }
-    return h.fd                        // error E2122
+    return h.fd                        // error E2123
 }

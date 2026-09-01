@@ -1,7 +1,6 @@
 //! TEST: defer_in_loop_body_moves
-//! COMPILE-ERROR: E2122
+//! COMPILE-ERROR: E2123
 //! EXIT: 1
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -21,7 +20,7 @@ fn deinit(self: FileHandle) {}
 pub fn main() i32 {
     let h = open(3)
     for _i in 0..2 {
-        defer (move h).deinit()    // error E2122 on the second iteration
+        defer deinit(move h)    // error E2123 on the second iteration
     }
     return 0
 }

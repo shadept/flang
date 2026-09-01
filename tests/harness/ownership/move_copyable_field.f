@@ -1,7 +1,6 @@
 //! TEST: move_copyable_field
-//! COMPILE-WARNING: W2004
+//! COMPILE-WARNING: W2005
 //! EXIT: 3
-//! SKIP: RFC-027 not implemented
 
 type FileHandle = struct {
     owned fd: i32
@@ -18,6 +17,6 @@ fn close(h: FileHandle) i32 {
 // `fd` is an i32. Moving it transfers nothing.
 pub fn main() i32 {
     let h = open(3)
-    let n = move h.fd              // warning W2004
+    let n = move h.fd              // warning W2005
     return n
 }

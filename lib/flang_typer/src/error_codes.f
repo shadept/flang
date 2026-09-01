@@ -106,6 +106,29 @@ pub const E_INDEX_AMBIGUOUS: String = "E2077"
 // `?` inside a `defer` body - there is no return path to take.
 pub const E_TRY_IN_DEFER: String = "E2091"
 
+// Ownership (RFC-028). A type is non-copyable when a field is declared `owned`, or when a field's
+// own type is non-copyable; copying such a value would duplicate the release responsibility with no
+// way to say which copy holds it.
+//
+// A binding of a non-copyable type is live or moved: `move` takes it to moved, an assignment takes
+// it back to live.
+pub const E_USE_AFTER_MOVE: String = "E2123"
+// A site that would copy a non-copyable value: a rebinding, a by-value argument, a struct-literal
+// field, an element store, or a by-value return of a local.
+pub const E_COPY_NEEDS_MOVE: String = "E2124"
+// `move` over something with no storage to take. An rvalue leaves nothing behind, so there is
+// nothing to mark moved.
+pub const E_MOVE_NOT_LVALUE: String = "E2125"
+// An assignment over a binding that still holds a value: the old one is overwritten and whatever it
+// held is leaked.
+pub const E_ASSIGN_OVER_LIVE: String = "E2126"
+// `move base.field` outside the module declaring `base`'s type. Moving a field takes the same
+// rights as writing one (E2114).
+pub const E_PARTIAL_MOVE: String = "E2127"
+// A consuming call written in receiver position. A by-value receiver of a non-copyable type is not
+// reachable through UFCS; the free-call form spells the transfer.
+pub const E_CONSUMING_RECEIVER: String = "E2128"
+
 // A `let`/`const` re-declared in the SAME scope. Cross-scope shadowing stays silent; this only
 // fires when the earlier binding becomes unreachable in the same block (reference parity: a warning
 // locally, an error at module scope, where it is E2005).
@@ -128,3 +151,7 @@ pub const W_UNKNOWN_DIRECTIVE: String = "W2003"
 // A reference cast to an integer. Reading an address is legitimate (null checks, containment
 // checks, pointer identity), so the warning is suppressed per site with `#allow(W2004)`.
 pub const W_REF_TO_INT: String = "W2004"
+
+// `move` at a site that does not consume. It does nothing, so a `move` that outlives its type
+// becoming copyable does not break the build.
+pub const W_MOVE_NO_CONSUME: String = "W2005"

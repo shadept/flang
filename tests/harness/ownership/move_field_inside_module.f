@@ -1,6 +1,5 @@
 //! TEST: move_field_inside_module
 //! EXIT: 3
-//! SKIP: RFC-027 not implemented
 
 type Inner = struct {
     owned fd: i32
