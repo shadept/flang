@@ -3032,32 +3032,40 @@ fn build_range_slot(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty, sv: Operand, ev:
 // A UFCS receiver adapted to the winner's first-parameter shape. The checker commits value <-> &T
 // adaptation in-set and REWRITES the receiver node's recorded type to the adapted form, so the node
 // table cannot tell the two apart - the decision reads the receiver's MEMORY type (a binding's
-// declared type, a field's substituted declaration) instead. Only scalar-&-primitive shapes need
-// care: an aggregate's value IS its address, so every aggregate combination coincides and takes the
-// plain path.
-//   - param `&prim`, memory holds the prim  -> the place's address
-//   - param `&prim`, memory holds `&prim`   -> the pointer value
-//   - param prim,    memory holds `&prim`   -> load through
+// declared type, a field's substituted declaration) instead. Only scalar shapes need care: an
+// in-memory aggregate's value IS its address, so every aggregate combination coincides and takes
+// the plain path.
+//   - param `&scalar`, memory holds the scalar  -> the place's address
+//   - param `&scalar`, memory holds `&scalar`   -> the pointer value
+//   - param prim,      memory holds `&prim`     -> load through
 // Anything else scalar-adapted (a temporary receiver) refuses - passing raw bytes at the wrong
 // indirection was a silent miscompile (an i8 handed to a `&u8` parameter). Receivers that resolved
 // through an op_deref chain never reach here - `lower_call` routes them to `lower_deref_receiver`
 // via `receiver_derefs`.
+//
+// Scalar here is `!is_by_ref`, not `is_prim`: a reference, a function value and the pointer-niche
+// `Option(&T)` are all pointer-shaped values with no storage of their own, so a place holding one
+// has to be addressed rather than loaded.
 fn lower_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, want: &Ty) Operand {
     let want_inner = tn(ctx, want.*) match {
         NRef(i) => Some(i)
         _ => null
     }
-    let want_ref_prim = want_inner.is_some() and is_prim(ctx, want_inner.unwrap())
+    let want_ref_scalar = false
+    if want_inner.is_some() {
+        let wi = want_inner.unwrap()
+        want_ref_scalar = !is_by_ref(ctx, &wi)
+    }
 
-    if want_ref_prim {
+    if want_ref_scalar {
         let inner = want_inner.unwrap()
         let mem = receiver_place_mem(ctx, bb, env, recv)
         if mem.is_none() {
             // A temporary receiver (`n.double().add_five()`): spill the value into a fresh slot and
             // pass its address - the same `&temporary` rule call arguments already have.
             let rty = node_ty(ctx, expr_span(recv))
-            if !prim_rep_eq(ctx, rty, inner) {
-                return unlowerable_why(ctx, "scalar &prim receiver with no place")
+            if !scalar_rep_eq(ctx, rty, inner) {
+                return unlowerable_why(ctx, "scalar &T receiver with no place")
             }
             let v = lower_expr(ctx, bb, env, recv)
             let slot = alloc_slot(bb, ir_of(ctx, rty))
@@ -3065,11 +3073,11 @@ fn lower_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, wan
             return slot
         }
         let m = mem.unwrap()
-        if ref_prim_rep_eq(ctx, m.ty, want.*) {
-            // The memory already holds the &prim - its value is the arg.
+        if ref_scalar_rep_eq(ctx, m.ty, want.*) {
+            // The memory already holds the &T - its value is the arg.
             return bb.load(IrType.Ptr, m.addr)
         }
-        if prim_rep_eq(ctx, m.ty, inner) {
+        if scalar_rep_eq(ctx, m.ty, inner) {
             return m.addr
         }
         return unlowerable_why(ctx, "scalar receiver adaptation mismatch")
@@ -3123,6 +3131,27 @@ fn lower_deref_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Exp
 // not in machine representation (a `&usize` receiver on a `deinit(&u64)` winner - equal
 // specificity, zero-cost coercion, declaration order arbitrates). The bytes are the same; the call
 // is sound.
+// Two types whose VALUES are the same machine word. An in-memory aggregate is never one: its value
+// is an address, which is a different thing from being pointer-shaped.
+fn scalar_rep_eq(ctx: &LowerCtx, a: Ty, b: Ty) bool {
+    if is_by_ref(ctx, &a) or is_by_ref(ctx, &b) {
+        return false
+    }
+    return ir_of(ctx, a) == ir_of(ctx, b)
+}
+
+fn ref_scalar_rep_eq(ctx: &LowerCtx, a: Ty, b: Ty) bool {
+    let ia = tn(ctx, a) match {
+        NRef(i) => i
+        _ => return false
+    }
+    let ib = tn(ctx, b) match {
+        NRef(i) => i
+        _ => return false
+    }
+    return scalar_rep_eq(ctx, ia, ib)
+}
+
 fn prim_rep_eq(ctx: &LowerCtx, a: Ty, b: Ty) bool {
     let pa = tn(ctx, a) match {
         NPrim(p) => p
@@ -3133,18 +3162,6 @@ fn prim_rep_eq(ctx: &LowerCtx, a: Ty, b: Ty) bool {
         _ => return false
     }
     return prim_ir(pa) == prim_ir(pb)
-}
-
-fn ref_prim_rep_eq(ctx: &LowerCtx, a: Ty, b: Ty) bool {
-    let ia = tn(ctx, a) match {
-        NRef(i) => i
-        _ => return false
-    }
-    let ib = tn(ctx, b) match {
-        NRef(i) => i
-        _ => return false
-    }
-    return prim_rep_eq(ctx, ia, ib)
 }
 
 fn is_prim(ctx: &LowerCtx, ty: Ty) bool {
