@@ -65,6 +65,8 @@ static char** materialize_argv(const uintptr_t* packed, size_t n) {
 #include <windows.h>
 #include <io.h>
 #include <fcntl.h>
+/* The C name is deprecated in the MSVC CRT, which only ships the underscored one. */
+#define strdup _strdup
 
 extern char** environ;
 

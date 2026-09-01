@@ -236,6 +236,7 @@ int __flang_fs_closedir(void* dir, int32_t* out_err) {
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <direct.h>
+#include <io.h>
 
 int __flang_fs_mkdir(const char* path, int32_t* out_err) {
     if (!path) { *out_err = FS_INVALID_ARGUMENT; return FS_R_ERR; }
@@ -290,7 +291,6 @@ int __flang_fs_stat(const char* path,
     return FS_R_OK;
 }
 
-#include <io.h>
 #include <fcntl.h>
 
 static int fs_open_flags(int32_t mode) {

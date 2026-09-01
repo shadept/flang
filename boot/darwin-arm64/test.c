@@ -17,9 +17,10 @@
  * The ledger's own nodes come from raw malloc and are never routed back
  * through the FLang allocator, so tracking cannot recurse.
  *
- * FLANG_LEAK_TRACE in the environment records a native stack per block and
- * reports the leaked ones grouped by stack. Off by default - a stack per
- * allocation costs both the capture and the memory to hold it.
+ * `flang test --stats` makes the generated runner arm leak tracing before
+ * the first allocation, which records a native stack per block and reports
+ * the leaked ones grouped by stack. Off by default - a stack per allocation
+ * costs both the capture and the memory to hold it.
  *
  * Single-threaded, like the rest of the FLang runtime.
  *
@@ -57,14 +58,15 @@ struct flang_test_block {
     int nframes;
 };
 
-/* -1 until the first allocation reads the environment. */
-static int flang_leak_trace = -1;
+static int flang_leak_trace = 0;
+
+/* Armed by the generated test runner before the tracking allocator is
+   installed, so no block predates the decision. */
+void __flang_test_set_leak_trace(int on) {
+    flang_leak_trace = on ? 1 : 0;
+}
 
 static int flang_leak_tracing(void) {
-    if (flang_leak_trace < 0) {
-        const char *v = getenv("FLANG_LEAK_TRACE");
-        flang_leak_trace = (v != NULL && v[0] != '\0' && v[0] != '0') ? 1 : 0;
-    }
     return flang_leak_trace;
 }
 
@@ -209,7 +211,7 @@ static int flang_leak_same_stack(const struct flang_test_block *a,
 /* Every distinct allocation stack among the live blocks, with how many
    blocks and bytes were born there. Blocks with no stack (tracing off, or a
    platform with no capture) are skipped, so this prints nothing at all when
-   FLANG_LEAK_TRACE is unset.
+   tracing was never armed.
 
    ponytail: O(n^2) over the leaked blocks, which is a debug path over
    hundreds of blocks; sort by stack hash if a suite ever leaks thousands. */
