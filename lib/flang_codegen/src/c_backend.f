@@ -20,6 +20,7 @@ import std.env
 import std.io.dir
 import std.io.file
 import std.io.fs
+import std.io.print
 import std.io.reader
 import std.list
 import std.option
@@ -30,6 +31,7 @@ import std.string
 import std.string_builder
 import std.test
 import std.time
+
 import flang_codegen.backend
 import flang_codegen.builder
 import flang_codegen.fir

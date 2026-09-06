@@ -5,8 +5,10 @@
 //! STDOUT: 2
 //! STDOUT: 20
 
-// Pins spec 5.1.1 beyond call arguments: binary operands, struct-literal
-// fields, and the operands of an index expression.
+import std.io.print
+
+// Pins spec 5.1.1 beyond call arguments: binary operands, struct-literal fields, and the operands
+// of an index expression.
 
 type Pair = struct {
     first: i32

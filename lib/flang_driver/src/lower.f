@@ -51,31 +51,33 @@
 // `ast` and `fir` both export `BinaryOp`/`UnaryOp`; neither is named here (operators match AST
 // variants and emit through builder methods).
 
-import std.set
 import std.allocator
 import std.dict
 import std.list
 import std.option
+import std.set
 import std.string
 import std.string_builder
 import std.test
+
+import flang_analysis.analyze
+import flang_codegen.builder
+import flang_codegen.fir
 import flang_core.span
 import flang_parser.ast
 import flang_parser.comptime
 import flang_parser.lexer
-import flang_typer.type
-import flang_typer.interner
-import flang_typer.node_id
-import flang_typer.result
-import flang_typer.nominal_registry
 import flang_typer.function_registry
 import flang_typer.inference_results
+import flang_typer.interner
+import flang_typer.node_id
+import flang_typer.nominal_registry
+import flang_typer.result
 import flang_typer.scheme
 import flang_typer.specialization
+import flang_typer.type
 import flang_typer.well_known
-import flang_codegen.fir
-import flang_codegen.builder
-import flang_analysis.analyze
+
 import flang_driver.layout
 import flang_driver.param_escape
 import flang_driver.symbol_table

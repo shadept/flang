@@ -3,6 +3,7 @@
 
 // Test memcpy - copy data between two buffers
 
+import std.io.print
 import std.mem
 
 pub fn main() {

@@ -6,6 +6,7 @@
 
 pub import std.allocator
 pub import std.dict
+pub import std.io.print
 pub import std.iter
 pub import std.list
 pub import std.mem

@@ -12,8 +12,9 @@ import std.allocator
 import std.dict
 import std.option
 import std.stack
-import flang_typer.scheme
+
 import flang_typer.node_id
+import flang_typer.scheme
 
 pub type Binding = struct {
     scheme: Scheme

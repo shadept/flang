@@ -2,16 +2,16 @@
 //! EXIT: 0
 //! STDOUT: <9>
 
-// `println`'s generic fallback routes an arbitrary value through a local
-// builder, so a type with only a `format` prints without a `println` of its own.
+// `println`'s generic fallback routes an arbitrary value through a local builder, so a type with
+// only a `format` prints without a `println` of its own.
 
-import std.string_builder
+import std.io.print
 import std.io.writer
 import std.string
-import core.io
+import std.string_builder
 
 type Tag = struct {
-    n: i32,
+    n: i32
 }
 
 pub fn format(self: &Tag, w: Writer, spec: String) {

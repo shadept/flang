@@ -2,23 +2,26 @@
 // pipeline `flang_driver.analyze` opens.
 
 import std.allocator
+import std.io.fs
+import std.io.print
 import std.list
 import std.option
 import std.result
 import std.string
 import std.string_builder
-import std.io.fs
 import std.time
+
+import flang_analysis.analyze
+import flang_analysis.resolver
+import flang_codegen.backend
+import flang_codegen.c_backend
+import flang_codegen.fir
+import flang_codegen.instrument
 import flang_parser.ast
 import flang_parser.comptime
 import flang_typer.result
-import flang_codegen.fir
-import flang_codegen.backend
-import flang_codegen.c_backend
-import flang_codegen.instrument
-import flang_analysis.analyze
+
 import flang_driver.lower
-import flang_analysis.resolver
 
 // Lower `unit` to FIR and compile+link it to an executable at `output_path` (the backend appends a
 // platform extension if missing). The unit must be error-free - callers check `error_count` first;

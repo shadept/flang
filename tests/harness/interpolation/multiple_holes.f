@@ -2,9 +2,9 @@
 //! EXIT: 0
 //! STDOUT: 2+3=5
 
-import std.string_builder
+import std.io.print
 import std.string
-import core.io
+import std.string_builder
 
 pub fn main() i32 {
     let a = 2i32

@@ -2,9 +2,11 @@
 //! EXIT: 0
 //! STDOUT: 12 8 23 6 7 -1 1
 
+import std.io.print
+
 // A naked enum's explicit `= N` is its wire tag: `e as i32` yields the declared value, not the
-// declaration index, and `n as E` reads that same value back. Auto-incremented and negative tags
-// go through the same numbering.
+// declaration index, and `n as E` reads that same value back. Auto-incremented and negative tags go
+// through the same numbering.
 
 type Kind = enum {
     Field = 8
@@ -41,8 +43,8 @@ pub fn main() i32 {
     // Back the other way: the tag names the variant it was taken from.
     const round: Sign = 1i32 as Sign
     const tag: i32 = round match {
-        Negative => -1,
-        Zero => 0,
+        Negative => -1
+        Zero => 0
         Positive => 1
     }
     println(tag)

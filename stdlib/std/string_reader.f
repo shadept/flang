@@ -4,10 +4,10 @@
 // Also provides MemReader - a Reader implementation over a byte slice in memory. Any type with
 // #string_reader gets a reader() method returning a MemReader.
 
-import std.string
-import std.mem
-import std.io.reader
 import std.interface
+import std.io.reader
+import std.mem
+import std.string
 
 // Reader over a byte slice in memory.
 // Create via mem_reader(s), then call mr.reader() to get a Reader interface. The MemReader must

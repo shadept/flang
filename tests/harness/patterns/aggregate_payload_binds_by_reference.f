@@ -3,7 +3,8 @@
 //! STDOUT: 2
 //! STDOUT: 7
 //! EXIT: 0
-import core.io
+
+import std.io.print
 import std.list
 import std.option
 

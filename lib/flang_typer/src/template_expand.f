@@ -11,21 +11,23 @@
 
 import std.allocator
 import std.dict
-import std.path
 import std.list
 import std.option
+import std.path
 import std.result
 import std.string
 import std.string_builder
+
 import flang_core.diagnostic
 import flang_core.span
 import flang_parser.ast
 import flang_parser.comptime
-import flang_parser.lexer
 import flang_parser.cst
+import flang_parser.lexer
 import flang_parser.parser
 import flang_parser.projector
 import flang_parser.template
+
 import flang_typer.checker
 import flang_typer.error_codes
 import flang_typer.nominal_registry

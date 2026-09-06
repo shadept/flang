@@ -17,8 +17,10 @@ import std.result
 import std.string
 import std.string_builder
 import std.test
+
 import flang_core.diagnostic
 import flang_core.span
+
 import flang_parser.ast
 import flang_parser.comptime
 import flang_parser.cst

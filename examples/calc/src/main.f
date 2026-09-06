@@ -1,8 +1,10 @@
-import calc.ast
-import calc.parser
-import calc.eval
-import std.env
+import std.envx
+import std.io.print
 import std.readline
+
+import calc.ast
+import calc.eval
+import calc.parser
 
 fn eval_line(input: String) {
     if input.len == 0 {

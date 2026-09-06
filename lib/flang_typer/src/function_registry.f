@@ -15,9 +15,11 @@ import std.option
 import std.set
 import std.string
 import std.test
+
 import flang_core.span
-import flang_typer.type
+
 import flang_typer.scheme
+import flang_typer.type
 import flang_typer.visibility
 
 pub type FunctionScheme = struct {

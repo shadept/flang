@@ -2,7 +2,8 @@
 //! STDOUT: early
 //! STDOUT: void_call
 //! EXIT: 0
-import core.io
+
+import std.io.print
 
 pub fn gate() bool {
     return false

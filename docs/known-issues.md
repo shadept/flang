@@ -328,6 +328,20 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### The formatter refuses three harness files
+
+**Status:** Open (found 2026-09-06)
+**Affected:** `lib/flang_fmt`
+
+`flang fmt` on `tests/harness/patterns/tuple_pattern.f`, `tests/harness/patterns/range_pattern.f`
+and `tests/harness/interpolation/named_args.f` reports "formatter verification failed (formatter
+bug) - file left untouched": the rendered output does not re-lex to the input's tokens. All three
+reproduce on the committed files, independent of the import sorter. They stay unformatted until
+the renderer bug is found; each has a tuple or range pattern, or a named argument inside an
+interpolation hole, which is where to look.
+
+---
+
 ### The formatter does not round-trip a string literal containing a raw newline
 
 **Status:** Open
@@ -722,6 +736,13 @@ and the parameter is never pinned. Whether a lambda infers therefore depends on
 what else is imported, which is not a property a caller can reason about.
 
 Workaround: annotate the parameter (`fn(s: OwnedString) { ... }`).
+
+The return side has the same shape. `opt.map(extract)` leaves `$U` open until the drain, and a
+consumer with several overloads pins it to whichever concrete candidate it tries first:
+`println(mapped.unwrap())` bound `$U` to `OwnedString` once `std.io.print` made that the first
+concrete `println` (2026-09-06; it had been `i32` by the same luck under `core.io`). Annotating the
+binding (`const mapped: Option(i32) = ...`) is the workaround, and the harness test
+`generics/option_map_enum_repro.f` carries it.
 
 The fix is a way for a signature to constrain `$F` - "F is callable with T" -
 so the pin comes from the declaration rather than from resolution order, while
@@ -2172,7 +2193,11 @@ Same family as the stack-variable bug above: a non-pub helper that took the addr
 
 ### Lazy Combinator Set Over Slices and Iterators
 
-**Status:** Future work — shape decided, not implemented
+**Status:** Landed — `std.iter` carries the lazy set (`map`, `filter`, `take`,
+`skip`, `take_while`, `skip_while`, `zip`, `zip_longest`, `chain`, `enumerate`
+and the terminal folds), `core.slice` gives `SliceIterator`. Only `flat_map` is
+missing, and that is a checker gap (ticket 019 §5). The entry stays for the two
+invariants below, which are design rules rather than pending work.
 **Affected:** `stdlib/std/list.f`, `stdlib/core/slice.f`, `stdlib/std/iter.f`
 
 `List` has an eager set (`map`, `flat_map`, `filter`, `remove`, `fold`,
@@ -2209,9 +2234,6 @@ that as intentional, so no one adds such a rule later for convenience.
 2. Do not define a lazy variant with a `List` receiver. Two overloads differing
    only in return type is the one case overload resolution cannot settle.
 
-**Not scheduled.** The compiler sticks to `List` and the eager set: it is the
-main consumer, it works over lists throughout, and iterator machinery would
-enlarge the subset that has to lower before self-hosting completes.
 
 ---
 
@@ -2252,13 +2274,19 @@ The parser only accepts `import` statements (including `pub import`) before any 
 
 ---
 
-### Minimal I/O (`core/io.f`) Uses C stdio
+### Minimal I/O (`core/io.f`) Uses C stdio — RESOLVED
 
-**Status:** Intentional stopgap
+**Status:** Resolved 2026-09-06
 
-`print`/`println` use C `printf` with `"%.*s"`. Embedded NUL bytes truncate output.
-
-**Future:** Replace with `std/io/fmt.f` using `fwrite` in Milestone 19.
+`print`/`println` lived in `core.io` on `printf("%.*s")`: an embedded NUL truncated the output,
+`u32` printed through a `%ud` typo, and a float rendered as printf's `%g` while `format` rendered
+it fixed. They are now `std.io.print` (also in `std.prelude`, and re-exported by the `std.io` façade): one generic `print(value: $T)` over
+the value's `format`, plus template forms `println("{} and {}", a, b)` over `std.format`'s `format_to`, holes in the
+interpolation grammar. Each print formats into a stack buffer over the `std.io` `stdout` file and flushes once,
+so a value formatted piecewise is one `write(2)`; nothing buffers across calls. `core.io` is gone:
+`panic` writes its one line through its own sidecar (`core/panic.c`, `__flang_panic`), and core
+carries what the language needs to be self-contained and no more - printing is not that. `println(1.5e10)`
+therefore prints `15000000000`, not `1.5e+10`, and a file that prints imports `std.io.print`.
 
 ---
 

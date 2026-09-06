@@ -6,9 +6,10 @@
 // AST (see ast.f) is a typed view computed on demand from the CST and is what the type checker
 // consumes.
 
-import std.enum
 import std.allocator
+import std.enum
 import std.list
+
 import flang_parser.token
 import flang_parser.trivia
 

@@ -23,6 +23,7 @@ import std.string
 import std.string_builder
 import std.terminal
 import std.test
+
 import flang_core.diagnostic
 import flang_core.line_index
 import flang_core.span

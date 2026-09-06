@@ -19,6 +19,7 @@
 // checker to parse; the profiler's own output goes to stderr and the `--profile-out` path.
 
 import std.env
+import std.io.print
 import std.option
 import std.profile
 import std.result

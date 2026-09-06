@@ -7,8 +7,9 @@ import std.list
 import std.option
 import std.string
 import std.string_builder
-import flang_parser.ast
+
 import flang_core.span
+import flang_parser.ast
 
 // ─────────────────────────────────────────────────────────────────────────
 // Entry point

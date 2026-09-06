@@ -2,12 +2,18 @@
 //! STDOUT: 42
 //! STDOUT: 10
 //! STDOUT: 7
+import std.io.print
+
 pub fn add(a: i32, b: i32) i32 {
     a + b
 }
 
 pub fn max(a: i32, b: i32) i32 {
-    if (a > b) { a } else { b }
+    if (a > b) {
+        a
+    } else {
+        b
+    }
 }
 
 pub fn compute() i32 {

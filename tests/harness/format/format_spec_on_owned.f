@@ -2,13 +2,12 @@
 //! EXIT: 0
 //! STDOUT: [  ab][cd  ]
 
-// The spec-taking `OwnedString` and `StringBuilder` appends pad like `String`
-// does. The OwnedString overload consumes its argument, as the unspecced one
-// already did.
+// The spec-taking `OwnedString` and `StringBuilder` appends pad like `String` does. The OwnedString
+// overload consumes its argument, as the unspecced one already did.
 
-import std.string_builder
+import std.io.print
 import std.string
-import core.io
+import std.string_builder
 
 pub fn main() i32 {
     let out = string_builder(32)

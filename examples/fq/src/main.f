@@ -1,6 +1,7 @@
 import std.encoding.json
 import std.env
 import std.io.file
+import std.io.print
 
 fn print_usage() {
     println("Usage: fq [file] <query>")

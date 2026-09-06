@@ -26,8 +26,10 @@ import std.option
 import std.result
 import std.string
 import std.string_builder
+
 import flang_core.diagnostic
 import flang_core.span
+
 import flang_parser.ast
 
 pub type ComptimeCtx = struct {

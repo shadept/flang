@@ -11,8 +11,9 @@
 
 import std.allocator
 import std.set
-import flang_typer.type
+
 import flang_typer.interner
+import flang_typer.type
 
 // `forall {quantified}. body`. A scheme with empty `quantified` is monomorphic - `specialize`
 // short-circuits.

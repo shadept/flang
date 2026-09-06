@@ -2,17 +2,17 @@
 //! EXIT: 0
 //! STDOUT: 00042|2.50|  true|hi  | z |ff|P007|
 
-// Every builtin has a `format`, so a generic body can format whatever it was
-// handed without knowing which types have an `append` overload of their own.
+// Every builtin has a `format`, so a generic body can format whatever it was handed without knowing
+// which types have an `append` overload of their own.
 
-import std.string_builder
+import std.io.print
 import std.io.writer
 import std.string
-import core.io
+import std.string_builder
 
 type Point = struct {
-    x: i32,
-    y: i32,
+    x: i32
+    y: i32
 }
 
 pub fn format(self: Point, w: Writer, spec: String) {

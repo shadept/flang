@@ -2,22 +2,22 @@
 //! EXIT: 0
 //! STDOUT: Pair(P(1,2), P(3,4))
 
-// One `format` reaching another through the generic append: the inner type's
-// impl is found from the outer impl's body.
+// One `format` reaching another through the generic append: the inner type's impl is found from the
+// outer impl's body.
 
-import std.string_builder
+import std.io.print
 import std.io.writer
 import std.string
-import core.io
+import std.string_builder
 
 type Point = struct {
-    x: i32,
-    y: i32,
+    x: i32
+    y: i32
 }
 
 type Pair = struct {
-    a: Point,
-    b: Point,
+    a: Point
+    b: Point
 }
 
 pub fn format(self: &Point, w: Writer, spec: String) {

@@ -2,6 +2,7 @@
 // simplicity (allocator support to be added later).
 
 import core.math
+
 import std.allocator
 import std.dict
 import std.mem

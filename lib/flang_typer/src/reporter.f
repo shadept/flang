@@ -14,13 +14,15 @@ import std.list
 import std.option
 import std.string
 import std.string_builder
+
 import flang_core.diagnostic
 import flang_core.span
-import flang_typer.type
-import flang_typer.interner
-import flang_typer.inference_engine
-import flang_typer.nominal_registry
+
 import flang_typer.error_codes
+import flang_typer.inference_engine
+import flang_typer.interner
+import flang_typer.nominal_registry
+import flang_typer.type
 
 // Where the unification happened. The caller carries the span and chooses the error code (e.g.
 // `E2071` for return-statement mismatch vs `E2002` for general type mismatch) and may supply a

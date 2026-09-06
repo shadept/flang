@@ -8,8 +8,8 @@
 // BufferedReader is a borrowed view.
 
 import std.allocator
-import std.mem
 import std.interface
+import std.mem
 import std.string
 import std.string_builder
 import std.string_reader

@@ -9,8 +9,8 @@
 //       process(line.value)
 //   }
 
-import std.option
 import std.mem
+import std.option
 import std.terminal
 
 // =============================================================================

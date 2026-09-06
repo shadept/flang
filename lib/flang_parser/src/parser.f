@@ -16,11 +16,13 @@ import std.allocator
 import std.list
 import std.string
 import std.string_builder
-import flang_parser.token
-import flang_parser.cst
-import flang_parser.trivia
+
 import flang_core.diagnostic
 import flang_core.span
+
+import flang_parser.cst
+import flang_parser.token
+import flang_parser.trivia
 
 // Internal builder for an in-progress CST node. The parser pushes Tokens and finished sub-nodes
 // onto `children`; `start`/`end` track the byte span covered so far.

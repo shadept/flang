@@ -11,8 +11,9 @@ import std.list
 import std.option
 import std.string
 import std.string_builder
-import flang_typer.visibility
+
 import flang_typer.nominal_registry
+import flang_typer.visibility
 
 pub type FqnMap = struct(V) {
     // FQN -> value. Keys are views into `owned_fqns`; values are stored as-is and never freed here

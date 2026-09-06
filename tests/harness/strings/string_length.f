@@ -3,7 +3,8 @@
 //! STDOUT: hello
 //! STDOUT: world!!!
 import core.string
-import core.io
+
+import std.io.print
 
 pub fn main() i32 {
     let s1: String = "hello"
@@ -12,4 +13,3 @@ pub fn main() i32 {
     println(s2)
     return (s1.len + s2.len) as i32
 }
-

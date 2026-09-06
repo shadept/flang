@@ -9,11 +9,13 @@
 
 import std.env
 import std.io.file
+import std.io.print
 import std.list
 import std.option
 import std.result
 import std.string
 import std.string_builder
+
 import flang_core.line_index
 import flang_parser.lexer
 import flang_parser.token

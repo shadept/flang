@@ -7,8 +7,10 @@ import std.list
 import std.string
 import std.string_builder
 import std.test
+
 import flang_core.span
 import flang_parser.ast
+
 import flang_lsp.handlers.syntax_diagnostics
 
 // LSP SymbolKind, tagged with the protocol's fixed numbering; `kind as i64` is the wire value.

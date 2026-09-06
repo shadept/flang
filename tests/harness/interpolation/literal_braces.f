@@ -2,9 +2,9 @@
 //! EXIT: 0
 //! STDOUT: { 42 }
 
-import std.string_builder
+import std.io.print
 import std.string
-import core.io
+import std.string_builder
 
 pub fn main() i32 {
     let x = 42i32

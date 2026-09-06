@@ -3,6 +3,7 @@
 // LSP encodes the same values into the protocol's own shape.
 
 import std.string
+
 import flang_core.span
 
 // Severity ladder used by every phase. The order matters: clients filter by `severity >=

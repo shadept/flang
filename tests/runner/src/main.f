@@ -8,6 +8,7 @@
 //   - a project whose `main` exists does not run it - the runner is the entry point
 //   - the process exits non-zero when anything failed
 
+import std.io.print
 import std.test
 
 fn main() i32 {

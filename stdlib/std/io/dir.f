@@ -15,6 +15,10 @@
 // "." and ".." are filtered at the syscall layer - callers never see them.
 
 import std.allocator
+import std.io.fs
+import std.io.internal.fs
+import std.io.print
+import std.io.types
 import std.list
 import std.option
 import std.owned
@@ -23,9 +27,6 @@ import std.result
 import std.string
 import std.string_builder
 import std.test
-import std.io.fs
-import std.io.internal.fs
-import std.io.types
 
 pub type DirError = enum {
     IOError

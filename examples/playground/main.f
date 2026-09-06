@@ -1,5 +1,5 @@
 import std.io.file
-import std.io.fmt
+import std.io.print
 import std.char
 import std.derive
 import std.iter

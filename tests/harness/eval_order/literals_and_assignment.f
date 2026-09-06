@@ -5,9 +5,10 @@
 //! STDOUT: place=1
 //! STDOUT: value=2
 
-// Array-literal elements and the two halves of an assignment. The assignment
-// case pins which side runs first, which is the part of left-to-right that is
-// easiest to get wrong.
+import std.io.print
+
+// Array-literal elements and the two halves of an assignment. The assignment case pins which side
+// runs first, which is the part of left-to-right that is easiest to get wrong.
 
 fn tick(counter: &i32) i32 {
     counter.* = counter.* + 1

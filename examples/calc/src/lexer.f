@@ -1,6 +1,7 @@
-import calc.ast
 import std.char
 import std.conv
+
+import calc.ast
 
 pub type Lexer = struct {
     input: String

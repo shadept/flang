@@ -7,9 +7,10 @@
 //! STDOUT: after-loop
 //! STDOUT: outer
 
-// `break` exits the loop body - every defer registered inside it (including
-// in nested blocks) fires first, innermost out. After the loop, the
-// function-level defer fires on the implicit return.
+import std.io.print
+
+// `break` exits the loop body - every defer registered inside it (including in nested blocks) fires
+// first, innermost out. After the loop, the function-level defer fires on the implicit return.
 
 fn emit(tag: String) {
     println(tag)

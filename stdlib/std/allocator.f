@@ -351,13 +351,10 @@ pub type FixedBufferAllocatorState = struct {
     offset: usize
 }
 
-// Align a value up to the given alignment.
-// alignment must be a power of 2.
-// TODO: Needs bitwise AND operator to implement properly.
-//   Correct implementation: return (value + mask) & (0 - alignment)
+// Align a value up to the given alignment, which must be a power of 2.
 fn align_up(value: usize, alignment: usize) usize {
     let mask = alignment - 1
-    return value + mask - (value + mask) % alignment
+    return (value + mask) & ~mask
 }
 
 fn fixed_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {

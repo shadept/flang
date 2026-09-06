@@ -5,11 +5,12 @@
 //   3. Discover a C toolchain (MSVC / clang / gcc / xcrun) and compile.
 //   4. Spawn the produced executable.
 //
-// On success the program prints the demo banner, three precomputed sums
-// (so we know FIR control flow lowers correctly), and exits 0.
+// On success the program prints the demo banner, three precomputed sums (so we know FIR control
+// flow lowers correctly), and exits 0.
 
 import std.allocator
 import std.io.file
+import std.io.print
 import std.list
 import std.option
 import std.path
@@ -17,10 +18,11 @@ import std.process
 import std.result
 import std.string
 import std.string_builder
+
 import flang_codegen.backend
+import flang_codegen.builder
 import flang_codegen.c_backend
 import flang_codegen.fir
-import flang_codegen.builder
 import flang_codegen.print
 
 pub fn main() i32 {
@@ -41,7 +43,7 @@ pub fn main() i32 {
 
     let opts = build_options(out_path.as_view())
     defer opts.deinit()
-    opts.set_keep_temps(true)        // leave the .c next to the .exe for inspection
+    opts.set_keep_temps(true) // leave the .c next to the .exe for inspection
 
     println("codegen_demo: lowering + invoking C compiler …")
     let r = compile(&m, &opts)
@@ -60,18 +62,18 @@ pub fn main() i32 {
         Some(p) => {
             const c_banner = $"codegen_demo: kept C source at {p.as_view()}"
             defer c_banner.deinit()
-            const _u = println(c_banner.as_view())
+            println(c_banner.as_view())
         }
         None => {}
     }
 
     println("codegen_demo: running …")
     println("----- program output -----")
-    // Windows won't search cwd for executables - prefix with ".\\" so
-    // the OS treats it as a relative path and looks where we wrote it.
+    // Windows won't search cwd for executables - prefix with ".\\" so the OS treats it as a
+    // relative path and looks where we wrote it.
     let exe_sb = string_builder(result.executable_path.len + 4)
     defer exe_sb.deinit()
-    #if(platform.os == "windows") {
+    #if (platform.os == "windows") {
         exe_sb.append(".\\")
     } else {
         exe_sb.append("./")
@@ -104,11 +106,10 @@ pub fn main() i32 {
 // -------------------------------------------------------------------------
 
 fn pick_output_path() OwnedString {
-    // Drop the artifact in build/ alongside the demo binary so the
-    // project root stays clean (and so `flang build` already gitignores
-    // it via the [project].output setting).
+    // Drop the artifact in build/ alongside the demo binary so the project root stays clean (and so
+    // `flang build` already gitignores it via the [project].output setting).
     let exe_name: String = "build/codegen_demo_artifact"
-    #if(platform.os == "windows") {
+    #if (platform.os == "windows") {
         exe_name = "build\\codegen_demo_artifact.exe"
     }
     return from_view(exe_name)
@@ -174,8 +175,8 @@ fn build_demo_module() IrModule {
         cc = CallConv.C,
     })
 
-    // Runtime helpers wired up in the C backend's preamble. Declaring
-    // them as foreigns here proves the backend skips re-emitting them.
+    // Runtime helpers wired up in the C backend's preamble. Declaring them as foreigns here proves
+    // the backend skips re-emitting them.
     let argc_params: List(IrType) = list(0)
     let argc_ret: IrType? = Some(IrType.I32)
     m.add_foreign(ForeignDecl {
@@ -327,9 +328,8 @@ fn build_main() Function {
     prod_extras.push((IrType.I32, prod))
     entry.call_variadic("printf", IrType.I32, prod_fixed, prod_extras)
 
-    // Prove the runtime captured argv. We call the same helpers std.env
-    // calls under the hood - the values come from the globals populated
-    // by the wrapper main the C backend emits.
+    // Prove the runtime captured argv. We call the same helpers std.env calls under the hood - the
+    // values come from the globals populated by the wrapper main the C backend emits.
     let argc_args: List(Operand) = list(0)
     const argc = entry.call("__flang_get_argc", IrType.I32, argc_args)
     let argc_fixed: List(Operand) = list(1)
@@ -355,14 +355,14 @@ fn build_main() Function {
 
 fn report_error(e: BuildError) {
     e match {
-        NoCompilerFound => println("codegen_demo: no C compiler found on this system."),
+        NoCompilerFound => println("codegen_demo: no C compiler found on this system.")
         CompilerFailed(code) => {
             const msg = $"codegen_demo: C compiler exited with code {code}"
             defer msg.deinit()
             println(msg.as_view())
-        },
-        SpawnFailed => println("codegen_demo: failed to spawn the C compiler."),
-        IOError => println("codegen_demo: I/O error writing the generated .c file."),
-        LowerFailed => println("codegen_demo: FIR -> C lowering failed."),
+        }
+        SpawnFailed => println("codegen_demo: failed to spawn the C compiler.")
+        IOError => println("codegen_demo: I/O error writing the generated .c file.")
+        LowerFailed => println("codegen_demo: FIR -> C lowering failed.")
     }
 }

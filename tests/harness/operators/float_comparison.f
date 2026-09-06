@@ -7,10 +7,12 @@
 //! STDOUT: 1
 //! STDOUT: 1
 
-import core.io
+import std.io.print
 
 pub fn check(v: bool) i32 {
-    if v { return 1 }
+    if v {
+        return 1
+    }
     return 0
 }
 

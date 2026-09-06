@@ -2,10 +2,10 @@
 //! EXIT: 0
 //! STDOUT: count=7
 
+import std.io.print
 import std.string_builder
 import std.string
 import std.allocator
-import core.io
 
 pub fn main() i32 {
     let buf = [0u8; 64]

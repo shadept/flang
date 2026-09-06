@@ -14,17 +14,19 @@ import std.option
 import std.string
 import std.string_builder
 import std.test
+
+import flang_analysis.analyze
 import flang_parser.ast
-import flang_typer.type
+import flang_typer.function_registry
 import flang_typer.interner
 import flang_typer.node_id
-import flang_typer.result
 import flang_typer.nominal_registry
-import flang_typer.function_registry
+import flang_typer.result
 import flang_typer.scheme
 import flang_typer.specialization
+import flang_typer.type
 import flang_typer.well_known
-import flang_analysis.analyze
+
 import flang_driver.layout
 
 // Symbol table

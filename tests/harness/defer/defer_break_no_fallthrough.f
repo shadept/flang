@@ -9,15 +9,14 @@
 //! STDOUT: after-loop
 //! STDOUT: outer
 
-// Pins that `break` has no fall-through. The `bad_counter` counts side effects
-// from statements lexically AFTER the `break`; if any of them execute at
-// runtime the exit code goes non-zero and the test fails.
+// Pins that `break` has no fall-through. The `bad_counter` counts side effects from statements
+// lexically AFTER the `break`; if any of them execute at runtime the exit code goes non-zero and
+// the test fails.
 //
-// Also checks that defers registered *before* the `break` fire innermost
-// first, and that nothing after the `break` - including a trailing `defer`
-// - ever registers or emits at runtime.
+// Also checks that defers registered *before* the `break` fire innermost first, and that nothing
+// after the `break` - including a trailing `defer` - ever registers or emits at runtime.
 
-import core.io
+import std.io.print
 
 fn emit(tag: String) {
     println(tag)

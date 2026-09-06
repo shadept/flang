@@ -10,15 +10,17 @@ import std.dict
 import std.list
 import std.option
 import std.string
+
 import flang_core.span
 import flang_parser.ast
-import flang_typer.type
-import flang_typer.node_id
+
+import flang_typer.function_registry
 import flang_typer.inference_results
 import flang_typer.interner
+import flang_typer.node_id
 import flang_typer.nominal_registry
-import flang_typer.function_registry
 import flang_typer.specialization
+import flang_typer.type
 
 pub type TypeCheckResult = struct {
     node_types: Dict(NodeId, Ty) // every entry zonked

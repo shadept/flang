@@ -9,25 +9,28 @@
 //                         reports min/avg/max on stderr
 //   -n, --iterations N    iteration count for --time (default 1)
 
+import std.conv
 import std.env
 import std.io.file
+import std.io.print
 import std.list
 import std.option
 import std.result
 import std.string
 import std.string_builder
 import std.time
-import std.conv
+
+import flang_core.diagnostic
 import flang_core.line_index
+import flang_core.span
+import flang_parser.ast
+import flang_parser.cst
 import flang_parser.lexer
 import flang_parser.parser
-import flang_parser.cst
+import flang_parser.projector
 import flang_parser.token
 import flang_parser.trivia
-import flang_parser.ast
-import flang_parser.projector
-import flang_core.diagnostic
-import flang_core.span
+
 import cst_explorer.ast_json
 
 type Options = struct {

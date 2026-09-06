@@ -1,3 +1,5 @@
+import std.io.print
+
 pub fn main() i32 {
     println("hello, world!")
     return 0

@@ -16,11 +16,12 @@
 //       --ascii       Use ASCII instead of Unicode box-drawing
 //       --help        Show this help and exit
 
-import std.io.dir
-import std.io.types
-import std.io.fs
 import std.conv
 import std.env
+import std.io.dir
+import std.io.fs
+import std.io.print
+import std.io.types
 
 // -----------------------------------------------------------------------------
 // Types

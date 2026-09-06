@@ -16,7 +16,9 @@ import std.option
 import std.string
 import std.string_builder
 import std.test
+
 import flang_core.span
+
 import flang_typer.type
 import flang_typer.visibility
 

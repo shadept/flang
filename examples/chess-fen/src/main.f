@@ -1,3 +1,4 @@
+import std.io.print
 import std.io.writer
 import std.terminal
 

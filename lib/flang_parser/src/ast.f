@@ -19,6 +19,7 @@
 import std.allocator
 import std.list
 import std.option
+
 import flang_core.span
 
 // ─────────────────────────────────────────────────────────────────────────

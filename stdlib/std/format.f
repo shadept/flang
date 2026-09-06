@@ -22,15 +22,15 @@
 // A `format` body writes literals with `w.write_str(...)` and delegates values to their own
 // `format`.
 
-import std.io.writer
-import std.string_builder
 import std.allocator
-import std.string
 import std.conv
 import std.encoding.utf8
+import std.io.writer
 import std.mem
-import std.result
 import std.option
+import std.result
+import std.string
+import std.string_builder
 import std.test
 
 // =============================================================================
@@ -1066,4 +1066,177 @@ test "append text with a spec" {
 
     'x'.format(w, ">3")
     expect_view(&sb, "  x", "a char pads by its encoded byte count")
+}
+
+// =============================================================================
+// Templates
+// =============================================================================
+//
+// `format_to(w, "{} and {}", a, b)` writes a template with holes in the language's own
+// interpolation grammar: `{}` takes the next argument, `{1}` the argument at that index, `{:spec}`
+// and `{1:spec}` hand `spec` to the argument's `format` (`{:x}` prints hex, `{:04}` pads to four),
+// and `{{` / `}}` stand for a literal brace. A hole naming an argument the call does not pass
+// panics; a surplus argument is ignored.
+
+type TemplateScan = struct {
+    text: String
+    pos: usize
+    // The argument the next bare `{}` takes. An indexed hole does not advance it.
+    next_index: usize
+}
+
+// Writes the literal text up to the next hole to `w` and returns that hole as (argument index,
+// spec), or `None` once the tail is written.
+fn next_hole(self: &TemplateScan, w: Writer) Option((usize, String)) {
+    let start = self.pos
+    while self.pos < self.text.len {
+        const c = self.text[self.pos]
+        const doubled = self.pos + 1 < self.text.len and self.text[self.pos + 1] == c
+        if (c == '{' or c == '}') and doubled {
+            w.write_str(self.text[start..self.pos + 1])
+            self.pos = self.pos + 2
+            start = self.pos
+            continue
+        }
+        if c == '{' {
+            w.write_str(self.text[start..self.pos])
+            let close = self.pos + 1
+            while close < self.text.len and self.text[close] != '}' {
+                close = close + 1
+            }
+            if close == self.text.len {
+                panic("format_to: a `{` in the template has no closing `}`")
+            }
+            const body = self.text[self.pos + 1..close]
+            self.pos = close + 1
+            return Some(self.parse_hole(body))
+        }
+        self.pos = self.pos + 1
+    }
+    w.write_str(self.text[start..self.pos])
+    return None
+}
+
+fn parse_hole(self: &TemplateScan, body: String) (usize, String) {
+    let colon = body.len
+    for i in 0..body.len {
+        if body[i] == ':' {
+            colon = i
+            break
+        }
+    }
+    const name = body[0..colon]
+    const spec = if colon < body.len { body[colon + 1..body.len] } else { "" }
+    if name.len == 0 {
+        self.next_index = self.next_index + 1
+        return (self.next_index - 1, spec)
+    }
+    let index: usize = 0
+    for i in 0..name.len {
+        const d = name[i]
+        if d < '0' or d > '9' {
+            panic("format_to: a hole names its argument by index, as in `{1}`")
+        }
+        index = index * 10 + (d - '0') as usize
+    }
+    return (index, spec)
+}
+
+fn missing_argument() never {
+    panic("format_to: the template names an argument the call does not pass")
+}
+
+pub fn format_to(w: Writer, template: String, a: $A) {
+    let scan = TemplateScan { text = template, pos = 0, next_index = 0 }
+    loop {
+        scan.next_hole(w) match {
+            Some(h) => {
+                if h.0 == 0 {
+                    a.format(w, h.1)
+                } else {
+                    missing_argument()
+                }
+            }
+            None => { break }
+        }
+    }
+}
+
+pub fn format_to(w: Writer, template: String, a: $A, b: $B) {
+    let scan = TemplateScan { text = template, pos = 0, next_index = 0 }
+    loop {
+        scan.next_hole(w) match {
+            Some(h) => {
+                if h.0 == 0 {
+                    a.format(w, h.1)
+                } else if h.0 == 1 {
+                    b.format(w, h.1)
+                } else {
+                    missing_argument()
+                }
+            }
+            None => { break }
+        }
+    }
+}
+
+pub fn format_to(w: Writer, template: String, a: $A, b: $B, c: $C) {
+    let scan = TemplateScan { text = template, pos = 0, next_index = 0 }
+    loop {
+        scan.next_hole(w) match {
+            Some(h) => {
+                if h.0 == 0 {
+                    a.format(w, h.1)
+                } else if h.0 == 1 {
+                    b.format(w, h.1)
+                } else if h.0 == 2 {
+                    c.format(w, h.1)
+                } else {
+                    missing_argument()
+                }
+            }
+            None => { break }
+        }
+    }
+}
+
+// =============================================================================
+// Template tests
+// =============================================================================
+
+fn rendered(template: String, a: $A, b: $B) OwnedString {
+    let sb = string_builder(64)
+    defer sb.deinit()
+    format_to(sb.writer(), template, a, b)
+    return sb.to_string()
+}
+
+test "bare holes take the arguments in order" {
+    const s = rendered("{} and {}", "this", "that")
+    defer s.deinit()
+    assert_eq(s.as_view(), "this and that", "positional")
+}
+
+test "an indexed hole picks its argument and leaves the counter alone" {
+    const s = rendered("{1} {} {0}", "a", "b")
+    defer s.deinit()
+    assert_eq(s.as_view(), "b a a", "indexed")
+}
+
+test "a spec reaches the argument's format" {
+    const s = rendered("{:x} {1:04}", 255i32, 7i32)
+    defer s.deinit()
+    assert_eq(s.as_view(), "ff 0007", "spec")
+}
+
+test "doubled braces are literal" {
+    const s = rendered("{{{}}} {{}}", 1i32, 2i32)
+    defer s.deinit()
+    assert_eq(s.as_view(), "{1} {}", "escapes")
+}
+
+test "text without holes is written whole" {
+    const s = rendered("plain", 1i32, 2i32)
+    defer s.deinit()
+    assert_eq(s.as_view(), "plain", "no holes")
 }

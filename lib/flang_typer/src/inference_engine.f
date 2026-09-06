@@ -27,16 +27,18 @@ import std.list
 import std.option
 import std.set
 import std.stack
-import flang_typer.type
-import flang_typer.interner
-import flang_typer.scheme
-import flang_typer.union_find
-import flang_typer.coercion
-import flang_typer.nominal_registry
-import flang_typer.well_known
-import std.test
 import std.string_builder
+import std.test
+
 import flang_core.span
+
+import flang_typer.coercion
+import flang_typer.interner
+import flang_typer.nominal_registry
+import flang_typer.scheme
+import flang_typer.type
+import flang_typer.union_find
+import flang_typer.well_known
 
 // ─────────────────────────────────────────────────────────────────────
 // UnifyOutcome - structured result, no diagnostics

@@ -16,10 +16,12 @@
 import std.allocator
 import std.list
 import std.option
-import flang_parser.token
-import flang_parser.cst
-import flang_parser.ast
+
 import flang_core.span
+
+import flang_parser.ast
+import flang_parser.cst
+import flang_parser.token
 
 // ─────────────────────────────────────────────────────────────────────────
 // Projector state

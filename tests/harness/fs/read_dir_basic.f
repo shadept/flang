@@ -2,11 +2,11 @@
 //! EXIT: 0
 //! STDOUT: ok
 
-// Opens a directory that is guaranteed to exist and contain entries,
-// iterates it, and verifies: iteration completes without error and
-// "." / ".." are filtered out.
+// Opens a directory that is guaranteed to exist and contain entries, iterates it, and verifies:
+// iteration completes without error and "." / ".." are filtered out.
 
 import std.io.dir
+import std.io.print
 import std.option
 import std.result
 

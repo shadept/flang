@@ -14,30 +14,32 @@
 
 import std.allocator
 import std.dict
+import std.io.file
 import std.list
 import std.option
+import std.result
 import std.set
 import std.string
 import std.string_builder
 import std.test
-import std.io.file
-import std.result
 import std.time
-import flang_parser.lexer
-import flang_parser.parser
-import flang_parser.projector
+
+import flang_core.diagnostic
+import flang_core.span
 import flang_parser.ast
 import flang_parser.comptime
 import flang_parser.cst
-import flang_core.diagnostic
-import flang_core.span
+import flang_parser.lexer
+import flang_parser.parser
+import flang_parser.projector
 import flang_typer.checker
-import flang_typer.template_expand
-import flang_typer.result
 import flang_typer.nominal_registry
-import flang_analysis.resolver
-import flang_analysis.project
+import flang_typer.result
+import flang_typer.template_expand
+
 import flang_analysis.demand
+import flang_analysis.project
+import flang_analysis.resolver
 import flang_analysis.unused
 
 // A fully analysed compilation unit. `checked` is false when the source failed to parse - `result`

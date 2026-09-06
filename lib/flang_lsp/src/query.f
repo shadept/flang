@@ -11,8 +11,10 @@ import std.option
 import std.string
 import std.string_builder
 import std.test
-import flang_core.span
+
 import flang_analysis.analyze
+import flang_core.span
+import flang_parser.ast
 import flang_typer.function_registry
 import flang_typer.inference_results
 import flang_typer.interner
@@ -35,6 +37,49 @@ pub fn file_id_of(unit: &AnalyzedProject, path: String) i32? {
 
 pub fn span_contains(span: SourceSpan, offset: usize) bool {
     return offset >= span.start and offset < span.start + span.length
+}
+
+// An `import` declaration under the cursor: its dotted path and the span of that path in the source
+// (the keyword and any `pub` excluded), which is what a link highlights.
+pub type ImportRef = struct {
+    path: OwnedString
+    span: SourceSpan
+}
+
+pub fn deinit(self: &ImportRef) {
+    self.path.deinit()
+}
+
+// The `import` declaration under `offset` in `module`, or null when the cursor is not inside one.
+// The declaration's span ends at its last path segment, so the path's span is its tail.
+pub fn import_at(module: &Module, offset: usize) ImportRef? {
+    for d in module.decls {
+        d match {
+            Import(id) => {
+                if span_contains(id.span, offset) {
+                    const path = id.path.join(".")
+                    const end = id.span.start + id.span.length
+                    const span = SourceSpan { file_id = id.span.file_id, start = end - path.len,
+                        length = path.len }
+                    return Some(ImportRef { path = path, span = span })
+                }
+            }
+            _ => {}
+        }
+    }
+    return null
+}
+
+// The file id of the loaded module whose FQN is `fqn` - what an `import` line names, since the
+// resolver derives every module's FQN from the same dotted form. Null when nothing loaded matches
+// (the import did not resolve).
+pub fn file_id_of_fqn(unit: &AnalyzedProject, fqn: String) i32? {
+    for i in 0..unit.fqns.len {
+        if unit.fqns[i].as_view() == fqn {
+            return Some(i as i32)
+        }
+    }
+    return null
 }
 
 // A generic template's body is checked only per instantiation, into that specialization's private

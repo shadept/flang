@@ -16,23 +16,24 @@
 // The parser handles RFC 4180 with lenient line endings (LF, CR, CRLF). Quoting and delimiter
 // characters are configurable via CsvOptions.
 
-import std.encoding.codec
-import std.io.reader
-import std.io.writer
+import core.bits
+
 import std.allocator
 import std.conv
+import std.encoding.codec
 import std.enum
 import std.interface
+import std.io.reader
+import std.io.writer
 import std.list
 import std.mem
 import std.option
 import std.result
+import std.simd
 import std.string
 import std.string_builder
 import std.string_reader
-import std.simd
 import std.test
-import core.bits
 
 // =============================================================================
 // Errors

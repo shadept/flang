@@ -6,7 +6,7 @@
 //! STDOUT: 1.75
 //! STDOUT: 1.5
 
-import core.io
+import std.io.print
 
 pub fn main() i32 {
     let a: f64 = 3.5

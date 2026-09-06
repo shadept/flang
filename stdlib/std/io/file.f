@@ -7,17 +7,17 @@
 // Paths are ordinary String views. Nothing here requires NUL termination - internal copies before
 // it reaches the OS.
 
-import std.io.reader
-import std.io.writer
 import std.allocator
+import std.io.internal.fs
+import std.io.reader
+import std.io.types
+import std.io.writer
 import std.option
 import std.owned
 import std.result
 import std.string
 import std.string_builder
 import std.test
-import std.io.internal.fs
-import std.io.types
 
 pub type FileMode = enum {
     Read

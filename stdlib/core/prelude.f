@@ -1,7 +1,6 @@
 pub import core.cmp
 pub import core.deinit
 pub import core.hash
-pub import core.io
 pub import core.math
 pub import core.option
 pub import core.panic

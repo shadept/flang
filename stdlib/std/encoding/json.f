@@ -7,14 +7,14 @@
 //   parse()      - DOM-level parse from Reader or String
 //   stringify()  - DOM-level serialize via JsonEncoder
 
-import std.encoding.codec
-import std.io.reader
-import std.io.writer
 import std.allocator
 import std.conv
 import std.dict
+import std.encoding.codec
 import std.enum
 import std.interface
+import std.io.reader
+import std.io.writer
 import std.list
 import std.option
 import std.result

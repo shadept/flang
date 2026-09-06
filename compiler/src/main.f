@@ -15,6 +15,9 @@ import std.allocator
 import std.conv
 import std.dict
 import std.env
+import std.io.file
+import std.io.fs
+import std.io.print
 import std.list
 import std.option
 import std.path
@@ -22,22 +25,22 @@ import std.process
 import std.result
 import std.string
 import std.string_builder
-import std.io.file
-import std.io.fs
 import std.time
-import flang_core.diagnostic
-import flang_parser.comptime
-import flang_parser.lexer
-import flang_fmt.fmt
-import flang_codegen.backend
+
 import flang_analysis.analyze
-import flang_typer.interner
-import flang_driver.compile
 import flang_analysis.project
 import flang_analysis.resolver
+import flang_codegen.backend
+import flang_core.diagnostic
+import flang_driver.compile
+import flang_fmt.fmt
+import flang_lsp.server
+import flang_parser.comptime
+import flang_parser.lexer
+import flang_typer.interner
 import flang_typer.result
 import flang_typer.type
-import flang_lsp.server
+
 import flang.frontend
 
 // Parsed CLI state. `subcommand` is the first positional argument; the remainder of argv after the
@@ -998,6 +1001,9 @@ fn run_fmt(cli: &Cli) i32 {
     }
 
     let cfg = default_config()
+    // Owned at this scope: the config views it for the whole run, past the manifest's own lifetime.
+    let project_name = from_view("")
+    defer project_name.deinit()
     let sources: List(OwnedString) = list(0)
     defer sources.deinit()
 
@@ -1016,6 +1022,9 @@ fn run_fmt(cli: &Cli) i32 {
         defer toml.deinit()
         let proj = parse_project(toml.as_view())
         defer proj.deinit()
+        project_name.deinit()
+        project_name = from_view(proj.name.as_view())
+        set_project(&cfg, project_name.as_view())
         for &e in proj.fmt {
             if !set_option(&cfg, e.key.as_view(), e.value.as_view()) {
                 const w = $"flang: ignoring unknown [fmt] entry `{e.key.as_view()} = {e.value.as_view()}`"

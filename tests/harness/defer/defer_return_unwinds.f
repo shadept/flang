@@ -5,8 +5,10 @@
 //! STDOUT: middle
 //! STDOUT: outer
 
-// `return` unwinds every active defer scope from innermost to outermost.
-// LIFO order: the defer registered deepest in the block nest fires first.
+import std.io.print
+
+// `return` unwinds every active defer scope from innermost to outermost. LIFO order: the defer
+// registered deepest in the block nest fires first.
 
 fn emit(tag: String) {
     println(tag)

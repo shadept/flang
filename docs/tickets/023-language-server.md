@@ -331,7 +331,10 @@ didSave still refreshes; disk-only edits stay stale until then. Un-park
 together with the re-demand memory fix, adding §7's ~300 ms debounce in
 the same pass.
 
-Definition resolves in three tiers: resolved target at the cursor (locals,
+Definition resolves in four tiers: an `import` under the cursor, to the
+file whose FQN it names (one import, one file, a LocationLink over the whole
+dotted path when the client takes links; never falls through to the name
+tiers); then the resolved target at the cursor (locals,
 params, functions, fields, variants, consts, specialized generics); then
 the identifier under the cursor against the project's registries (nominal
 FQN tails and function overload sets - stdlib and dependencies included);

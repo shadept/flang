@@ -6,10 +6,11 @@
 //! STDOUT: body:2
 //! STDOUT: outer
 
-// `continue` jumps back to the loop head, escaping every scope between the
-// jump and the loop body. Defers registered in those scopes must fire before
-// the jump - innermost first - and must NOT fire again on subsequent
-// iterations that don't re-register them.
+import std.io.print
+
+// `continue` jumps back to the loop head, escaping every scope between the jump and the loop body.
+// Defers registered in those scopes must fire before the jump - innermost first - and must NOT fire
+// again on subsequent iterations that don't re-register them.
 
 fn emit(tag: String) {
     println(tag)

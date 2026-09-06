@@ -13,6 +13,9 @@
 // Paths are ordinary String views - nothing here requires NUL termination.
 
 import std.allocator
+import std.io.internal.fs
+import std.io.print
+import std.io.types
 import std.list
 import std.option
 import std.owned
@@ -22,8 +25,6 @@ import std.stack
 import std.string
 import std.string_builder
 import std.test
-import std.io.internal.fs
-import std.io.types
 
 // FileKind, FileInfo and FsError come from std.io.types, which sits below every io module. Import
 // it directly if you need qualified access such as `FileKind.Dir`; matching on the variant needs no

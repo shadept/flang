@@ -18,9 +18,10 @@
 import std.allocator
 import std.list
 import std.option
-import flang_typer.type
+
 import flang_typer.interner
 import flang_typer.nominal_registry
+import flang_typer.type
 import flang_typer.well_known
 
 // Side-unification request emitted by a coercion rule. The engine runs `unify(a, b)` for each and

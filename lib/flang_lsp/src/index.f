@@ -7,8 +7,10 @@ import std.allocator
 import std.list
 import std.string
 import std.test
+
 import flang_core.span
 import flang_parser.ast
+
 import flang_lsp.handlers.document_symbol
 import flang_lsp.handlers.syntax_diagnostics
 

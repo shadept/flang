@@ -1,9 +1,9 @@
 import std.allocator
 import std.dict
 import std.list
+import std.option
 import std.set
 import std.test
-import std.option
 
 // =============================================================================
 // Iterator combinators.

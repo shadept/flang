@@ -1,6 +1,7 @@
-import std.io.file
-import std.io.reader
 import std.env
+import std.io.file
+import std.io.print
+import std.io.reader
 
 fn is_whitespace(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\n' or c == '\r'

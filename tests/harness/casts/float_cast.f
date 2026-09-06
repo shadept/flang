@@ -3,7 +3,7 @@
 //! STDOUT: 42
 //! STDOUT: 1
 
-import core.io
+import std.io.print
 
 pub fn main() i32 {
     // int -> float

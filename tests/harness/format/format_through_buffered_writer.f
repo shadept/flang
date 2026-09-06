@@ -2,14 +2,14 @@
 //! EXIT: 0
 //! STDOUT: buffered=[00042]
 
-// A `Writer` wrapping another `Writer` is the case that proves the sink is not
-// special-cased: the value formats the same whether the bytes land in a builder
-// directly or pass through a buffer on the way.
+// A `Writer` wrapping another `Writer` is the case that proves the sink is not special-cased: the
+// value formats the same whether the bytes land in a builder directly or pass through a buffer on
+// the way.
 
-import std.string_builder
+import std.io.print
 import std.io.writer
 import std.string
-import core.io
+import std.string_builder
 
 pub fn main() i32 {
     let backing = [0u8; 64]

@@ -1,6 +1,8 @@
 //! TEST: tuple_pattern
 //! STDOUT: PASS
 
+import std.io.print
+
 fn classify(p: (i32, bool)) i32 {
     return p match {
         (0, _) => 0i32,

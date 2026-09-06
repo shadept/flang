@@ -6,8 +6,10 @@
 //! STDOUT: 4
 //! STDOUT: 5
 
-// Pins spec 5.1.1: call arguments evaluate left to right, each fully before
-// the next. C leaves this unspecified, so the backend has to enforce it.
+import std.io.print
+
+// Pins spec 5.1.1: call arguments evaluate left to right, each fully before the next. C leaves this
+// unspecified, so the backend has to enforce it.
 
 fn tick(counter: &i32) i32 {
     counter.* = counter.* + 1

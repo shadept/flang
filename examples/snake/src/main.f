@@ -3,8 +3,8 @@
 // Controls: WASD or arrow keys to move, Q to quit. If interrupted with Ctrl+C, run `reset` to
 // restore terminal settings.
 
-import std.string_builder
 import std.io.writer
+import std.string_builder
 import std.terminal
 
 // =============================================================================

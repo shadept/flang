@@ -5,11 +5,11 @@
 // O(words) union/intersect.
 
 import std.allocator
-import std.list
-import std.test
 import std.dict
+import std.list
 import std.option
 import std.string
+import std.test
 
 pub type Set = struct(T) {
     __inner: Dict(T, u8)

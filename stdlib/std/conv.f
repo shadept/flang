@@ -1,9 +1,9 @@
 // Zero-allocation conversion functions.
 // Buffer-based formatting and parsing for integers and booleans.
 
-import std.test
-import std.result
 import std.option
+import std.result
+import std.test
 
 // =============================================================================
 // Types

@@ -1,6 +1,8 @@
 //! TEST: null_propagation_flatten
 //! STDOUT: PASS
 
+import std.io.print
+
 type Inner = struct {
     name: String
 }
@@ -18,8 +20,8 @@ type Outer = struct {
 fn read_inner(mid: Option(Middle)) String {
     let inner_opt = mid?.inner
     return inner_opt match {
-        Some(i) => i.name,
-        None => "missing",
+        Some(i) => i.name
+        None => "missing"
     }
 }
 
@@ -29,10 +31,21 @@ pub fn main() i32 {
     let m_some = Middle { inner = Some(Inner { name = "alice" }) }
     let m_none: Middle = Middle { inner = null }
 
-    if read_inner(Some(m_some)) != "alice" { println("FAIL: outer Some, inner Some"); pass = false }
-    if read_inner(Some(m_none)) != "missing" { println("FAIL: outer Some, inner None"); pass = false }
-    if read_inner(null) != "missing" { println("FAIL: outer None"); pass = false }
+    if read_inner(Some(m_some)) != "alice" {
+        println("FAIL: outer Some, inner Some")
+        pass = false
+    }
+    if read_inner(Some(m_none)) != "missing" {
+        println("FAIL: outer Some, inner None")
+        pass = false
+    }
+    if read_inner(null) != "missing" {
+        println("FAIL: outer None")
+        pass = false
+    }
 
-    if pass { println("PASS") }
+    if pass {
+        println("PASS")
+    }
     return 0
 }

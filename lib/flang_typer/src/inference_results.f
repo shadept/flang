@@ -24,10 +24,12 @@ import std.dict
 import std.list
 import std.option
 import std.string
+
 import flang_core.span
 import flang_parser.ast
-import flang_typer.type
+
 import flang_typer.node_id
+import flang_typer.type
 
 // Where a name reference points to. Distinguishing variants drives `goto-definition` resolution +
 // lets the lowering pass pick the right code path.

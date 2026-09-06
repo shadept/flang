@@ -3,17 +3,17 @@
 //! STDOUT: a42b
 //! STDOUT: a42b
 
-// A closure held in a generic struct field, reached through the `format`
-// convention: the generic `append` finds `format`, which calls the field.
-// This is the shape a deferred formatting value takes.
+// A closure held in a generic struct field, reached through the `format` convention: the generic
+// `append` finds `format`, which calls the field. This is the shape a deferred formatting value
+// takes.
 
-import std.string_builder
+import std.io.print
 import std.io.writer
 import std.string
-import core.io
+import std.string_builder
 
 type Deferred = struct(F) {
-    emit: F,
+    emit: F
 }
 
 fn deferred(f: $F) Deferred(F) {

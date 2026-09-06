@@ -3,6 +3,7 @@
 // with the Option type.
 
 import core.option
+
 import std.test
 
 // Deinit the payload (if any) and reset to `None`. Lets options participate in container cascades

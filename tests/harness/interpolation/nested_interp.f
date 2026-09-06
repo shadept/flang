@@ -2,14 +2,13 @@
 //! EXIT: 0
 //! STDOUT: outer[inner=42] end
 
-// Nested `$"..."` inside a hole. The inner interp evaluates to an OwnedString
-// temporary; the outer `append` copies its bytes. The inner temporary's
-// buffer is currently not reclaimed (see known-issues) - this test pins the
-// output behavior, not the memory behavior.
+// Nested `$"..."` inside a hole. The inner interp evaluates to an OwnedString temporary; the outer
+// `append` copies its bytes. The inner temporary's buffer is currently not reclaimed (see
+// known-issues) - this test pins the output behavior, not the memory behavior.
 
-import std.string_builder
+import std.io.print
 import std.string
-import core.io
+import std.string_builder
 
 pub fn main() i32 {
     let n = 42i32

@@ -33,31 +33,33 @@ import std.string
 import std.string_builder
 import std.test
 import std.time
+
 import flang_core.diagnostic
 import flang_core.span
 import flang_parser.ast
 import flang_parser.comptime
-import flang_parser.lexer
 import flang_parser.cst
+import flang_parser.lexer
 import flang_parser.parser
 import flang_parser.projector
-import flang_typer.type
-import flang_typer.well_known
-import flang_typer.scheme
+
 import flang_typer.env
+import flang_typer.error_codes
+import flang_typer.fqn_map
+import flang_typer.function_registry
 import flang_typer.inference_engine
 import flang_typer.inference_results
 import flang_typer.interner
-import flang_typer.nominal_registry
-import flang_typer.fqn_map
-import flang_typer.function_registry
-import flang_typer.specialization
-import flang_typer.template_expand
-import flang_typer.visibility
 import flang_typer.node_id
-import flang_typer.error_codes
+import flang_typer.nominal_registry
 import flang_typer.reporter
 import flang_typer.result
+import flang_typer.scheme
+import flang_typer.specialization
+import flang_typer.template_expand
+import flang_typer.type
+import flang_typer.visibility
+import flang_typer.well_known
 
 // One function's lexical context: the declared return type so `ReturnStmt` can unify against it,
 // and the function's name for diagnostics. Pushed onto the checker's `fn_stack` on entry, popped on

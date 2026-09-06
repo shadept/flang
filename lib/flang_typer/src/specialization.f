@@ -20,12 +20,14 @@ import std.option
 import std.string
 import std.string_builder
 import std.test
+
 import flang_core.span
 import flang_parser.ast
-import flang_typer.type
+
+import flang_typer.inference_results
 import flang_typer.interner
 import flang_typer.node_id
-import flang_typer.inference_results
+import flang_typer.type
 
 // A closure environment a body pass registered: enough to register it again at the id it held.
 // Cached per module slot (checker's body cache) and per specialization (a reused specialization

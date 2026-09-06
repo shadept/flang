@@ -1,6 +1,8 @@
 //! TEST: range_pattern
 //! STDOUT: PASS
 
+import std.io.print
+
 fn bucket(n: i32) i32 {
     return n match {
         ..0     => -1i32,

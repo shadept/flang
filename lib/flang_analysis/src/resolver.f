@@ -13,17 +13,19 @@
 // forward slashes before any prefix comparison.
 
 import std.allocator
+import std.io.file
+import std.io.fs
 import std.list
 import std.option
 import std.path
 import std.result
 import std.string
 import std.string_builder
-import std.io.fs
-import std.io.file
 import std.test
-import flang_analysis.project
+
 import flang_parser.comptime
+
+import flang_analysis.project
 
 // One direct dependency: its `[project].name` (its import namespace) and its resolved source root.
 pub type DepRoot = struct {

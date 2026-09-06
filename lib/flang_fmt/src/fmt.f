@@ -29,11 +29,14 @@ import std.result
 import std.string
 import std.string_builder
 import std.test
+
 import flang_parser.cst
 import flang_parser.lexer
 import flang_parser.parser
 import flang_parser.token
 import flang_parser.trivia
+
+import flang_fmt.imports
 
 // ─────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -75,6 +78,11 @@ pub type FmtConfig = struct {
     ml_if_stmt: bool
     ml_if_else_stmt: bool
     ml_if_expr: bool
+    // Sort the leading import block: core, std, dependencies, own modules (see imports.f).
+    sort_imports: bool
+    // The manifest's project name, which decides the last group. A view into the caller's manifest;
+    // empty when there is none.
+    project: String
 }
 
 pub fn default_config() FmtConfig {
@@ -90,7 +98,14 @@ pub fn default_config() FmtConfig {
         ml_if_stmt = true,
         ml_if_else_stmt = true,
         ml_if_expr = false,
+        sort_imports = true,
+        project = "",
     }
+}
+
+// Name the project so its own imports group last. Viewed, not copied: it must outlive the config.
+pub fn set_project(self: &FmtConfig, project: String) {
+    self.project = project
 }
 
 // Apply one `[fmt]` manifest entry. Returns false for an unknown key or an unparsable value; the
@@ -132,6 +147,9 @@ pub fn set_option(self: &FmtConfig, key: String, val: String) bool {
     }
     if key == "if-expr" {
         return set_layout(&self.ml_if_expr, val)
+    }
+    if key == "sort-imports" {
+        return set_bool(&self.sort_imports, val)
     }
     return false
 }
@@ -204,7 +222,11 @@ pub type FmtError = enum {
 // which can in turn move a separator. Real inputs settle in one or two passes; an output still
 // changing after four is a formatter bug and is refused rather than left oscillating.
 pub fn format_source(source: String, cfg: &FmtConfig) Result(OwnedString, FmtError) {
-    let current = from_view(source)
+    let current = if cfg.sort_imports {
+        sort_imports(source, cfg.project, line_ending_of(source))
+    } else {
+        from_view(source)
+    }
     let passes = 0usize
     while passes < 4 {
         const pass = format_once(current.as_view(), cfg)
@@ -1394,7 +1416,12 @@ fn parse_comment_line(line: String) (usize, String, bool) {
         return (0, "", false)
     }
     let content = line[(i + 2)..line.len]
-    if content.len > 0 and content[0] == ' ' {
+    // `//!`, `//#` and the like are markers, not prose: the harness reads `//! STDOUT:` headers.
+    // Only a comment that opens with a space is text the reflow may touch.
+    if content.len > 0 and content[0] != ' ' {
+        return (0, "", false)
+    }
+    if content.len > 0 {
         content = content[1..content.len]
     }
     return (i, content, true)
@@ -1525,6 +1552,13 @@ fn ensure_single_trailing_newline(source: String, eol: String) OwnedString {
 // ─────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────
+
+test "a comment with no space after the slashes is a marker and passes verbatim" {
+    const cfg = default_config()
+    const out = format_source("//! TEST: t\n//! STDOUT: hi\n\nfn f() {}\n", &cfg).unwrap()
+    defer out.deinit()
+    assert_eq(out.as_view(), "//! TEST: t\n//! STDOUT: hi\n\nfn f() {}\n", "markers untouched")
+}
 
 test "line hygiene: trailing ws stripped, final newline added" {
     const cfg = default_config()

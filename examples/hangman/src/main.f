@@ -2,14 +2,15 @@
 //
 // Guess the hidden word one letter at a time. Six misses and you hang.
 
+import std.io.file
+import std.io.print
 import std.option
+import std.random
+import std.readline
 import std.result
 import std.string
 import std.string_builder
-import std.random
 import std.time
-import std.readline
-import std.io.file
 
 const DICT_PATH = "/usr/share/dict/words"
 const FALLBACK_WORD = "compiler"

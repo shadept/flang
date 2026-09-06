@@ -2,16 +2,16 @@
 //! EXIT: 0
 //! STDOUT: a[-]b[04]c[>10]
 
-// A hole's format spec reaches a user `format` unchanged whatever it says, and
-// a hole without one arrives as the empty string.
+// A hole's format spec reaches a user `format` unchanged whatever it says, and a hole without one
+// arrives as the empty string.
 
-import std.string_builder
+import std.io.print
 import std.io.writer
 import std.string
-import core.io
+import std.string_builder
 
 type Tag = struct {
-    n: i32,
+    n: i32
 }
 
 pub fn format(self: &Tag, w: Writer, spec: String) {

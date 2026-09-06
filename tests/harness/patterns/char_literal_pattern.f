@@ -1,6 +1,8 @@
 //! TEST: char_literal_pattern
 //! STDOUT: PASS
 
+import std.io.print
+
 type Token = enum {
     Char(u8)
     None
@@ -11,8 +13,8 @@ pub fn main() i32 {
 
     // char literal pattern decays to u8
     let r = c match {
-        'A' => 1i32,
-        'B' => 2i32,
+        'A' => 1i32
+        'B' => 2i32
         _ => 0i32
     }
     if r != 1 {
@@ -23,8 +25,8 @@ pub fn main() i32 {
     // char literal pattern inside enum variant
     let tok = Token.Char('l')
     let r2 = tok match {
-        Char('l') => 10i32,
-        Char(_) => 20i32,
+        Char('l') => 10i32
+        Char(_) => 20i32
         None => 30i32
     }
     if r2 != 10 {

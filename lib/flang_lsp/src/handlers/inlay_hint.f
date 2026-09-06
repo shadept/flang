@@ -11,9 +11,11 @@ import std.allocator
 import std.list
 import std.option
 import std.test
+
 import flang_core.span
 import flang_parser.ast
 import flang_typer.node_id
+
 import flang_lsp.handlers.syntax_diagnostics
 
 pub type Binder = struct {

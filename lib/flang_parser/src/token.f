@@ -6,6 +6,7 @@
 import std.allocator
 import std.enum
 import std.list
+
 import flang_parser.trivia
 
 // All token kinds the FLang lexer can produce.

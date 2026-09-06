@@ -22,11 +22,12 @@ import std.list
 import std.option
 import std.string
 import std.test
+
 import flang_core.span
 import flang_parser.ast
+import flang_typer.inference_results
 import flang_typer.node_id
 import flang_typer.result
-import flang_typer.inference_results
 
 // Whether each of `decl`'s parameters needs a shadow copy, parallel to `decl.params`. A parameter
 // that is not a by-value aggregate answers `true`, which its caller ignores.

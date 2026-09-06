@@ -4,12 +4,12 @@
 // Parsed strings are copied into `OwnedString`s so a `Project` outlives the source text.
 
 import std.allocator
+import std.io.fs
 import std.list
 import std.option
 import std.result
 import std.string
 import std.test
-import std.io.fs
 
 pub type ProjectKind = enum {
     Exe

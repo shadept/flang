@@ -1,6 +1,7 @@
 //! TEST: list_ref_index
 //! STDOUT: PASS
 
+import std.io.print
 import std.list
 
 fn inc(n: &i32) {

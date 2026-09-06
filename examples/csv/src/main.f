@@ -5,11 +5,12 @@
 //   cat data.csv | fcsv name,age 0..10
 //   fcsv --count data.csv      # SIMD-accelerated newline count
 
-import std.encoding.csv
-import std.io.file
-import std.io.reader
 import std.conv
+import std.encoding.csv
 import std.env
+import std.io.file
+import std.io.print
+import std.io.reader
 import std.simd
 
 fn print_usage() {

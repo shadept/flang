@@ -1,17 +1,17 @@
 // Mutable string builder for efficient string construction. Uses a growable byte buffer backed by
 // the allocator pattern. Designed to support future string interpolation.
 
-import std.io.writer
 import std.allocator
-import std.string
 import std.conv
+import std.encoding.utf8
 // Re-exported: `append` is this builder's front door onto `format`, so its users can call either
 // without a second import.
 pub import std.format
-import std.encoding.utf8
+import std.io.writer
 import std.mem
 import std.option
 import std.result
+import std.string
 import std.test
 
 pub type StringBuilder = struct {

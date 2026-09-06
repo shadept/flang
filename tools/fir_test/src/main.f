@@ -1,16 +1,17 @@
-// fir_test - exercises lib/flang_codegen by hand-building example FIR
-// modules and printing them. Acts as a regression check against the
-// canonical text format in `docs/fir.md` until colocated-test running
-// is wired up.
+// fir_test - exercises lib/flang_codegen by hand-building example FIR modules and printing them.
+// Acts as a regression check against the canonical text format in `docs/fir.md` until
+// colocated-test running is wired up.
 
 import std.allocator
+import std.io.print
 import std.list
 import std.option
 import std.string
 import std.string_builder
+
+import flang_codegen.builder
 import flang_codegen.fir
 import flang_codegen.print
-import flang_codegen.builder
 
 pub fn main() i32 {
     let m = module()
@@ -52,20 +53,19 @@ fn build_factorial() Function {
 // type RangeIter = struct { current: i32, end: i32 }   // size 8, align 4
 // type Option(i32) = enum { Some(i32), None }          // {tag: i8, value: i32}, size 8
 //
-// fn iter(self: &RangeIter) RangeIter { return self.* }
-// fn next(self: &RangeIter) Option(i32) {
+// fn iter(self: &RangeIter) RangeIter { return self.* } fn next(self: &RangeIter) Option(i32) {
 //     if self.current >= self.end { return None }
 //     let v = self.current
 //     self.current = v + 1
 //     return Some(v)
 // }
 //
-// `iter` is the required entry point for `for v in it` - for types that
-// are already iterators it just returns a copy of self. Inlined away by
-// the time we get to FIR, so only `next` is built here.
+// `iter` is the required entry point for `for v in it` - for types that are already iterators it
+// just returns a copy of self. Inlined away by the time we get to FIR, so only `next` is built
+// here.
 //
-// Aggregate return is lowered to a hidden out-pointer first parameter
-// (`sret` convention). Both parameters are `ptr`.
+// Aggregate return is lowered to a hidden out-pointer first parameter (`sret` convention). Both
+// parameters are `ptr`.
 fn build_next() Function {
     let void_ret: IrType? = null
     let fb = function("next", void_ret)
@@ -106,9 +106,8 @@ fn build_next() Function {
 //     return acc
 // }
 //
-// `for v in it` desugars to a `loop` that calls `it.next()` each
-// iteration and matches on the returned `Option`: `Some(v) => body`,
-// `None => break`. That's the structure of the FIR below.
+// `for v in it` desugars to a `loop` that calls `it.next()` each iteration and matches on the
+// returned `Option`: `Some(v) => body`, `None => break`. That's the structure of the FIR below.
 fn build_sum_range() Function {
     let fb = function("sum_range", Some(IrType.I32))
     const start = fb.param(IrType.I32)

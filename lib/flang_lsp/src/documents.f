@@ -7,6 +7,7 @@ import std.dict
 import std.option
 import std.string
 import std.test
+
 import flang_lsp.line_index
 import flang_lsp.uri
 

@@ -2,16 +2,16 @@
 //! EXIT: 0
 //! STDOUT: Box(7)/Box(  hi)/Box(002a)
 
-// `format` declared on a generic struct dispatches per specialization, and
-// forwards the spec on to the wrapped value's own append.
+// `format` declared on a generic struct dispatches per specialization, and forwards the spec on to
+// the wrapped value's own append.
 
-import std.string_builder
+import std.io.print
 import std.io.writer
 import std.string
-import core.io
+import std.string_builder
 
 type Box = struct(T) {
-    v: T,
+    v: T
 }
 
 fn box_of(v: $T) Box(T) {

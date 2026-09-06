@@ -2,6 +2,8 @@
 //! EXPECT: 20
 //! EXPECT: 10
 
+import std.io.print
+
 const X: i32 = 10
 
 pub fn main() i32 {

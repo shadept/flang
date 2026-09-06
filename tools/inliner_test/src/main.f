@@ -1,8 +1,8 @@
-// inliner_test - exercises lib/flang_codegen.shim_inliner on a
-// hand-built module that mimics the canonical FLang shim pattern
+// inliner_test - exercises lib/flang_codegen.shim_inliner on a hand-built module that mimics the
+// canonical FLang shim pattern
 // (RFC-015 §3.1). Prints FIR before and after the pass, asserts the
-// shim wrappers were collapsed, then lowers the inlined module to C
-// and runs the produced executable to confirm semantic equivalence.
+// shim wrappers were collapsed, then lowers the inlined module to C and runs the produced
+// executable to confirm semantic equivalence.
 //
 //   inner(n)  -> n + 1                    (1-instr leaf; inlinable)
 //   outer(n)  -> inner(n)                 (1-call shim;  inlinable)
@@ -14,11 +14,12 @@
 //                                          where outer+inner collapse)
 //   main      -> printf("%d", middle(10))
 //
-// After the inliner runs, every non-`main` body should contain only
-// arithmetic + ret - no `call @inner` / `call @outer` left.
+// After the inliner runs, every non-`main` body should contain only arithmetic + ret - no `call
+// @inner` / `call @outer` left.
 
 import std.allocator
 import std.io.file
+import std.io.print
 import std.list
 import std.option
 import std.path
@@ -26,16 +27,17 @@ import std.process
 import std.result
 import std.string
 import std.string_builder
+
 import flang_codegen.backend
+import flang_codegen.builder
 import flang_codegen.c_backend
 import flang_codegen.fir
-import flang_codegen.builder
 import flang_codegen.print
 import flang_codegen.shim_inliner
 
 pub fn main() i32 {
-    // Smoke 1: empty module - verifies the pass never touches anything
-    // when there are no functions to consider.
+    // Smoke 1: empty module - verifies the pass never touches anything when there are no functions
+    // to consider.
     let m0 = module()
     defer m0.deinit()
     const _s0 = inline_shims(&m0)
@@ -81,15 +83,15 @@ pub fn main() i32 {
     if r.is_err() {
         const err = r.unwrap_err()
         err match {
-            NoCompilerFound => println("inliner_test: no C compiler found."),
+            NoCompilerFound => println("inliner_test: no C compiler found.")
             CompilerFailed(code) => {
                 const msg = $"inliner_test: C compiler exited with code {code}"
                 defer msg.deinit()
                 println(msg.as_view())
-            },
-            SpawnFailed => println("inliner_test: failed to spawn the C compiler."),
-            IOError => println("inliner_test: I/O error writing the generated .c file."),
-            LowerFailed => println("inliner_test: FIR -> C lowering failed."),
+            }
+            SpawnFailed => println("inliner_test: failed to spawn the C compiler.")
+            IOError => println("inliner_test: I/O error writing the generated .c file.")
+            LowerFailed => println("inliner_test: FIR -> C lowering failed.")
         }
         return 2
     }
@@ -98,7 +100,7 @@ pub fn main() i32 {
 
     let exe_sb = string_builder(result.executable_path.len + 4)
     defer exe_sb.deinit()
-    #if(platform.os == "windows") {
+    #if (platform.os == "windows") {
         exe_sb.append(".\\")
     } else {
         exe_sb.append("./")
@@ -222,14 +224,16 @@ fn build_main() Function {
 // Verification
 // ─────────────────────────────────────────────────────────────────────
 
-// Walk every non-`main` function and check it has no direct call to
-// any of the shim wrappers we expected the inliner to collapse. (`main`
-// is exempted as a caller - calls *from* main are not inlined; that's
+// Walk every non-`main` function and check it has no direct call to any of the shim wrappers we
+// expected the inliner to collapse. (`main` is exempted as a caller - calls *from* main are not
+// inlined; that's
 // the RFC-015 §3.3 default.)
 fn verify_no_residual_calls(m: &IrModule) bool {
     for fi in 0..m.functions.len {
         const f = &m.functions[fi]
-        if f.name == "main" { continue }
+        if f.name == "main" {
+            continue
+        }
         for bi in 0..f.blocks.len {
             const b = &f.blocks[bi]
             for ii in 0..b.instrs.len {
@@ -238,8 +242,8 @@ fn verify_no_residual_calls(m: &IrModule) bool {
                         if c.callee == "inner" or c.callee == "outer" or c.callee == "caller" {
                             return false
                         }
-                    },
-                    _ => {},
+                    }
+                    _ => {}
                 }
             }
         }
@@ -273,7 +277,7 @@ fn print_stats(s: &InlineStats) {
 
 fn pick_output_path() OwnedString {
     let exe_name: String = "build/inliner_test_artifact"
-    #if(platform.os == "windows") {
+    #if (platform.os == "windows") {
         exe_name = "build\\inliner_test_artifact.exe"
     }
     return from_view(exe_name)

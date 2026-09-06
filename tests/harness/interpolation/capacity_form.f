@@ -2,9 +2,9 @@
 //! EXIT: 0
 //! STDOUT: hi alice
 
+import std.io.print
 import std.string_builder
 import std.string
-import core.io
 
 pub fn main() i32 {
     let who = "alice"

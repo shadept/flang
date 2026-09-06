@@ -2,13 +2,12 @@
 //! EXIT: 0
 //! STDOUT: sum=7
 
-// Exercises the parser's named-arg peek (ident followed by `=`) from inside a
-// hole. The lexer must treat the hole-internal `(` / `)` depth correctly so
-// the peek doesn't prematurely exit hole mode.
+// Exercises the parser's named-arg peek (ident followed by `=`) from inside a hole. The lexer must
+// treat the hole-internal `(` / `)` depth correctly so the peek doesn't prematurely exit hole mode.
 
-import std.string_builder
+import std.io.print
 import std.string
-import core.io
+import std.string_builder
 
 fn add(a: i32, b: i32) i32 {
     return a + b

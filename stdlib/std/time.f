@@ -1,3 +1,5 @@
+import std.io.print
+
 // std.time - high-resolution monotonic clock for measuring intervals.
 //
 // `monotonic_ns()` returns nanoseconds since an unspecified epoch that is stable for the lifetime

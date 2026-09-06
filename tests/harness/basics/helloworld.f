@@ -3,7 +3,8 @@
 //! STDOUT: hello world
 
 import core.string
-import core.io
+
+import std.io.print
 
 pub fn main() i32 {
     println("hello world")

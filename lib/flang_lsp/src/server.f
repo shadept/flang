@@ -16,6 +16,8 @@
 import std.dict
 import std.encoding.codec
 import std.encoding.json
+import std.io.file
+import std.io.fs
 import std.io.reader
 import std.io.writer
 import std.list
@@ -28,13 +30,12 @@ import std.string_builder
 import std.string_reader
 import std.test
 import std.time
-import std.io.file
-import std.io.fs
-import flang_core.diagnostic
-import flang_core.span
+
 import flang_analysis.analyze
 import flang_analysis.project
 import flang_analysis.resolver
+import flang_core.diagnostic
+import flang_core.span
 import flang_fmt.fmt
 import flang_typer.checker
 import flang_typer.function_registry
@@ -43,6 +44,7 @@ import flang_typer.interner
 import flang_typer.nominal_registry
 import flang_typer.reporter
 import flang_typer.result
+
 import flang_lsp.documents
 import flang_lsp.handlers.document_symbol
 import flang_lsp.handlers.folding_range
@@ -68,6 +70,9 @@ pub type LspServer = struct {
     // Access logging to stderr: one line per message in and per message handled, method and id
     // only, never payloads. Off in tests; `flang lsp` turns it on.
     log_access: bool
+    // The client accepts LocationLink from definition (`linkSupport`), which lets an import
+    // highlight its whole dotted path rather than the word under the cursor.
+    definition_links: bool
     exit_code: i32?
     next_id: i64
 }
@@ -85,6 +90,7 @@ pub fn lsp_server(r: Reader, w: Writer, stdlib_path: String = "", version: Strin
         shutdown_requested = false,
         stdlib_warned = false,
         log_access = log_access,
+        definition_links = false,
         exit_code = null,
         next_id = 0,
     }
@@ -483,19 +489,33 @@ fn send_status(self: &LspServer) {
 // The client's `general.positionEncodings` is a preference-ordered list; any occurrence of utf-8
 // selects the byte-offset fast path. Absent or without utf-8 (VS Code), utf-16 is the mandatory
 // default.
-fn negotiate_encoding(params: &JsonValue?) PositionEncoding {
+// The member at a dotted path of object keys, or null where the path leaves the object.
+fn member_path(params: &JsonValue?, path: String[]) &JsonValue? {
     if params.is_none() {
-        return PositionEncoding.Utf16
+        return null
     }
-    const caps = get_member(params.unwrap(), "capabilities")
-    if caps.is_none() {
-        return PositionEncoding.Utf16
+    let cur = params.unwrap()
+    for key in path {
+        const next = get_member(cur, key)
+        if next.is_none() {
+            return null
+        }
+        cur = next.unwrap()
     }
-    const general = get_member(caps.unwrap(), "general")
-    if general.is_none() {
-        return PositionEncoding.Utf16
+    return Some(cur)
+}
+
+// `capabilities.textDocument.definition.linkSupport`, false when absent.
+fn definition_link_support(params: &JsonValue?) bool {
+    const link = member_path(params, ["capabilities", "textDocument", "definition", "linkSupport"])
+    return link match {
+        Some(v) => v.as_bool() ?? false
+        None => false
     }
-    const encodings = get_member(general.unwrap(), "positionEncodings")
+}
+
+fn negotiate_encoding(params: &JsonValue?) PositionEncoding {
+    const encodings = member_path(params, ["capabilities", "general", "positionEncodings"])
     if encodings.is_none() {
         return PositionEncoding.Utf16
     }
@@ -598,6 +618,7 @@ fn is_utf8_encoding(enc: PositionEncoding) bool {
 
 fn on_initialize(self: &LspServer, msg: &RpcMessage) {
     self.encoding = negotiate_encoding(msg.params())
+    self.definition_links = definition_link_support(msg.params())
     self.collect_folders(msg.params())
     if msg.id().is_none() {
         return
@@ -1164,6 +1185,28 @@ fn respond_null(self: &LspServer, msg: &RpcMessage) {
     write_response(self.writer, msg.id().unwrap(), &nul)
 }
 
+// One LSP LocationLink from `origin` (in the requesting file) to `target`, both resolved inside
+// project `pi`. The target's range doubles as its selection range.
+fn encode_link(self: &LspServer, e: &Encoder, pi: ProjectId, origin: SourceSpan,
+    target: SourceSpan) {
+    const unit = &self.ws.projects[pi].unit
+    const origin_text = unit.sources[origin.file_id as usize].as_view()
+    let origin_idx = line_index(origin_text)
+    const target_text = unit.sources[target.file_id as usize].as_view()
+    let target_idx = line_index(target_text)
+    const u = self.uri_for_path(unit.file_paths[target.file_id as usize].as_view())
+    e.begin_map(0)
+    e.key("originSelectionRange")
+    encode_span_range(e, &origin_idx, origin_text, origin, self.encoding)
+    e.key("targetUri")
+    e.encode_str(u.as_view())
+    e.key("targetRange")
+    encode_span_range(e, &target_idx, target_text, target, self.encoding)
+    e.key("targetSelectionRange")
+    encode_span_range(e, &target_idx, target_text, target, self.encoding)
+    e.end_map()
+}
+
 // One LSP Location for `span`, resolved inside project `pi` (the span's file id indexes that
 // project's unit).
 fn encode_span_location(self: &LspServer, e: &Encoder, pi: ProjectId, span: SourceSpan) {
@@ -1498,9 +1541,10 @@ fn registry_hover(self: &LspServer, pi: ProjectId, name: String) OwnedString? {
 
 // ---- textDocument/definition ----
 
-// Resolution order: the checker's resolved target at the cursor (locals, params, functions, fields,
-// variants, consts); then a name-level ModuleIndex lookup across the workspace, which covers
-// everything the checker records no use-edge for - type names, template `#name`s.
+// Resolution order: an `import` under the cursor goes to the file it names; else the checker's
+// resolved target at the cursor (locals, params, functions, fields, variants, consts); then a
+// name-level ModuleIndex lookup across the workspace, which covers everything the checker records
+// no use-edge for - type names, template `#name`s.
 fn on_definition(self: &LspServer, msg: &RpcMessage) {
     if !msg.is_request() {
         return
@@ -1524,6 +1568,29 @@ fn on_definition(self: &LspServer, msg: &RpcMessage) {
     e.begin_seq(0)
 
     const text = unit.sources[fid as usize].as_view()
+
+    // An import names one file: answer with its start, and never fall through to the name tiers - a
+    // path segment like `list` would otherwise match every declaration of that name. As a
+    // LocationLink when the client takes one, so the whole dotted path highlights as the origin.
+    const imp = import_at(&unit.modules[fid as usize], offset)
+    if imp.is_some() {
+        let ref = imp.unwrap()
+        defer ref.deinit()
+        const target = file_id_of_fqn(unit, ref.path.as_view())
+        if target.is_some() {
+            const start = SourceSpan { file_id = target.unwrap(), start = 0, length = 0 }
+            if self.definition_links {
+                self.encode_link(&e, pi, ref.span, start)
+            } else {
+                self.encode_span_location(&e, pi, start)
+            }
+        }
+        e.end_seq()
+        e.end_map()
+        write_frame(self.writer, sb.as_view())
+        return
+    }
+
     const word = identifier_at(text, offset)
 
     let found = false
@@ -1922,9 +1989,14 @@ fn on_formatting(self: &LspServer, msg: &RpcMessage) {
     const text = doc.unwrap().text.as_view()
 
     let cfg = default_config()
-    if doc.unwrap().path.as_view().len > 0 {
+    // The project name is owned here so the config's view of it outlives the format.
+    let project = if doc.unwrap().path.as_view().len > 0 {
         apply_project_fmt(doc.unwrap().path.as_view(), &cfg)
+    } else {
+        from_view("")
     }
+    defer project.deinit()
+    set_project(&cfg, project.as_view())
 
     const res = format_source(text, &cfg)
     if res.is_err() {
@@ -1959,11 +2031,12 @@ fn on_formatting(self: &LspServer, msg: &RpcMessage) {
 }
 
 // The `[fmt]` table of the manifest governing `path`, applied onto `cfg`. Unknown keys are silently
-// ignored - `flang fmt` already warns about them on the command line.
-fn apply_project_fmt(path: String, cfg: &FmtConfig) {
+// ignored - `flang fmt` already warns about them on the command line. Returns the project's name,
+// for `set_project`; empty without a manifest.
+fn apply_project_fmt(path: String, cfg: &FmtConfig) OwnedString {
     const dir = project_dir_for(path)
     if dir.is_none() {
-        return
+        return from_view("")
     }
     let d = dir.unwrap()
     const manifest = $"{d.as_view()}/flang.toml"
@@ -1971,15 +2044,17 @@ fn apply_project_fmt(path: String, cfg: &FmtConfig) {
     const got = read_text(manifest.as_view())
     manifest.deinit()
     if got.is_none() {
-        return
+        return from_view("")
     }
     let toml = got.unwrap()
     let proj = parse_project(toml.as_view())
     for &e in proj.fmt {
         const _ok = set_option(cfg, e.key.as_view(), e.value.as_view())
     }
+    const name = from_view(proj.name.as_view())
     proj.deinit()
     toml.deinit()
+    return name
 }
 
 // =============================================================================
@@ -2366,6 +2441,79 @@ test "definition on a call lands on the declaration" {
     assert_true(contains(out.as_view(), "\"id\":13,\"result\":[{"), "a location came back")
     assert_true(contains(out.as_view(), "\"uri\":\"file:///t/m.f\""), "same file")
     assert_true(contains(out.as_view(), "\"start\":{\"line\":0,"), "the declaration line")
+}
+
+// A two-module project where the first imports the second by FQN, for the import tier of
+// definition. Kept apart from DEMO_SRC so the positions the other tests pin stay put.
+fn demo_import_run(request: String, out: &StringBuilder, links: bool = false) {
+    const src = "import t.extra\nimport t.missing\npub fn go() i32 { return extra() }\n"
+    let input = string_builder(1024)
+    if links {
+        frame_into(&input,
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"textDocument\":{\"definition\":{\"linkSupport\":true}}}}}")
+    }
+    frame_into(&input,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/imp.f\",\"version\":1,\"text\":\"import t.extra\\nimport t.missing\\npub fn go() i32 { return extra() }\\n\"}}}")
+    frame_into(&input, request)
+    defer input.deinit()
+    let mr = mem_reader(input.as_view())
+    let srv = lsp_server(mr.reader(), out.writer())
+    defer srv.deinit()
+    let srcs: List(OwnedString) = list(2)
+    srcs.push(from_view(src))
+    srcs.push(from_view("pub fn extra() i32 { return 1 }\n"))
+    let fqns: List(String) = list(2)
+    fqns.push("/t/imp.f")
+    fqns.push("t.extra")
+    let unit = analyze_source_set(srcs, &fqns)
+    fqns.deinit()
+    const origin = &unit.project_origin
+    origin.push(true)
+    origin.push(false)
+    let index = build_indexes(&unit)
+    let proj = parse_project("[project]\nname = \"t\"\n")
+    let ctx = resolve_ctx(&proj, "")
+    proj.deinit()
+    srv.ws.projects.push(OpenProject {
+        dir = from_view("/t"),
+        name = from_view("t"),
+        ctx = ctx,
+        unit = unit,
+        index = index,
+    })
+    srv.run()
+}
+
+test "definition on an import lands on the imported file" {
+    let out = string_builder(4096)
+    defer out.deinit()
+    demo_import_run("{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/imp.f\"},\"position\":{\"line\":0,\"character\":10}}}",
+        &out)
+    assert_true(contains(out.as_view(), "\"id\":40,\"result\":[{"), "a location came back")
+    assert_true(contains(out.as_view(), "t.extra"), "the imported module's file")
+    assert_true(contains(out.as_view(), "\"start\":{\"line\":0,\"character\":0}"),
+        "its first position")
+    assert_true(!contains(out.as_view(), "imp.f\"}"), "not the importing file itself")
+}
+
+test "definition on an import is a link over the whole dotted path when the client takes links" {
+    let out = string_builder(4096)
+    defer out.deinit()
+    demo_import_run("{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/imp.f\"},\"position\":{\"line\":0,\"character\":10}}}",
+        &out, true)
+    assert_true(contains(out.as_view(),
+            "\"id\":42,\"result\":[{\"originSelectionRange\":{\"start\":{\"line\":0,\"character\":7},\"end\":{\"line\":0,\"character\":14}}"),
+        "origin is `t.extra`, keyword excluded")
+    assert_true(contains(out.as_view(), "\"targetUri\":\"file://"), "a link target")
+    assert_true(contains(out.as_view(), "t.extra\",\"targetRange\""), "the imported module's file")
+}
+
+test "definition on an unresolved import answers empty, not the name tiers" {
+    let out = string_builder(4096)
+    defer out.deinit()
+    demo_import_run("{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/imp.f\"},\"position\":{\"line\":1,\"character\":10}}}",
+        &out)
+    assert_true(contains(out.as_view(), "\"id\":41,\"result\":[]"), "empty result")
 }
 
 test "hover on a function parameter renders its type" {

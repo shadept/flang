@@ -2,9 +2,11 @@
 //! EXIT: 0
 //! STDOUT: 1 Green red
 
-// Bare enum tag values are 0, 1, 2... in declaration order.
-// `i32 as Enum` constructs a variant from a tag; `e as i32` extracts it.
-// The round-trip is used by FFI shims that share numeric error codes with C.
+import std.io.print
+
+// Bare enum tag values are 0, 1, 2... in declaration order. `i32 as Enum` constructs a variant from
+// a tag; `e as i32` extracts it. The round-trip is used by FFI shims that share numeric error codes
+// with C.
 
 type Color = enum {
     Red
@@ -14,9 +16,9 @@ type Color = enum {
 
 fn name(c: Color) String {
     c match {
-        Red => "red",
-        Green => "Green",
-        Blue => "blue",
+        Red => "red"
+        Green => "Green"
+        Blue => "blue"
     }
 }
 

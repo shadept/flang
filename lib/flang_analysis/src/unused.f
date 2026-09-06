@@ -26,28 +26,30 @@
 
 import std.allocator
 import std.dict
+import std.io.fs
 import std.list
 import std.option
 import std.set
 import std.string
 import std.string_builder
 import std.test
-import std.io.fs
+
 import flang_core.diagnostic
 import flang_core.span
 import flang_parser.ast
-import flang_typer.type
-import flang_typer.node_id
 import flang_typer.error_codes
-import flang_typer.interner
-import flang_typer.inference_results
 import flang_typer.function_registry
+import flang_typer.inference_results
+import flang_typer.interner
+import flang_typer.node_id
 import flang_typer.nominal_registry
-import flang_typer.specialization
 import flang_typer.result
+import flang_typer.specialization
+import flang_typer.type
+
+import flang_analysis.analyze
 import flang_analysis.project
 import flang_analysis.resolver
-import flang_analysis.analyze
 
 // One project function under consideration: its registry id, where it is declared, and the flags
 // the root rules read.

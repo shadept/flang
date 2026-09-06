@@ -3,11 +3,12 @@
 //! STDOUT: hello
 
 import core.string
-import core.io
+
+import std.io.print
 
 pub fn main() i32 {
     let arr: [u8; 5] = [104, 101, 108, 108, 111]
-    let bytes: u8[] = arr  // automatic cast
+    let bytes: u8[] = arr // automatic cast
     let s: String = bytes as String
     println(s)
     return 0

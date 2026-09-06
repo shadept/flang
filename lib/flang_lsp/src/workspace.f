@@ -10,6 +10,7 @@
 
 import std.allocator
 import std.dict
+import std.io.fs
 import std.list
 import std.option
 import std.path
@@ -17,11 +18,12 @@ import std.result
 import std.set
 import std.string
 import std.string_builder
-import std.io.fs
 import std.test
+
 import flang_analysis.analyze
 import flang_analysis.project
 import flang_analysis.resolver
+
 import flang_lsp.documents
 import flang_lsp.index
 import flang_lsp.uri

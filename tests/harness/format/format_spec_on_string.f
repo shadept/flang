@@ -3,12 +3,12 @@
 //! STDOUT: [    hi][hi    ][..hi..][hi]
 //! STDOUT: [   ok][o    ][k!]
 
-// Text takes the same [fill][align][0][width] spec the numeric appenders do,
-// with width a byte-count minimum. Wider text is emitted whole.
+// Text takes the same [fill][align][0][width] spec the numeric appenders do, with width a
+// byte-count minimum. Wider text is emitted whole.
 
-import std.string_builder
+import std.io.print
 import std.string
-import core.io
+import std.string_builder
 
 pub fn main() i32 {
     let name = "hi"

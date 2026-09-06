@@ -2,10 +2,10 @@
 //! EXIT: 0
 //! STDOUT: Point(3, 4)
 
-import std.string_builder
+import std.io.print
 import std.io.writer
 import std.string
-import core.io
+import std.string_builder
 
 type Point = struct {
     x: i32

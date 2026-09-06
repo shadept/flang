@@ -7,9 +7,9 @@
 // Building block for File, stdout, network streams, etc. The caller owns the backing storage;
 // BufferedWriter is a borrowed view.
 
-import std.mem
-import std.interface
 import std.conv
+import std.interface
+import std.mem
 import std.option
 import std.result
 

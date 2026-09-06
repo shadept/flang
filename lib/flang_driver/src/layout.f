@@ -17,10 +17,11 @@ import std.list
 import std.option
 import std.string
 import std.test
+
 import flang_core.span
-import flang_typer.type
 import flang_typer.interner
 import flang_typer.nominal_registry
+import flang_typer.type
 import flang_typer.well_known
 
 // Size and alignment of a value, in bytes.
