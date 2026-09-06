@@ -7,13 +7,13 @@
 // ============================================================================
 // FLang Build Script - build the compiler with itself
 //
-//   1. find a compiler: dist/<rid>/flang, else the cold-start seed
-//      boot/<rid>/flang-seed
-//   2. build compiler/ with it (stage 1)
-//   3. install that as dist/<rid>/flang -- THE compiler
+//   1. rebuild the cold-start seed boot/<rid>/flang-seed if its C is newer
+//   2. find a compiler: dist/<rid>/flang unless the seed is newer, else the seed
+//   3. build compiler/ with it (stage 1)
+//   4. install that as dist/<rid>/flang -- THE compiler
 //
-// A clean clone has neither, and the seed is the way in: `make` (or
-// build.bat) in boot/<rid> needs nothing but a C compiler. See boot/README.md.
+// A clean clone has only the seed C, and building it needs nothing but a C
+// compiler (`make`, or build.bat on Windows). See boot/README.md.
 //
 // Usage:
 //   dotnet run build.cs                  # Build for current platform
@@ -43,7 +43,9 @@ if (showHelp)
         Builds compiler/ with an existing compiler and installs the result as
         dist/<rid>/flang, the compiler test.cs, test-all.cs and the docs use.
         The builder is dist/<rid>/flang when present, otherwise the cold-start
-        seed at boot/<rid>/flang-seed.
+        seed at boot/<rid>/flang-seed. The seed is rebuilt first whenever its C
+        is newer than the binary, and wins over an installed compiler older
+        than itself.
 
         Usage:
           dotnet run build.cs                  Build for current platform
@@ -112,23 +114,36 @@ if (!File.Exists(Path.Combine(compilerDir, "flang.toml")))
     return 1;
 }
 
-// The builder for stage 1. An installed compiler is preferred over the seed:
-// it is at least as new, and the seed's whole job is the cold start.
-var seedExe = Path.Combine(scriptDir, "boot", rid, $"flang-seed{exeExt}");
-var builder = File.Exists(finalExe) ? finalExe : File.Exists(seedExe) ? seedExe : null;
+// The seed binary is kept current before anything is built with it. A promote
+// (or a checkout that brings one in) replaces boot/<rid>/flang.c but not the
+// flang-seed beside it, and a stale seed miscompiles sources that use features
+// it predates -- silently, into a compiler that segfaults on hello world.
+var seedDir = Path.Combine(scriptDir, "boot", rid);
+var seedExe = Path.Combine(seedDir, $"flang-seed{exeExt}");
+var seedSources = Directory.Exists(seedDir) ? Directory.GetFiles(seedDir, "*.c") : [];
+if (seedSources.Length > 0
+    && (!File.Exists(seedExe) || seedSources.Max(File.GetLastWriteTimeUtc) > File.GetLastWriteTimeUtc(seedExe)))
+{
+    Console.WriteLine($"=== Seed out of date, rebuilding {seedExe} ===");
+    var (tool, toolArgs) = OperatingSystem.IsWindows() ? ("cmd", "/c build.bat") : ("make", "");
+    if (Run(tool, toolArgs, seedDir) != 0)
+    {
+        Console.Error.WriteLine($"Error: seed build failed in boot/{rid} (needs only a C compiler; see boot/README.md).");
+        return 1;
+    }
+}
+
+// The builder for stage 1: the installed compiler, unless the seed is newer.
+// The seed rule lets the sources use whatever the seed supports, so a builder
+// that predates it is not trusted to compile them.
+var builder =
+    File.Exists(finalExe) && (!File.Exists(seedExe) || File.GetLastWriteTimeUtc(finalExe) >= File.GetLastWriteTimeUtc(seedExe)) ? finalExe
+    : File.Exists(seedExe) ? seedExe
+    : null;
 
 if (builder == null)
 {
-    Console.Error.WriteLine($"""
-        Error: no compiler to build with.
-
-        Cold-start from the committed seed, which needs only a C compiler:
-
-          cd boot/{rid}
-          make                  # build.bat on Windows, from a VS developer prompt
-
-        then re-run this script. See boot/README.md.
-        """);
+    Console.Error.WriteLine($"Error: no compiler to build with: neither {finalExe} nor {seedExe} exists. See boot/README.md.");
     return 1;
 }
 
@@ -147,7 +162,7 @@ var sourceRoots = new[]
     stdlibSrc,
 };
 
-if (!force && File.Exists(finalExe) && NewestInput(sourceRoots) <= File.GetLastWriteTimeUtc(finalExe))
+if (!force && builder == finalExe && NewestInput(sourceRoots) <= File.GetLastWriteTimeUtc(finalExe))
 {
     Console.WriteLine($"Compiler up to date: {finalExe} (--force to rebuild)");
 }

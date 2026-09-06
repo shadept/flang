@@ -5,7 +5,8 @@ stdlib's hand-written runtime sidecar `.c` files it links against. This is
 what a clean clone cold-starts from: building a seed needs a C compiler and
 nothing else - no prior FLang binary.
 
-Cold start:
+`dotnet run build.cs` does the cold start itself, rebuilding `flang-seed`
+whenever the seed C beside it is newer. By hand:
 
     cd boot/<target>
     make                          # linux-x64, darwin-arm64
