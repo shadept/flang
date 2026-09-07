@@ -191,12 +191,6 @@ pub fn deinit(self: &Set($T)) {
     self.__storage.deinit(self.allocator)
 }
 
-// Indexing and `for` resolve through `op_deref` since 2026-09-07 (spec.md §7), but the committed
-// seed's checker still stops at the wrapper; these wrappers stay until the next promote.
-pub fn iter(self: &Set($T)) SetIterator(T) {
-    return self.__storage.iter()
-}
-
 // The elements `pred` accepts, as a new set.
 pub fn filter(self: &Set($T), pred: $F, allocator: &Allocator? = null) Set(T) {
     const alloc = allocator ?? self.allocator

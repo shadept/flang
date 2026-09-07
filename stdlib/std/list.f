@@ -701,24 +701,6 @@ pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
     return (self.__storage.to_owned_slice(self.allocator), self.allocator)
 }
 
-// Indexing and `for` resolve through `op_deref` since 2026-09-07 (spec.md §7), but the committed
-// seed's checker still stops at the wrapper; these wrappers stay until the next promote.
-pub fn op_index_ref(self: &List($T), index: usize) &T {
-    return self.__storage.op_index_ref(index)
-}
-
-pub fn op_index(self: &List($T), range: Range(usize)) T[] {
-    return self.__storage.op_index(range)
-}
-
-pub fn iter(self: &List($T)) ListIterator(T) {
-    return self.__storage.iter()
-}
-
-pub fn iter_ref(self: &List($T)) SliceRefIterator(T) {
-    return self.__storage.iter_ref()
-}
-
 // Returns a new list of `f(x)` for every element, in order.
 pub fn map(self: &List($T), f: $F, allocator: &Allocator? = null) List($U) {
     const alloc = allocator ?? self.allocator

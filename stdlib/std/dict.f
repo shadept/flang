@@ -566,16 +566,6 @@ pub fn op_set_index(self: &Dict($K, $V), key: K, value: V) {
     self.__storage.set(key, value, self.allocator)
 }
 
-// Indexing and `for` resolve through `op_deref` since 2026-09-07 (spec.md §7), but the committed
-// seed's checker still stops at the wrapper; these wrappers stay until the next promote.
-pub fn op_index(self: &Dict($K, $V), key: K) V? {
-    return self.__storage.get(key)
-}
-
-pub fn iter(self: &Dict($K, $V)) DictIterator(K, V) {
-    return self.__storage.iter()
-}
-
 // Deinits every live key and value and frees the table. Idempotent: a second call is a no-op.
 pub fn deinit(self: &Dict($K, $V)) {
     self.__storage.deinit(self.allocator)

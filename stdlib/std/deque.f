@@ -227,12 +227,6 @@ pub fn push_front(self: &Deque($T), value: T) {
     self.__storage.push_front(value, self.allocator)
 }
 
-// Indexing and `for` resolve through `op_deref` since 2026-09-07 (spec.md §7), but the committed
-// seed's checker still stops at the wrapper; these wrappers stay until the next promote.
-pub fn iter(self: &Deque($T)) DequeIterator(T) {
-    return self.__storage.iter()
-}
-
 // Free the backing storage. Each live element's `deinit()` runs first. Idempotent.
 pub fn deinit(self: &Deque($T)) {
     self.__storage.deinit(self.allocator)

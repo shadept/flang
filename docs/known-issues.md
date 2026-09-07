@@ -354,9 +354,8 @@ resolve their operator (`op_index_ref`/`op_index`, `op_set_index`, `iter`/`iter_
 `receiver_pick`, the same receiver-shape ranking a spelled method call uses, and lowering replays
 the recorded hop chain for the receiver; `for x in w` is code-identical to `w.iter()` plus the
 `next` loop. Pinned by `op_deref/op_deref_index_for.f` and the `ranking:` tests in `checker.f`.
-The wrappers below stay until the next promote: the committed seed's checker still stops at the
-wrapper, and the stdlib is built with the seed (seed rule, CLAUDE.md). Still open: the `&&Wrap`
-note at the end.
+The wrappers below were deleted once `seed/20260907` carried the change (the stdlib is built with
+the seed, so it could not rely on the peel before that). Still open: the `&&Wrap` note at the end.
 **Affected:** `lib/flang_typer/src/checker.f`, every `op_deref` wrapper
 
 spec.md §7 promises `op_deref` for `x.field` and `x.method()`, and that is all the checker does:
