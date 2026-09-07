@@ -517,3 +517,20 @@ test "sort with custom cmp" {
     assert_eq(s[0], 5i32, "descending first")
     assert_eq(s[4], 1i32, "descending last")
 }
+
+// Sorts `s` in place by `key(x)` ascending, keeping the order of equal keys.
+//
+// - `key`: its result type needs `<`.
+pub fn sort_by(s: $T[], key: $F) {
+    sort(s, fn(a, b) {
+        let ka = key(a)
+        let kb = key(b)
+        if ka < kb {
+            Ord.Less
+        } else if kb < ka {
+            Ord.Greater
+        } else {
+            Ord.Equal
+        }
+    })
+}

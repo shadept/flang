@@ -18,7 +18,11 @@ import core.panic
 import core.range
 import core.rtti
 
+import std.option
+import std.test
+
 // A view into a contiguous sequence of elements of type T. A Slice does not own ptr.
+
 pub type Slice = struct(T) {
     ptr: &T
     len: usize
@@ -31,7 +35,7 @@ pub fn slice_from_raw_parts(ptr: &$T, len: usize) T[] {
 }
 
 // =============================================================================
-// Indexing
+// Element access
 // =============================================================================
 
 // Returns the element at `idx`, or null if `idx` is out of bounds.
@@ -41,6 +45,14 @@ pub fn get(s: $T[], idx: usize) T? {
     }
     const ptr = s.ptr + idx
     return Some(ptr.*)
+}
+
+// Returns a reference to the element at `idx`, or null past the end.
+pub fn get_ref(s: $T[], idx: usize) &T? {
+    if idx >= s.len {
+        return null
+    }
+    return Some(s.ptr + idx)
 }
 
 // Returns the element at `idx`. Panics if `idx >= s.len`.
@@ -82,8 +94,26 @@ pub fn op_set_index(s: &Slice($T), index: usize, value: T) {
     slot.* = value
 }
 
+// Returns the first element, or null when empty.
+pub fn first(s: $T[]) T? {
+    if s.len == 0 {
+        return null
+    }
+    return Some(s[0])
+}
+
+// Returns the last element, or null when empty.
+pub fn last(s: $T[]) T? {
+    if s.len == 0 {
+        return null
+    }
+    return Some(s[s.len - 1])
+}
+
 // =============================================================================
-// Search
+// Search and query
+//
+// Predicate forms take any callable `$F` usable as `fn(T) bool`; value forms compare with `==`.
 // =============================================================================
 
 // Returns true if the slice contains `value`.
@@ -129,32 +159,99 @@ pub fn count(s: $T[], value: T) usize {
     return n
 }
 
-// Searches a sorted slice for `value` using binary search. Returns the index if found, or null if
-// not present. The slice MUST be sorted in ascending order; results are undefined otherwise.
-pub fn binary_search(s: $T[], value: T) usize? {
-    let lo: usize = 0
-    let hi: usize = s.len
-    for _i in 0..s.len {
-        if lo >= hi {
-            return null
+// Returns how many elements satisfy `pred`. `count` counts occurrences of a value.
+pub fn count_if(s: $T[], pred: $F) usize {
+    let n: usize = 0
+    for i in 0..s.len {
+        if pred(s[i]) {
+            n = n + 1
         }
-        const mid = lo + (hi - lo) / 2
-        const elem = s[mid]
-        if elem == value {
-            return Some(mid)
-        }
-        if elem < value {
-            lo = mid + 1
-        } else {
-            hi = mid
+    }
+    return n
+}
+
+// Returns the first element satisfying `pred`, or null.
+pub fn find(s: $T[], pred: $F) T? {
+    for i in 0..s.len {
+        if pred(s[i]) {
+            return Some(s[i])
         }
     }
     return null
 }
 
-// =============================================================================
-// Comparison
-// =============================================================================
+// Returns the index of the first element satisfying `pred`, or null.
+pub fn find_index(s: $T[], pred: $F) usize? {
+    for i in 0..s.len {
+        if pred(s[i]) {
+            return Some(i)
+        }
+    }
+    return null
+}
+
+// Returns whether any element satisfies `pred`. False when empty.
+pub fn any(s: $T[], pred: $F) bool {
+    return s.find_index(pred).is_some()
+}
+
+// Returns whether every element satisfies `pred`. True when empty.
+pub fn all(s: $T[], pred: $F) bool {
+    for i in 0..s.len {
+        let ok: bool = pred(s[i])
+        if !ok {
+            return false
+        }
+    }
+    return true
+}
+
+// Returns the index of the first element for which `pred` is false. O(log n).
+//
+// - `pred`: must be true for a prefix of `s` and false for the rest; the precondition is not
+//   checked. `lower_bound`, `upper_bound` and `binary_search` are built on this.
+//
+// Returns `s.len` when `pred` holds everywhere and 0 when it holds nowhere.
+pub fn partition_point(s: $T[], pred: $F) usize {
+    let lo: usize = 0
+    let hi: usize = s.len
+    while lo < hi {
+        const mid = lo + (hi - lo) / 2
+        if pred(s[mid]) {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    return lo
+}
+
+// Returns the index of the first element not less than `value`: the first position at which `value`
+// could be inserted and keep `s` sorted. `s.len` when every element is smaller.
+//
+// - `s`: must be sorted ascending.
+pub fn lower_bound(s: $T[], value: T) usize {
+    return s.partition_point(fn(x) { x < value })
+}
+
+// Returns the index of the first element greater than `value`: the last position at which `value`
+// could be inserted and keep `s` sorted. `upper_bound - lower_bound` counts the copies of `value`.
+//
+// - `s`: must be sorted ascending.
+pub fn upper_bound(s: $T[], value: T) usize {
+    return s.partition_point(fn(x) { !(value < x) })
+}
+
+// Returns the index of `value`, or null when absent; with duplicates, the first.
+//
+// - `s`: must be sorted ascending; the result is meaningless otherwise.
+pub fn binary_search(s: $T[], value: T) usize? {
+    const i = s.lower_bound(value)
+    if i < s.len and s[i] == value {
+        return Some(i)
+    }
+    return null
+}
 
 // Returns true if `s` starts with the elements in `prefix`.
 pub fn starts_with(s: $T[], prefix: T[]) bool {
@@ -183,8 +280,102 @@ pub fn ends_with(s: $T[], suffix: T[]) bool {
     return true
 }
 
+// Returns the smallest element by `<`, or null when empty.
+pub fn min(s: $T[]) T? {
+    if s.len == 0 {
+        return null
+    }
+    let best = s[0]
+    for i in 1..s.len {
+        if s[i] < best {
+            best = s[i]
+        }
+    }
+    return Some(best)
+}
+
+// Returns the largest element by `<`, or null when empty.
+pub fn max(s: $T[]) T? {
+    if s.len == 0 {
+        return null
+    }
+    let best = s[0]
+    for i in 1..s.len {
+        if best < s[i] {
+            best = s[i]
+        }
+    }
+    return Some(best)
+}
+
+// Returns the element with the smallest `key(x)`, or null when empty. Ties keep the earliest.
+pub fn min_by(s: $T[], key: $F) T? {
+    if s.len == 0 {
+        return null
+    }
+    let best = s[0]
+    let best_key = key(best)
+    for i in 1..s.len {
+        let k = key(s[i])
+        if k < best_key {
+            best_key = k
+            best = s[i]
+        }
+    }
+    return Some(best)
+}
+
+// Returns the element with the largest `key(x)`, or null when empty. Ties keep the earliest.
+pub fn max_by(s: $T[], key: $F) T? {
+    if s.len == 0 {
+        return null
+    }
+    let best = s[0]
+    let best_key = key(best)
+    for i in 1..s.len {
+        let k = key(s[i])
+        if best_key < k {
+            best_key = k
+            best = s[i]
+        }
+    }
+    return Some(best)
+}
+
 // =============================================================================
-// Mutation
+// Traversal and folds
+// =============================================================================
+
+// Calls `f` on every element, in order. To accumulate, use `fold`; to mutate outer state from a
+// closure, capture a reference and write through it.
+pub fn each(s: $T[], f: $F) {
+    for i in 0..s.len {
+        f(s[i])
+    }
+}
+
+// Combines left to right: `f(f(f(init, x0), x1), x2)`.
+pub fn fold(s: $T[], init: $A, f: $F) A {
+    let acc = init
+    for i in 0..s.len {
+        acc = f(acc, s[i])
+    }
+    return acc
+}
+
+// Combines right to left: `f(x0, f(x1, f(x2, init)))`. The accumulator is `f`'s second argument.
+pub fn fold_right(s: $T[], init: $A, f: $F) A {
+    let acc = init
+    let i = s.len
+    while i > 0 {
+        i = i - 1
+        acc = f(s[i], acc)
+    }
+    return acc
+}
+
+// =============================================================================
+// In-place mutation
 // =============================================================================
 
 // Swaps the values at two mutable references.
@@ -229,11 +420,8 @@ pub fn reverse(s: $T[]) {
     }
 }
 
-// `sort` now lives in `std.sort` - see that module for insertion_sort, quicksort, powersort, and
-// the stable default `sort`.
-
 // =============================================================================
-// Copy
+// Copy and reinterpretation
 // =============================================================================
 
 // Copies elements from `src` into `dest`.
@@ -256,7 +444,7 @@ pub fn reinterpret(src: $T[]) $U[] {
 }
 
 // =============================================================================
-// Slice Iterator
+// Iteration
 // =============================================================================
 
 // Iterator state for slices. Created by `iter(&slice)`. Stores a copy of the slice and tracks the
@@ -288,14 +476,17 @@ pub type SliceRefIterator = struct(T) {
     index: usize
 }
 
+// Iterates the elements by reference, in order: `for &x in s`.
 pub fn iter_ref(slice: &$T[]) SliceRefIterator(T) {
     return .{ slice = slice.*, index = 0 }
 }
 
+// An iterator is its own iterable, so adapter chains can consume it.
 pub fn iter(it: &SliceRefIterator($T)) SliceRefIterator(T) {
     return it.*
 }
 
+// Advances and returns a reference to the next element, or null at the end.
 pub fn next(iter: &SliceRefIterator($T)) &T? {
     if iter.index >= iter.slice.len {
         return null
@@ -306,7 +497,63 @@ pub fn next(iter: &SliceRefIterator($T)) &T? {
 }
 
 // =============================================================================
+// Tests
+// =============================================================================
+
+fn slice_test_is_even(x: i32) bool {
+    return x % 2 == 0
+}
+
+test "first, last, find, any, all over a slice" {
+    let arr = [3i32, 4i32, 5i32]
+    const s = arr as i32[]
+    assert_eq(s.first().unwrap(), 3, "first")
+    assert_eq(s.last().unwrap(), 5, "last")
+    assert_eq(s.find(slice_test_is_even).unwrap(), 4, "find")
+    assert_eq(s.find_index(slice_test_is_even).unwrap(), 1 as usize, "find_index")
+    assert_true(s.any(slice_test_is_even), "any")
+    assert_true(!s.all(slice_test_is_even), "all")
+    assert_eq(s.count_if(slice_test_is_even), 1 as usize, "count_if")
+    const empty = s[0..0]
+    assert_true(empty.first().is_none(), "first of empty")
+    assert_true(empty.all(slice_test_is_even), "all of empty")
+}
+
+test "partition_point, lower_bound, upper_bound and binary_search over a sorted slice" {
+    let arr = [1i32, 3i32, 3i32, 3i32, 8i32]
+    const s = arr as i32[]
+    assert_eq(s.partition_point(fn(x: i32) bool { x < 5 }), 4 as usize, "prefix below 5")
+    assert_eq(s.lower_bound(3), 1 as usize, "first 3")
+    assert_eq(s.upper_bound(3), 4 as usize, "past the last 3")
+    assert_eq(s.upper_bound(3) - s.lower_bound(3), 3 as usize, "three copies")
+    assert_eq(s.lower_bound(5), 4 as usize, "absent value: its insertion point")
+    assert_eq(s.upper_bound(5), 4 as usize, "absent value: same point")
+    assert_eq(s.lower_bound(0), 0 as usize, "below everything")
+    assert_eq(s.lower_bound(9), 5 as usize, "above everything")
+    assert_eq(s.binary_search(3).unwrap(), 1 as usize, "found, first copy")
+    assert_eq(s.binary_search(8).unwrap(), 4 as usize, "found at the end")
+    assert_true(s.binary_search(5).is_none(), "absent")
+    const empty = s[0..0]
+    assert_eq(empty.lower_bound(3), 0 as usize, "empty")
+    assert_true(empty.binary_search(3).is_none(), "empty search")
+}
+
+test "min, max and the folds over a slice" {
+    let arr = [3i32, 9i32, 1i32]
+    const s = arr as i32[]
+    assert_eq(s.min().unwrap(), 1, "min")
+    assert_eq(s.max().unwrap(), 9, "max")
+    assert_eq(s.min_by(fn(v: i32) i32 { 0 - v }).unwrap(), 9, "min_by negated")
+    assert_eq(s.fold(0i32, fn(a: i32, b: i32) i32 { a + b }), 13, "fold")
+    assert_eq(s.fold_right(10i32, fn(x: i32, acc: i32) i32 { acc - x }), 10 - 1 - 9 - 3,
+        "fold_right runs from the end")
+}
+
+// =============================================================================
 // Foreigns
+//
+// Kept last: a bare `fn` directly after a return-type-less `#foreign fn` is parsed as its return
+// type (docs/known-issues.md).
 // =============================================================================
 
 // Fills `len` bytes starting at `ptr` with the byte `value`.
@@ -314,107 +561,3 @@ pub fn next(iter: &SliceRefIterator($T)) &T? {
 
 // Copies `len` bytes from `src` to `dst`. Handles overlapping regions safely.
 #foreign fn memmove(dst: &u8, src: &u8, len: usize)
-
-// =============================================================================
-// Tests
-// =============================================================================
-
-// test "contains" {
-//     let arr = [1i32, 2, 3, 4, 5]
-//     let s: i32[] = arr
-//     assert_true(s.contains(3), "should contain 3")
-//     assert_true(!s.contains(6), "should not contain 6")
-// }
-
-// test "index_of" {
-//     let arr = [10i32, 20, 30, 20, 40]
-//     let s: i32[] = arr
-//     let idx = s.index_of(30)
-//     assert_true(idx != null, "should find 30")
-//     assert_eq(idx.value, 2 as usize, "index of 30 should be 2")
-//     assert_true(s.index_of(99) == null, "should not find 99")
-// }
-
-// test "last_index_of" {
-//     let arr = [10i32, 20, 30, 20, 40]
-//     let s: i32[] = arr
-//     let idx = s.last_index_of(20)
-//     assert_true(idx != null, "should find 20")
-//     assert_eq(idx.value, 3 as usize, "last index of 20 should be 3")
-// }
-
-// test "count" {
-//     let arr = [1i32, 2, 1, 3, 1]
-//     let s: i32[] = arr
-//     assert_eq(s.count(1), 3 as usize, "count of 1 should be 3")
-//     assert_eq(s.count(9), 0 as usize, "count of 9 should be 0")
-// }
-
-// test "starts_with" {
-//     let arr = [1i32, 2, 3, 4, 5]
-//     let s: i32[] = arr
-//     let prefix = [1i32, 2, 3]
-//     assert_true(s.starts_with(prefix), "should start with [1,2,3]")
-//     let bad = [1i32, 3]
-//     assert_true(!s.starts_with(bad), "should not start with [1,3]")
-// }
-
-// test "ends_with" {
-//     let arr = [1i32, 2, 3, 4, 5]
-//     let s: i32[] = arr
-//     let suffix = [3i32, 4, 5]
-//     assert_true(s.ends_with(suffix), "should end with [3,4,5]")
-//     let bad = [4i32, 3]
-//     assert_true(!s.ends_with(bad), "should not end with [4,3]")
-// }
-
-// test "fill" {
-//     let arr = [0i32, 0, 0, 0]
-//     let s: i32[] = arr
-//     s.fill(42)
-//     assert_eq(s[0], 42, "s[0] should be 42")
-//     assert_eq(s[3], 42, "s[3] should be 42")
-// }
-
-// test "replace" {
-//     let arr = [1i32, 2, 1, 3, 1]
-//     let s: i32[] = arr
-//     let n = s.replace(1, 9)
-//     assert_eq(n, 3 as usize, "should replace 3 times")
-//     assert_eq(s[0], 9, "s[0] should be 9")
-//     assert_eq(s[1], 2, "s[1] should still be 2")
-// }
-
-// test "reverse" {
-//     let arr = [1i32, 2, 3, 4, 5]
-//     let s: i32[] = arr
-//     s.reverse()
-//     assert_eq(s[0], 5, "s[0] should be 5")
-//     assert_eq(s[4], 1, "s[4] should be 1")
-// }
-
-// test "sort" {
-//     let arr = [5i32, 3, 1, 4, 2]
-//     let s: i32[] = arr
-//     s.sort()
-//     assert_eq(s[0], 1, "s[0] should be 1")
-//     assert_eq(s[1], 2, "s[1] should be 2")
-//     assert_eq(s[4], 5, "s[4] should be 5")
-// }
-
-// test "binary_search" {
-//     let arr = [1i32, 2, 3, 4, 5]
-//     let s: i32[] = arr
-//     let idx = s.binary_search(3)
-//     assert_true(idx != null, "should find 3")
-//     assert_eq(idx.value, 2 as usize, "binary_search(3) should be 2")
-//     assert_true(s.binary_search(6) == null, "should not find 6")
-// }
-
-// test "swap" {
-//     let a: i32 = 10
-//     let b: i32 = 20
-//     swap(&a, &b)
-//     assert_eq(a, 20, "a should be 20")
-//     assert_eq(b, 10, "b should be 10")
-// }

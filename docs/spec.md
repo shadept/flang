@@ -414,8 +414,8 @@ pub type AllocatorVTable = struct {
 
 **Rules:**
 
-1. Types that allocate have an `allocator: &Allocator?` field.
-2. Null allocator falls back to `global_allocator` (wraps `malloc`/`free`) via `or_global()`.
+1. Types that allocate have an `allocator: &Allocator` field.
+2. **A null `&Allocator` is the global allocator.** `alloc`, `realloc` and `dealloc` resolve it at the leaf, so a zero-initialised container (`let xs: List(i32)`, a struct nobody constructed) allocates and frees through the global with no constructor. An optional `&Allocator?` parameter still spells "none given" and resolves the same way (`or_global()`).
 3. All allocation/realloc/free go through the allocator — never raw `malloc`/`free`.
 3a. **Every entry point carries the alignment**, next to the `memory` it finishes describing and ahead of any new size, and `realloc`/`dealloc` must be given the one the matching `alloc` was: an allocator cannot recover it from a pointer, a block that moves has to land on it, and a platform whose over-aligned blocks need their own release path has to know which kind it holds. The typed helpers (`free(&T)`, `free(T[])`) derive `align_of(T)`; raw byte-slice callers pass it explicitly.
 3b. **`MAX_ALIGN` (16) is the global allocator's ceiling, not the interface's.** It is what `malloc`/`realloc`/`free` guarantee. An allocator built on them declines a request above it — returning null, never memory that does not meet it — and satisfying one means `aligned_alloc`/`_aligned_malloc` with a matching release path. The bump allocators (arena, fixed buffer) align their own cursor and have no such limit.
@@ -557,7 +557,9 @@ Operators on primitive types are compiler built-ins, resolved and emitted direct
 
 **`op_call`** (RFC-014): when `t(args)` is invoked and `t`'s type defines `fn op_call(self: T, ...)` or `fn op_call(self: &T, ...)`, the call rewrites to `op_call(t, args...)` (or `op_call(&t, args...)`). Any type can become callable — comparators with state, function objects, iterator-like wrappers, and (Phase 2) capturing closures. Multiple `op_call` overloads on the same type are resolved by the existing overload mechanism. `op_call` resolution chains through `op_deref`: `Owned(F)` is callable when `F` is, no special-casing required. `op_call` dispatch also applies in field position: `h.f(args)` where field `f`'s type defines `op_call` (e.g. a capturing closure stored in a struct field) rewrites to `op_call(&h.f, args...)`, calling in place through the field — no local copy needed.
 
-**`op_deref`**: When `x.field` or `x.method()` fails to resolve on type `X`, the compiler looks for `fn op_deref(self: &X) &T`. If found, resolution retries on `T`. This applies to both field access and UFCS method calls. Chains through multiple layers: `Rc(Wrapper(Point)).x` resolves through two `op_deref` calls. Own fields and methods on `X` always take priority — `op_deref` is only consulted when direct resolution fails. This is a general-purpose language feature, not specific to smart pointers.
+**`op_deref`**: When `x.field` or `x.method()` fails to resolve on type `X`, the compiler looks for `fn op_deref(self: &X) &T`. If found, resolution retries on `T`. This applies to both field access and UFCS method calls. Chains through multiple layers: `Rc(Wrapper(Point)).x` resolves through two `op_deref` calls. Own fields and methods on `X` always take priority — `op_deref` is only consulted when direct resolution fails. This is a general-purpose language feature, not specific to smart pointers: `List` reaches its `UnmanagedList` storage through it (§9.4).
+
+`op_deref` only ever turns a reference into another reference, `&W → &I`. It applies to the receiver today and, per RFC-020, to every reference-typed argument of a call, spelled either way (`w.f()` and `f(&w)` resolve the same); it never yields a value from a reference, and nothing yields a reference from a value outside the UFCS sugar (§7.2).
 
 **Indexing (`[]`)** — two mutually exclusive patterns for user-defined types:
 
@@ -679,7 +681,9 @@ Two names are exempt and keep their source spelling, because something outside t
 
 ### 7.2 UFCS
 
-Any function with first parameter `T` or `&T` can be called as `value.func(args)`. If the function expects `&T`, the receiver is automatically referenced. This is how methods work — no `impl` blocks.
+Any function with first parameter `T` or `&T` can be called as `value.func(args)`. The dot is sugar for two rewrites, tried in order: `x.f(y)` is `f(x, y)`, and when that does not resolve, `f(&x, y)`. This is how methods work — no `impl` blocks.
+
+**That rewrite is the only implicit reference in the language.** A free call passing `x` where the parameter is `&x` is an error, not an auto-reference; a reference is never implicitly dereferenced to a value; and the coercion ladder (§9.2) is closed to user types. The one user-defined adaptation, `op_deref` (§7.1), turns a reference into another reference and nothing else. Keeping both directions out is what keeps this from becoming C++'s implicit conversions.
 
 **Exception: the receiver never consumes.** A function whose first parameter is a `T` that is *not copyable* (RFC-028) has no receiver form at all — `h.close()` is E2128, whatever the receiver is. A consuming call spells its transfer one way everywhere, `move` in an argument of a plain call, so the free-function form `close(move h)` is the only spelling, and `(move h).close()` is refused for the position rather than for the `move`. Nothing changes for a copyable type: `s.trim()`, `opt.map(f)` and `c.is_digit()` keep their by-value receivers, because a copy of a copyable value is unchecked and the receiver is therefore not a consuming site. A read-only function on a non-copyable type must take `&T` to stay reachable as a method.
 
@@ -1001,3 +1005,12 @@ std/encoding/   serialization (JSON, codec)
 std/io/         input/output, filesystem, readers/writers
 std/            collections (List, Dict), text (string, string_builder), allocator
 ```
+
+**Collections come in a managed and an unmanaged flavour**, Zig's split. `UnmanagedList(T)` is
+the buffer and every operation on it; the ones that allocate take the allocator at the call
+(`xs.push(v, alloc)`), so a composite stores one allocator for all its children. `List(T)` pairs an
+`UnmanagedList` with an allocator and allocates through that (`xs.push(v)`), reaching the storage
+through `op_deref` so `xs.len`, `xs.pop()` and the rest read the same on either. The storage field
+is `__storage`: readable, as every field is, and by convention not touched. A null `&Allocator` is
+the global allocator (§4.1), so a zero-initialised `List` is a valid empty list. `Dict`, `Set`,
+`Deque` and `Stack` follow.

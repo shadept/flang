@@ -9,6 +9,7 @@ import std.io.writer
 import std.list
 import std.mem
 import std.option
+import std.string_builder
 import std.string_reader
 
 // =============================================================================
@@ -579,4 +580,18 @@ pub fn partition(s: String, delimiter: u8) (String, String) {
         }
     }
     return (s, "")
+}
+
+// Concatenates the views in `parts` with `sep` between them into a new owned string.
+//
+// - `allocator`: where the result is allocated. Null is the global allocator.
+pub fn join(parts: String[], sep: String, allocator: &Allocator? = null) OwnedString {
+    let sb = string_builder(0, allocator)
+    for i in 0..parts.len {
+        if i > 0 {
+            sb.append(sep)
+        }
+        sb.append(parts[i])
+    }
+    return sb.to_string()
 }

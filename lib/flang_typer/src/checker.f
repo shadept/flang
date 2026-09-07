@@ -4414,7 +4414,31 @@ fn check_index(self: &Checker, idx: &IndexExpr) Ty {
         return elem.unwrap()
     }
 
+    // `xs[a..]` on a user type fills its end from `xs.len`. When the receiver has no `len` of its
+    // own but reaches one through `op_deref` (a `List` over its storage), the hop chain is recorded
+    // on the range node for lowering to follow.
+    if ranged {
+        idx.index.* match {
+            Range(r) => {
+                if r.end.is_none() and !has_direct_field(self, rbase, "len") {
+                    let _ty = member_deref_retry_at(self, "len", r.span, rbase)
+                }
+            }
+            _ => {}
+        }
+    }
+
     return user_index(self, idx, base_ty, rbase, index_ty)
+}
+
+// Whether `recv` (one reference peeled) is a nominal declaring `member` itself.
+fn has_direct_field(self: &Checker, recv: Ty, member: String) bool {
+    let r = self.engine.resolve(recv)
+    let peeled = ty_node(self, r) match {
+        NRef(inner) => self.engine.resolve(inner)
+        _ => r
+    }
+    return struct_field_lookup(self, peeled, member).is_some()
 }
 
 // A range used as an index counts in elements, so its bounds are `usize`.
@@ -7439,6 +7463,13 @@ fn struct_without_field(self: &Checker, recv: Ty, name: String) bool {
 // as method syntax. The winning chain is recorded on the MEMBER node - lowering calls each hop
 // instead of geping into the wrapper's own layout, which would read at the wrong offset.
 fn member_deref_retry(self: &Checker, ma: &MemberAccessExpr, recv_ty: Ty) Ty? {
+    return member_deref_retry_at(self, ma.member, ma.span, recv_ty)
+}
+
+// Resolves `member` on `recv_ty` through `op_deref` hops and records the chain on `span`, the node
+// lowering will ask at. `member_deref_retry` is the spelled-member case; this one also serves
+// members the source does not spell, such as the `len` an open range `xs[a..]` reads for its end.
+fn member_deref_retry_at(self: &Checker, member: String, span: SourceSpan, recv_ty: Ty) Ty? {
     let vis = fn_visibility(self)
     defer vis.visible.deinit()
     let dcands = self.functions.lookup("op_deref", &vis) match {
@@ -7473,7 +7504,7 @@ fn member_deref_retry(self: &Checker, ma: &MemberAccessExpr, recv_ty: Ty) Ty? {
 
         let dargs = list(1, self.allocator)
         dargs.push(self.engine.mk_ref(peeled))
-        let dpick = resolve_overload(self, &dc, &dargs, ma.span)
+        let dpick = resolve_overload(self, &dc, &dargs, span)
         dargs.deinit()
         if dpick.is_none() {
             return null
@@ -7486,9 +7517,9 @@ fn member_deref_retry(self: &Checker, ma: &MemberAccessExpr, recv_ty: Ty) Ty? {
             _ => return null
         }
 
-        let fty = struct_field_lookup(self, inner, ma.member)
+        let fty = struct_field_lookup(self, inner, member)
         if fty.is_some() {
-            commit_deref_chain(self, &chain, ma.span)
+            commit_deref_chain(self, &chain, span)
             return fty
         }
 

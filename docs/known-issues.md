@@ -328,6 +328,42 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### Member Access Through `op_deref` on a Reference Receiver Read the Parameter's Slot — RESOLVED
+
+**Status:** Resolved 2026-09-06
+**Affected:** `lib/flang_driver/src/lower.f` (`deref_member_field`, `lower_deref_receiver`)
+
+`w.value` and `w.method()` through an `op_deref` hop took `receiver_place_mem` as the hop's
+argument. For a by-value local that is the wrapper's address, which is right; for a `w: &Wrap`
+parameter it is the address of the cell holding the pointer, one layer short, so the hop geped
+into the stack and every field read through it was garbage. Surfaced the moment `List` became an
+`op_deref` wrapper: `self.len` in any `fn f(self: &List(T))` read a random number. Fixed with
+`deref_hop_base`, which loads through the receiver's place once per reference layer, mirroring
+what the plain member path already did. Pinned by `tests/harness/op_deref/op_deref_ref_receiver.f`.
+
+The compiler that carried the bug could not compile the fix against the new `List` (it miscompiled
+its own `self.len`), so the fix was bootstrapped through the previous stdlib copy in
+`dist/<rid>/stages/stdlib` first. A stage compiler's stdlib copy is worth keeping for exactly this.
+
+---
+
+### Indexing and `for` Do Not Peel `op_deref`
+
+**Status:** Open (found 2026-09-06)
+**Affected:** `lib/flang_typer/src/checker.f`, every `op_deref` wrapper
+
+spec.md §7 promises `op_deref` for `x.field` and `x.method()`, and that is all the checker does:
+`xs[i]`, `&xs[i]`, `xs[a..b]` and `for x in xs` on a wrapper whose inner type has `op_index_ref`,
+`op_index` and `iter` are E2028 / E2021. `List` spells out four one-line wrappers
+(`op_index_ref`, `op_index`, `iter`, `iter_ref`) to cover it. Extending the retry to the index and
+iterator resolutions deletes them. The one index form that does go through the
+hops is the `len` an open range `xs[a..]` synthesises for its end: `check_index` records the chain
+on the range node (`member_deref_retry_at`) and `lower_partial_range_arg` follows it.
+
+A `&&Wrap` receiver is also not retried through two reference layers for member access.
+
+---
+
 ### The formatter refuses three harness files
 
 **Status:** Open (found 2026-09-06)
@@ -1454,7 +1490,9 @@ Two independent bugs, the second unmasked by fixing the first:
 
 ### Composite Structs Duplicate the Allocator Pointer Per Child Container
 
-**Status:** Future work — noted 2026-08-19, explicitly not a priority
+**Status:** In progress — `List` has its unmanaged flavour (2026-09-06: `UnmanagedList` is the
+storage and takes the allocator per allocating call; `List` wraps it and reaches it through
+`op_deref`); `Dict`, `Set`, `Deque`, `Stack` follow the same split, each its own pass
 **Affected:** any struct composing several allocator-carrying containers — `UnionFind` (nodes Dict + undo Stack of Lists + own field), `Engine`, `Checker`, and every similar composite
 
 Header-owned allocators mean a composite stores the same `&Allocator?` once
@@ -3378,10 +3416,13 @@ overload resolution. Every foreign `memcpy` / `memset` / `memmove` site in the t
 
 ---
 
-### A Free Call Does Not Adapt a Value Argument to a `&T` Parameter
+### A Free Call Does Not Adapt a Value Argument to a `&T` Parameter — BY DESIGN
 
-**Status:** Open.
-**Affected:** `lib/flang_typer/src/checker.f` (`resolve_overload`), `stdlib/core/hash.f`
+**Status:** By design (2026-09-06; was Open). The UFCS sugar is the only implicit reference in the
+language: `x.f(y)` is `f(x, y)`, else `f(&x, y)`, and a free call never auto-references (spec §7.2,
+RFC-020). What remains below is the stdlib consequence, still real: a `&T` overload is unreachable
+from a free call passing a `T`, so the blanket generic wins silently.
+**Affected:** `stdlib/core/hash.f`
 
 `resolve_overload` adapts between the value and reference shapes for a UFCS
 receiver only - `alt_recv` rides along per candidate and covers argument 0 of a

@@ -3110,12 +3110,7 @@ fn lower_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, wan
 // value as a scalar prim, load through.
 fn lower_deref_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr,
     chain: &List(ResolvedTarget), want: &Ty) Operand {
-    // An aggregate receiver lowers to its address; that is the first hop's argument. A
-    // scalar-classified wrapper local also needs its ADDRESS - take the place when there is one.
-    let cur = receiver_place_mem(ctx, bb, env, recv) match {
-        Some(m) => m.addr
-        None => lower_expr(ctx, bb, env, recv)
-    }
+    let cur = deref_hop_base(ctx, bb, env, recv)
     for i in 0..chain.len {
         const c = target_callable(ctx, &chain[i]) match {
             Some(c) => c
@@ -5314,16 +5309,46 @@ fn member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
     return Some(MemberField { addr = bb.gep(base, Operand.IntConst(off as i64)), fty = fty })
 }
 
-// The field of an `op_deref`-forwarded member access: call every hop on the receiver's address,
-// then gep into the innermost struct. Null when a hop has no callable symbol or the final type is
-// not a struct with that field - both refuse the enclosing function rather than read at a guessed
-// offset.
-fn deref_member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessExpr,
-    chain: &List(ResolvedTarget)) MemberField? {
-    let cur = receiver_place_mem(ctx, bb, env, ma.receiver) match {
-        Some(m) => m.addr
-        None => lower_expr(ctx, bb, env, ma.receiver)
+// The first `op_deref` hop's argument: the address of the WRAPPER. A by-value receiver lowers to
+// its address (its place when it has one). A reference-typed receiver holds that address as its
+// value, so its place is one pointer cell short: load through it, once per reference layer
+// (`(&&Wrap).x` is two loads).
+fn deref_hop_base(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr) Operand {
+    let depth: usize = 0
+    let peeled = node_ty(ctx, expr_span(recv))
+    loop {
+        let inner = tn(ctx, peeled) match {
+            NRef(i) => Some(i)
+            _ => null
+        }
+        if inner.is_none() {
+            break
+        }
+        peeled = inner.unwrap()
+        depth = depth + 1
     }
+    let cur = receiver_place_mem(ctx, bb, env, recv) match {
+        Some(m) => m.addr
+        None => {
+            // An rvalue's value is already one layer in: the pointer itself, not a cell holding it.
+            if depth > 0 {
+                depth = depth - 1
+            }
+            lower_expr(ctx, bb, env, recv)
+        }
+    }
+    for _k in 0..depth {
+        cur = bb.load(IrType.Ptr, cur)
+    }
+    return cur
+}
+
+// Calls every hop of `chain` starting from `base`, the wrapper's address. Returns the innermost
+// struct's address and its type, or null when a hop has no callable symbol or does not return a
+// reference.
+fn follow_deref_hops(ctx: &LowerCtx, bb: &BlockBuilder, base: Operand,
+    chain: &List(ResolvedTarget)) (Operand, Ty)? {
+    let cur = base
     let inner: Ty? = null
     for i in 0..chain.len {
         const c = target_callable(ctx, &chain[i]) match {
@@ -5339,7 +5364,22 @@ fn deref_member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberA
     if inner.is_none() {
         return null
     }
-    let it = inner.unwrap()
+    return Some((cur, inner.unwrap()))
+}
+
+// The field of an `op_deref`-forwarded member access: call every hop on the receiver's address,
+// then gep into the innermost struct. Null when a hop has no callable symbol or the final type is
+// not a struct with that field - both refuse the enclosing function rather than read at a guessed
+// offset.
+fn deref_member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessExpr,
+    chain: &List(ResolvedTarget)) MemberField? {
+    let base = deref_hop_base(ctx, bb, env, ma.receiver)
+    let landed = follow_deref_hops(ctx, bb, base, chain) match {
+        Some(l) => l
+        None => return null
+    }
+    let cur = landed.0
+    let it = landed.1
     let st = resolve_struct(ctx, &it, &ctx.result.nominals, ctx.allocator) match {
         Some(s) => s
         None => return null
@@ -5599,8 +5639,20 @@ fn lower_partial_range_arg(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &In
         let ee = r.end.unwrap()
         ev = lower_expr(ctx, bb, env, ee)
     } else {
-        let base_ty = node_ty(ctx, expr_span(ix.receiver))
-        let ln = receiver_len(ctx, bb, &base_ty, recv)
+        // A receiver whose `len` lives behind `op_deref` (the checker recorded the hops on the
+        // range node): follow them, then read the inner struct's `len`.
+        let hops = ctx_receiver_deref(ctx, node_id_of(r.span))
+        let ln: Operand? = null
+        if hops.is_some() {
+            let base = deref_hop_base(ctx, bb, env, ix.receiver)
+            let landed = follow_deref_hops(ctx, bb, base, hops.unwrap())
+            if landed.is_some() {
+                ln = receiver_len(ctx, bb, &landed.unwrap().1, landed.unwrap().0)
+            }
+        } else {
+            let base_ty = node_ty(ctx, expr_span(ix.receiver))
+            ln = receiver_len(ctx, bb, &base_ty, recv)
+        }
         if ln.is_none() {
             return unlowerable(ctx)
         }

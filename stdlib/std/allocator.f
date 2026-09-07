@@ -80,22 +80,31 @@ pub type Allocator = struct {
     vtable: &AllocatorVTable
 }
 
+// Maps a null `&Allocator` to the global allocator (spec §4.1), so a zero-initialised holder of one
+// allocates and frees through the global.
+fn resolved(allocator: &Allocator) &Allocator {
+    return if allocator == 0usize as &Allocator { global() } else { allocator }
+}
+
 // Allocate `size` bytes with given `alignment`.
 // Returns pointer to allocated memory or null on failure.
 pub fn alloc(allocator: &Allocator, size: usize, alignment: usize) u8[]? {
-    return allocator.vtable.alloc(allocator.impl, size, alignment)
+    const a = resolved(allocator)
+    return a.vtable.alloc(a.impl, size, alignment)
 }
 
 // Reallocate an existing allocation to a new size, under the alignment it was allocated with.
 // Returns the new pointer, or null on failure - some allocators do not support realloc at all.
 pub fn realloc(allocator: &Allocator, memory: u8[], alignment: usize, new_size: usize) u8[]? {
-    return allocator.vtable.realloc(allocator.impl, memory, alignment, new_size)
+    const a = resolved(allocator)
+    return a.vtable.realloc(a.impl, memory, alignment, new_size)
 }
 
 // Free memory previously allocated by this allocator, under the alignment it was allocated with.
 // Some allocators (like FixedBufferAllocator) do nothing.
 pub fn dealloc(allocator: &Allocator, memory: u8[], alignment: usize) {
-    allocator.vtable.dealloc(allocator.impl, memory, alignment)
+    const a = resolved(allocator)
+    a.vtable.dealloc(a.impl, memory, alignment)
 }
 
 pub fn new(allocator: &Allocator, ty: Type($T)) &T {
@@ -657,4 +666,11 @@ pub fn allocator(state: &ArenaAllocator) Allocator {
         impl = state as &u8,
         vtable = &arena_allocator_vtable,
     }
+}
+
+test "a null allocator reference is the global allocator" {
+    let none: &Allocator = 0usize as &Allocator
+    const buf = none.alloc(16, 8)
+    assert_true(buf.is_some(), "allocates through the global")
+    none.dealloc(buf.unwrap(), 8)
 }

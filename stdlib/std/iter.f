@@ -313,6 +313,240 @@ pub fn zip_longest(a: $I, b: $J, fill_a: $A, fill_b: $B) ZipLongestIter(I, J, A,
 }
 
 // =============================================================================
+// Cycle
+// =============================================================================
+
+type CycleIter = struct(I) {
+    start: I
+    it: I
+}
+
+pub fn iter(self: &CycleIter($I)) CycleIter(I) {
+    return self.*
+}
+
+pub fn next(self: &CycleIter($I)) $T? {
+    const v = self.it.next()
+    if v.is_some() {
+        return v
+    }
+    self.it = self.start
+    return self.it.next()
+}
+
+// Repeats the sequence forever: after the last element, the first again. Infinite unless the source
+// is empty; pair it with `take`. The source must be restartable by copy, which every iterator over
+// a container is.
+pub fn cycle(it: $I) CycleIter(I) {
+    return .{ start = it, it = it }
+}
+
+// =============================================================================
+// Step by
+// =============================================================================
+
+type StepByIter = struct(I) {
+    it: I
+    step: usize
+}
+
+pub fn iter(self: &StepByIter($I)) StepByIter(I) {
+    return self.*
+}
+
+pub fn next(self: &StepByIter($I)) $T? {
+    const v = self.it.next()
+    if v.is_none() {
+        return null
+    }
+    for _k in 1..self.step {
+        if self.it.next().is_none() {
+            break
+        }
+    }
+    return v
+}
+
+// Every `step`th element, starting with the first. Panics when `step` is 0.
+pub fn step_by(it: $I, step: usize) StepByIter(I) {
+    if step == 0 {
+        panic("step_by: step must be at least 1")
+    }
+    return .{ it = it, step = step }
+}
+
+// =============================================================================
+// Peekable
+// =============================================================================
+
+type PeekableIter = struct(I, T) {
+    it: I
+    // The element `next` will return, pulled one step ahead; null at the end.
+    ahead: T?
+}
+
+pub fn iter(self: &PeekableIter($I, $T)) PeekableIter(I, T) {
+    return self.*
+}
+
+pub fn next(self: &PeekableIter($I, $T)) T? {
+    const v = self.ahead
+    self.ahead = self.it.next()
+    return v
+}
+
+// Returns the element the next `next` will return without consuming it, or null at the end.
+pub fn peek(self: &PeekableIter($I, $T)) T? {
+    return self.ahead
+}
+
+// An iterator that can look one element ahead (`peek`). Pulls the first element on construction.
+pub fn peekable(it: $I) PeekableIter(I, $T) {
+    // Pulled before the literal: its fields evaluate in order, and `it = it` would copy the
+    // iterator before `next` advanced it.
+    const first = it.next()
+    return .{ it = it, ahead = first }
+}
+
+// =============================================================================
+// Tap
+// =============================================================================
+
+type TapIter = struct(I, F) {
+    it: I
+    f: F
+}
+
+pub fn iter(self: &TapIter($I, $F)) TapIter(I, F) {
+    return self.*
+}
+
+pub fn next(self: &TapIter($I, $F)) $T? {
+    const v = self.it.next()
+    if v.is_some() {
+        self.f(v.unwrap())
+    }
+    return v
+}
+
+// Calls `f` on every element as it passes through, yielding the element unchanged: a look at what
+// an adapter chain produces without breaking the chain.
+pub fn tap(it: $I, f: $F) TapIter(I, F) {
+    return .{ it = it, f = f }
+}
+
+// =============================================================================
+// Scan
+// =============================================================================
+
+type ScanIter = struct(I, A, F) {
+    it: I
+    acc: A
+    f: F
+}
+
+pub fn iter(self: &ScanIter($I, $A, $F)) ScanIter(I, A, F) {
+    return self.*
+}
+
+pub fn next(self: &ScanIter($I, $A, $F)) A? {
+    const v = self.it.next()
+    if v.is_none() {
+        return null
+    }
+    self.acc = self.f(self.acc, v.unwrap())
+    return Some(self.acc)
+}
+
+// A running fold: yields `f(acc, x)` for every element, starting from `init`, so the last value is
+// what `fold` would return. `init` itself is not yielded.
+pub fn scan(it: $I, init: $A, f: $F) ScanIter(I, A, F) {
+    return .{ it = it, acc = init, f = f }
+}
+
+// =============================================================================
+// Uniq
+// =============================================================================
+
+type UniqIter = struct(I, T) {
+    it: I
+    // The next element to yield, pulled one step ahead; null at the end.
+    ahead: T?
+}
+
+pub fn iter(self: &UniqIter($I, $T)) UniqIter(I, T) {
+    return self.*
+}
+
+pub fn next(self: &UniqIter($I, $T)) T? {
+    const cur = self.ahead
+    if cur.is_none() {
+        return null
+    }
+    loop {
+        self.ahead = self.it.next()
+        if self.ahead.is_none() {
+            break
+        }
+        let same: bool = self.ahead.unwrap() == cur.unwrap()
+        if !same {
+            break
+        }
+    }
+    return cur
+}
+
+// Collapses runs of consecutive `==` duplicates to one element, `sort | uniq` style; sort first for
+// whole-sequence uniqueness. Pulls the first element on construction.
+pub fn uniq(it: $I) UniqIter(I, $T) {
+    const first = it.next()
+    return .{ it = it, ahead = first }
+}
+
+// =============================================================================
+// Sources
+// =============================================================================
+
+type OnceIter = struct(T) {
+    value: T
+    done: bool
+}
+
+pub fn iter(self: &OnceIter($T)) OnceIter(T) {
+    return self.*
+}
+
+pub fn next(self: &OnceIter($T)) T? {
+    if self.done {
+        return null
+    }
+    self.done = true
+    return Some(self.value)
+}
+
+// An iterator over exactly one element.
+pub fn once(value: $T) OnceIter(T) {
+    return .{ value = value, done = false }
+}
+
+type RepeatIter = struct(T) {
+    value: T
+}
+
+pub fn iter(self: &RepeatIter($T)) RepeatIter(T) {
+    return self.*
+}
+
+pub fn next(self: &RepeatIter($T)) T? {
+    return Some(self.value)
+}
+
+// An iterator that yields `value` forever. Pair it with `take` or `zip`.
+pub fn repeat(value: $T) RepeatIter(T) {
+    return .{ value = value }
+}
+
+// =============================================================================
 // Consumers
 // =============================================================================
 
@@ -415,6 +649,17 @@ pub fn last(it: $I) $T? {
         v = item
     }
     return Some(v)
+}
+
+// Returns the element at position `n`, counting from 0, or null when the sequence is shorter.
+// Consumes everything up to and including it.
+pub fn nth(it: $I, n: usize) $T? {
+    for _k in 0..n {
+        if it.next().is_none() {
+            return null
+        }
+    }
+    return it.next()
 }
 
 // Smallest element by `<`, or null when empty. Requires an ordered element type (primitive or
@@ -750,4 +995,93 @@ test "to_set and to_dict collect an iterator" {
     defer d.deinit()
     assert_eq(d.len(), 3 as usize, "same key overwrites")
     assert_eq(d.get(20i32).unwrap(), 2i32, "keyed by the extractor")
+}
+
+fn iter_test_noop(x: i32) {}
+
+test "cycle repeats the sequence and take bounds it" {
+    let xs = list123()
+    defer xs.deinit()
+    let out = xs.iter().cycle().take(7).to_list()
+    defer out.deinit()
+    assert_eq(out.len, 7 as usize, "seven elements")
+    assert_eq(out[3], 1i32, "wrapped to the start")
+    assert_eq(out[6], 1i32, "and again")
+    let none: List(i32) = list(0)
+    defer none.deinit()
+    assert_true(none.iter().cycle().next().is_none(), "an empty source stays empty")
+}
+
+test "step_by yields every nth element starting with the first" {
+    let xs: List(i32) = list(0)
+    defer xs.deinit()
+    for i in 0..7usize {
+        xs.push(i as i32)
+    }
+    let out = xs.iter().step_by(3).to_list()
+    defer out.deinit()
+    assert_eq(out.len, 3 as usize, "0, 3, 6")
+    assert_eq(out[1], 3i32, "second is 3")
+    assert_eq(out[2], 6i32, "third is 6")
+}
+
+test "peekable looks ahead without consuming" {
+    let xs = list123()
+    defer xs.deinit()
+    let it = xs.iter().peekable()
+    assert_eq(it.peek().unwrap(), 1i32, "peek sees the first")
+    assert_eq(it.peek().unwrap(), 1i32, "peek again, still the first")
+    assert_eq(it.next().unwrap(), 1i32, "next returns it")
+    assert_eq(it.peek().unwrap(), 2i32, "peek moved on")
+    assert_eq(it.next().unwrap(), 2i32, "second")
+    assert_eq(it.next().unwrap(), 3i32, "third")
+    assert_true(it.peek().is_none(), "peek at the end")
+    assert_true(it.next().is_none(), "next at the end")
+}
+
+test "tap passes elements through unchanged" {
+    let xs = list123()
+    defer xs.deinit()
+    assert_eq(xs.iter().tap(iter_test_noop).count(), 3 as usize, "all three seen")
+    assert_eq(xs.iter().tap(iter_test_noop).last().unwrap(), 3i32, "unchanged")
+}
+
+test "scan yields the running fold" {
+    let xs = list123()
+    defer xs.deinit()
+    let sums = xs.iter().scan(0i32, fn(acc: i32, x: i32) i32 { acc + x }).to_list()
+    defer sums.deinit()
+    assert_eq(sums.len, 3 as usize, "one per element")
+    assert_eq(sums[0], 1i32, "1")
+    assert_eq(sums[1], 3i32, "1 + 2")
+    assert_eq(sums[2], 6i32, "1 + 2 + 3")
+}
+
+test "uniq collapses consecutive runs" {
+    let xs: List(i32) = list(0)
+    defer xs.deinit()
+    xs.push(1i32)
+    xs.push(1i32)
+    xs.push(2i32)
+    xs.push(2i32)
+    xs.push(2i32)
+    xs.push(1i32)
+    let out = xs.iter().uniq().to_list()
+    defer out.deinit()
+    assert_eq(out.len, 3 as usize, "1, 2, 1")
+    assert_eq(out[2], 1i32, "the later 1 is not a duplicate of the earlier one")
+}
+
+test "nth, once and repeat" {
+    let xs = list123()
+    defer xs.deinit()
+    assert_eq(xs.iter().nth(1).unwrap(), 2i32, "second element")
+    assert_true(xs.iter().nth(3).is_none(), "past the end")
+    let one = once(9i32).to_list()
+    defer one.deinit()
+    assert_eq(one.len, 1 as usize, "exactly one")
+    let sevens = repeat(7i32).take(4).to_list()
+    defer sevens.deinit()
+    assert_eq(sevens.len, 4 as usize, "bounded by take")
+    assert_eq(sevens[3], 7i32, "all sevens")
 }

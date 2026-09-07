@@ -1,7 +1,7 @@
 # 020 — `op_deref` argument coercion (deref chains at call sites)
 
-Status: **accepted, scheduled** (2026-08-20) — implementation planned for
-the next session. Supersedes the "deref-copy adaptation" sketch in
+Status: **accepted** (2026-08-20), rule pinned 2026-09-06 to the borrow leg
+only - see "The rule". Supersedes the "deref-copy adaptation" sketch in
 ticket 019 §1 as the mechanism of record.
 
 ## Summary
@@ -19,23 +19,31 @@ the spec gets simpler, not bigger.
 
 ## The rule
 
-At an argument-unify failure, if the argument's type is settled, walk
-its deref chain (`X → &Y1 → &Y2 → …`, bounded like field resolution):
+`op_deref` turns a reference into another reference, and that is all it
+does. At an argument-unify failure, if the argument's type is settled and
+is a reference `&X`, walk `X`'s deref chain (`&X → &Y1 → &Y2 → …`, bounded
+like field resolution) and, when some `&Yk` is the parameter's type,
+insert the `op_deref` call(s). Zero copy. `List(Rc(Big))` elements flow
+into `fn(x: &Big)` callbacks for free; `Owned(F)` passes anywhere `&F` is
+expected. Every reference-typed argument position, resolved left to right.
 
-1. **Borrow leg** — the parameter is `&Yk` for some chain step: insert
-   the `op_deref` call(s). Zero copy. `List(Rc(Big))` elements flow
-   into `fn(x: &Big)` callbacks for free; `Owned(F)` passes anywhere
-   `&F` is expected.
-2. **Value leg** — the parameter is `Yk` by value: insert the borrows,
-   then copy through the final reference. Semantics identical to
-   value-mode argument passing today (§3.2 implicit-ref copy-on-write).
+Exact unification always wins; each deref hop costs in overload scoring
+(mirror the receiver machinery's existing preference order).
 
-Exact unification always wins; each deref hop costs in overload
-scoring (mirror the receiver machinery's existing preference order).
+**Both directions across the reference boundary stay closed:**
 
-**Direction is strictly one-way.** The chain only *peels*. `T → &T`
-(auto-ref) is a separate, unrelated rule with its own
-mutation-visibility question (019 §1) and is NOT part of this ticket.
+- No value leg. A `&Yk` never satisfies a parameter that takes `Yk` by
+  value; the caller spells the copy (`p.*`). The first draft of this ticket
+  allowed it, restricted to the built-in `&T → T` case - dropped: it is an
+  implicit copy, a hidden shallow copy of shared storage out of a smart
+  pointer, and under RFC-028 a copy the compiler would have to invent a
+  `move` for. This is exactly how implicit conversions get in.
+- No auto-ref. `f(x, y)` where `f` wants `&x` is an error. The one place
+  the compiler adds a reference is the UFCS sugar: `x.f(y)` is `f(x, y)`,
+  else `f(&x, y)` (spec §7.2). With the borrow leg in argument position
+  those two spellings resolve identically, which restores `x.f(y) ≡ f(x, y)`
+  for wrappers - today `w.value_of()` resolves through `op_deref` and
+  `value_of(&w)` is E2011.
 
 ## `op_ref` — considered and rejected
 
@@ -54,56 +62,42 @@ rejected outright:
 - If a built-in auto-ref rule is ever wanted (019 §1), it will be a
   compiler rule for places, never a user hook.
 
-## Sub-decisions to settle before/while implementing
+## Sub-decisions
 
-1. **Owned values on the value leg.** Copying an owned value (e.g.
-   `OwnedString`) *out of a smart pointer* via the value leg is a
-   hidden shallow copy of shared storage — tension with the Rc design
-   stance ("explicit `.clone()`, no hidden costs"). Recommended
-   default: **the value leg applies only to the built-in `&T` base
-   case** (which is today's semantics); copying through a *user*
-   `op_deref` (Rc, Owned) stays explicit (`p.*` / `.clone()`). The
-   borrow leg is unrestricted — borrowing is never a hidden cost.
-2. **Scope phasing.**
-   - Phase 1: sites with a single known callee signature — indirect
-     calls through fn values, closure `op_call` dispatch, fn-typed
-     struct fields, single-candidate direct calls. Covers the stdlib
-     combinator story entirely; no overload-scoring changes.
-   - Phase 2: full overload sets with per-hop cost — needs a corpus
-     run (adaptable arguments can shift existing picks).
-3. **`op_deref(&OwnedString) &String` layout spike** — the
+1. **One phase, corpus-gated.** The rule is universal (every reference
+   argument, every call), so the mechanism lands as one change with a
+   full-tree build, the harness and the stage-3 fixpoint as the gate:
+   adaptable arguments can shift existing overload picks, and the fixpoint
+   is what catches a silent shift in the compiler itself.
+2. **`op_deref(&OwnedString) &String` layout spike** — the
    `&String → &str`-style ergonomic win (pass `OwnedString` wherever a
    `String` view is expected, no `.as_view()`). `op_deref` must return
    a reference to a real `String`, so OwnedString needs either a
    layout-compatible view prefix or a stored view field. Spike before
    promising it.
-4. **Diagnostics.** When a call fails AND a deref chain would have
-   matched a rejected leg (e.g. value leg through a user wrapper under
-   the recommended restriction), say so: "found `Rc(Big)`, parameter
-   takes `Big` by value — dereference explicitly with `.*`".
+3. **Diagnostics.** When a call fails AND a hop would have reached the
+   parameter's type by value, say so: "found `&Rc(Big)`, parameter takes
+   `Big` by value — dereference explicitly with `.*`".
 
-## Implementation notes (both compilers)
+## Implementation notes
 
-- **Checker:** on arg-unify failure, resolve the arg type, walk
-  registered `op_deref` overloads (the receiver path's lookup,
-  refactored to be position-agnostic). Record a per-argument adaptation
-  list on the call node — new side table entry following the
-  `ResolvedOperator.is_ref_form` precedent; overlay-scoped in the
-  self-hosted checker so `$F` instantiations adapt per-instantiation.
-- **Lowering:** inserted user `op_deref`s are ordinary direct calls
-  (their symbols exist); the built-in `&T` base case is a scalar load
-  or aggregate identity (aggregates already travel as addresses, so
-  most hops are free at the FIR level).
-- **Self-hosted:** extend `deref_retry`'s chain walk to argument loops
-  in `indirect_call` / closure dispatch / `field_call`; adaptation
-  records go in `InferenceResults` next to `lambdas`.
-- Estimated ~1.5–2 days per compiler including tests (Phase 1).
+- **Checker:** on arg-unify failure with a reference-typed argument,
+  walk `op_deref` overloads the way `member_deref_retry_at` does (already
+  position-agnostic: it records a chain on any span). Record a
+  per-argument adaptation list on the call node, overlay-scoped so `$F`
+  instantiations adapt per instantiation.
+- **Lowering:** inserted `op_deref`s are ordinary direct calls;
+  `follow_deref_hops` (lower.f) already runs a recorded chain from a
+  wrapper's address, and `deref_hop_base` already loads a reference
+  receiver down to that address. Argument adaptation is the same two
+  steps on the argument operand.
 
 ## Test plan
 
-- Harness: `Rc(T)` element → `fn(&T)` callback (borrow leg, zero
-  copy); chain of two wrappers; `&T → T` value leg (base case);
-  rejection + diagnostic for the restricted value leg through a user
-  wrapper; exact-match-beats-deref overload test (Phase 2).
+- Harness: `Rc(T)` element → `fn(&T)` callback (zero copy); chain of
+  two wrappers; the free-call spelling `value_of(&w)` and a second-argument
+  position both resolving; `weigh(&shared)` against a by-value parameter
+  rejected with the diagnostic; `f(x)` against `f(&x)` rejected;
+  exact-match-beats-deref overload test.
 - Stdlib: a `List(Rc(Big))` combinator round-trip test.
-- Self-hosted: mirrored lower.f tests + a bootstrap e2e program.
+- lower.f: a colocated test that the adaptation calls the hop on the argument, not on its slot.
