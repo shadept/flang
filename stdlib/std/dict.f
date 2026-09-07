@@ -56,6 +56,24 @@ pub fn op_deref(self: &Dict($K, $V)) &UnmanagedDict(K, V) {
     return &self.__storage
 }
 
+// A managed handle over a table owned elsewhere: `s.index.managed(s.allocator)` reads and grows
+// `s.index` in place through the `Dict` API, for the scope where the allocator is known. It holds
+// the table by reference, so an insert lands in the composite's field. Nothing to deinit.
+pub type DictRef = struct(K, V) {
+    __storage: &UnmanagedDict(K, V)
+    allocator: &Allocator
+}
+
+// Makes a `DictRef` over `d` that allocates through `allocator`.
+pub fn managed(d: &UnmanagedDict($K, $V), allocator: &Allocator) DictRef(K, V) {
+    return .{ __storage = d, allocator = allocator }
+}
+
+// Reaches the table, as `Dict`'s does.
+pub fn op_deref(self: &DictRef($K, $V)) &UnmanagedDict(K, V) {
+    return self.__storage
+}
+
 // =============================================================================
 // Construction
 // =============================================================================
@@ -170,7 +188,7 @@ fn ensure_capacity(self: &UnmanagedDict($K, $V), allocator: &Allocator) {
         for i in 0..old_cap {
             const old_entry: &Entry(K, V) = old_entries + i
             if old_entry.hash >= 2 {
-                self.place(old_entry.hash, old_entry.key, old_entry.value)
+                const _placed = self.place(old_entry.hash, old_entry.key, old_entry.value)
             }
         }
         allocator.free(slice_from_raw_parts(old_entries, old_cap))
@@ -179,7 +197,7 @@ fn ensure_capacity(self: &UnmanagedDict($K, $V), allocator: &Allocator) {
 
 // Store a key known to be absent in the first tombstone or empty slot on its probe sequence. The
 // table must have room (`ensure_capacity`).
-fn place(self: &UnmanagedDict($K, $V), h: usize, key: K, value: V) {
+fn place(self: &UnmanagedDict($K, $V), h: usize, key: K, value: V) &Entry(K, V) {
     for i in 0..self.cap {
         const entry: &Entry(K, V) = self.entries + probe_slot(h, i, self.cap)
         if entry.hash == HASH_EMPTY or entry.hash == HASH_DEAD {
@@ -190,11 +208,49 @@ fn place(self: &UnmanagedDict($K, $V), h: usize, key: K, value: V) {
             entry.key = key
             entry.value = value
             self.length = self.length + 1
-            return
+            return entry
         }
     }
     // Unreachable while the load factor is maintained
     panic("dict: set failed - table full")
+}
+
+// Insert `key` unless it is present. Returns whether it was inserted, so a visited-set check is one
+// probe: `if seen.add(x, alloc) { ... }`. An existing entry keeps its value and `key`/`value` are
+// left to the caller.
+pub fn add(self: &UnmanagedDict($K, $V), key: K, value: V, allocator: &Allocator) bool {
+    if self.find_entry(key).is_some() {
+        return false
+    }
+    self.ensure_capacity(allocator)
+    const _e = self.place(hash_key(key), key, value)
+    return true
+}
+
+pub fn add(self: &UnmanagedDict(OwnedString, $V), key: String, value: V,
+    allocator: &Allocator) bool {
+    const fake = fake_owned(key)
+    if self.find_entry(fake).is_some() {
+        return false
+    }
+    self.ensure_capacity(allocator)
+    const _e = self.place(hash_key(fake), from_view(key, allocator), value)
+    return true
+}
+
+// The value for `key`, inserting `make()` first when absent - the multimap append
+// `d.get_or_insert_with(k, fn() { list(0) }, alloc).push(v)` in one probe on a hit. The reference
+// is good until the next insert.
+pub fn get_or_insert_with(self: &UnmanagedDict($K, $V), key: K, make: $F,
+    allocator: &Allocator) &V {
+    const found = self.find_entry(key)
+    if found.is_some() {
+        const entry = found.unwrap()
+        return &entry.value
+    }
+    self.ensure_capacity(allocator)
+    const placed = self.place(hash_key(key), key, make())
+    return &placed.value
 }
 
 // Insert or update a key-value pair. On an update the old value is deinited, and so is `key`, since
@@ -209,7 +265,7 @@ pub fn set(self: &UnmanagedDict($K, $V), key: K, value: V, allocator: &Allocator
         return
     }
     self.ensure_capacity(allocator)
-    self.place(hash_key(key), key, value)
+    const _placed = self.place(hash_key(key), key, value)
 }
 
 // String-key insert for `UnmanagedDict(OwnedString, V)`: the key is a borrowed view, copied into an
@@ -224,7 +280,7 @@ pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: V, allocat
         return
     }
     self.ensure_capacity(allocator)
-    self.place(hash_key(fake), from_view(key, allocator), value)
+    const _placed = self.place(hash_key(fake), from_view(key, allocator), value)
 }
 
 // Deinits every live key and value, frees the table and resets to empty, so a second call is a
@@ -547,46 +603,68 @@ pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) Unm
 }
 
 // =============================================================================
-// Dict: the managed API
+// The managed API: `Dict` and `DictRef`
 //
-// The same operations over the dict's own allocator. A derived dict takes an optional allocator for
-// its result and otherwise uses the receiver's.
+// The same operations over the carrier's own allocator, forwarded to the unmanaged function by a
+// generator, as `List`'s are (list.f): a managed carrier is any type with a `__storage` reaching an
+// `UnmanagedDict(K, V)` and an `allocator` beside it. A derived dict takes an optional allocator
+// for its result and otherwise uses the receiver's, and is a `Dict` either way. `deinit` is
+// `Dict`'s alone.
 // =============================================================================
 
-// Insert or update a key-value pair. Panics when the allocation fails.
-pub fn set(self: &Dict($K, $V), key: K, value: V) {
-    self.__storage.set(key, value, self.allocator)
+#define(managed_dict, Self: Ident) {
+    // Insert or update a key-value pair. Panics when the allocation fails.
+    pub fn set(self: &#(Self)($K, $V), key: K, value: V) {
+        self.__storage.set(key, value, self.allocator)
+    }
+
+    pub fn set(self: &#(Self)(OwnedString, $V), key: String, value: V) {
+        self.__storage.set(key, value, self.allocator)
+    }
+
+    pub fn op_set_index(self: &#(Self)($K, $V), key: K, value: V) {
+        self.__storage.set(key, value, self.allocator)
+    }
+
+    // Insert `key` unless it is present; returns whether it was inserted.
+    pub fn add(self: &#(Self)($K, $V), key: K, value: V) bool {
+        return self.__storage.add(key, value, self.allocator)
+    }
+
+    pub fn add(self: &#(Self)(OwnedString, $V), key: String, value: V) bool {
+        return self.__storage.add(key, value, self.allocator)
+    }
+
+    // The value for `key`, inserting `make()` first when absent.
+    pub fn get_or_insert_with(self: &#(Self)($K, $V), key: K, make: $F) &V {
+        return self.__storage.get_or_insert_with(key, make, self.allocator)
+    }
+
+    // Copy every entry of `other` into `self`, overwriting on key collisions - see the unmanaged
+    // `merge` for the aliasing caveat.
+    pub fn merge(self: &#(Self)($K, $V), other: &#(Self)(K, V)) {
+        self.__storage.merge(other.op_deref(), self.allocator)
+    }
+
+    // A new dict with the same keys and `f(key, value)` as values.
+    pub fn map_values(self: &#(Self)($K, $V), f: $F, allocator: &Allocator? = null) Dict(K, $U) {
+        const alloc = allocator ?? self.allocator
+        return .{ __storage = self.__storage.map_values(f, alloc), allocator = alloc }
+    }
+
+    // The entries `pred(key, value)` accepts.
+    pub fn filter(self: &#(Self)($K, $V), pred: $F, allocator: &Allocator? = null) Dict(K, V) {
+        const alloc = allocator ?? self.allocator
+        return .{ __storage = self.__storage.filter(pred, alloc), allocator = alloc }
+    }
 }
 
-pub fn set(self: &Dict(OwnedString, $V), key: String, value: V) {
-    self.__storage.set(key, value, self.allocator)
-}
-
-pub fn op_set_index(self: &Dict($K, $V), key: K, value: V) {
-    self.__storage.set(key, value, self.allocator)
-}
+#managed_dict(Dict)
+#managed_dict(DictRef)
 
 // Deinits every live key and value and frees the table. Idempotent: a second call is a no-op.
 pub fn deinit(self: &Dict($K, $V)) {
     self.__storage.deinit(self.allocator)
-}
-
-// Copy every entry of `other` into `self`, overwriting on key collisions - see the unmanaged
-// `merge` for the aliasing caveat.
-pub fn merge(self: &Dict($K, $V), other: &Dict(K, V)) {
-    self.__storage.merge(&other.__storage, self.allocator)
-}
-
-// A new dict with the same keys and `f(key, value)` as values.
-pub fn map_values(self: &Dict($K, $V), f: $F, allocator: &Allocator? = null) Dict(K, $U) {
-    const alloc = allocator ?? self.allocator
-    return .{ __storage = self.__storage.map_values(f, alloc), allocator = alloc }
-}
-
-// The entries `pred(key, value)` accepts.
-pub fn filter(self: &Dict($K, $V), pred: $F, allocator: &Allocator? = null) Dict(K, V) {
-    const alloc = allocator ?? self.allocator
-    return .{ __storage = self.__storage.filter(pred, alloc), allocator = alloc }
 }
 
 // =============================================================================
@@ -614,6 +692,33 @@ test "an UnmanagedDict takes its allocator at every allocating call" {
     doubled.deinit(&alloc)
     d.deinit(&alloc)
     assert_eq(counting.live_bytes, 0 as usize, "everything went back through that allocator")
+}
+
+test "add reports a new key and get_or_insert_with hands back the slot" {
+    let d: Dict(u32, i32) = dict()
+    defer d.deinit()
+    let first = d.get_or_insert_with(1u32, fn() { 10i32 })
+    first.* = first.* + 1
+    let again = d.get_or_insert_with(1u32, fn() { 99i32 })
+    assert_eq(again.*, 11i32, "the second call found the first slot, not the fallback")
+    assert_eq(d.len(), 1 as usize, "one key")
+
+    let seen: Dict(u32, u8) = dict()
+    defer seen.deinit()
+    assert_true(seen.add(1u32, 1u8), "the first insert is new")
+    assert_true(!seen.add(1u32, 2u8), "the second is not")
+    assert_eq(seen.get(1u32).unwrap(), 1u8, "and leaves the value alone")
+}
+
+test "a DictRef grows the table it wraps" {
+    let field: UnmanagedDict(u32, i32)
+    let h = field.managed(global())
+    h[1u32] = 10i32
+    h.set(2u32, 20i32)
+    assert_eq(field.len(), 2 as usize, "inserts landed in the field")
+    assert_eq(h.get(2u32).unwrap(), 20i32, "reads through the handle")
+    assert_true(h.add(3u32, 30i32), "add through the handle")
+    field.deinit(global())
 }
 
 test "a zero-initialised Dict is a valid empty dict" {

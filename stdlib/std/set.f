@@ -42,17 +42,16 @@ pub fn set(allocator: &Allocator? = null) Set($T) {
 // UnmanagedSet: growth and release, allocator explicit
 // =============================================================================
 
-// Insert a value. No-op when the value is already present (no allocation or replacement). Returns
-// nothing - the value-add idempotence is the expected behavior; callers that want to know whether
-// it was new should `contains()` first.
-pub fn add(self: &UnmanagedSet($T), value: T, allocator: &Allocator) {
-    self.__inner.set(value, 1u8, allocator)
+// Insert a value. Returns whether it was new, so a visited check is one probe: `if seen.add(x,
+// alloc) { work.push(x, alloc) }`. A present value is left as it is.
+pub fn add(self: &UnmanagedSet($T), value: T, allocator: &Allocator) bool {
+    return self.__inner.add(value, 1u8, allocator)
 }
 
 // String-key insert for `UnmanagedSet(OwnedString)`: the view is copied into an owned key only when
 // it is new to the set.
-pub fn add(self: &UnmanagedSet(OwnedString), value: String, allocator: &Allocator) {
-    self.__inner.set(value, 1u8, allocator)
+pub fn add(self: &UnmanagedSet(OwnedString), value: String, allocator: &Allocator) bool {
+    return self.__inner.add(value, 1u8, allocator)
 }
 
 // Free the backing storage. Each live key's `deinit()` runs first. Idempotent.
@@ -177,13 +176,13 @@ pub fn next(it: &SetIterator($T)) T? {
 // for its result and otherwise uses the receiver's.
 // =============================================================================
 
-// Insert a value; a no-op when it is already present.
-pub fn add(self: &Set($T), value: T) {
-    self.__storage.add(value, self.allocator)
+// Insert a value. Returns whether it was new.
+pub fn add(self: &Set($T), value: T) bool {
+    return self.__storage.add(value, self.allocator)
 }
 
-pub fn add(self: &Set(OwnedString), value: String) {
-    self.__storage.add(value, self.allocator)
+pub fn add(self: &Set(OwnedString), value: String) bool {
+    return self.__storage.add(value, self.allocator)
 }
 
 // Free the backing storage. Each live key's `deinit()` runs first. Idempotent.
@@ -211,10 +210,10 @@ test "an UnmanagedSet takes its allocator at every allocating call" {
     let counting = counting_allocator(global())
     const alloc = counting.allocator()
     let s: UnmanagedSet(i32)
-    s.add(1i32, &alloc)
-    s.add(2i32, &alloc)
-    s.add(2i32, &alloc)
-    assert_eq(s.len(), 2 as usize, "a duplicate does not add")
+    assert_true(s.add(1i32, &alloc), "a new value reports true")
+    assert_true(s.add(2i32, &alloc), "so does the next")
+    assert_true(!s.add(2i32, &alloc), "a duplicate reports false")
+    assert_eq(s.len(), 2 as usize, "and does not add")
     assert_true(s.contains(2i32), "contains")
     assert_true(s.remove(1i32), "remove reports presence")
     let sum = 0i32

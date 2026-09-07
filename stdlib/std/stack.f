@@ -100,6 +100,16 @@ pub fn as_slice(self: &UnmanagedStack($T)) T[] {
     return self.__inner.as_slice()
 }
 
+// Iterates the elements bottom to top, by value.
+pub fn iter(self: &UnmanagedStack($T)) SliceIterator(T) {
+    return self.__inner.iter()
+}
+
+// Iterates the elements top to bottom, by value: the order `pop` would yield them.
+pub fn iter_rev(self: &UnmanagedStack($T)) SliceRevIterator(T) {
+    return self.__inner.iter_rev()
+}
+
 // =============================================================================
 // Stack: the managed API
 // =============================================================================
@@ -125,6 +135,18 @@ test "an UnmanagedStack takes its allocator at every allocating call" {
     s.push(1i32, &alloc)
     s.push(2i32, &alloc)
     assert_eq(s.len(), 2usize, "two pushes")
+    let first_popped = 0i32
+    for x in s.iter_rev() {
+        if first_popped == 0 {
+            first_popped = x
+        }
+    }
+    assert_eq(first_popped, 2i32, "iter_rev starts at the top")
+    let bottom_up = 0i32
+    for x in s {
+        bottom_up = bottom_up * 10 + x
+    }
+    assert_eq(bottom_up, 12i32, "for walks bottom to top")
     assert_eq(s.peek().unwrap(), 2i32, "peek sees the top")
     assert_eq(s.pop().unwrap(), 2i32, "pop returns the top")
     s.deinit(&alloc)

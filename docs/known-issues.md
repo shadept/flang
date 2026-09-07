@@ -1526,8 +1526,15 @@ Two independent bugs, the second unmasked by fixing the first:
 **Status:** Stdlib side done — every collection has its unmanaged flavour (2026-09-06:
 `UnmanagedList` is the storage and takes the allocator per allocating call; `List` wraps it and
 reaches it through `op_deref`. 2026-09-07: `UnmanagedDict`, `UnmanagedSet`, `UnmanagedStack`,
-`UnmanagedDeque` the same way, the set and stack over the unmanaged dict and list). What remains
-is migrating the composites below to store one allocator and hold unmanaged children
+`UnmanagedDeque` the same way, the set and stack over the unmanaged dict and list. 2026-09-07:
+`ListRef`/`DictRef` handles - `s.items.managed(s.allocator)` - give a composite the managed API
+over a field for the scope where its allocator is known, and the managed wrappers come from the
+`#managed_list`/`#managed_dict` generators, one implementation per operation). What remains is
+migrating the composites below to store one allocator and hold unmanaged children; the survey of
+2026-09-07 ranks them: `Tarjan` (demand.f), `BuildOptions`, `FqnMap`, lower's `Env`, `TypeEnv`,
+`UnionFind`, then `InferenceResults`+`CapturedKeys`, `TypeInterner`, `OwnPass`, `TemplateState`,
+`LowerCtx`; `Checker`, `TypeCheckResult`, `AnalyzedProject` and the FIR structs stay managed (their
+containers are handed out as managed values or live under two allocators)
 **Affected:** any struct composing several allocator-carrying containers — `UnionFind` (nodes Dict + undo Stack of Lists + own field), `Engine`, `Checker`, and every similar composite
 
 Header-owned allocators mean a composite stores the same `&Allocator?` once

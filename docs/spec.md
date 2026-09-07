@@ -746,6 +746,13 @@ A `for` loop comes in two forms. They differ in what the loop variable binds, an
 
 `for x in xs.iter_ref()` is the reference form spelled out.
 
+**A collection is not modified while it is being iterated.** An iterator is a snapshot of the
+storage as it was when `iter` ran: a `List`'s iterator is the slice iterator over its elements at
+that moment, in either direction (`iter_rev` walks last to first without the copy `reversed`
+makes). Appending to the list inside the loop is outside the contract - the iterator may or may
+not see the new elements, and a reallocation leaves it reading freed memory. Collect into a second
+list, or drain a worklist with `pop`.
+
 **Choose by aliasing, not by speed.** Take the reference form to mutate elements in place, or when the body must otherwise alias the collection's storage. It is not the faster one: the pointer stride can defeat vectorization, while the by-value copy is a local temporary the C backend eliminates under `--release` — measured on 48-byte structs, the by-value loop compiles to the same vectorized loop as manual indexing.
 
 Which types iterate, and how:
@@ -1015,4 +1022,10 @@ is `__storage`: readable, as every field is, and by convention not touched. A nu
 the global allocator (§4.1), so a zero-initialised `List` is a valid empty list. `Dict`, `Set`,
 `Stack` and `Deque` follow the same split (`UnmanagedDict`, `UnmanagedSet`, `UnmanagedStack`,
 `UnmanagedDeque`); the set and stack flavours wrap the dict and list of the matching flavour, so
-an unmanaged composite stores no allocator at any depth.
+an unmanaged composite stores no allocator at any depth. Where such a composite knows its
+allocator for a scope, `s.items.managed(s.allocator)` makes a `ListRef(T)` (`DictRef(K, V)` for a
+dict): a managed handle holding the storage by reference, so it reads and grows the field in place
+through the managed API, and owns nothing - there is no `deinit` on it. The managed API itself is
+one set of unmanaged functions plus a generator (`#managed_list`, `#managed_dict`) that emits the
+forwarding overloads for each carrier; a transformation on either carrier returns a `List`/`Dict`,
+since a new collection needs storage of its own.

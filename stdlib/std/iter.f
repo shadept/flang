@@ -274,7 +274,7 @@ pub fn next(self: &ChainIter($I, $J)) $T? {
 }
 
 // All of `a`, then all of `b`. The iterator TYPES may differ (chain a FilterIter with a plain
-// ListIterator); only the element type they yield
+// SliceIterator); only the element type they yield
 // must agree — `next` unifies the two.
 pub fn chain(a: $I, b: $J) ChainIter(I, J) {
     return .{ a = a, b = b, on_b = false }
@@ -948,7 +948,7 @@ test "chain composes iterators of different types" {
     defer ys.deinit()
     ys.push(7i32)
 
-    // I = FilterIter(ListIterator, ...), J = ListIterator — only the element
+    // I = FilterIter(SliceIterator, ...), J = SliceIterator — only the element
     // type has to match.
     let out = xs.iter().filter(is_even).chain(ys.iter()).to_list()
     defer out.deinit()

@@ -40,6 +40,25 @@ pub fn op_deref(self: &List($T)) &UnmanagedList(T) {
     return &self.__storage
 }
 
+// A managed handle over storage owned elsewhere: `s.items.managed(s.allocator)` reads and grows
+// `s.items` in place through the `List` API, for the scope where the allocator is known. It holds
+// the storage by reference, so a push lands in the composite's field, not in a copy. There is
+// nothing to deinit - the composite owns both halves.
+pub type ListRef = struct(T) {
+    __storage: &UnmanagedList(T)
+    allocator: &Allocator
+}
+
+// Makes a `ListRef` over `s` that allocates through `allocator`.
+pub fn managed(s: &UnmanagedList($T), allocator: &Allocator) ListRef(T) {
+    return .{ __storage = s, allocator = allocator }
+}
+
+// Reaches the storage, as `List`'s does.
+pub fn op_deref(self: &ListRef($T)) &UnmanagedList(T) {
+    return self.__storage
+}
+
 // Budget for a list's first allocation, in bytes, and the ceiling on how many elements it buys.
 // Sizing in bytes keeps the first allocation flat across element types; a fixed element count would
 // scale it with `size_of(T)`.
@@ -78,8 +97,9 @@ pub fn unmanaged_list(capacity: usize, allocator: &Allocator) UnmanagedList($T) 
     return out
 }
 
-// Copies `source` into fresh storage sized to its length.
-fn copy_unmanaged(source: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
+// Creates an unmanaged list holding a copy of `source`, in fresh storage sized to its length. An
+// empty source allocates nothing. Panics when the allocation fails.
+pub fn unmanaged_list(source: $T[], allocator: &Allocator) UnmanagedList(T) {
     if source.len == 0 {
         let empty: UnmanagedList(T)
         return empty
@@ -120,11 +140,16 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
     return out
 }
 
-// Create a shallow copy of an existing list.
-// Allocates new backing storage and copies all elements.
+// Creates a list holding a shallow copy of `source`'s elements, in fresh storage sized to fit.
 pub fn list(source: List($T), allocator: &Allocator? = null) List(T) {
+    return list(source.as_slice(), allocator)
+}
+
+// Creates a list holding a shallow copy of `source`, in fresh storage sized to fit: the `list(n);
+// push_all(xs)` pair in one call. An empty source allocates nothing.
+pub fn list(source: $T[], allocator: &Allocator? = null) List(T) {
     const alloc = allocator.unwrap_or(0usize as &Allocator)
-    let st: UnmanagedList(T) = copy_unmanaged(&source.__storage, alloc)
+    let st: UnmanagedList(T) = unmanaged_list(source, alloc)
     return .{ __storage = st, allocator = alloc }
 }
 
@@ -410,6 +435,20 @@ pub fn last(self: &UnmanagedList($T)) T? {
     return self.as_slice().last()
 }
 
+// Returns a reference to the first element, or null when empty. Writes through it land in the list;
+// a push may move the storage and invalidate it.
+pub fn first_ref(self: &UnmanagedList($T)) &T? {
+    return self.get_ref(0)
+}
+
+// Returns a reference to the last element, or null when empty - the top of a stack-like list.
+pub fn last_ref(self: &UnmanagedList($T)) &T? {
+    if self.len == 0 {
+        return null
+    }
+    return self.get_ref(self.len - 1)
+}
+
 // Returns the index of `value`, or null when absent; with duplicates, the first. The list must be
 // sorted ascending.
 pub fn binary_search(self: &UnmanagedList($T), value: T) usize? {
@@ -502,36 +541,21 @@ pub fn join(self: &UnmanagedList(String), sep: String, allocator: &Allocator? = 
 // UnmanagedList: iteration
 // =============================================================================
 
-pub type ListIterator = struct(T) {
-    list: &UnmanagedList(T)
-    current: usize
-}
-
-// Iterates the elements by value, in order.
-pub fn iter(l: &UnmanagedList($T)) ListIterator(T) {
-    return .{ list = l, current = 0 }
-}
-
-// An iterator is its own iterable, so `for x in xs.iter().filter(f)`-style chains (and the iter
-// combinators' `for item in it`) can consume it.
-pub fn iter(it: &ListIterator($T)) ListIterator(T) {
-    return it.*
-}
-
-// Advance iterator and return next value
-pub fn next(it: &ListIterator($T)) T? {
-    if it.current >= it.list.len {
-        return null
-    }
-
-    const elem = it.list.get(it.current)
-    it.current = it.current + 1
-    return elem
+// Iterates the elements by value, in order, through the slice's iterator. Every list iterator is a
+// snapshot of the storage: the list is not modified while it is being iterated.
+pub fn iter(l: &UnmanagedList($T)) SliceIterator(T) {
+    return l.as_slice().iter()
 }
 
 // `for &x in xs` - elements by reference, through the slice's iterator.
 pub fn iter_ref(l: &UnmanagedList($T)) SliceRefIterator(T) {
     return l.as_slice().iter_ref()
+}
+
+// Iterates the elements by value, last to first, without the copy `reversed()` makes: the undo
+// drain `for u in undo.iter_rev()`.
+pub fn iter_rev(l: &UnmanagedList($T)) SliceRevIterator(T) {
+    return l.as_slice().iter_rev()
 }
 
 // =============================================================================
@@ -661,32 +685,109 @@ pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
 }
 
 // =============================================================================
-// List: the managed API
+// The managed API: `List` and `ListRef`
 //
-// The same operations over the list's own allocator. A transformation takes an optional allocator
-// for its result and otherwise uses the receiver's.
+// The same operations over the carrier's own allocator, forwarded to the unmanaged function - the
+// one implementation - by a generator, so a managed carrier is any type with a `__storage` reaching
+// an `UnmanagedList(T)` and an `allocator` beside it. A transformation takes an optional allocator
+// for its result and otherwise uses the receiver's; it returns a `List` either way, since a new
+// list needs storage of its own. Only what owns storage lives outside the template: `deinit`,
+// `to_owned_slice` and `flat_map` are `List`'s alone.
 // =============================================================================
 
-// Ensures room for at least `capacity` elements. Panics when the allocation fails.
-pub fn reserve(self: &List($T), capacity: usize) {
-    self.__storage.reserve(capacity, self.allocator)
+#define(managed_list, Self: Ident) {
+    // Ensures room for at least `capacity` elements. Panics when the allocation fails.
+    pub fn reserve(self: &#(Self)($T), capacity: usize) {
+        self.__storage.reserve(capacity, self.allocator)
+    }
+
+    // Appends `value`, growing when full. Panics when the allocation fails.
+    pub fn push(self: &#(Self)($T), value: T) {
+        self.__storage.push(value, self.allocator)
+    }
+
+    // Appends every element of `xs`, in order. `xs` must not alias the list's own storage.
+    pub fn push_all(self: &#(Self)($T), xs: T[]) {
+        self.__storage.push_all(xs, self.allocator)
+    }
+
+    // Inserts `value` at `index`, shifting everything at and after it one slot toward the end.
+    // `index == len` appends. Panics past the end.
+    pub fn insert(self: &#(Self)($T), index: usize, value: T) {
+        self.__storage.insert(index, value, self.allocator)
+    }
+
+    // Returns a new list of `f(x)` for every element, in order.
+    pub fn map(self: &#(Self)($T), f: $F, allocator: &Allocator? = null) List($U) {
+        const alloc = allocator ?? self.allocator
+        return .{ __storage = self.__storage.map(f, alloc), allocator = alloc }
+    }
+
+    // Returns a new list of the elements `keep` accepts, in order.
+    pub fn filter(self: &#(Self)($T), keep: $F, allocator: &Allocator? = null) List(T) {
+        const alloc = allocator ?? self.allocator
+        return .{ __storage = self.__storage.filter(keep, alloc), allocator = alloc }
+    }
+
+    // Returns a new list of the elements `drop` rejects, in order: `filter` with the predicate
+    // negated.
+    pub fn remove(self: &#(Self)($T), drop: $F, allocator: &Allocator? = null) List(T) {
+        const alloc = allocator ?? self.allocator
+        return .{ __storage = self.__storage.remove(drop, alloc), allocator = alloc }
+    }
+
+    // Returns a new list of everything after the first `n` elements; empty when `n` exceeds the
+    // length.
+    pub fn drop_first(self: &#(Self)($T), n: usize, allocator: &Allocator? = null) List(T) {
+        const alloc = allocator ?? self.allocator
+        return .{ __storage = self.__storage.drop_first(n, alloc), allocator = alloc }
+    }
+
+    // Returns a reversed copy.
+    pub fn reversed(self: &#(Self)($T), allocator: &Allocator? = null) List(T) {
+        const alloc = allocator ?? self.allocator
+        return .{ __storage = self.__storage.reversed(alloc), allocator = alloc }
+    }
+
+    // Returns a new list of the last `n` elements, or all of them when `n` exceeds the length.
+    pub fn take_last(self: &#(Self)($T), n: usize, allocator: &Allocator? = null) List(T) {
+        const alloc = allocator ?? self.allocator
+        return .{ __storage = self.__storage.take_last(n, alloc), allocator = alloc }
+    }
+
+    // Returns a new list pairing elements positionally with `other`, stopping at the shorter.
+    pub fn zip(self: &#(Self)($T), other: &#(Self)($B), allocator: &Allocator? = null) List((T,
+            B)) {
+        const alloc = allocator ?? self.allocator
+        return .{ __storage = self.__storage.zip(other.op_deref(), alloc), allocator = alloc }
+    }
+
+    // Splits into two new lists, (accepted, rejected) by `pred`, each in order.
+    pub fn partition(self: &#(Self)($T), pred: $F,
+        allocator: &Allocator? = null) (List(T), List(T)) {
+        const alloc = allocator ?? self.allocator
+        const parts = self.__storage.partition(pred, alloc)
+        return (.{ __storage = parts.0, allocator = alloc }, .{ __storage = parts.1,
+            allocator = alloc })
+    }
+
+    // Returns a new list of every inner list's elements, in order, in one allocation sized from the
+    // inner lengths. The inner lists are left untouched.
+    pub fn flatten(self: &#(Self)(List($T)), allocator: &Allocator? = null) List(T) {
+        const alloc = allocator ?? self.allocator
+        return .{ __storage = self.__storage.flatten(alloc), allocator = alloc }
+    }
+
+    // Returns a copy with runs of consecutive `==` duplicates collapsed to one element, `sort |
+    // uniq` style: sort first for whole-list uniqueness.
+    pub fn uniq(self: &#(Self)($T), allocator: &Allocator? = null) List(T) {
+        const alloc = allocator ?? self.allocator
+        return .{ __storage = self.__storage.uniq(alloc), allocator = alloc }
+    }
 }
 
-// Appends `value`, growing when full. Panics when the allocation fails.
-pub fn push(self: &List($T), value: T) {
-    self.__storage.push(value, self.allocator)
-}
-
-// Appends every element of `xs`, in order. `xs` must not alias the list's own storage.
-pub fn push_all(self: &List($T), xs: T[]) {
-    self.__storage.push_all(xs, self.allocator)
-}
-
-// Inserts `value` at `index`, shifting everything at and after it one slot toward the end. `index
-// == len` appends. Panics past the end.
-pub fn insert(self: &List($T), index: usize, value: T) {
-    self.__storage.insert(index, value, self.allocator)
-}
+#managed_list(List)
+#managed_list(ListRef)
 
 // Deinits every live element and frees the backing storage. Idempotent: a second call is a no-op.
 pub fn deinit(self: &List($T)) {
@@ -699,12 +800,6 @@ pub fn deinit(self: &List($T)) {
 // frees the slice with `alloc.free(s)`, deiniting the elements first when they own anything.
 pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
     return (self.__storage.to_owned_slice(self.allocator), self.allocator)
-}
-
-// Returns a new list of `f(x)` for every element, in order.
-pub fn map(self: &List($T), f: $F, allocator: &Allocator? = null) List($U) {
-    const alloc = allocator ?? self.allocator
-    return .{ __storage = self.__storage.map(f, alloc), allocator = alloc }
 }
 
 // Returns a new list of the results of `f` concatenated, in order. Each list `f` returns is
@@ -723,64 +818,6 @@ pub fn flat_map(self: &List($T), f: $F, allocator: &Allocator? = null) List($U) 
         part.deinit()
     }
     return out
-}
-
-// Returns a new list of the elements `keep` accepts, in order.
-pub fn filter(self: &List($T), keep: $F, allocator: &Allocator? = null) List(T) {
-    const alloc = allocator ?? self.allocator
-    return .{ __storage = self.__storage.filter(keep, alloc), allocator = alloc }
-}
-
-// Returns a new list of the elements `drop` rejects, in order: `filter` with the predicate negated.
-pub fn remove(self: &List($T), drop: $F, allocator: &Allocator? = null) List(T) {
-    const alloc = allocator ?? self.allocator
-    return .{ __storage = self.__storage.remove(drop, alloc), allocator = alloc }
-}
-
-// Returns a new list of everything after the first `n` elements; empty when `n` exceeds the length.
-pub fn drop_first(self: &List($T), n: usize, allocator: &Allocator? = null) List(T) {
-    const alloc = allocator ?? self.allocator
-    return .{ __storage = self.__storage.drop_first(n, alloc), allocator = alloc }
-}
-
-// Returns a reversed copy.
-pub fn reversed(self: &List($T), allocator: &Allocator? = null) List(T) {
-    const alloc = allocator ?? self.allocator
-    return .{ __storage = self.__storage.reversed(alloc), allocator = alloc }
-}
-
-// Returns a new list of the last `n` elements, or all of them when `n` exceeds the length.
-pub fn take_last(self: &List($T), n: usize, allocator: &Allocator? = null) List(T) {
-    const alloc = allocator ?? self.allocator
-    return .{ __storage = self.__storage.take_last(n, alloc), allocator = alloc }
-}
-
-// Returns a new list pairing elements positionally with `other`, stopping at the shorter.
-pub fn zip(self: &List($T), other: &List($B), allocator: &Allocator? = null) List((T, B)) {
-    const alloc = allocator ?? self.allocator
-    return .{ __storage = self.__storage.zip(&other.__storage, alloc), allocator = alloc }
-}
-
-// Splits into two new lists, (accepted, rejected) by `pred`, each in order.
-pub fn partition(self: &List($T), pred: $F, allocator: &Allocator? = null) (List(T), List(T)) {
-    const alloc = allocator ?? self.allocator
-    const parts = self.__storage.partition(pred, alloc)
-    return (.{ __storage = parts.0, allocator = alloc }, .{ __storage = parts.1,
-        allocator = alloc })
-}
-
-// Returns a new list of every inner list's elements, in order, in one allocation sized from the
-// inner lengths. The inner lists are left untouched.
-pub fn flatten(self: &List(List($T)), allocator: &Allocator? = null) List(T) {
-    const alloc = allocator ?? self.allocator
-    return .{ __storage = self.__storage.flatten(alloc), allocator = alloc }
-}
-
-// Returns a copy with runs of consecutive `==` duplicates collapsed to one element, `sort | uniq`
-// style: sort first for whole-list uniqueness.
-pub fn uniq(self: &List($T), allocator: &Allocator? = null) List(T) {
-    const alloc = allocator ?? self.allocator
-    return .{ __storage = self.__storage.uniq(alloc), allocator = alloc }
 }
 
 // =============================================================================
@@ -807,6 +844,52 @@ test "search utilities: contains, index_of, first, last" {
     defer empty.deinit()
     assert_true(empty.first().is_none(), "empty list has no first")
     assert_true(empty.last().is_none(), "empty list has no last")
+}
+
+test "a ListRef grows the field it wraps and owns nothing" {
+    let counting = counting_allocator(global())
+    const alloc = counting.allocator()
+    let field: UnmanagedList(i32)
+    let h = field.managed(&alloc)
+    h.push(1i32)
+    h.push(2i32)
+    assert_eq(field.len, 2 as usize, "pushes landed in the field")
+    assert_eq(h[1], 2i32, "reads through the handle")
+    let total = 0i32
+    for x in h {
+        total = total + x
+    }
+    assert_eq(total, 3i32, "for through the handle")
+    let doubled = h.map(fn(v: i32) i32 { v * 2 })
+    assert_eq(doubled[1], 4i32, "a transformation yields a List on the handle's allocator")
+    doubled.deinit()
+    field.deinit(&alloc)
+    assert_eq(counting.live_bytes, 0 as usize, "the field's allocator saw every free")
+}
+
+test "list from a slice, first_ref, last_ref and iter_rev" {
+    let src: List(i32) = list(0)
+    defer src.deinit()
+    src.push(1i32)
+    src.push(2i32)
+    src.push(3i32)
+    let xs: List(i32) = list(src.as_slice())
+    defer xs.deinit()
+    assert_eq(xs.len, 3 as usize, "copied every element")
+    let top = xs.last_ref().unwrap()
+    top.* = 30i32
+    assert_eq(xs[2], 30i32, "last_ref writes through")
+    assert_eq(xs.first_ref().unwrap().*, 1i32, "first_ref reads the head")
+    let seen: List(i32) = list(0)
+    defer seen.deinit()
+    for x in xs.iter_rev() {
+        seen.push(x)
+    }
+    assert_eq(seen[0], 30i32, "iter_rev starts at the end")
+    assert_eq(seen[2], 1i32, "and finishes at the head")
+    let empty: List(i32) = list(0)
+    defer empty.deinit()
+    assert_true(empty.last_ref().is_none(), "no last on an empty list")
 }
 
 test "a zero-initialised List is a valid empty list" {

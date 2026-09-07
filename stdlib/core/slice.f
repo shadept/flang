@@ -459,6 +459,11 @@ pub fn iter(slice: &$T[]) SliceIterator(T) {
     return .{ slice = slice.*, index = 0 }
 }
 
+// An iterator is its own iterable, so adapter chains can consume it.
+pub fn iter(it: &SliceIterator($T)) SliceIterator(T) {
+    return it.*
+}
+
 // Advances the iterator and returns the next element, or null if exhausted.
 pub fn next(iter: &SliceIterator($T)) T? {
     if iter.index >= iter.slice.len {
@@ -494,6 +499,33 @@ pub fn next(iter: &SliceRefIterator($T)) &T? {
     const p: &T = iter.slice.ptr + iter.index
     iter.index = iter.index + 1
     return Some(p)
+}
+
+// Reverse iterator: `for x in xs.iter_rev()` yields the elements last to first, by value, without
+// the copy `reversed()` makes. `remaining` counts down to the next element's index + 1.
+pub type SliceRevIterator = struct(T) {
+    slice: T[]
+    remaining: usize
+}
+
+// Iterates the elements by value, last to first.
+pub fn iter_rev(slice: &$T[]) SliceRevIterator(T) {
+    return .{ slice = slice.*, remaining = slice.len }
+}
+
+// An iterator is its own iterable, so adapter chains can consume it.
+pub fn iter(it: &SliceRevIterator($T)) SliceRevIterator(T) {
+    return it.*
+}
+
+// Advances toward the front and returns the next element, or null past the first.
+pub fn next(iter: &SliceRevIterator($T)) T? {
+    if iter.remaining == 0 {
+        return null
+    }
+    iter.remaining = iter.remaining - 1
+    let val: T = iter.slice[iter.remaining]
+    return Some(val)
 }
 
 // =============================================================================

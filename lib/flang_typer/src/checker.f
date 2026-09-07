@@ -1219,7 +1219,9 @@ fn base_visible_set(self: &Checker, m: String) Set(String) {
     let fresh: Set(String) = set(self.allocator)
     self.visible_by_module.get(m) match {
         Some(src) => copy_set_into(&fresh, &src)
-        None => fresh.add(m)
+        None => {
+            let _new = fresh.add(m)
+        }
     }
     return fresh
 }
