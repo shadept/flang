@@ -2,8 +2,8 @@
 //! EXIT: 0
 //! STDOUT: 2
 
+import std.collections.list
 import std.io.print
-import std.list
 import std.option
 
 type MyVal = enum {

@@ -1,17 +1,20 @@
-// Double-ended queues in two flavours, the managed and unmanaged split of spec §9.4:
-// `UnmanagedDeque(T)` is the ring buffer and every operation on it, the allocating ones taking the
-// allocator at the call (`dq.push_back(v, alloc)`); `Deque(T)` pairs it with an allocator
-// (`dq.push_back(v)`), reaching the storage through `op_deref` so `dq.len` and `dq.pop_front()`
-// read the same on either.
+// Double-ended queues over a ring buffer: push and pop at either end in amortised constant time.
+// Use one as a queue (`push_back`, `pop_front`), as a stack (`push_back`, `pop_back`), or as a
+// worklist that switches between the two.
 //
-// Push/pop at either end run in amortised O(1). Use as a queue (push_back/pop_front), stack
-// (push_back/pop_back), or worklist that flips ordering mid-algorithm.
+// Two flavours, the managed and unmanaged split of spec §9.4. `Deque(T)` owns its buffer and its
+// allocator (`dq.push_back(v)`); `UnmanagedDeque(T)` carries no allocator and takes one at every
+// allocating call (`dq.push_back(v, alloc)`), for composites that keep one allocator for all their
+// children.
 
 import std.allocator
 import std.mem
 import std.option
 import std.test
 
+// A double-ended queue of `T` over a ring buffer, carrying no allocator: `push_back`, `push_front`
+// and `deinit` take one as their last argument, and the same allocator must be passed every time. A
+// zero-initialised value is a valid empty deque. Elements are owned: `deinit` deinits each.
 pub type UnmanagedDeque = struct(T) {
     ptr: &T
     cap: usize // backing buffer capacity (in elements)
@@ -19,6 +22,10 @@ pub type UnmanagedDeque = struct(T) {
     len: usize
 }
 
+// A double-ended queue of `T` that owns its ring buffer and remembers the allocator it grows and
+// frees through. Every `UnmanagedDeque` operation applies to it as well, reached through
+// `op_deref`, and the allocating ones come without the allocator argument. A zero-initialised value
+// is a valid empty deque on the global allocator.
 pub type Deque = struct(T) {
     __storage: UnmanagedDeque(T)
     allocator: &Allocator
@@ -32,8 +39,10 @@ pub fn op_deref(self: &Deque($T)) &UnmanagedDeque(T) {
 
 const DEQUE_DEFAULT_CAPACITY: usize = 8
 
-// Construct an empty unmanaged deque with room for `capacity` elements. Zero allocates nothing; a
-// zero-initialised `UnmanagedDeque` is the same empty deque.
+// Creates an empty unmanaged deque with room for `capacity` elements. Zero allocates nothing.
+// Panics when the allocation fails.
+//
+// - `allocator`: grows and frees the buffer. Pass the same one to every allocating call.
 pub fn unmanaged_deque(capacity: usize, allocator: &Allocator) UnmanagedDeque($T) {
     let out: UnmanagedDeque(T)
     if capacity > 0 {
@@ -42,14 +51,13 @@ pub fn unmanaged_deque(capacity: usize, allocator: &Allocator) UnmanagedDeque($T
     return out
 }
 
-// Construct an empty deque. The capacity hint pre-allocates storage to avoid early growth churn;
-// pass 0 to defer allocation to the first push. `T` is inferred from context (e.g. `let dq:
-// Deque(i32) = deque(0)`).
+// Creates an empty deque with room for `capacity` elements. Zero allocates nothing until the first
+// push. Panics when the allocation fails.
 //
 // - `allocator`: kept for the deque's whole life. Null is the global allocator.
 pub fn deque(capacity: usize, allocator: &Allocator? = null) Deque($T) {
     let out: Deque(T)
-    out.allocator = allocator.unwrap_or(0usize as &Allocator)
+    out.allocator = allocator.or_global()
     out.__storage = unmanaged_deque(capacity, out.allocator)
     return out
 }
@@ -92,7 +100,8 @@ fn reserve(self: &UnmanagedDeque($T), required: usize, allocator: &Allocator) {
     self.head = 0
 }
 
-// Append a value to the back of the deque (queue enqueue / stack push).
+// Appends `value` at the back, growing when full. The deque owns it from here. Panics when the
+// allocation fails.
 pub fn push_back(self: &UnmanagedDeque($T), value: T, allocator: &Allocator) {
     self.reserve(self.len + 1, allocator)
     const tail = (self.head + self.len) % self.cap
@@ -101,7 +110,8 @@ pub fn push_back(self: &UnmanagedDeque($T), value: T, allocator: &Allocator) {
     self.len = self.len + 1
 }
 
-// Prepend a value to the front of the deque.
+// Prepends `value` at the front, growing when full. The deque owns it from here. Panics when the
+// allocation fails.
 pub fn push_front(self: &UnmanagedDeque($T), value: T, allocator: &Allocator) {
     self.reserve(self.len + 1, allocator)
     // Wrap backwards. Adding cap-1 then mod cap avoids underflow on usize.
@@ -111,8 +121,7 @@ pub fn push_front(self: &UnmanagedDeque($T), value: T, allocator: &Allocator) {
     self.len = self.len + 1
 }
 
-// Free the backing storage. Each live element's `deinit()` runs first, in logical (front-to-back)
-// order. Idempotent.
+// Deinits every element, front to back, and frees the buffer. Idempotent: a second call is a no-op.
 pub fn deinit(self: &UnmanagedDeque($T), allocator: &Allocator) {
     if self.cap > 0 {
         for i in 0..self.len {
@@ -131,11 +140,12 @@ pub fn deinit(self: &UnmanagedDeque($T), allocator: &Allocator) {
 // UnmanagedDeque: in-place mutation and reads
 // =============================================================================
 
+// Returns whether there are no elements.
 pub fn is_empty(self: &UnmanagedDeque($T)) bool {
     return self.len == 0
 }
 
-// Remove and return the front element, or `null` when empty (queue dequeue).
+// Removes and returns the front element, or null when empty. The element is the caller's to deinit.
 pub fn pop_front(self: &UnmanagedDeque($T)) T? {
     if self.len == 0 {
         return null
@@ -147,7 +157,7 @@ pub fn pop_front(self: &UnmanagedDeque($T)) T? {
     return Some(v)
 }
 
-// Remove and return the back element, or `null` when empty (stack pop).
+// Removes and returns the back element, or null when empty. The element is the caller's to deinit.
 pub fn pop_back(self: &UnmanagedDeque($T)) T? {
     if self.len == 0 {
         return null
@@ -158,7 +168,7 @@ pub fn pop_back(self: &UnmanagedDeque($T)) T? {
     return Some(slot.*)
 }
 
-// Read the front element without removing it.
+// Returns the front element without removing it, or null when empty.
 pub fn peek_front(self: &UnmanagedDeque($T)) T? {
     if self.len == 0 {
         return null
@@ -167,7 +177,7 @@ pub fn peek_front(self: &UnmanagedDeque($T)) T? {
     return Some(slot.*)
 }
 
-// Read the back element without removing it.
+// Returns the back element without removing it, or null when empty.
 pub fn peek_back(self: &UnmanagedDeque($T)) T? {
     if self.len == 0 {
         return null
@@ -177,8 +187,8 @@ pub fn peek_back(self: &UnmanagedDeque($T)) T? {
     return Some(slot.*)
 }
 
-// Drop every element. Backing storage is retained for reuse. Element `deinit()` is NOT called - use
-// `deinit()` for a full release.
+// Drops every element without deiniting any; the buffer is kept for reuse. Elements that own
+// something must be popped and deinited by the caller first.
 pub fn clear(self: &UnmanagedDeque($T)) {
     self.head = 0
     self.len = 0
@@ -188,11 +198,14 @@ pub fn clear(self: &UnmanagedDeque($T)) {
 // Iterator (front-to-back)
 // =============================================================================
 
+// Iterator over a deque's elements, by value, front to back. A snapshot: the deque is not modified
+// while it is being iterated.
 pub type DequeIterator = struct(T) {
     deque: &UnmanagedDeque(T)
     current: usize // logical offset from head, 0 .. len
 }
 
+// Iterates the elements by value, front to back: `for x in dq`.
 pub fn iter(self: &UnmanagedDeque($T)) DequeIterator(T) {
     return .{ deque = self, current = 0 }
 }
@@ -203,6 +216,7 @@ pub fn iter(it: &DequeIterator($T)) DequeIterator(T) {
     return it.*
 }
 
+// Advances and returns the next element, or null after the back.
 pub fn next(it: &DequeIterator($T)) T? {
     if it.current >= it.deque.len {
         return null
@@ -217,17 +231,19 @@ pub fn next(it: &DequeIterator($T)) T? {
 // Deque: the managed API
 // =============================================================================
 
-// Append a value to the back of the deque. Panics when the allocation fails.
+// Appends `value` at the back, growing when full. The deque owns it from here. Panics when the
+// allocation fails.
 pub fn push_back(self: &Deque($T), value: T) {
     self.__storage.push_back(value, self.allocator)
 }
 
-// Prepend a value to the front of the deque. Panics when the allocation fails.
+// Prepends `value` at the front, growing when full. The deque owns it from here. Panics when the
+// allocation fails.
 pub fn push_front(self: &Deque($T), value: T) {
     self.__storage.push_front(value, self.allocator)
 }
 
-// Free the backing storage. Each live element's `deinit()` runs first. Idempotent.
+// Deinits every element, front to back, and frees the buffer. Idempotent: a second call is a no-op.
 pub fn deinit(self: &Deque($T)) {
     self.__storage.deinit(self.allocator)
 }

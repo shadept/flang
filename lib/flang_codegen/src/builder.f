@@ -9,7 +9,7 @@
 // twice on the same block overwrites the previous terminator.
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.string
 import std.string_builder
 

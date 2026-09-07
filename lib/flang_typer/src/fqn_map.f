@@ -6,8 +6,8 @@
 // bare name resolves against the current module then scans visible modules.
 
 import std.allocator
-import std.dict
-import std.list
+import std.collections.dict
+import std.collections.list
 import std.option
 import std.string
 import std.string_builder
@@ -15,25 +15,30 @@ import std.string_builder
 import flang_typer.nominal_registry
 import flang_typer.visibility
 
+// A registry of values named by fully qualified name, looked up with import visibility: a dotted
+// name resolves as itself, a bare name resolves against the current module and then the modules it
+// can see. One allocator serves the table and the key buffers it owns.
 pub type FqnMap = struct(V) {
     // FQN -> value. Keys are views into `owned_fqns`; values are stored as-is and never freed here
     // (they borrow the AST or the engine's allocator).
-    entries: Dict(String, V)
-    owned_fqns: List(OwnedString)
-    allocator: &Allocator?
+    entries: UnmanagedDict(String, V)
+    owned_fqns: UnmanagedList(OwnedString)
+    // The one allocator both containers allocate through.
+    allocator: &Allocator
 }
 
+// Creates an empty map. Nothing allocates until the first `register`.
+//
+// - `allocator`: kept for the map's whole life. Null is the global allocator.
 pub fn fqn_map(allocator: &Allocator? = null) FqnMap($V) {
-    return .{
-        entries = dict(allocator),
-        owned_fqns = list(0, allocator),
-        allocator = allocator,
-    }
+    let out: FqnMap(V)
+    out.allocator = allocator.or_global()
+    return out
 }
 
 pub fn deinit(self: &FqnMap($V)) {
-    self.owned_fqns.deinit()
-    self.entries.deinit()
+    self.owned_fqns.deinit(self.allocator)
+    self.entries.deinit(self.allocator)
 }
 
 // True when a value is already registered under this exact FQN.
@@ -45,9 +50,9 @@ pub fn contains(self: &FqnMap($V), fqn: String) bool {
 // view stable for the map's lifetime.
 pub fn register(self: &FqnMap($V), fqn_owned: OwnedString, value: V) {
     let idx = self.owned_fqns.len
-    self.owned_fqns.push(fqn_owned)
+    self.owned_fqns.push(fqn_owned, self.allocator)
     let stable = self.owned_fqns[idx].as_view()
-    self.entries.set(stable, value)
+    self.entries.set(stable, value, self.allocator)
 }
 
 // Drop every entry whose FQN sits directly in `module`. The key buffers stay in `owned_fqns`:

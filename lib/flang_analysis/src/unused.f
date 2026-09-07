@@ -25,11 +25,12 @@
 // name suppresses the warning, matching W1001.
 
 import std.allocator
-import std.dict
+import std.collections.dict
+import std.collections.list
+import std.collections.multimap
+import std.collections.set
 import std.io.fs
-import std.list
 import std.option
-import std.set
 import std.string
 import std.string_builder
 import std.test
@@ -148,22 +149,18 @@ pub fn unused_functions(result: &TypeCheckResult, modules: &List(Module), fqns: 
 
     // Edges. A target outside the project is dropped; a site outside any project function roots its
     // target.
-    let adj: Dict(u32, List(u32)) = dict(allocator)
+    let adj: MultiMap(u32, u32) = multimap(allocator)
     defer adj.deinit()
     add_table_edges(result, &result.resolved_targets, &result.resolved_ops, &result.receiver_derefs,
-        &nodes, &per_file, &adj, &reached, &work, allocator)
-    add_overlay_edges(result, &nodes, &adj, &reached, &work, allocator)
+        &nodes, &per_file, &adj, &reached, &work)
+    add_overlay_edges(result, &nodes, &adj, &reached, &work)
 
     // Reachability.
     let head: usize = 0
     while head < work.len {
         const from = work[head]
         head = head + 1
-        const out = adj.get_ref(from)
-        if out.is_none() {
-            continue
-        }
-        for t in out.unwrap() {
+        for t in adj.values(from) {
             mark(&reached, &work, t)
         }
     }
@@ -235,8 +232,8 @@ fn target_fn(result: &TypeCheckResult, t: &ResolvedTarget) u32? {
 // Record `from-site -> fid`: an edge from the enclosing project function, or a root when the site
 // has no such home.
 fn add_site(key: NodeId, fid: u32, result: &TypeCheckResult, nodes: &Dict(u32, FnNode),
-    per_file: &List(List(FnNode)), adj: &Dict(u32, List(u32)), reached: &Dict(u32, bool),
-    work: &List(u32), allocator: &Allocator?) {
+    per_file: &List(List(FnNode)), adj: &MultiMap(u32, u32), reached: &Dict(u32, bool),
+    work: &List(u32)) {
     if nodes.get(fid).is_none() {
         return
     }
@@ -246,38 +243,30 @@ fn add_site(key: NodeId, fid: u32, result: &TypeCheckResult, nodes: &Dict(u32, F
         enc = enclosing_fn(per_file, span.unwrap())
     }
     enc match {
-        Some(from) => {
-            if adj.get_ref(from).is_none() {
-                let fresh: List(u32) = list(1, allocator)
-                adj.set(from, fresh)
-            }
-            let row = adj.get_ref(from).unwrap()
-            row.push(fid)
-        }
+        Some(from) => adj.add(from, fid)
         None => mark(reached, work, fid)
     }
 }
 
 fn add_table_edges(result: &TypeCheckResult, targets: &Dict(NodeId, ResolvedTarget),
     ops: &Dict(NodeId, ResolvedOperator), derefs: &Dict(NodeId, List(ResolvedTarget)),
-    nodes: &Dict(u32, FnNode), per_file: &List(List(FnNode)), adj: &Dict(u32, List(u32)),
-    reached: &Dict(u32, bool), work: &List(u32), allocator: &Allocator?) {
+    nodes: &Dict(u32, FnNode), per_file: &List(List(FnNode)), adj: &MultiMap(u32, u32),
+    reached: &Dict(u32, bool), work: &List(u32)) {
     for e in targets {
         const t = e.value
         const fid = target_fn(result, &t)
         if fid.is_some() {
-            add_site(e.key, fid.unwrap(), result, nodes, per_file, adj, reached, work, allocator)
+            add_site(e.key, fid.unwrap(), result, nodes, per_file, adj, reached, work)
         }
     }
     for e in ops {
-        add_site(e.key, e.value.function_id, result, nodes, per_file, adj, reached, work, allocator)
+        add_site(e.key, e.value.function_id, result, nodes, per_file, adj, reached, work)
     }
     for e in derefs {
         for &t in e.value {
             const fid = target_fn(result, t)
             if fid.is_some() {
-                add_site(e.key, fid.unwrap(), result, nodes, per_file, adj, reached, work,
-                    allocator)
+                add_site(e.key, fid.unwrap(), result, nodes, per_file, adj, reached, work)
             }
         }
     }
@@ -285,8 +274,8 @@ fn add_table_edges(result: &TypeCheckResult, targets: &Dict(NodeId, ResolvedTarg
 
 // A specialization's body edges live in its private overlay. They all attribute to the template
 // function - which instantiation resolved them does not matter for reachability.
-fn add_overlay_edges(result: &TypeCheckResult, nodes: &Dict(u32, FnNode), adj: &Dict(u32,
-        List(u32)), reached: &Dict(u32, bool), work: &List(u32), allocator: &Allocator?) {
+fn add_overlay_edges(result: &TypeCheckResult, nodes: &Dict(u32, FnNode), adj: &MultiMap(u32, u32),
+    reached: &Dict(u32, bool), work: &List(u32)) {
     for i in 0..(result.specializations.next_id as usize) {
         const found = result.specializations.find(i as SpecId)
         if found.is_none() {
@@ -296,28 +285,23 @@ fn add_overlay_edges(result: &TypeCheckResult, nodes: &Dict(u32, FnNode), adj: &
         if nodes.get(s.function_id).is_none() {
             continue
         }
-        if adj.get_ref(s.function_id).is_none() {
-            let fresh: List(u32) = list(4, allocator)
-            adj.set(s.function_id, fresh)
-        }
-        let row = adj.get_ref(s.function_id).unwrap()
         for e in s.overlay.resolved_targets {
             const t = e.value
             const fid = target_fn(result, &t)
             if fid.is_some() and nodes.get(fid.unwrap()).is_some() {
-                row.push(fid.unwrap())
+                adj.add(s.function_id, fid.unwrap())
             }
         }
         for e in s.overlay.resolved_ops {
             if nodes.get(e.value.function_id).is_some() {
-                row.push(e.value.function_id)
+                adj.add(s.function_id, e.value.function_id)
             }
         }
         for e in s.overlay.receiver_derefs {
             for &t in e.value {
                 const fid = target_fn(result, t)
                 if fid.is_some() and nodes.get(fid.unwrap()).is_some() {
-                    row.push(fid.unwrap())
+                    adj.add(s.function_id, fid.unwrap())
                 }
             }
         }

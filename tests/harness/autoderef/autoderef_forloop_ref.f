@@ -1,7 +1,7 @@
 //! TEST: autoderef_forloop_ref
 //! EXIT: 138
 
-import std.list
+import std.collections.list
 
 type Node = struct {
     value: i32

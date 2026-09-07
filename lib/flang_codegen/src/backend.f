@@ -15,7 +15,8 @@
 //   c_backend.compile(&m, &opts).unwrap()
 
 import std.allocator
-import std.list
+import std.collections.list
+import std.option
 import std.string
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -41,25 +42,25 @@ pub type BuildOptions = struct {
     mode: BuildMode
 
     // Additional .c sources compiled and linked alongside the generated file (used for FFI shims
-    // like stdlib/std/process.c).
-    extra_c_files: List(String)
+    // like stdlib/std/process.c). Every list below allocates through `allocator`.
+    extra_c_files: UnmanagedList(String)
 
     // Pre-compiled object files linked as-is. Useful with a future build cache where companion .c
     // files compile once and stay cached.
-    extra_obj_files: List(String)
+    extra_obj_files: UnmanagedList(String)
 
     // Directories appended to the compiler's include search path (-I).
-    include_paths: List(String)
+    include_paths: UnmanagedList(String)
 
     // Libraries to link against. Each entry may be:
     //   - An absolute path to a .a / .lib (passed through verbatim)
     //   - A bare name like "m" (the backend prepends "-l" on unix)
     // The C backend always appends "-lm" on unix automatically.
-    libs: List(String)
+    libs: UnmanagedList(String)
 
     // Extra cflags / ldflags passed straight through to the compiler.
-    cflags: List(String)
-    ldflags: List(String)
+    cflags: UnmanagedList(String)
+    ldflags: UnmanagedList(String)
 
     // When set, the backend writes the generated translation unit to this path before invoking the
     // compiler. The .c file otherwise lives in a temporary location next to the executable.
@@ -93,22 +94,24 @@ pub type BuildOptions = struct {
     allocator: &Allocator?
 }
 
+// Creates the default options for an executable at `output_path`: a debug build with every list
+// empty. Nothing allocates until the first `add_*`.
+//
+// - `output_path`: borrowed; the caller keeps it alive through `compile()`.
+// - `allocator`: used for everything the backend allocates on the call's behalf. Null is the
+//   global allocator.
 pub fn build_options(output_path: String, allocator: &Allocator? = null) BuildOptions {
-    let extra_c: List(String) = list(0, allocator)
-    let extra_obj: List(String) = list(0, allocator)
-    let includes: List(String) = list(0, allocator)
-    let libs: List(String) = list(0, allocator)
-    let cflags: List(String) = list(0, allocator)
-    let ldflags: List(String) = list(0, allocator)
+    // A zero-initialised unmanaged list is the empty list; nothing allocates until the first add.
+    let none: UnmanagedList(String)
     return BuildOptions {
         output_path = output_path,
         mode = BuildMode.Debug,
-        extra_c_files = extra_c,
-        extra_obj_files = extra_obj,
-        include_paths = includes,
-        libs = libs,
-        cflags = cflags,
-        ldflags = ldflags,
+        extra_c_files = none,
+        extra_obj_files = none,
+        include_paths = none,
+        libs = none,
+        cflags = none,
+        ldflags = none,
         emit_c_path = null,
         keep_temps = false,
         emit_only = false,
@@ -121,43 +124,49 @@ pub fn build_options(output_path: String, allocator: &Allocator? = null) BuildOp
     }
 }
 
+// Returns the allocator the option lists grow and free through: the caller's, else the global one.
+fn list_allocator(self: &BuildOptions) &Allocator {
+    return self.allocator.or_global()
+}
+
 pub fn deinit(self: &BuildOptions) {
-    self.extra_c_files.deinit()
-    self.extra_obj_files.deinit()
-    self.include_paths.deinit()
-    self.libs.deinit()
-    self.cflags.deinit()
-    self.ldflags.deinit()
+    const alloc = self.list_allocator()
+    self.extra_c_files.deinit(alloc)
+    self.extra_obj_files.deinit(alloc)
+    self.include_paths.deinit(alloc)
+    self.libs.deinit(alloc)
+    self.cflags.deinit(alloc)
+    self.ldflags.deinit(alloc)
 }
 
 // Fluent helpers - let callers chain configuration without juggling the inner lists.
 pub fn add_c_file(self: &BuildOptions, p: String) &BuildOptions {
-    self.extra_c_files.push(p)
+    self.extra_c_files.push(p, self.list_allocator())
     return self
 }
 
 pub fn add_obj_file(self: &BuildOptions, p: String) &BuildOptions {
-    self.extra_obj_files.push(p)
+    self.extra_obj_files.push(p, self.list_allocator())
     return self
 }
 
 pub fn add_include_path(self: &BuildOptions, p: String) &BuildOptions {
-    self.include_paths.push(p)
+    self.include_paths.push(p, self.list_allocator())
     return self
 }
 
 pub fn add_lib(self: &BuildOptions, name_or_path: String) &BuildOptions {
-    self.libs.push(name_or_path)
+    self.libs.push(name_or_path, self.list_allocator())
     return self
 }
 
 pub fn add_cflag(self: &BuildOptions, flag: String) &BuildOptions {
-    self.cflags.push(flag)
+    self.cflags.push(flag, self.list_allocator())
     return self
 }
 
 pub fn add_ldflag(self: &BuildOptions, flag: String) &BuildOptions {
-    self.ldflags.push(flag)
+    self.ldflags.push(flag, self.list_allocator())
     return self
 }
 

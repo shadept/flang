@@ -7,8 +7,8 @@
 // consumes.
 
 import std.allocator
+import std.collections.list
 import std.enum
-import std.list
 
 import flang_parser.token
 import flang_parser.trivia

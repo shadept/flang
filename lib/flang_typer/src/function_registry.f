@@ -9,10 +9,10 @@
 // short-name filtering, FQN bypass.
 
 import std.allocator
-import std.dict
-import std.list
+import std.collections.dict
+import std.collections.list
+import std.collections.set
 import std.option
-import std.set
 import std.string
 import std.test
 

@@ -13,8 +13,8 @@
 
 import std.allocator
 import std.char
+import std.collections.list
 import std.encoding.utf8
-import std.list
 import std.option
 import std.string
 import std.string_builder

@@ -1,18 +1,19 @@
 //! TEST: for_by_ref
 //! EXIT: 216
 
-// `for &x in xs` iterates through `iter_ref`: `x` is `&T` into the
-// collection's storage, so writes land in place. Works on List, slices
-// and fixed arrays (which decay to a slice); a custom type joins by
-// defining `iter_ref`.
+// `for &x in xs` iterates through `iter_ref`: `x` is `&T` into the collection's storage, so writes
+// land in place. Works on List, slices and fixed arrays (which decay to a slice); a custom type
+// joins by defining `iter_ref`.
 
-import std.list
+import std.collections.list
 
 type Counter = struct { n: i32 }
 type CounterRef = struct { c: &Counter, done: bool }
 fn iter_ref(c: &Counter) CounterRef { return .{ c = c, done = false } }
 fn next(it: &CounterRef) &i32? {
-    if it.done { return null }
+    if it.done {
+        return null
+    }
     it.done = true
     return Some(&it.c.n)
 }
@@ -20,18 +21,20 @@ fn next(it: &CounterRef) &i32? {
 pub fn main() i32 {
     let xs: List(i32) = list(0)
     defer xs.deinit()
-    xs.push(1i32); xs.push(2i32); xs.push(3i32)
-    for &x in xs { x.* = x.* * 10 }          // 10, 20, 30
+    xs.push(1i32)
+    xs.push(2i32)
+    xs.push(3i32)
+    for &x in xs { x.* = x.* * 10 } // 10, 20, 30
     const s = xs.as_slice()
-    for &x in s { x.* = x.* + 1 }            // 11, 21, 31
+    for &x in s { x.* = x.* + 1 } // 11, 21, 31
     let sum = 0i32
-    for x in xs { sum = sum + x }            // 63
+    for x in xs { sum = sum + x } // 63
     let c = Counter { n = 5 }
-    for &n in c { n.* = n.* - 32 }           // -27
+    for &n in c { n.* = n.* -32 } // -27
     let arr: [i32; 3] = [1, 2, 3]
     // POSIX exit codes are 8-bit, so the total stays under 256.
-    for &a in arr { a.* = a.* * 30 }         // 30, 60, 90 - in place
+    for &a in arr { a.* = a.* * 30 } // 30, 60, 90 - in place
     let asum = 0i32
-    for a in arr { asum = asum + a }         // 180
+    for a in arr { asum = asum + a } // 180
     return sum + c.n + asum
 }

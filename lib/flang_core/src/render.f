@@ -17,8 +17,8 @@
 // counts once. East Asian width and combining marks are not modelled.
 
 import std.allocator
+import std.collections.list
 import std.encoding.utf8
-import std.list
 import std.string
 import std.string_builder
 import std.terminal

@@ -1006,12 +1006,16 @@ Requires `import std.test`. Test blocks are module-scoped, not exported. Run wit
 ### 9.4 Standard Library
 
 ```
-core/           runtime bindings, platform integration (auto-imported)
-std/            standard modules
-std/encoding/   serialization (JSON, codec)
-std/io/         input/output, filesystem, readers/writers
-std/            collections (List, Dict), text (string, string_builder), allocator
+core/             runtime bindings, platform integration (auto-imported)
+std/              standard modules: text (string, string_builder), allocator, option, result, ...
+std/collections/  List, Dict, Set, Stack, Deque, Bitset, the iterator combinators, Journal, MultiMap
+std/encoding/     serialization (JSON, codec)
+std/io/           input/output, filesystem, readers/writers
 ```
+
+A folder with a façade module beside it - `std.collections` alongside `std/collections/`, `std.io`
+alongside `std/io/` - re-exports every child through `pub import`, so `import std.collections`
+brings in every collection and `import std.collections.list` just the one.
 
 **Collections come in a managed and an unmanaged flavour**. `UnmanagedList(T)` is
 the buffer and every operation on it; the ones that allocate take the allocator at the call
@@ -1028,4 +1032,8 @@ dict): a managed handle holding the storage by reference, so it reads and grows 
 through the managed API, and owns nothing - there is no `deinit` on it. The managed API itself is
 one set of unmanaged functions plus a generator (`#managed_list`, `#managed_dict`) that emits the
 forwarding overloads for each carrier; a transformation on either carrier returns a `List`/`Dict`,
-since a new collection needs storage of its own.
+since a new collection needs storage of its own. Only the building blocks come in two flavours.
+A composite built on them is managed only, storing its allocator once: `Journal(T)` (std.journal),
+an undo log with nested checkpoints whose two buffers are reused across regions; `MultiMap(K, V)`
+(std.multimap), a key-to-many-values table whose values share one pool, chained per key, so the
+map is two allocations whatever the key count.

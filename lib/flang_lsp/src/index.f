@@ -4,7 +4,7 @@
 // checker, never here.
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.string
 import std.test
 

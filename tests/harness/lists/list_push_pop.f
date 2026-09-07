@@ -1,7 +1,7 @@
 //! TEST: list_push_pop
 //! EXIT: 12
 
-import std.list
+import std.collections.list
 import std.option
 
 pub fn main() i32 {

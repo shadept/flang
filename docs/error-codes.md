@@ -3501,7 +3501,7 @@ The check fires on direct assignment of the form `expr.field = value` whose rece
 #### Example
 
 ```flang
-// stdlib/std/list.f defines List.
+// stdlib/std/collections/list.f defines List.
 pub type List = struct(T) {
     ptr: &T
     len: usize
@@ -3516,7 +3516,7 @@ pub fn pop(list: &List($T)) T? {
     return last.*
 }
 
-// stdlib/std/stack.f wraps List.
+// stdlib/std/collections/stack.f wraps List.
 pub type Stack = struct(T) { inner: List(T) }
 
 pub fn pop(self: &Stack($T)) T? {

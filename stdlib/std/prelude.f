@@ -5,10 +5,10 @@
 // expansion of the prelude.
 
 pub import std.allocator
-pub import std.dict
+pub import std.collections.dict
+pub import std.collections.iter
+pub import std.collections.list
 pub import std.io.print
-pub import std.iter
-pub import std.list
 pub import std.mem
 pub import std.option
 pub import std.owned

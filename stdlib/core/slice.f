@@ -501,14 +501,14 @@ pub fn next(iter: &SliceRefIterator($T)) &T? {
     return Some(p)
 }
 
-// Reverse iterator: `for x in xs.iter_rev()` yields the elements last to first, by value, without
-// the copy `reversed()` makes. `remaining` counts down to the next element's index + 1.
+// Iterator over a slice's elements by value, last to first. A snapshot of the view it was made
+// from: the storage is not modified while it is being iterated.
 pub type SliceRevIterator = struct(T) {
     slice: T[]
     remaining: usize
 }
 
-// Iterates the elements by value, last to first.
+// Iterates the elements by value, last to first: `for x in s.iter_rev()`.
 pub fn iter_rev(slice: &$T[]) SliceRevIterator(T) {
     return .{ slice = slice.*, remaining = slice.len }
 }
@@ -518,7 +518,7 @@ pub fn iter(it: &SliceRevIterator($T)) SliceRevIterator(T) {
     return it.*
 }
 
-// Advances toward the front and returns the next element, or null past the first.
+// Advances toward the front and returns the next element, or null after the first.
 pub fn next(iter: &SliceRevIterator($T)) T? {
     if iter.remaining == 0 {
         return null

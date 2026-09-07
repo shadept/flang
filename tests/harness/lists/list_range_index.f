@@ -1,8 +1,8 @@
 //! TEST: list_range_index
 //! STDOUT: PASS
 
+import std.collections.list
 import std.io.print
-import std.list
 
 pub fn main() i32 {
     let xs: List(i32) = list(4)

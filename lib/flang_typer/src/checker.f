@@ -25,10 +25,10 @@
 // reference to every sub-routine - no global state.
 
 import std.allocator
-import std.dict
-import std.list
+import std.collections.dict
+import std.collections.list
+import std.collections.set
 import std.option
-import std.set
 import std.string
 import std.string_builder
 import std.test
@@ -6001,12 +6001,14 @@ fn receiver_overload(self: &Checker, candidates: &List(FunctionScheme), recv: Ty
     return pick
 }
 
-// Resolve `name` as a method of `recv` with `extra` arguments - the receiver as written, adapted
-// value <-> &T, or peeled through `op_deref`, all in one ranked set (`resolve_overload`) - and
-// record the winner's hop chain on `record_span`'s node for lowering. The protocol operators
-// (`op_index_ref`, `op_set_index`, `iter`) go through here so `xs[i]` and `for x in xs` resolve
-// exactly as `xs.op_index_ref(i)` and `xs.iter()` would. Null when nothing matches; never reports,
-// so a caller that tries several names reports once at the end.
+// Resolves `name` as a method of `recv` with `extra` arguments, ranking every receiver shape in one
+// set: as written, adapted between value and reference, and peeled through `op_deref`. The winner's
+// hop chain is recorded on the node at `record_span` for lowering. The protocol operators
+// (`op_index_ref`, `op_set_index`, `iter`) resolve through here, so `xs[i]` and `for x in xs`
+// resolve exactly as `xs.op_index_ref(i)` and `xs.iter()` would.
+//
+// Returns null when nothing matches, without reporting: a caller that tries several names reports
+// once at the end.
 fn receiver_pick(self: &Checker, name: String, recv: Ty, extra: &List(Ty), span: SourceSpan,
     record_span: SourceSpan) OverloadPick? {
     let vis = fn_visibility(self)
@@ -6045,11 +6047,10 @@ fn deref_candidates(self: &Checker, vis: &Visibility) List(FunctionScheme)? {
     }
 }
 
-// Record the first `hops` entries of a winning deref chain for lowering: one target per hop on the
-// call node (outermost first), plus a pending specialization per generic hop (the drain rewrites
-// that hop's entry to `RtSpecialized`, keyed by `deref_index`). Lowering calls each hop instead of
-// passing the wrapper's address as the receiver - dropping the peel was a silent field-offset-shift
-// miscompile (the stage-2 `Owned(StringBuilder).append` segfault). Nothing to record for zero hops.
+// Records the first `hops` entries of a winning deref chain on the node at `span`, for lowering to
+// call each hop before the winner: one target per hop, outermost first, plus a pending
+// specialization per generic hop (the drain rewrites that hop's entry to `RtSpecialized`, keyed by
+// `deref_index`). Records nothing for zero hops.
 fn commit_deref_chain(self: &Checker, chain: &List(OverloadPick), hops: usize, span: SourceSpan) {
     if hops == 0 {
         return
@@ -6612,11 +6613,11 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
     return Some(commit_pick(self, pick, "op_call", arg_tys.len, span, 1usize, &no_exprs, null))
 }
 
-// Append the receiver shapes reachable from `recv` through `op_deref` to `alts`: per hop, the
-// wrapped value by reference then by value, with each hop's pick on `ctx.chain` (mirrors the
-// reference checker's UFCS deref chain, with the same depth bound). Stops at a receiver that is not
-// a nominal or has no `op_deref`. Each hop is resolved non-speculatively, so a chain the winner
-// does not use leaves its deref unifications behind - parity with the reference checker.
+// Appends to `alts` every receiver shape reachable from `recv` through `op_deref`, at most ten hops
+// deep: per hop, the wrapped value by reference and then by value. Each hop's pick goes on
+// `ctx.chain`, outermost first. Stops at a receiver that is not a nominal or has no `op_deref`.
+// Hops are resolved non-speculatively, so a chain the winner does not use leaves its deref
+// unifications behind.
 fn deref_alternatives(self: &Checker, recv: Ty, span: SourceSpan, ctx: &PeelCtx,
     alts: &List(RecvAlt)) {
     let dcands = deref_candidates(self, ctx.vis)
@@ -6912,13 +6913,12 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     return Some(OverloadPick { id = w.id, ret = f.ret, params = fparams, inst = inst, hops = hops })
 }
 
-// Whether trying the receiver through `op_deref` could change `resolve_overload`'s outcome, given
-// the as-written probes: nothing matched yet, the best match coerced an argument, or a candidate
-// that failed is structurally more specific than the best match and could still take the call
-// through a hop - its arity window admits the arguments, and its receiver parameter is not the
-// receiver's own nominal (a hop always lands on a different one). The two filters keep the hot
-// paths (`d.set(k, v)` against the four-parameter unmanaged `set` and the `Dict(OwnedString, V)`
-// overload) from building a peel that cannot win.
+// Returns whether trying the receiver through `op_deref` could change `resolve_overload`'s outcome,
+// given the as-written probes in `st`: nothing matched yet, the best match coerced an argument, or
+// a candidate that failed is structurally more specific than the best match and could still take
+// the call through a hop. A failed candidate is only weighed when its arity window admits the
+// arguments and its receiver parameter is not the receiver's own nominal, since a hop always lands
+// on a different one; both checks keep the common call from building a peel that cannot win.
 fn peel_could_win(self: &Checker, candidates: &List(FunctionScheme), st: &List(CandProbe),
     arg_tys: &List(Ty), named: &NamedArgs?) bool {
     let best_spec = 0u32

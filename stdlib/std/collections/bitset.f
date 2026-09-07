@@ -10,7 +10,7 @@
 import core.bits
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.option
 
 pub type Bitset = struct {

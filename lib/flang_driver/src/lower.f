@@ -52,10 +52,10 @@
 // variants and emit through builder methods).
 
 import std.allocator
-import std.dict
-import std.list
+import std.collections.dict
+import std.collections.list
+import std.collections.set
 import std.option
-import std.set
 import std.string
 import std.string_builder
 import std.test
@@ -297,54 +297,56 @@ type LocalSlot = struct {
     src: Ty
 }
 
+// The locals in scope, innermost last: `names[i]` is bound to `bindings[i]`. Both lists allocate
+// through `allocator`.
 type Env = struct {
-    names: List(String)
-    bindings: List(LocalSlot)
+    names: UnmanagedList(String)
+    bindings: UnmanagedList(LocalSlot)
+    allocator: &Allocator
 }
 
+// Creates an empty environment. Null is the global allocator.
 fn new_env(allocator: &Allocator?) Env {
-    let n: List(String) = list(8, allocator)
-    let b: List(LocalSlot) = list(8, allocator)
-    return Env { names = n, bindings = b }
+    const alloc = allocator.or_global()
+    return Env { names = unmanaged_list(8, alloc), bindings = unmanaged_list(8, alloc),
+        allocator = alloc }
 }
 
 // Bind `name` to a stack slot holding a scalar of `ty`, declared as `src`.
 fn bind_slot(self: &Env, name: String, addr: Operand, ty: IrType, src: Ty) {
-    self.names.push(name)
-    self.bindings.push(LocalSlot { addr = addr, ty = ty, aggregate = false, src = src })
+    self.names.push(name, self.allocator)
+    self.bindings.push(LocalSlot { addr = addr, ty = ty, aggregate = false, src = src },
+        self.allocator)
 }
 
 // Bind `name` to an aggregate of type `src` at `addr`.
 fn bind_aggregate(self: &Env, name: String, addr: Operand, src: Ty) {
-    self.names.push(name)
-    self.bindings.push(LocalSlot { addr = addr, ty = IrType.Ptr, aggregate = true, src = src })
+    self.names.push(name, self.allocator)
+    self.bindings.push(LocalSlot { addr = addr, ty = IrType.Ptr, aggregate = true, src = src },
+        self.allocator)
 }
 
 fn mark(self: &Env) usize {
     return self.names.len
 }
 
+// Drops every binding made since `mark()` returned `m`, closing the scope.
 fn release(self: &Env, m: usize) {
-    while self.names.len > m {
-        let _n = self.names.pop()
-        let _b = self.bindings.pop()
-    }
+    self.names.truncate(m)
+    self.bindings.truncate(m)
 }
 
+// The innermost binding of `name`, or null.
 fn get(self: &Env, name: String) LocalSlot? {
-    let i = self.names.len
-    while i > 0 {
-        i = i - 1
-        if self.names[i] == name {
-            return Some(self.bindings[i])
-        }
+    return self.names.last_index_of(name) match {
+        Some(i) => Some(self.bindings[i])
+        None => null
     }
-    return null
 }
 
 pub fn deinit(self: &Env) {
-    self.names.deinit()
-    self.bindings.deinit()
+    self.names.deinit(self.allocator)
+    self.bindings.deinit(self.allocator)
 }
 
 // A stack slot sized for one FIR scalar.
@@ -3111,11 +3113,12 @@ fn lower_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, wan
     return lower_expr(ctx, bb, env, recv)
 }
 
-// A receiver that resolved through op_deref hops (a method call, an index, an index assignment or a
-// `for` iterable - the checker records the chain beside the pick): call each hop on the previous
-// pointer - the wrapper's own address first - and hand the last hop's `&inner` to the winner. Every
-// hop is `(&Wrapper) &Inner`, scalar ptr in and out. When the winner takes the inner value as a
-// scalar prim, load through.
+// Lowers a receiver the checker resolved through `op_deref` hops - a method call, an index, an
+// index assignment or a `for` iterable - by calling each hop on the previous pointer, the wrapper's
+// own address first, and yielding what the winning function's first parameter takes: the last hop's
+// `&inner`, or the inner value loaded through it when that parameter is a scalar primitive.
+//
+// - `chain`: the hops outermost first, each a `(&Wrapper) &Inner` function.
 fn lower_deref_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr,
     chain: &List(ResolvedTarget), want: &Ty) Operand {
     let cur = deref_hop_base(ctx, bb, env, recv)

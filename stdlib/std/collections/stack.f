@@ -1,19 +1,28 @@
-// LIFO stacks in two flavours, the managed and unmanaged split of spec §9.4, each a thin wrapper
-// over the list of the matching flavour: `UnmanagedStack(T)` over `UnmanagedList(T)`, taking the
-// allocator at every allocating call (`s.push(v, alloc)`), and `Stack(T)` with its allocator beside
-// it (`s.push(v)`), reaching the storage through `op_deref`.
+// Last-in, first-out stacks: `push` and `pop` at the top, `peek` to read it, iteration from either
+// end.
 //
-// Push/pop both act on the top of the stack; `peek` reads the top without removing it.
+// Two flavours, the managed and unmanaged split of spec §9.4. `Stack(T)` owns its storage and its
+// allocator (`s.push(v)`); `UnmanagedStack(T)` carries no allocator and takes one at every
+// allocating call (`s.push(v, alloc)`), for composites that keep one allocator for all their
+// children. Both are a list restricted to its end, so a stack costs what the list does and
+// `as_slice` exposes the elements bottom to top.
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.option
 import std.test
 
+// A last-in, first-out stack of `T` that carries no allocator: `push` and `deinit` take one as
+// their last argument, and the same allocator must be passed every time. A zero-initialised value
+// is a valid empty stack. Elements are owned: `deinit` deinits each.
 pub type UnmanagedStack = struct(T) {
     __inner: UnmanagedList(T)
 }
 
+// A last-in, first-out stack of `T` that owns its storage and remembers the allocator it grows and
+// frees through. Every `UnmanagedStack` operation applies to it as well, reached through
+// `op_deref`, and `push` comes without the allocator argument. A zero-initialised value is a valid
+// empty stack on the global allocator.
 pub type Stack = struct(T) {
     __storage: UnmanagedStack(T)
     allocator: &Allocator
@@ -24,20 +33,21 @@ pub fn op_deref(self: &Stack($T)) &UnmanagedStack(T) {
     return &self.__storage
 }
 
-// Construct an empty unmanaged stack with room for `capacity` elements. Zero allocates nothing; a
-// zero-initialised `UnmanagedStack` is the same empty stack.
+// Creates an empty unmanaged stack with room for `capacity` elements. Zero allocates nothing.
+// Panics when the allocation fails.
+//
+// - `allocator`: grows and frees the storage. Pass the same one to every allocating call.
 pub fn unmanaged_stack(capacity: usize, allocator: &Allocator) UnmanagedStack($T) {
     return .{ __inner = unmanaged_list(capacity, allocator) }
 }
 
-// Construct an empty stack. The capacity hint pre-reserves storage to avoid early growth churn;
-// pass 0 to defer allocation to the first `push`. `T` is inferred from the call's expected type
-// (e.g. `let s: Stack(i32) = stack(0)` or `let s = stack(0); s.push(1i32)`).
+// Creates an empty stack with room for `capacity` elements. Zero allocates nothing until the first
+// `push`. Panics when the allocation fails.
 //
 // - `allocator`: kept for the stack's whole life. Null is the global allocator.
 pub fn stack(capacity: usize, allocator: &Allocator? = null) Stack($T) {
     let out: Stack(T)
-    out.allocator = allocator.unwrap_or(0usize as &Allocator)
+    out.allocator = allocator.or_global()
     out.__storage = unmanaged_stack(capacity, out.allocator)
     return out
 }
@@ -46,12 +56,13 @@ pub fn stack(capacity: usize, allocator: &Allocator? = null) Stack($T) {
 // UnmanagedStack: growth and release, allocator explicit
 // =============================================================================
 
-// Push a value onto the top of the stack. Grows the backing storage when capacity is exhausted.
+// Pushes `value` on top, growing when full. The stack owns it from here. Panics when the allocation
+// fails.
 pub fn push(self: &UnmanagedStack($T), value: T, allocator: &Allocator) {
     self.__inner.push(value, allocator)
 }
 
-// Free the backing storage. Each live element's `deinit()` runs first. Idempotent.
+// Deinits every element and frees the storage. Idempotent: a second call is a no-op.
 pub fn deinit(self: &UnmanagedStack($T), allocator: &Allocator) {
     self.__inner.deinit(allocator)
 }
@@ -60,28 +71,28 @@ pub fn deinit(self: &UnmanagedStack($T), allocator: &Allocator) {
 // UnmanagedStack: in-place mutation and reads
 // =============================================================================
 
-// Number of elements currently on the stack.
+// Returns the number of elements.
 pub fn len(self: &UnmanagedStack($T)) usize {
     return self.__inner.len
 }
 
-// True when the stack holds no elements.
+// Returns whether there are no elements.
 pub fn is_empty(self: &UnmanagedStack($T)) bool {
     return self.__inner.len == 0
 }
 
-// Remove and return the top element, or `null` when the stack is empty.
+// Removes and returns the top element, or null when empty. The element is the caller's to deinit.
 pub fn pop(self: &UnmanagedStack($T)) T? {
     return self.__inner.pop()
 }
 
-// Return the top element without removing it, or `null` when empty.
+// Returns the top element without removing it, or null when empty.
 pub fn peek(self: &UnmanagedStack($T)) T? {
     return self.__inner.last()
 }
 
-// Return a pointer to the top element without removing it, or `null` when empty. Mutations through
-// the pointer persist in the stack.
+// Returns a reference to the top element, or null when empty. Writes through it land in the stack;
+// a push may move the storage and invalidate it.
 pub fn peek_ref(self: &UnmanagedStack($T)) &T? {
     if self.__inner.len == 0 {
         return null
@@ -89,23 +100,24 @@ pub fn peek_ref(self: &UnmanagedStack($T)) &T? {
     return self.__inner.get_ref(self.__inner.len - 1)
 }
 
-// Drop every element, deiniting each. Backing storage is kept for reuse.
+// Removes every element, deiniting each. The storage is kept for reuse.
 pub fn clear(self: &UnmanagedStack($T)) {
     self.__inner.clear()
 }
 
-// View the stack's storage as a slice in bottom-to-top order. Iterating the slice in reverse visits
-// elements top-down.
+// Returns a view of the elements, bottom to top. Growth moves the storage and invalidates the view.
 pub fn as_slice(self: &UnmanagedStack($T)) T[] {
     return self.__inner.as_slice()
 }
 
-// Iterates the elements bottom to top, by value.
+// Iterates the elements by value, bottom to top: `for x in s`. The stack is not modified while it
+// is being iterated.
 pub fn iter(self: &UnmanagedStack($T)) SliceIterator(T) {
     return self.__inner.iter()
 }
 
-// Iterates the elements top to bottom, by value: the order `pop` would yield them.
+// Iterates the elements by value, top to bottom, the order `pop` would yield them, without removing
+// any. The stack is not modified while it is being iterated.
 pub fn iter_rev(self: &UnmanagedStack($T)) SliceRevIterator(T) {
     return self.__inner.iter_rev()
 }
@@ -114,12 +126,13 @@ pub fn iter_rev(self: &UnmanagedStack($T)) SliceRevIterator(T) {
 // Stack: the managed API
 // =============================================================================
 
-// Push a value onto the top of the stack. Panics when the allocation fails.
+// Pushes `value` on top, growing when full. The stack owns it from here. Panics when the allocation
+// fails.
 pub fn push(self: &Stack($T), value: T) {
     self.__storage.push(value, self.allocator)
 }
 
-// Free the backing storage. Each live element's `deinit()` runs first. Idempotent.
+// Deinits every element and frees the storage. Idempotent: a second call is a no-op.
 pub fn deinit(self: &Stack($T)) {
     self.__storage.deinit(self.allocator)
 }

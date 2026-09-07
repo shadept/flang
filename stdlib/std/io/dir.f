@@ -15,11 +15,11 @@
 // "." and ".." are filtered at the syscall layer - callers never see them.
 
 import std.allocator
+import std.collections.list
 import std.io.fs
 import std.io.internal.fs
 import std.io.print
 import std.io.types
-import std.list
 import std.option
 import std.owned
 import std.path

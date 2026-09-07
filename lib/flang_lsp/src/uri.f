@@ -7,7 +7,7 @@
 //
 // ponytail: no UNC (`file://server/share`) support; add when a workspace actually lives on a share.
 
-import std.list
+import std.collections.list
 import std.option
 import std.string
 import std.string_builder

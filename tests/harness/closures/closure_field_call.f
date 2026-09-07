@@ -1,21 +1,20 @@
 //! TEST: closure_field_call
 //! EXIT: 90
 
-// A capturing closure stored in a struct field is callable directly through
-// the field: `h.f(x)` dispatches via the closure type's op_call, without
-// needing the `let g = h.f; g(x)` local-copy workaround.
+// A capturing closure stored in a struct field is callable directly through the field: `h.f(x)`
+// dispatches via the closure type's op_call, without needing the `let g = h.f; g(x)` local-copy
+// workaround.
 
 type Holder = struct(F) {
-    f: F,
+    f: F
 }
 
 fn make_holder(f: $F) Holder(F) {
     return .{ f = f }
 }
 
-// Generic fn body: the field's type is a TypeVar at template time and only
-// becomes the concrete __Closure_N at specialization (the iterator-adapter
-// pattern in std.iter).
+// Generic fn body: the field's type is a TypeVar at template time and only becomes the concrete
+// __Closure_N at specialization (the iterator-adapter pattern in std.iter).
 fn invoke(h: &Holder($F), x: i32) i32 {
     return h.f(x)
 }

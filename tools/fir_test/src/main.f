@@ -4,7 +4,7 @@
 
 import std.allocator
 import std.io.print
-import std.list
+import std.collections.list
 import std.option
 import std.string
 import std.string_builder

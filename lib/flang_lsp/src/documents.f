@@ -3,7 +3,7 @@
 // win over disk: whatever is in here is the text the rest of the server analyses and answers about.
 
 import std.allocator
-import std.dict
+import std.collections.dict
 import std.option
 import std.string
 import std.test

@@ -13,12 +13,12 @@
 // CST are dropped inside `analyze` once the AST exists.
 
 import std.allocator
-import std.dict
+import std.collections.dict
+import std.collections.list
+import std.collections.set
 import std.io.file
-import std.list
 import std.option
 import std.result
-import std.set
 import std.string
 import std.string_builder
 import std.test

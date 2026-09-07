@@ -22,11 +22,11 @@
 // operation.
 
 import std.allocator
-import std.dict
-import std.list
+import std.collections.dict
+import std.collections.journal
+import std.collections.list
+import std.collections.set
 import std.option
-import std.set
-import std.stack
 import std.string_builder
 import std.test
 
@@ -142,9 +142,9 @@ pub type Engine = struct {
     // level the caller happened to pass in - soundness bug for let-polymorphism.
     levels: Dict(VarId, Level)
 
-    binding_undo: Stack(List(BindingUndo))
-    prim_undo: Stack(List(PrimConstraintUndo))
-    level_undo: Stack(List(LevelUndo))
+    binding_undo: Journal(BindingUndo)
+    prim_undo: Journal(PrimConstraintUndo)
+    level_undo: Journal(LevelUndo)
 
     var_counter: u32
     level: Level
@@ -160,9 +160,9 @@ pub fn engine(allocator: &Allocator? = null) Engine {
     let bindings: Dict(VarId, Ty) = dict(allocator)
     let prim_constraints: Dict(VarId, PrimSet) = dict(allocator)
     let levels: Dict(VarId, Level) = dict(allocator)
-    let bu: Stack(List(BindingUndo)) = stack(0, allocator)
-    let pu: Stack(List(PrimConstraintUndo)) = stack(0, allocator)
-    let lu: Stack(List(LevelUndo)) = stack(0, allocator)
+    let bu: Journal(BindingUndo) = journal(allocator)
+    let pu: Journal(PrimConstraintUndo) = journal(allocator)
+    let lu: Journal(LevelUndo) = journal(allocator)
     return .{
         uf = uf,
         interner = type_interner(allocator),
@@ -192,36 +192,8 @@ pub fn deinit(self: &Engine) {
     self.bindings.deinit()
     self.prim_constraints.deinit()
     self.levels.deinit()
-    // Drain undo stacks - each frame is its own list with its own buffer.
-    loop {
-        self.binding_undo.pop() match {
-            Some(frame) => {
-                let f = frame
-                f.deinit()
-            }
-            None => break
-        }
-    }
     self.binding_undo.deinit()
-    loop {
-        self.prim_undo.pop() match {
-            Some(frame) => {
-                let f = frame
-                f.deinit()
-            }
-            None => break
-        }
-    }
     self.prim_undo.deinit()
-    loop {
-        self.level_undo.pop() match {
-            Some(frame) => {
-                let f = frame
-                f.deinit()
-            }
-            None => break
-        }
-    }
     self.level_undo.deinit()
 }
 
@@ -1158,75 +1130,50 @@ pub fn try_unify(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
 // Speculative regions
 // ─────────────────────────────────────────────────────────────────────
 
+// Opens a speculative region over every mutable table: the union-find, the bindings, the primitive
+// constraints and the levels. Regions nest; each `commit` or `rollback` closes the innermost. A
+// checkpoint allocates nothing once the journals have reached their high-water mark.
 pub fn push_checkpoint(self: &Engine) {
     self.uf.push_checkpoint()
-    let bu_frame: List(BindingUndo) = list(0, self.allocator)
-    let pu_frame: List(PrimConstraintUndo) = list(0, self.allocator)
-    let lu_frame: List(LevelUndo) = list(0, self.allocator)
-    self.binding_undo.push(bu_frame)
-    self.prim_undo.push(pu_frame)
-    self.level_undo.push(lu_frame)
+    self.binding_undo.checkpoint()
+    self.prim_undo.checkpoint()
+    self.level_undo.checkpoint()
 }
 
+// Closes the innermost region and keeps its mutations. An enclosing region's `rollback` still
+// undoes them. Panics when no region is open.
 pub fn commit(self: &Engine) {
     self.uf.commit()
-    let b = self.binding_undo.pop().expect("commit: no binding checkpoint")
-    b.deinit()
-    let p = self.prim_undo.pop().expect("commit: no prim checkpoint")
-    p.deinit()
-    let l = self.level_undo.pop().expect("commit: no level checkpoint")
-    l.deinit()
+    self.binding_undo.commit()
+    self.prim_undo.commit()
+    self.level_undo.commit()
 }
 
+// Closes the innermost region and undoes its mutations, newest first: an overwritten entry gets its
+// old value back, an inserted one is removed. Panics when no region is open.
 pub fn rollback(self: &Engine) {
     self.uf.rollback()
-    let b = self.binding_undo.pop().expect("rollback: no binding checkpoint")
-    let i = b.len
-    loop {
-        if i == 0 {
-            break
-        }
-        i = i - 1
-        let entry = &b[i]
+    self.binding_undo.rollback(fn(entry: BindingUndo) {
         if entry.prev.is_some() {
             self.bindings.set(entry.var_id, entry.prev.unwrap())
         } else {
             let _discard = self.bindings.remove(entry.var_id)
         }
-    }
-    b.deinit()
-
-    let p = self.prim_undo.pop().expect("rollback: no prim checkpoint")
-    let j = p.len
-    loop {
-        if j == 0 {
-            break
-        }
-        j = j - 1
-        let entry = &p[j]
+    })
+    self.prim_undo.rollback(fn(entry: PrimConstraintUndo) {
         if entry.prev.is_some() {
             self.prim_constraints.set(entry.var_id, entry.prev.unwrap())
         } else {
             let _discard = self.prim_constraints.remove(entry.var_id)
         }
-    }
-    p.deinit()
-
-    let l = self.level_undo.pop().expect("rollback: no level checkpoint")
-    let k = l.len
-    loop {
-        if k == 0 {
-            break
-        }
-        k = k - 1
-        let entry = &l[k]
+    })
+    self.level_undo.rollback(fn(entry: LevelUndo) {
         if entry.prev.is_some() {
             self.levels.set(entry.var_id, entry.prev.unwrap())
         } else {
             let _discard = self.levels.remove(entry.var_id)
         }
-    }
-    l.deinit()
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1304,24 +1251,23 @@ fn intersect_prim_constraints(self: &Engine, ra: VarId, rb: VarId) PrimSet? {
     return Some(ca.unwrap() & cb.unwrap())
 }
 
+// Logs the current binding of `var_id`, if a region is open, so a rollback can restore it. Called
+// before every write to `bindings`.
 fn record_binding_undo(self: &Engine, var_id: VarId) {
-    self.binding_undo.peek_ref() match {
-        Some(frame) => frame.push(BindingUndo {
-            var_id = var_id,
-            prev = self.bindings.get(var_id),
-        })
-        None => {}
+    if !self.binding_undo.is_open() {
+        return
     }
+    self.binding_undo.record(BindingUndo { var_id = var_id, prev = self.bindings.get(var_id) })
 }
 
 fn record_prim_undo(self: &Engine, var_id: VarId) {
-    self.prim_undo.peek_ref() match {
-        Some(frame) => frame.push(PrimConstraintUndo {
-            var_id = var_id,
-            prev = self.prim_constraints.get(var_id),
-        })
-        None => {}
+    if !self.prim_undo.is_open() {
+        return
     }
+    self.prim_undo.record(PrimConstraintUndo {
+        var_id = var_id,
+        prev = self.prim_constraints.get(var_id),
+    })
 }
 
 fn set_level(self: &Engine, var_id: VarId, lvl: Level) {
@@ -1338,13 +1284,10 @@ fn clear_level(self: &Engine, var_id: VarId) {
 }
 
 fn record_level_undo(self: &Engine, var_id: VarId) {
-    self.level_undo.peek_ref() match {
-        Some(frame) => frame.push(LevelUndo {
-            var_id = var_id,
-            prev = self.levels.get(var_id),
-        })
-        None => {}
+    if !self.level_undo.is_open() {
+        return
     }
+    self.level_undo.record(LevelUndo { var_id = var_id, prev = self.levels.get(var_id) })
 }
 
 // ─────────────────────────────────────────────────────────────────────

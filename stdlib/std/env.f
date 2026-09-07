@@ -3,7 +3,7 @@
 // Arguments are views into the process's argv strings (no allocation). Environment variable lookups
 // return views into the C runtime's storage.
 
-import std.list
+import std.collections.list
 import std.option
 import std.string
 import std.test

@@ -12,8 +12,8 @@
 // (declaration order). The C# backend still does C-order always - see docs/known-issues.md.
 
 import std.allocator
-import std.dict
-import std.list
+import std.collections.dict
+import std.collections.list
 import std.option
 import std.string
 import std.test

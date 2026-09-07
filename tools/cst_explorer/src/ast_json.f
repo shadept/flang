@@ -3,7 +3,7 @@
 // Schema: `{ "kind": "Foo", "span": [start, length], ...fields }`. Optional fields are `null` when
 // None. `&T` references are inlined.
 
-import std.list
+import std.collections.list
 import std.option
 import std.string
 import std.string_builder

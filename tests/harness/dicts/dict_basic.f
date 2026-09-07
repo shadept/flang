@@ -1,7 +1,7 @@
 //! TEST: dict_basic
 //! EXIT: 30
 
-import std.dict
+import std.collections.dict
 import std.option
 
 pub fn main() i32 {

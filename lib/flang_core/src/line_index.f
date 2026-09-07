@@ -9,8 +9,8 @@
 // Out-of-range input is clamped, never rejected.
 
 import std.allocator
+import std.collections.list
 import std.encoding.utf8
-import std.list
 import std.string
 import std.test
 

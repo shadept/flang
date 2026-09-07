@@ -14,8 +14,8 @@
 // interpreted.
 
 import std.allocator
+import std.collections.dict
 import std.conv
-import std.dict
 import std.encoding.codec
 import std.encoding.json
 import std.enum

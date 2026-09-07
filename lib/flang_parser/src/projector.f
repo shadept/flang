@@ -14,7 +14,7 @@
 // default zero-spans rather than aborting. It mirrors the parser's recover-and-continue stance.
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.option
 
 import flang_core.span

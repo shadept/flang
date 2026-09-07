@@ -2,7 +2,7 @@
 //! EXIT: 2
 //! SKIP: RFC-028 step 7 - the blanket `deinit(&$T)` wins over the element's own
 
-import std.list
+import std.collections.list
 
 type FileHandle = struct {
     owned fd: i32

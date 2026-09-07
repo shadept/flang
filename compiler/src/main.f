@@ -12,13 +12,13 @@
 // fmt runs in-process on lib/flang_fmt; lsp runs in-process on lib/flang_lsp.
 
 import std.allocator
+import std.collections.dict
+import std.collections.list
 import std.conv
-import std.dict
 import std.env
 import std.io.file
 import std.io.fs
 import std.io.print
-import std.list
 import std.option
 import std.path
 import std.process

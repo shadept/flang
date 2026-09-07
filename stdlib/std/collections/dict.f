@@ -37,6 +37,10 @@ pub type Entry = struct(K, V) {
     value: V
 }
 
+// A hash map from `K` to `V` that carries no allocator: every operation that grows or frees the
+// table takes one as its last argument, and the same allocator must be passed every time. A
+// zero-initialised value is a valid empty dict. Keys and values are owned: `deinit` deinits each
+// before freeing the table. `K` needs `hash` and `==`.
 pub type UnmanagedDict = struct(K, V) {
     entries: &Entry(K, V)
     length: usize
@@ -46,6 +50,10 @@ pub type UnmanagedDict = struct(K, V) {
     cap: usize
 }
 
+// A hash map from `K` to `V` that owns its table and remembers the allocator it grows and frees
+// through. Every `UnmanagedDict` operation applies to it as well, reached through `op_deref`, and
+// the allocating ones come without the allocator argument. A zero-initialised value is a valid
+// empty dict on the global allocator.
 pub type Dict = struct(K, V) {
     __storage: UnmanagedDict(K, V)
     allocator: &Allocator
@@ -56,20 +64,22 @@ pub fn op_deref(self: &Dict($K, $V)) &UnmanagedDict(K, V) {
     return &self.__storage
 }
 
-// A managed handle over a table owned elsewhere: `s.index.managed(s.allocator)` reads and grows
-// `s.index` in place through the `Dict` API, for the scope where the allocator is known. It holds
-// the table by reference, so an insert lands in the composite's field. Nothing to deinit.
+// The `Dict` API over an `UnmanagedDict` owned by someone else, for a scope in which the allocator
+// is known: `s.index.managed(s.allocator).set(k, v)` inserts into `s.index` in place. It holds the
+// table by reference, so nothing is copied and there is nothing to deinit; the owner of the table
+// frees it, through the same allocator.
 pub type DictRef = struct(K, V) {
     __storage: &UnmanagedDict(K, V)
     allocator: &Allocator
 }
 
-// Makes a `DictRef` over `d` that allocates through `allocator`.
+// Returns the `Dict` API over `d`, growing it through `allocator`. `d` must outlive the handle and
+// keep allocating through the same allocator.
 pub fn managed(d: &UnmanagedDict($K, $V), allocator: &Allocator) DictRef(K, V) {
     return .{ __storage = d, allocator = allocator }
 }
 
-// Reaches the table, as `Dict`'s does.
+// Reaches the wrapped table: every `UnmanagedDict` read, indexing and `for` resolve through this.
 pub fn op_deref(self: &DictRef($K, $V)) &UnmanagedDict(K, V) {
     return self.__storage
 }
@@ -98,10 +108,12 @@ pub fn unmanaged_dict(capacity: usize, allocator: &Allocator) UnmanagedDict($K, 
 // `V` are inferred from the call's expected type (e.g. `let d: Dict(String, i32) = dict()`).
 pub fn dict(allocator: &Allocator? = null) Dict($K, $V) {
     let out: Dict(K, V)
-    out.allocator = allocator.unwrap_or(0usize as &Allocator)
+    out.allocator = allocator.or_global()
     return out
 }
 
+// Creates a dict whose table starts at `capacity` slots and that allocates through `allocator` for
+// its whole life.
 pub fn dict(capacity: usize, allocator: &Allocator) Dict($K, $V) {
     return dict(capacity, Some(allocator))
 }
@@ -112,7 +124,7 @@ pub fn dict(capacity: usize, allocator: &Allocator) Dict($K, $V) {
 // - `allocator`: kept for the dict's whole life. Null is the global allocator.
 pub fn dict(capacity: usize, allocator: &Allocator? = null) Dict($K, $V) {
     let out: Dict(K, V)
-    out.allocator = allocator.unwrap_or(0usize as &Allocator)
+    out.allocator = allocator.or_global()
     out.__storage = unmanaged_dict(capacity, out.allocator)
     return out
 }
@@ -215,9 +227,11 @@ fn place(self: &UnmanagedDict($K, $V), h: usize, key: K, value: V) &Entry(K, V) 
     panic("dict: set failed - table full")
 }
 
-// Insert `key` unless it is present. Returns whether it was inserted, so a visited-set check is one
-// probe: `if seen.add(x, alloc) { ... }`. An existing entry keeps its value and `key`/`value` are
-// left to the caller.
+// Inserts `key` with `value` unless the key is present, and returns whether it was inserted.
+//
+// A present key keeps its entry untouched, and `key` and `value` stay the caller's to deinit; an
+// inserted pair is owned by the dict from here. One probe either way, so a membership-then-insert
+// check is `if d.add(k, v, alloc) { ... }`. Panics when the table cannot grow.
 pub fn add(self: &UnmanagedDict($K, $V), key: K, value: V, allocator: &Allocator) bool {
     if self.find_entry(key).is_some() {
         return false
@@ -227,6 +241,8 @@ pub fn add(self: &UnmanagedDict($K, $V), key: K, value: V, allocator: &Allocator
     return true
 }
 
+// String-key `add` for `UnmanagedDict(OwnedString, V)`: `key` is a borrowed view, copied into an
+// owned key only when it is inserted.
 pub fn add(self: &UnmanagedDict(OwnedString, $V), key: String, value: V,
     allocator: &Allocator) bool {
     const fake = fake_owned(key)
@@ -238,9 +254,14 @@ pub fn add(self: &UnmanagedDict(OwnedString, $V), key: String, value: V,
     return true
 }
 
-// The value for `key`, inserting `make()` first when absent - the multimap append
-// `d.get_or_insert_with(k, fn() { list(0) }, alloc).push(v)` in one probe on a hit. The reference
-// is good until the next insert.
+// Returns a reference to the value for `key`, inserting `make()` under it first when the key is
+// absent.
+//
+// - `make`: `fn() V`, called only on a miss, so an expensive initial value is built once and only
+//   when needed. `key` is stored on a miss and stays the caller's on a hit.
+//
+// The reference is valid until the next insert, which may move the table. Panics when the table
+// cannot grow.
 pub fn get_or_insert_with(self: &UnmanagedDict($K, $V), key: K, make: $F,
     allocator: &Allocator) &V {
     const found = self.find_entry(key)
@@ -296,9 +317,9 @@ pub fn deinit(self: &UnmanagedDict($K, $V), allocator: &Allocator) {
     self.cap = 0
 }
 
-// Copy every entry of `other` into `self`, overwriting on key collisions. Entries are copied
-// shallowly: with owned keys or values, both dicts end up referencing the same buffers - deinit
-// only one of them.
+// Copies every entry of `other` into this dict, overwriting the value under a key both have.
+// Entries are copied bitwise: an owned key or value is then owned by both dicts, and only one may
+// deinit it. Panics when the table cannot grow.
 pub fn merge(self: &UnmanagedDict($K, $V), other: &UnmanagedDict(K, V), allocator: &Allocator) {
     for e in other.iter() {
         self.set(e.key, e.value, allocator)
@@ -309,7 +330,8 @@ pub fn merge(self: &UnmanagedDict($K, $V), other: &UnmanagedDict(K, V), allocato
 // UnmanagedDict: in-place mutation
 // =============================================================================
 
-// Remove a key from the dict. Returns the removed value, or null if not found.
+// Removes `key` and returns its value, or null when absent. The stored key is deinited; the value
+// is the caller's to deinit.
 pub fn remove(self: &UnmanagedDict($K, $V), key: K) V? {
     const found = self.find_entry(key)
     if found.is_none() {
@@ -324,12 +346,12 @@ pub fn remove(self: &UnmanagedDict($K, $V), key: K) V? {
     return Some(val)
 }
 
+// String-key `remove` for `UnmanagedDict(OwnedString, V)`: looks the owned key up by the view.
 pub fn remove(self: &UnmanagedDict(OwnedString, $V), key: String) V? {
     return remove(self, fake_owned(key))
 }
 
-// Remove all entries from the dict without freeing backing storage. Deinits all stored keys and
-// values.
+// Removes every entry, deiniting each key and value. The table is kept for reuse.
 pub fn clear(self: &UnmanagedDict($K, $V)) {
     if self.cap > 0 {
         self.deinit_entries()
@@ -395,26 +417,28 @@ pub fn capacity_bytes(self: &UnmanagedDict($K, $V)) usize {
     return self.cap * size_of(Entry(K, V))
 }
 
-// Returns the number of key-value pairs in the dict.
+// Returns the number of entries.
 pub fn len(self: &UnmanagedDict($K, $V)) usize {
     return self.length
 }
 
-// Returns true if the dict is empty.
+// Returns whether there are no entries.
 pub fn is_empty(self: &UnmanagedDict($K, $V)) bool {
     return self.length == 0
 }
 
+// `d[key]`: the value for `key`, or null when absent.
 pub fn op_index(self: &UnmanagedDict($K, $V), key: K) V? {
     return self.get(key)
 }
 
-// Get the value associated with a key, or null if not found.
+// Returns the value for `key`, or null when absent.
 pub fn get(self: &UnmanagedDict($K, $V), key: K) V? {
     return Some((self.get_ref(key)?).*)
 }
 
-// Get a reference to the value associated with a key, or null if not found.
+// Returns a reference to the value for `key`, or null when absent. Valid until the next insert,
+// which may move the table.
 pub fn get_ref(self: &UnmanagedDict($K, $V), key: K) &V? {
     const found = self.find_entry(key)
     if found.is_none() {
@@ -424,19 +448,22 @@ pub fn get_ref(self: &UnmanagedDict($K, $V), key: K) &V? {
     return Some(&entry.value)
 }
 
+// String-key `get` for `UnmanagedDict(OwnedString, V)`: looks the owned key up by the view.
 pub fn get(self: &UnmanagedDict(OwnedString, $V), key: String) V? {
     return Some((self.get_ref(key)?).*)
 }
 
+// String-key `get_ref` for `UnmanagedDict(OwnedString, V)`: looks the owned key up by the view.
 pub fn get_ref(self: &UnmanagedDict(OwnedString, $V), key: String) &V? {
     return get_ref(self, fake_owned(key))
 }
 
-// Check if a key exists in the dict.
+// Returns whether `key` is present.
 pub fn contains(self: &UnmanagedDict($K, $V), key: K) bool {
     return self.find_entry(key).is_some()
 }
 
+// String-key `contains` for `UnmanagedDict(OwnedString, V)`: looks the owned key up by the view.
 pub fn contains(self: &UnmanagedDict(OwnedString, $V), key: String) bool {
     return contains(self, fake_owned(key))
 }
@@ -460,14 +487,14 @@ pub fn get_or_else(self: &UnmanagedDict($K, $V), key: K, make: $F) V {
     return make()
 }
 
-// Run `f(key, value)` on every entry. Iteration order is unspecified.
+// Calls `f(key, value)` on every entry, in unspecified order.
 pub fn each(self: &UnmanagedDict($K, $V), f: $F) {
     for e in self.iter() {
         f(e.key, e.value)
     }
 }
 
-// Whether any entry satisfies `pred(key, value)`. False for an empty dict.
+// Returns whether any entry satisfies `pred(key, value)`. False when empty.
 pub fn any(self: &UnmanagedDict($K, $V), pred: $F) bool {
     for e in self.iter() {
         if pred(e.key, e.value) {
@@ -477,7 +504,7 @@ pub fn any(self: &UnmanagedDict($K, $V), pred: $F) bool {
     return false
 }
 
-// Whether every entry satisfies `pred(key, value)`. True for an empty dict.
+// Returns whether every entry satisfies `pred(key, value)`. True when empty.
 pub fn all(self: &UnmanagedDict($K, $V), pred: $F) bool {
     for e in self.iter() {
         let ok: bool = pred(e.key, e.value)
@@ -488,7 +515,7 @@ pub fn all(self: &UnmanagedDict($K, $V), pred: $F) bool {
     return true
 }
 
-// Number of entries `pred(key, value)` accepts.
+// Returns how many entries satisfy `pred(key, value)`.
 pub fn count(self: &UnmanagedDict($K, $V), pred: $F) usize {
     let n: usize = 0
     for e in self.iter() {
@@ -503,6 +530,8 @@ pub fn count(self: &UnmanagedDict($K, $V), pred: $F) usize {
 // Iterators
 // =============================================================================
 
+// Iterator over a dict's entries, each an `Entry` copy, in table order. A snapshot: the dict is not
+// modified while it is being iterated.
 pub type DictIterator = struct(K, V) {
     dict: &UnmanagedDict(K, V)
     current: usize
@@ -519,7 +548,7 @@ pub fn iter(it: &DictIterator($K, $V)) DictIterator(K, V) {
     return it.*
 }
 
-// Advance iterator and return next occupied entry
+// Advances and returns the next entry, or null after the last.
 pub fn next(it: &DictIterator($K, $V)) Entry(K, V)? {
     for idx in it.current..it.dict.cap {
         const entry: &Entry(K, V) = it.dict.entries + idx
@@ -533,16 +562,17 @@ pub fn next(it: &DictIterator($K, $V)) Entry(K, V)? {
     return null
 }
 
-// Lightweight projections of DictIterator. Materialize with std.iter's `to_list()`:
-// `d.keys().to_list()`.
+// Iterator over a dict's keys, in unspecified order.
 pub type KeysIter = struct(K, V) {
     it: DictIterator(K, V)
 }
 
+// An iterator is its own iterable, so adapter chains can consume it.
 pub fn iter(self: &KeysIter($K, $V)) KeysIter(K, V) {
     return self.*
 }
 
+// Advances and returns the next key, or null after the last.
 pub fn next(self: &KeysIter($K, $V)) K? {
     let e = self.it.next()
     if e.is_none() {
@@ -551,18 +581,22 @@ pub fn next(self: &KeysIter($K, $V)) K? {
     return Some(e.unwrap().key)
 }
 
+// Iterates the keys, in unspecified order.
 pub fn keys(self: &UnmanagedDict($K, $V)) KeysIter(K, V) {
     return .{ it = self.iter() }
 }
 
+// Iterator over a dict's values, in unspecified order.
 pub type ValuesIter = struct(K, V) {
     it: DictIterator(K, V)
 }
 
+// An iterator is its own iterable, so adapter chains can consume it.
 pub fn iter(self: &ValuesIter($K, $V)) ValuesIter(K, V) {
     return self.*
 }
 
+// Advances and returns the next value, or null after the last.
 pub fn next(self: &ValuesIter($K, $V)) V? {
     let e = self.it.next()
     if e.is_none() {
@@ -571,6 +605,7 @@ pub fn next(self: &ValuesIter($K, $V)) V? {
     return Some(e.unwrap().value)
 }
 
+// Iterates the values, in unspecified order.
 pub fn values(self: &UnmanagedDict($K, $V)) ValuesIter(K, V) {
     return .{ it = self.iter() }
 }
@@ -582,7 +617,8 @@ pub fn values(self: &UnmanagedDict($K, $V)) ValuesIter(K, V) {
 // the same convention as List's transformations.
 // =============================================================================
 
-// A new dict with the same keys and `f(key, value)` as values.
+// Returns a new dict with the same keys and `f(key, value)` as each value. Keys are copied bitwise;
+// an owned key is then owned by both dicts, and only one may deinit it.
 pub fn map_values(self: &UnmanagedDict($K, $V), f: $F, allocator: &Allocator) UnmanagedDict(K, $U) {
     let out: UnmanagedDict(K, U)
     for e in self.iter() {
@@ -591,7 +627,8 @@ pub fn map_values(self: &UnmanagedDict($K, $V), f: $F, allocator: &Allocator) Un
     return out
 }
 
-// The entries `pred(key, value)` accepts.
+// Returns a new dict of the entries `pred(key, value)` accepts. Keys and values are copied bitwise;
+// an owned key or value is then owned by both dicts, and only one may deinit it.
 pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) UnmanagedDict(K, V) {
     let out: UnmanagedDict(K, V)
     for e in self.iter() {
@@ -618,41 +655,51 @@ pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) Unm
         self.__storage.set(key, value, self.allocator)
     }
 
+    // String-key insert for a `(OwnedString, V)` carrier: `key` is a borrowed view, copied into an
+    // owned key only when it is new to the table.
     pub fn set(self: &#(Self)(OwnedString, $V), key: String, value: V) {
         self.__storage.set(key, value, self.allocator)
     }
 
+    // `d[key] = value`: insert or update. Panics when the allocation fails.
     pub fn op_set_index(self: &#(Self)($K, $V), key: K, value: V) {
         self.__storage.set(key, value, self.allocator)
     }
 
-    // Insert `key` unless it is present; returns whether it was inserted.
+    // Inserts `key` with `value` unless the key is present, and returns whether it was inserted. A
+    // present key keeps its entry, and `key` and `value` stay the caller's.
     pub fn add(self: &#(Self)($K, $V), key: K, value: V) bool {
         return self.__storage.add(key, value, self.allocator)
     }
 
+    // String-key `add` for a `(OwnedString, V)` carrier: `key` is copied into an owned key only
+    // when it is inserted.
     pub fn add(self: &#(Self)(OwnedString, $V), key: String, value: V) bool {
         return self.__storage.add(key, value, self.allocator)
     }
 
-    // The value for `key`, inserting `make()` first when absent.
+    // Returns a reference to the value for `key`, inserting `make()` under it first when the key is
+    // absent. `make` runs only on a miss. The reference is valid until the next insert.
     pub fn get_or_insert_with(self: &#(Self)($K, $V), key: K, make: $F) &V {
         return self.__storage.get_or_insert_with(key, make, self.allocator)
     }
 
-    // Copy every entry of `other` into `self`, overwriting on key collisions - see the unmanaged
-    // `merge` for the aliasing caveat.
+    // Copies every entry of `other` into this dict, overwriting the value under a key both have.
+    // Entries are copied bitwise: an owned key or value is then owned by both dicts, and only one
+    // may deinit it.
     pub fn merge(self: &#(Self)($K, $V), other: &#(Self)(K, V)) {
         self.__storage.merge(other.op_deref(), self.allocator)
     }
 
-    // A new dict with the same keys and `f(key, value)` as values.
+    // Returns a new dict with the same keys and `f(key, value)` as each value; keys are copied
+    // bitwise. The result is on `allocator`, or on the receiver's when null.
     pub fn map_values(self: &#(Self)($K, $V), f: $F, allocator: &Allocator? = null) Dict(K, $U) {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.map_values(f, alloc), allocator = alloc }
     }
 
-    // The entries `pred(key, value)` accepts.
+    // Returns a new dict of the entries `pred(key, value)` accepts, copied bitwise. The result is
+    // on `allocator`, or on the receiver's when null.
     pub fn filter(self: &#(Self)($K, $V), pred: $F, allocator: &Allocator? = null) Dict(K, V) {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.filter(pred, alloc), allocator = alloc }

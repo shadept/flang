@@ -1,8 +1,8 @@
 //! TEST: list_ref_index
 //! STDOUT: PASS
 
+import std.collections.list
 import std.io.print
-import std.list
 
 fn inc(n: &i32) {
     n.* = n.* + 10

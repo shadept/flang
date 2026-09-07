@@ -1,8 +1,17 @@
+// Iterator combinators and consumers over anything with the `for` protocol - a collection, a slice,
+// or another combinator: `xs.iter().filter(f).map(g).take(3)`, then `to_list()`, `fold`, `any`,
+// `count` and the rest.
+//
+// Every combinator is lazy and holds only the iterator it wraps plus its own state; nothing runs
+// until a consumer or a `for` pulls elements. Every combinator is itself iterable, so chains read
+// left to right. The consumers that build a collection (`to_list`, `to_set`, `to_dict`) take the
+// allocator last, as the collections do.
+
 import std.allocator
-import std.dict
-import std.list
+import std.collections.dict
+import std.collections.list
+import std.collections.set
 import std.option
-import std.set
 import std.test
 
 // =============================================================================

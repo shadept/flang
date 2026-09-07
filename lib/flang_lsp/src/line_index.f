@@ -10,8 +10,8 @@
 // routinely send both.
 
 import std.allocator
+import std.collections.list
 import std.encoding.utf8
-import std.list
 import std.option
 import std.string
 import std.test

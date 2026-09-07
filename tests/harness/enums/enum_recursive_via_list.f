@@ -2,7 +2,7 @@
 //! EXIT: 6
 
 // Recursive enum through a generic container (self-hosting pattern: AST nodes)
-import std.list
+import std.collections.list
 
 type Expr = enum {
     Num(i32)
@@ -11,7 +11,7 @@ type Expr = enum {
 
 fn eval(expr: &Expr) i32 {
     return expr match {
-        Num(n) => n,
+        Num(n) => n
         Add(children) => {
             let sum = 0
             for child in children {

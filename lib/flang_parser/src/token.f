@@ -4,8 +4,8 @@
 // so the CST round-trips to source byte-for-byte. See trivia.f for the trivia model.
 
 import std.allocator
+import std.collections.list
 import std.enum
-import std.list
 
 import flang_parser.trivia
 

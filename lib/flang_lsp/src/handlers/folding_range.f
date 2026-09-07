@@ -3,7 +3,7 @@
 // folding survives parse errors and covers every nesting level without an AST walk.
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.option
 import std.test
 

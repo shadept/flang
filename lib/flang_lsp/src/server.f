@@ -13,18 +13,18 @@
 // ends the loop with code 0 when a `shutdown` request preceded it, 1 otherwise (LSP 3.17 exit
 // semantics).
 
-import std.dict
+import std.collections.dict
+import std.collections.list
+import std.collections.set
 import std.encoding.codec
 import std.encoding.json
 import std.io.file
 import std.io.fs
 import std.io.reader
 import std.io.writer
-import std.list
 import std.option
 import std.result
 import std.rpc.jsonrpc
-import std.set
 import std.string
 import std.string_builder
 import std.string_reader

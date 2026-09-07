@@ -7,7 +7,7 @@
 // managed collections (`List`, `Dict`) are exactly this shape, and `Dict`'s entry-wise `any` takes
 // `(key, value)` where the catch-all would pass one item.
 
-import std.iter
+import std.collections.iter
 import std.option
 
 type Inner = struct {

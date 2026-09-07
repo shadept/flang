@@ -15,14 +15,14 @@
 // directly without ever touching discovery.
 
 import std.allocator
-import std.dict
+import std.collections.dict
+import std.collections.list
 import std.env
 import std.io.dir
 import std.io.file
 import std.io.fs
 import std.io.print
 import std.io.reader
-import std.list
 import std.option
 import std.path
 import std.process

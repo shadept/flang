@@ -2,10 +2,10 @@
 // `flang_core.Diagnostic`. The analysis pipeline itself is `flang_driver`; this is just the CLI's
 // I/O and rendering edge.
 
-import std.dict
+import std.collections.dict
+import std.collections.list
 import std.env
 import std.io.file
-import std.list
 import std.option
 import std.result
 import std.string

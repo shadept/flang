@@ -10,8 +10,8 @@
 // and `--emit-generated` show.
 
 import std.allocator
-import std.dict
-import std.list
+import std.collections.dict
+import std.collections.list
 import std.option
 import std.path
 import std.result

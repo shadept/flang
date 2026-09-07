@@ -16,7 +16,7 @@
 import core.math
 
 import std.allocator
-import std.dict
+import std.collections.dict
 import std.mem
 import std.option
 import std.sort
@@ -24,12 +24,20 @@ import std.string
 import std.string_builder
 import std.test
 
+// A growable array of `T` that carries no allocator: every operation that grows or frees the buffer
+// takes one as its last argument, and the same allocator must be passed every time. A
+// zero-initialised value is a valid empty list. Elements are owned: `deinit` deinits each before
+// freeing the buffer.
 pub type UnmanagedList = struct(T) {
     ptr: &T
     len: usize
     cap: usize
 }
 
+// A growable array of `T` that owns its storage and remembers the allocator it grows and frees
+// through. Every `UnmanagedList` operation applies to it as well, reached through `op_deref`, and
+// the allocating ones come without the allocator argument. A zero-initialised value is a valid
+// empty list on the global allocator.
 pub type List = struct(T) {
     __storage: UnmanagedList(T)
     allocator: &Allocator
@@ -40,21 +48,22 @@ pub fn op_deref(self: &List($T)) &UnmanagedList(T) {
     return &self.__storage
 }
 
-// A managed handle over storage owned elsewhere: `s.items.managed(s.allocator)` reads and grows
-// `s.items` in place through the `List` API, for the scope where the allocator is known. It holds
-// the storage by reference, so a push lands in the composite's field, not in a copy. There is
-// nothing to deinit - the composite owns both halves.
+// The `List` API over an `UnmanagedList` owned by someone else, for a scope in which the allocator
+// is known: `s.items.managed(s.allocator).push(v)` grows `s.items` in place. It holds the storage
+// by reference, so nothing is copied and there is nothing to deinit; the owner of the storage frees
+// it, through the same allocator.
 pub type ListRef = struct(T) {
     __storage: &UnmanagedList(T)
     allocator: &Allocator
 }
 
-// Makes a `ListRef` over `s` that allocates through `allocator`.
+// Returns the `List` API over `s`, growing it through `allocator`. `s` must outlive the handle and
+// keep allocating through the same allocator.
 pub fn managed(s: &UnmanagedList($T), allocator: &Allocator) ListRef(T) {
     return .{ __storage = s, allocator = allocator }
 }
 
-// Reaches the storage, as `List`'s does.
+// Reaches the wrapped storage: every `UnmanagedList` read, indexing and `for` resolve through this.
 pub fn op_deref(self: &ListRef($T)) &UnmanagedList(T) {
     return self.__storage
 }
@@ -97,8 +106,12 @@ pub fn unmanaged_list(capacity: usize, allocator: &Allocator) UnmanagedList($T) 
     return out
 }
 
-// Creates an unmanaged list holding a copy of `source`, in fresh storage sized to its length. An
-// empty source allocates nothing. Panics when the allocation fails.
+// Creates an unmanaged list holding a copy of `source`, in fresh storage sized to its length.
+//
+// Elements are copied bitwise: an element that owns something is now owned twice, and only one copy
+// may be deinited. An empty source allocates nothing. Panics when the allocation fails.
+//
+// - `allocator`: grows and frees the storage. Pass the same one to every allocating call.
 pub fn unmanaged_list(source: $T[], allocator: &Allocator) UnmanagedList(T) {
     if source.len == 0 {
         let empty: UnmanagedList(T)
@@ -131,7 +144,7 @@ pub fn list(capacity: usize, allocator: &Allocator) List($T) {
 // Panics when the allocation fails.
 pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
     let out: List(T)
-    out.allocator = allocator.unwrap_or(0usize as &Allocator)
+    out.allocator = allocator.or_global()
     if capacity > 0 {
         const buf = out.allocator.alloc(capacity * size_of(T),
             align_of(T)).expect("list: allocation failed")
@@ -140,26 +153,44 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
     return out
 }
 
-// Creates a list holding a shallow copy of `source`'s elements, in fresh storage sized to fit.
+// Creates a list holding a copy of `source`'s elements, in fresh storage sized to fit. Elements are
+// copied bitwise: an element that owns something is now owned twice, and only one list may deinit
+// it.
+//
+// - `allocator`: kept for the new list's whole life. Null is the global allocator.
 pub fn list(source: List($T), allocator: &Allocator? = null) List(T) {
     return list(source.as_slice(), allocator)
 }
 
-// Creates a list holding a shallow copy of `source`, in fresh storage sized to fit: the `list(n);
-// push_all(xs)` pair in one call. An empty source allocates nothing.
+// Creates a list holding a copy of `source`, in fresh storage sized to fit. Elements are copied
+// bitwise; an empty source allocates nothing. Panics when the allocation fails.
+//
+// - `allocator`: kept for the list's whole life. Null is the global allocator.
 pub fn list(source: $T[], allocator: &Allocator? = null) List(T) {
-    const alloc = allocator.unwrap_or(0usize as &Allocator)
+    const alloc = allocator.or_global()
     let st: UnmanagedList(T) = unmanaged_list(source, alloc)
     return .{ __storage = st, allocator = alloc }
 }
 
-// Creates a list holding `count` copies of `value`.
-pub fn filled_list(count: usize, value: $T, allocator: &Allocator? = null) List(T) {
-    let out: List(T) = list(count, allocator)
+// Creates an unmanaged list of `count` bitwise copies of `value`, in storage sized to fit. Zero
+// allocates nothing. Panics when the allocation fails.
+//
+// - `allocator`: grows and frees the storage. Pass the same one to every allocating call.
+pub fn filled_unmanaged_list(count: usize, value: $T, allocator: &Allocator) UnmanagedList(T) {
+    let out: UnmanagedList(T) = unmanaged_list(count, allocator)
     for _i in 0..count {
-        out.push(value)
+        out.push(value, allocator)
     }
     return out
+}
+
+// Creates a list of `count` bitwise copies of `value`, in storage sized to fit. Zero allocates
+// nothing. Panics when the allocation fails.
+//
+// - `allocator`: kept for the list's whole life. Null is the global allocator.
+pub fn filled_list(count: usize, value: $T, allocator: &Allocator? = null) List(T) {
+    const alloc = allocator.or_global()
+    return .{ __storage = filled_unmanaged_list(count, value, alloc), allocator = alloc }
 }
 
 // =============================================================================
@@ -436,12 +467,13 @@ pub fn last(self: &UnmanagedList($T)) T? {
 }
 
 // Returns a reference to the first element, or null when empty. Writes through it land in the list;
-// a push may move the storage and invalidate it.
+// growth may move the storage and invalidate it.
 pub fn first_ref(self: &UnmanagedList($T)) &T? {
     return self.get_ref(0)
 }
 
-// Returns a reference to the last element, or null when empty - the top of a stack-like list.
+// Returns a reference to the last element, or null when empty. Writes through it land in the list;
+// growth may move the storage and invalidate it.
 pub fn last_ref(self: &UnmanagedList($T)) &T? {
     if self.len == 0 {
         return null
@@ -541,19 +573,20 @@ pub fn join(self: &UnmanagedList(String), sep: String, allocator: &Allocator? = 
 // UnmanagedList: iteration
 // =============================================================================
 
-// Iterates the elements by value, in order, through the slice's iterator. Every list iterator is a
-// snapshot of the storage: the list is not modified while it is being iterated.
+// Iterates the elements by value, first to last: `for x in xs`. The iterator is a snapshot of the
+// storage; the list is not modified while it is being iterated.
 pub fn iter(l: &UnmanagedList($T)) SliceIterator(T) {
     return l.as_slice().iter()
 }
 
-// `for &x in xs` - elements by reference, through the slice's iterator.
+// Iterates the elements by reference, first to last: `for &x in xs`, for loops that write elements
+// in place. The list is not grown while it is being iterated.
 pub fn iter_ref(l: &UnmanagedList($T)) SliceRefIterator(T) {
     return l.as_slice().iter_ref()
 }
 
-// Iterates the elements by value, last to first, without the copy `reversed()` makes: the undo
-// drain `for u in undo.iter_rev()`.
+// Iterates the elements by value, last to first, without copying the list. The iterator is a
+// snapshot of the storage; the list is not modified while it is being iterated.
 pub fn iter_rev(l: &UnmanagedList($T)) SliceRevIterator(T) {
     return l.as_slice().iter_rev()
 }

@@ -9,13 +9,13 @@
 // case (possible on Windows) misses its override; normalise beyond the drive letter if it bites.
 
 import std.allocator
-import std.dict
+import std.collections.dict
+import std.collections.list
+import std.collections.set
 import std.io.fs
-import std.list
 import std.option
 import std.path
 import std.result
-import std.set
 import std.string
 import std.string_builder
 import std.test

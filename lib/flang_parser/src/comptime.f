@@ -18,10 +18,10 @@
 // only the active branch's declarations survive into collection.
 
 import std.allocator
+import std.collections.dict
+import std.collections.list
 import std.conv
-import std.dict
 import std.env
-import std.list
 import std.option
 import std.result
 import std.string

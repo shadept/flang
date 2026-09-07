@@ -6,7 +6,7 @@
 // parsed from.
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.test
 
 import flang_core.diagnostic

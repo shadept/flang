@@ -1,9 +1,9 @@
 // FIR - typed, SSA, block-based IR. See `docs/fir.md` for the design and canonical text format.
 
 import std.allocator
-import std.dict
-import std.list
-import std.set
+import std.collections.dict
+import std.collections.list
+import std.collections.set
 import std.string
 
 // ─────────────────────────────────────────────────────────────────────────

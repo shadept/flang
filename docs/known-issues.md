@@ -118,6 +118,25 @@ rejected copies.
 
 ---
 
+### A Generic Method on an Unannotated Lambda Parameter's Field Reaches Layout Unresolved
+
+**Status:** Open (found 2026-09-07, while moving the engine's undo stacks onto `std.journal`)
+**Affected:** `lib/flang_typer/src/checker.f` (lambda parameter pinning against the pending
+specialization drain), `lib/flang_driver` (the layout panic that reports it)
+
+A lambda whose parameter is unannotated and whose type comes from the callee's `$F` slot -
+`journal.rollback(fn(entry) { ... })` - checks its body while the parameter is still an open
+variable. A generic method called on one of the parameter's Option fields inside the body,
+`entry.prev.is_some()` or `entry.prev.unwrap()`, is specialized against that open field type. The
+parameter itself settles once the callee's specialization pins it, but the recorded
+`unwrap(Option($T))` keeps the variable, and lowering panics: `unresolved type variable reached
+layout - checker bug`. Calling a non-generic function on the field, or a method on the parameter
+itself, is fine; the field-of-parameter plus generic-callee combination is what trips it.
+Annotating the parameter (`fn(entry: BindingUndo)`) sidesteps it, which is what the engine and
+`UnionFind` do. Pinned by `closures/lambda_param_option_field_method.f`, failing until fixed.
+
+---
+
 ### A Struct Wrapping a Closure Cannot Be Returned
 
 **Status:** Open
@@ -173,7 +192,7 @@ message.
 ### The Blanket `deinit(&$T)` Silently Wins Over an Element's Own
 
 **Status:** Open
-**Affected:** `stdlib/core/deinit.f`, `stdlib/std/list.f`, any element type that owns memory
+**Affected:** `stdlib/core/deinit.f`, `stdlib/std/collections/list.f`, any element type that owns memory
 
 `List(T).deinit` calls `.deinit()` on each element. `core.deinit`'s blanket
 `pub fn deinit(self: &$T) {}` is in scope everywhere through the prelude, so that call always
@@ -856,7 +875,7 @@ nothing tracks that dependency today.
 **Status:** Open — reproduced, then avoided rather than fixed
 **Affected:** overload resolution (`lib/flang_typer/src/checker.f`), lowering
 
-Adding this to `stdlib/std/list.f` compiled clean and passed every unit test,
+Adding this to `stdlib/std/collections/list.f` compiled clean and passed every unit test,
 then produced a compiler binary that would not link — `LNK1561: entry point
 must be defined`:
 
@@ -1531,9 +1550,9 @@ reaches it through `op_deref`. 2026-09-07: `UnmanagedDict`, `UnmanagedSet`, `Unm
 over a field for the scope where its allocator is known, and the managed wrappers come from the
 `#managed_list`/`#managed_dict` generators, one implementation per operation). What remains is
 migrating the composites below to store one allocator and hold unmanaged children; the survey of
-2026-09-07 ranks them: `Tarjan` (demand.f), `BuildOptions`, `FqnMap`, lower's `Env`, `TypeEnv`,
-`UnionFind`, then `InferenceResults`+`CapturedKeys`, `TypeInterner`, `OwnPass`, `TemplateState`,
-`LowerCtx`; `Checker`, `TypeCheckResult`, `AnalyzedProject` and the FIR structs stay managed (their
+2026-09-07 ranks them: ~~`Tarjan` (demand.f), `BuildOptions`, `FqnMap`, lower's `Env`,
+`TypeEnv`, `UnionFind`~~ (done, one allocator each), then `InferenceResults`+`CapturedKeys`,
+`TypeInterner`, `OwnPass`, `TemplateState`, `LowerCtx`; `Checker`, `TypeCheckResult`, `AnalyzedProject` and the FIR structs stay managed (their
 containers are handed out as managed values or live under two allocators)
 **Affected:** any struct composing several allocator-carrying containers — `UnionFind` (nodes Dict + undo Stack of Lists + own field), `Engine`, `Checker`, and every similar composite
 
@@ -1560,7 +1579,7 @@ already demonstrates the arena half of the pattern.
 ### Higher-Order Stdlib Functions Cannot Thread an Allocator Into the Callback
 
 **Status:** Open — design decision needed before the combinator set grows
-**Affected:** `stdlib/std/list.f` (`flat_map` today; any future `group_by`, `partition_map`, `permutations`, `combinations`)
+**Affected:** `stdlib/std/collections/list.f` (`flat_map` today; any future `group_by`, `partition_map`, `permutations`, `combinations`)
 
 A callback that returns a container has to allocate it, and the caller has no
 way to say where from. `List.flat_map` therefore does one allocation and one
@@ -1989,7 +2008,7 @@ fn block_internal(self: &FunctionBuilder, ...) BlockBuilder {
 }
 ```
 
-The matching one-level pattern through a reference works fine — `self.words.push(0u64)` in `stdlib/std/bitset.f` and `self.__args.push(...)` in `stdlib/std/process.f` are exercised by tests.
+The matching one-level pattern through a reference works fine — `self.words.push(0u64)` in `stdlib/std/collections/bitset.f` and `self.__args.push(...)` in `stdlib/std/process.f` are exercised by tests.
 
 **Workaround:** define a small mutator on the defining type and call that. The method-call form preserves the place-ness:
 
@@ -2278,7 +2297,7 @@ Same family as the stack-variable bug above: a non-pub helper that took the addr
 and the terminal folds), `core.slice` gives `SliceIterator`. Only `flat_map` is
 missing, and that is a checker gap (ticket 019 §5). The entry stays for the two
 invariants below, which are design rules rather than pending work.
-**Affected:** `stdlib/std/list.f`, `stdlib/core/slice.f`, `stdlib/std/iter.f`
+**Affected:** `stdlib/std/collections/list.f`, `stdlib/core/slice.f`, `stdlib/std/collections/iter.f`
 
 `List` has an eager set (`map`, `flat_map`, `filter`, `remove`, `fold`,
 `fold_right`, `drop_first`) that allocates a new list per step. The same
@@ -2500,7 +2519,7 @@ Today only `Option(&T)` has a niche-based layout (null pointer encodes `None`). 
 ### M10 Fallout: Latent Checker Gaps Surfaced by Specialization — RESOLVED
 
 **Status:** Resolved (2026-08-20, with M10)
-**Affected:** `lib/flang_typer/src/checker.f`, `stdlib/std/iter.f`
+**Affected:** `lib/flang_typer/src/checker.f`, `stdlib/std/collections/iter.f`
 
 Un-silencing generic bodies (every instantiation re-checks with concrete
 types) and hard-failing on `Var` at lowering exposed a stack of latent
@@ -2960,7 +2979,7 @@ capture nothing (`raw_opendir`, `raw_stat`, `raw_mkdir`, ...) use `?` freely.
 ### `Dict` Probing Divided Instead of Masking — RESOLVED
 
 **Status:** Resolved 2026-08-25
-**Affected:** `stdlib/std/dict.f` (every probe loop), `stdlib/core/hash.f`
+**Affected:** `stdlib/std/collections/dict.f` (every probe loop), `stdlib/core/hash.f`
 
 `Dict` capacity is always a power of two, but every probe step computed
 `(h + i) % self.cap` - a 64-bit hardware divide per step, on every lookup,

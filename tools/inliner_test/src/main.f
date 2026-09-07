@@ -18,9 +18,9 @@
 // @inner` / `call @outer` left.
 
 import std.allocator
+import std.collections.list
 import std.io.file
 import std.io.print
-import std.list
 import std.option
 import std.path
 import std.process

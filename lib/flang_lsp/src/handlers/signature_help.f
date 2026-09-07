@@ -7,7 +7,7 @@
 // shift the count; tokenize the prefix if it ever bites.
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.option
 import std.string
 import std.test

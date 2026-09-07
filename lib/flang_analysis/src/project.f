@@ -4,8 +4,8 @@
 // Parsed strings are copied into `OwnedString`s so a `Project` outlives the source text.
 
 import std.allocator
+import std.collections.list
 import std.io.fs
-import std.list
 import std.option
 import std.result
 import std.string

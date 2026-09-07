@@ -1,7 +1,7 @@
 //! TEST: list_basic
 //! EXIT: 15
 
-import std.list
+import std.collections.list
 import std.option
 
 pub fn main() i32 {

@@ -2,11 +2,11 @@
 //! COMPILE-ERROR: E2127
 //! EXIT: 1
 
-import std.list
+import std.collections.list
 
 // A reference does not grant rights the module does not have.
 fn steal(l: &List(i32)) i32 {
-    let p = move l.ptr             // error E2127
+    let p = move l.ptr // error E2127
     return 0
 }
 

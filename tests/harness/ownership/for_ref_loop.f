@@ -2,7 +2,7 @@
 //! EXIT: 3
 //! SKIP: RFC-028 step 6 - std.list stores its element without `move`
 
-import std.list
+import std.collections.list
 
 type FileHandle = struct {
     owned fd: i32

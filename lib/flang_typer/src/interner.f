@@ -20,9 +20,9 @@
 // Rendering is `format`, which walks the node graph and appends the diagnostic text.
 
 import std.allocator
+import std.collections.dict
+import std.collections.list
 import std.derive
-import std.dict
-import std.list
 import std.option
 import std.string
 import std.string_builder

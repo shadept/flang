@@ -703,4 +703,4 @@ Index operands are lvalues and unchecked: `move_index_element`.
 substring, so message content is testable without a new directive. The
 attribution tests assert their own filename appears in the diagnostic, which is
 what distinguishes a copy reported at the call site from one reported inside
-`stdlib/std/list.f`.
+`stdlib/std/collections/list.f`.

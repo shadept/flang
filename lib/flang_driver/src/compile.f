@@ -2,9 +2,9 @@
 // pipeline `flang_driver.analyze` opens.
 
 import std.allocator
+import std.collections.list
 import std.io.fs
 import std.io.print
-import std.list
 import std.option
 import std.result
 import std.string

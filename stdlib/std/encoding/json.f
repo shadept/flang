@@ -8,14 +8,14 @@
 //   stringify()  - DOM-level serialize via JsonEncoder
 
 import std.allocator
+import std.collections.dict
+import std.collections.list
 import std.conv
-import std.dict
 import std.encoding.codec
 import std.enum
 import std.interface
 import std.io.reader
 import std.io.writer
-import std.list
 import std.option
 import std.result
 import std.string

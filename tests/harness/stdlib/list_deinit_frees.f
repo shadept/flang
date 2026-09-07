@@ -12,8 +12,8 @@
 // `CountingAllocator`'s byte and alloc counters do not balance even when every block is returned.
 
 import std.allocator
+import std.collections.list
 import std.io.print
-import std.list
 import std.string
 
 fn main() i32 {

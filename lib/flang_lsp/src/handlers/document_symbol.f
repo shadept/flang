@@ -3,7 +3,7 @@
 // the open buffer (handlers.syntax_diagnostics).
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.string
 import std.string_builder
 import std.test

@@ -10,7 +10,7 @@
 // Runs on the text before the formatter parses it, so the renderer's token check sees the sorted
 // source as its input.
 
-import std.list
+import std.collections.list
 import std.option
 import std.sort
 import std.string

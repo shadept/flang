@@ -8,7 +8,7 @@
 // inside `#define` bodies are not visited (template bodies are CST byte ranges, not AST).
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.option
 import std.test
 

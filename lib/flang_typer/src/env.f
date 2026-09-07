@@ -9,9 +9,9 @@
 // flag for assignment-target checking.
 
 import std.allocator
-import std.dict
+import std.collections.dict
+import std.collections.stack
 import std.option
-import std.stack
 
 import flang_typer.node_id
 import flang_typer.scheme
@@ -25,21 +25,26 @@ pub type Binding = struct {
     is_type_param: bool
 }
 
+// One lexical scope's bindings. Allocates through the owning `TypeEnv`'s allocator.
 pub type Scope = struct {
-    bindings: Dict(String, Binding)
+    bindings: UnmanagedDict(String, Binding)
 }
 
+// The lexical environment of the function being checked: a stack of scopes, innermost on top, each
+// mapping a name to its binding. Lookup walks from the innermost scope outward. One allocator
+// serves every scope's table.
 pub type TypeEnv = struct {
-    scopes: Stack(Scope)
-    allocator: &Allocator?
+    scopes: UnmanagedStack(Scope)
+    // The one allocator every scope allocates through.
+    allocator: &Allocator
 }
 
 pub fn type_env(allocator: &Allocator? = null) TypeEnv {
-    let scopes: Stack(Scope) = stack(0, allocator)
-    let bindings: Dict(String, Binding) = dict(allocator)
-    let initial: Scope = .{ bindings = bindings }
-    scopes.push(initial)
-    return .{ scopes = scopes, allocator = allocator }
+    let out: TypeEnv
+    out.allocator = allocator.or_global()
+    let initial: Scope
+    out.scopes.push(initial, out.allocator)
+    return out
 }
 
 pub fn deinit(self: &TypeEnv) {
@@ -47,18 +52,17 @@ pub fn deinit(self: &TypeEnv) {
         self.scopes.pop() match {
             Some(scope) => {
                 let s = scope
-                s.bindings.deinit()
+                s.bindings.deinit(self.allocator)
             }
             None => break
         }
     }
-    self.scopes.deinit()
+    self.scopes.deinit(self.allocator)
 }
 
 pub fn push_scope(self: &TypeEnv) {
-    let bindings: Dict(String, Binding) = dict(self.allocator)
-    let fresh: Scope = .{ bindings = bindings }
-    self.scopes.push(fresh)
+    let fresh: Scope
+    self.scopes.push(fresh, self.allocator)
 }
 
 pub fn pop_scope(self: &TypeEnv) {
@@ -67,12 +71,12 @@ pub fn pop_scope(self: &TypeEnv) {
     }
     let s = self.scopes.pop().expect("pop_scope: no scope")
     let scope = s
-    scope.bindings.deinit()
+    scope.bindings.deinit(self.allocator)
 }
 
 pub fn bind(self: &TypeEnv, name: String, binding: Binding) {
     self.scopes.peek_ref() match {
-        Some(top) => top.bindings.set(name, binding)
+        Some(top) => top.bindings.set(name, binding, self.allocator)
         None => panic("bind: no open scope")
     }
 }

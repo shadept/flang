@@ -4,8 +4,8 @@
 //! STDOUT: 7
 //! EXIT: 0
 
+import std.collections.list
 import std.io.print
-import std.list
 import std.option
 
 type Holder = enum {

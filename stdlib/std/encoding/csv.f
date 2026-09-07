@@ -19,13 +19,13 @@
 import core.bits
 
 import std.allocator
+import std.collections.list
 import std.conv
 import std.encoding.codec
 import std.enum
 import std.interface
 import std.io.reader
 import std.io.writer
-import std.list
 import std.mem
 import std.option
 import std.result

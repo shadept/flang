@@ -13,7 +13,7 @@ import std.conv
 import std.env
 import std.io.file
 import std.io.print
-import std.list
+import std.collections.list
 import std.option
 import std.result
 import std.string

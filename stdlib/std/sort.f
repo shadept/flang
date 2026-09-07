@@ -168,6 +168,14 @@ pub fn powersort(s: $T[], cmp: $F) {
     _powersort_impl(s, cmp)
 }
 
+// Words of scratch a sort keeps on its own frame: 4 KB, enough for a few hundred word-sized
+// elements, so the common sort allocates nothing. Larger inputs take heap scratch.
+const STACK_SCRATCH_WORDS: usize = 512
+
+// Sorts `s` by `cmp`, choosing where the merge scratch lives: on this frame when `s` fits in
+// `STACK_SCRATCH_WORDS` words and `T` needs at most word alignment, on the global allocator
+// otherwise, freed before returning. Inputs below `INSERTION_CUTOFF` are insertion-sorted and take
+// no scratch at all.
 fn _powersort_impl(s: $T[], cmp: $F) {
     const n = s.len
     if n < 2 {
@@ -178,14 +186,33 @@ fn _powersort_impl(s: $T[], cmp: $F) {
         return
     }
 
+    // The merges stage the left run in `scratch`, sized to the input. On this frame when it fits
+    // and `T` needs no more than word alignment; from the heap otherwise.
+    const byte_len = n * size_of(T)
+    if byte_len <= STACK_SCRATCH_WORDS * 8 and align_of(T) <= 8 {
+        let stack_scratch: [u64; 512] = [0; 512]
+        const base: &u64 = &stack_scratch[0]
+        const scratch: T[] = .{ ptr = base as &T, len = n }
+        _powersort_with(s, scratch, cmp)
+        return
+    }
+
     // Read the default once and free through that same instance: an allocator installed while the
     // sort is running must not receive a block it never handed out.
     const alloc = global()
-    const byte_len = n * size_of(T)
     const scratch_bytes = alloc.alloc(byte_len, align_of(T))
         .expect("powersort: scratch allocation failed")
     const scratch: T[] = .{ ptr = scratch_bytes.ptr as &T, len = n }
     defer alloc.dealloc(scratch_bytes, align_of(T))
+    _powersort_with(s, scratch, cmp)
+}
+
+// Sorts `s` by `cmp` with powersort, staging each merge's left run in `scratch`.
+//
+// - `scratch`: at least `s.len` elements of storage the caller owns; its contents on entry are
+//   ignored and on exit unspecified.
+fn _powersort_with(s: $T[], scratch: T[], cmp: $F) {
+    const n = s.len
 
     // Run stack. Bounded by the number of distinct powers, which for any practical n fits in ~40
     // slots. 64 covers n up to ~2^64.
@@ -439,6 +466,35 @@ test "quicksort large" {
     assert_true(is_sorted(s), "50 elements sorted")
     assert_eq(s[0], 1i32, "smallest")
     assert_eq(s[49], 95i32, "largest")
+}
+
+test "a sort of a few hundred words takes no heap; a larger one takes one block and frees it" {
+    let counting = counting_allocator(global())
+    const mine = counting.allocator()
+    const prev = set_global_allocator(&mine)
+
+    let small: [u64; 400] = [0; 400]
+    for i in 0..400usize {
+        small[i] = ((i * 7919) % 1000) as u64
+    }
+    sort(small)
+    assert_eq(counting.allocs, 0 as usize, "scratch lives on the frame")
+
+    let big: [u64; 1000] = [0; 1000]
+    for i in 0..1000usize {
+        big[i] = ((i * 7919) % 1000) as u64
+    }
+    sort(big)
+    assert_eq(counting.allocs, 1 as usize, "one heap scratch past the frame budget")
+    assert_eq(counting.live_bytes, 0 as usize, "and it went back")
+    const _restored = set_global_allocator(prev)
+
+    for i in 1..1000usize {
+        assert_true(big[i - 1] <= big[i], "sorted")
+    }
+    for i in 1..400usize {
+        assert_true(small[i - 1] <= small[i], "sorted")
+    }
 }
 
 test "powersort basic" {

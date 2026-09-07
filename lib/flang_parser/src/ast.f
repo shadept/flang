@@ -17,7 +17,7 @@
 // of later validation passes, not the type system.
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.option
 
 import flang_core.span

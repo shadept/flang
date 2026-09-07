@@ -24,7 +24,7 @@
 // from the result.
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.option
 import std.string
 import std.test
@@ -41,23 +41,32 @@ pub type ImportEdge = struct {
 // a node whose `low` equals its own `index` is the root of a component.
 const UNVISITED: usize = 0xFFFF_FFFF_FFFF_FFFF
 
+// The state of one Tarjan walk over `count` modules: the adjacency rows, the per-node discovery
+// numbers and low links, the DFS stack, and the order being emitted. Scratch for `demand_order`,
+// which hands `out` to its caller and frees the rest. One allocator serves every field.
 type Tarjan = struct {
-    adj: List(List(usize))
-    index: List(usize)
-    low: List(usize)
-    on_stack: List(bool)
-    stack: List(usize)
+    adj: UnmanagedList(UnmanagedList(usize))
+    index: UnmanagedList(usize)
+    low: UnmanagedList(usize)
+    on_stack: UnmanagedList(bool)
+    stack: UnmanagedList(usize)
     next_index: usize
-    out: List(usize)
+    out: UnmanagedList(usize)
+    // The one allocator every field allocates through.
+    allocator: &Allocator
 }
 
-pub fn deinit(self: &Tarjan) {
-    self.adj.deinit()
-    self.index.deinit()
-    self.low.deinit()
-    self.on_stack.deinit()
-    self.stack.deinit()
-    self.out.deinit()
+// Frees every field, the adjacency rows included.
+fn deinit(self: &Tarjan) {
+    for &row in self.adj {
+        row.deinit(self.allocator)
+    }
+    self.adj.deinit(self.allocator)
+    self.index.deinit(self.allocator)
+    self.low.deinit(self.allocator)
+    self.on_stack.deinit(self.allocator)
+    self.stack.deinit(self.allocator)
+    self.out.deinit(self.allocator)
 }
 
 // The order to visit `count` modules in. `fqns[i]` names module `i` and is the tie-break inside a
@@ -67,37 +76,42 @@ pub fn deinit(self: &Tarjan) {
 // edges say.
 pub fn demand_order(count: usize, fqns: &List(String), edges: &List(ImportEdge),
     allocator: &Allocator? = null) List(usize) {
+    const alloc = allocator.or_global()
     let t = Tarjan {
-        adj = build_adjacency(count, fqns, edges, allocator),
-        index = filled_list(count, UNVISITED, allocator),
-        low = filled_list(count, UNVISITED, allocator),
-        on_stack = filled_list(count, false, allocator),
-        stack = list(count, allocator),
+        adj = build_adjacency(count, fqns, edges, alloc),
+        index = filled_unmanaged_list(count, UNVISITED, alloc),
+        low = filled_unmanaged_list(count, UNVISITED, alloc),
+        on_stack = filled_unmanaged_list(count, false, alloc),
+        stack = unmanaged_list(count, alloc),
         next_index = 0,
-        out = list(count, allocator),
+        out = unmanaged_list(count, alloc),
+        allocator = alloc,
     }
     // Roots in FQN order, so a disconnected module set is still deterministic.
-    let roots = by_fqn(count, fqns, allocator)
+    let roots = by_fqn(count, fqns, alloc)
     defer roots.deinit()
     for r in roots {
         if t.index[r] == UNVISITED {
-            visit(&t, r, fqns, allocator)
+            visit(&t, r, fqns)
         }
     }
-    // The order goes to the caller; everything else was scratch. Leaving an empty list behind keeps
-    // `deinit` free to release every field it owns.
-    let out = t.out
-    t.out = list(0, allocator)
+    // The order goes to the caller as a list over the same allocator; everything else was scratch.
+    // Leaving an empty list behind keeps `deinit` free to release every field it owns.
+    let out: List(usize) = .{ __storage = t.out, allocator = alloc }
+    let empty: UnmanagedList(usize)
+    t.out = empty
     t.deinit()
     return out
 }
 
-// Successors of each node, deduplicated and in FQN order.
+// Returns the successors of each node, one row per node, deduplicated and in FQN order. Edges
+// naming a module outside `0..count` and self-edges are dropped.
 fn build_adjacency(count: usize, fqns: &List(String), edges: &List(ImportEdge),
-    allocator: &Allocator?) List(List(usize)) {
-    let adj: List(List(usize)) = list(count, allocator)
+    allocator: &Allocator) UnmanagedList(UnmanagedList(usize)) {
+    let adj: UnmanagedList(UnmanagedList(usize)) = unmanaged_list(count, allocator)
     for _i in 0..count {
-        adj.push(list(0, allocator))
+        let row: UnmanagedList(usize)
+        adj.push(row, allocator)
     }
     for e in edges {
         if e.from >= count or e.to >= count {
@@ -107,35 +121,26 @@ fn build_adjacency(count: usize, fqns: &List(String), edges: &List(ImportEdge),
             continue
         }
         let row = &adj[e.from]
-        if !contains_index(row, e.to) {
-            row.push(e.to)
+        if !row.contains(e.to) {
+            row.push(e.to, allocator)
         }
     }
     for &row in adj {
-        sort_indices_by_fqn(row, fqns)
+        row.sort_by(fn(i) { name_of(fqns, i) })
     }
     return adj
 }
 
-fn contains_index(row: &List(usize), v: usize) bool {
-    for x in row {
-        if x == v {
-            return true
-        }
-    }
-    return false
-}
-
-fn visit(t: &Tarjan, v: usize, fqns: &List(String), allocator: &Allocator?) {
+fn visit(t: &Tarjan, v: usize, fqns: &List(String)) {
     t.index[v] = t.next_index
     t.low[v] = t.next_index
     t.next_index = t.next_index + 1
-    t.stack.push(v)
+    t.stack.push(v, t.allocator)
     t.on_stack[v] = true
 
     for w in t.adj[v] {
         if t.index[w] == UNVISITED {
-            visit(t, w, fqns, allocator)
+            visit(t, w, fqns)
             if t.low[w] < t.low[v] {
                 t.low[v] = t.low[w]
             }
@@ -151,7 +156,7 @@ fn visit(t: &Tarjan, v: usize, fqns: &List(String), allocator: &Allocator?) {
     if t.low[v] != t.index[v] {
         return
     }
-    let comp = list(4, allocator)
+    let comp: List(usize) = list(4, t.allocator)
     loop {
         let w = t.stack.pop().unwrap()
         t.on_stack[w] = false
@@ -160,41 +165,25 @@ fn visit(t: &Tarjan, v: usize, fqns: &List(String), allocator: &Allocator?) {
             break
         }
     }
-    sort_indices_by_fqn(&comp, fqns)
+    comp.sort_by(fn(i) { name_of(fqns, i) })
     for m in comp {
-        t.out.push(m)
+        t.out.push(m, t.allocator)
     }
     comp.deinit()
 }
 
-fn by_fqn(count: usize, fqns: &List(String), allocator: &Allocator?) List(usize) {
-    let all = list(count, allocator)
+// Returns every index in `0..count`, ordered by the name it maps to.
+fn by_fqn(count: usize, fqns: &List(String), allocator: &Allocator) List(usize) {
+    let all: List(usize) = list(count, allocator)
     for i in 0..count {
         all.push(i)
     }
-    sort_indices_by_fqn(&all, fqns)
+    all.sort_by(fn(i) { name_of(fqns, i) })
     return all
 }
 
-// Insertion sort by FQN. Rows and components are a handful of entries each, and the whole-set root
-// list runs once per analysis.
-fn sort_indices_by_fqn(xs: &List(usize), fqns: &List(String)) {
-    if xs.len < 2 {
-        return
-    }
-    for i in 1..xs.len {
-        let v = xs[i]
-        let j = i
-        while j > 0 and name_of(fqns, xs[j - 1]) > name_of(fqns, v) {
-            xs[j] = xs[j - 1]
-            j = j - 1
-        }
-        xs[j] = v
-    }
-}
-
-// An index with no name sorts first, and ties among such indices keep their relative order - the
-// sort is stable, so they stay deterministic.
+// The key `sort_by` orders indices with. An index with no name sorts first, and ties among such
+// indices keep their relative order - `sort_by` is stable, so they stay deterministic.
 fn name_of(fqns: &List(String), i: usize) String {
     if i >= fqns.len {
         return ""

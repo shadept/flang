@@ -22,8 +22,8 @@
 // are layout, not structure: with `join_lines` on they re-flow, and `max_width` decides where the
 // line breaks. Blank lines and comment placement always survive.
 
+import std.collections.list
 import std.conv
-import std.list
 import std.option
 import std.result
 import std.string

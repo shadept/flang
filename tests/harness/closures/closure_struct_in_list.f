@@ -1,13 +1,13 @@
 //! TEST: closure_struct_in_list
 //! EXIT: 60
 
-// Struct-wrapped closures from one lambda site share a nominal, so they are a
-// homogeneous element type. Each push copies its own captured snapshot.
+// Struct-wrapped closures from one lambda site share a nominal, so they are a homogeneous element
+// type. Each push copies its own captured snapshot.
 
-import std.list
+import std.collections.list
 
 type Thunk = struct(F) {
-    f: F,
+    f: F
 }
 
 fn thunk(f: $F) Thunk(F) {

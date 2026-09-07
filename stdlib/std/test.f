@@ -2,7 +2,7 @@
 // the generated test runner installs for the duration of a run.
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.mem
 import std.string_builder
 

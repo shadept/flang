@@ -13,7 +13,7 @@
 //   Eof token
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.string
 import std.string_builder
 

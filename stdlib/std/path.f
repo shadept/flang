@@ -17,10 +17,10 @@
 
 import std.allocator
 import std.char
-import std.list
+import std.collections.list
+import std.collections.stack
 import std.option
 import std.result
-import std.stack
 import std.string
 import std.string_builder
 import std.test

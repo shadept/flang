@@ -16,7 +16,7 @@
 // decay, etc.) also need the registry to resolve well-known FQNs.
 
 import std.allocator
-import std.list
+import std.collections.list
 import std.option
 
 import flang_typer.interner

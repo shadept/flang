@@ -2,7 +2,7 @@
 //! EXIT: 3
 
 // Recursive struct through a generic container (self-hosting pattern: tree nodes)
-import std.list
+import std.collections.list
 
 type TreeNode = struct {
     value: i32

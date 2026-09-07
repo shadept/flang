@@ -16,11 +16,11 @@
 // now - there are no line directives to corrupt yet.
 
 import std.allocator
-import std.bitset
-import std.dict
-import std.list
+import std.collections.bitset
+import std.collections.dict
+import std.collections.list
+import std.collections.set
 import std.option
-import std.set
 import std.string
 import std.test
 

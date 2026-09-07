@@ -9,9 +9,9 @@
 // flow lowers correctly), and exits 0.
 
 import std.allocator
+import std.collections.list
 import std.io.file
 import std.io.print
-import std.list
 import std.option
 import std.path
 import std.process

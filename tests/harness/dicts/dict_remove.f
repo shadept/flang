@@ -1,7 +1,7 @@
 //! TEST: dict_remove
 //! EXIT: 10
 
-import std.dict
+import std.collections.dict
 import std.option
 
 pub fn main() i32 {

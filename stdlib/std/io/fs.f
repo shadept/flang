@@ -13,15 +13,15 @@
 // Paths are ordinary String views - nothing here requires NUL termination.
 
 import std.allocator
+import std.collections.list
+import std.collections.stack
 import std.io.internal.fs
 import std.io.print
 import std.io.types
-import std.list
 import std.option
 import std.owned
 import std.path
 import std.result
-import std.stack
 import std.string
 import std.string_builder
 import std.test
