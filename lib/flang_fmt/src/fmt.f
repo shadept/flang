@@ -1127,12 +1127,6 @@ fn needs_space(r: &Renderer, cur: TokenKind, parent: NodeKind) bool {
         return false
     }
 
-    // Match-arm patterns are a flat token run under MatchArm, so a payload paren (`Some(x)`) is
-    // recognized by what precedes it.
-    if cur == TokenKind.OpenParenthesis and parent == NodeKind.MatchArm {
-        return prev != TokenKind.Identifier
-    }
-
     if glue_after(prev, r.prev_parent) {
         return false
     }
@@ -1140,6 +1134,20 @@ fn needs_space(r: &Renderer, cur: TokenKind, parent: NodeKind) bool {
     // like any prefix. With a left operand present the range glues (`0..n`).
     if (cur == TokenKind.DotDot or cur == TokenKind.DotDotEquals) and !ends_expression(prev) {
         return true
+    }
+    // `(` glues to what it applies to - a callee, a declared or generic name (`List(T)`,
+    // `Box(Inner) { ... }`, `Some(x)`), or a `struct`/`enum`/`fn` opening a parameter list - and
+    // stands off after anything else: an operator, `=`, `,`, or a keyword such as `return` or `if`,
+    // where it opens a tuple or a grouping.
+    if cur == TokenKind.OpenParenthesis {
+        // After a closing bracket only a call glues (`f()(x)`, `xs[i](x)`); a tuple return type
+        // after a parameter list (`fn f(a: i32) (i32, i32)`) stands off.
+        if prev == TokenKind.CloseParenthesis or prev == TokenKind.CloseBracket
+            or prev == TokenKind.CloseBrace {
+            return parent != NodeKind.CallExpr
+        }
+        return !(ends_expression(prev) or prev == TokenKind.Struct or prev == TokenKind.Enum
+            or prev == TokenKind.Fn)
     }
     if glue_before(cur, parent) {
         return false
@@ -1181,18 +1189,8 @@ fn glue_before(kind: TokenKind, parent: NodeKind) bool {
         // The leading dot of `.{ ... }` stands off from what precedes it.
         return parent != NodeKind.AnonymousStructExpr
     }
-    // `(` glues to a callee, a declared name, or a generic parameter list (`struct(K)`); a tuple or
-    // grouping paren stands off.
-    if kind == TokenKind.OpenParenthesis {
-        return parent == NodeKind.CallExpr or parent == NodeKind.FunctionDecl
-            or parent == NodeKind.NamedType or parent == NodeKind.FunctionType
-            or parent == NodeKind.LambdaExpr or parent == NodeKind.GeneratorDef
-            or parent == NodeKind.GeneratorInvocation or parent == NodeKind.EnumVariant
-            or parent == NodeKind.EnumVariantPattern or parent == NodeKind.StructDecl
-            or parent == NodeKind.EnumDecl or parent == NodeKind.TypeAliasDecl
-            or parent == NodeKind.AnonymousStructType or parent == NodeKind.AnonymousEnumType
-    }
-    // `[` glues in `a[i]` and `T[]`; an array literal or `[T; N]` type stands off.
+    // `(` is decided by the token before it (`needs_space`). `[` glues in `a[i]` and `T[]`; an
+    // array literal or `[T; N]` type stands off.
     if kind == TokenKind.OpenBracket {
         return parent == NodeKind.IndexExpr or parent == NodeKind.SliceType
     }
@@ -1615,6 +1613,16 @@ test "spacing normalizes around punctuation and operators" {
     let out = r.unwrap()
     defer out.deinit()
     assert_true(out.as_view() == "fn f(a: i32, b: i32) i32 {\n    return a + b\n}\n", "spaced")
+}
+
+test "an open parenthesis glues to a name and stands off after a keyword or operator" {
+    const cfg = default_config()
+    const src = "type Box = struct(T) { v: T }\n#allow (W2004)\nfn f(a: i32) (i32, i32) {\n    let b: Box (i32) = Box (i32) { v = a }\n    let t = (a, b.v)\n    if (a + (b.v)) > 0 {\n        return (t.0, t.1)\n    }\n    return t\n}\n"
+    const r = format_source(src, &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.as_view() == "type Box = struct(T) { v: T }\n#allow(W2004)\nfn f(a: i32) (i32, i32) {\n    let b: Box(i32) = Box(i32) { v = a }\n    let t = (a, b.v)\n    if (a + (b.v)) > 0 {\n        return (t.0, t.1)\n    }\n    return t\n}\n",
+        "names, struct literals and annotations glue; tuple, grouping and keyword parens stand off")
 }
 
 test "unary and call positions glue" {

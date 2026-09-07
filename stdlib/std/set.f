@@ -1,5 +1,8 @@
-// Generic hash set backed by `Dict(T, u8)`. Membership test is the only operation that matters; the
-// value slot is a single byte sentinel and is never inspected by callers.
+// Hash sets in two flavours, the managed and unmanaged split of spec §9.4, each a `u8`-valued
+// dict of the matching flavour: `UnmanagedSet(T)` over `UnmanagedDict(T, u8)`, taking the allocator
+// at every allocating call (`s.add(v, alloc)`), and `Set(T)` with its allocator beside it
+// (`s.add(v)`), reaching the storage through `op_deref`. The value slot is a single byte sentinel
+// and is never inspected by callers.
 //
 // For dense integer-indexed sets prefer `Bitset` - it stores one bit per element and supports
 // O(words) union/intersect.
@@ -11,69 +14,135 @@ import std.option
 import std.string
 import std.test
 
+pub type UnmanagedSet = struct(T) {
+    __inner: UnmanagedDict(T, u8)
+}
+
 pub type Set = struct(T) {
-    __inner: Dict(T, u8)
+    __storage: UnmanagedSet(T)
+    allocator: &Allocator
+}
+
+// Reaches the storage: `s.len()`, `s.contains(v)` and every `UnmanagedSet` read resolve through
+// this.
+pub fn op_deref(self: &Set($T)) &UnmanagedSet(T) {
+    return &self.__storage
 }
 
 // Construct an empty set. `T` is inferred from context.
+//
+// - `allocator`: kept for the set's whole life. Null is the global allocator.
 pub fn set(allocator: &Allocator? = null) Set($T) {
-    return .{ __inner = dict(allocator) }
+    let out: Set(T)
+    out.allocator = allocator.unwrap_or(0usize as &Allocator)
+    return out
 }
 
-// Free the backing storage. Each live key's `deinit()` runs first.
-pub fn deinit(self: &Set($T)) {
-    self.__inner.deinit()
-}
-
-// Number of distinct elements currently in the set.
-pub fn len(self: &Set($T)) usize {
-    return self.__inner.len()
-}
-
-// True when the set holds no elements.
-pub fn is_empty(self: &Set($T)) bool {
-    return self.__inner.is_empty()
-}
+// =============================================================================
+// UnmanagedSet: growth and release, allocator explicit
+// =============================================================================
 
 // Insert a value. No-op when the value is already present (no allocation or replacement). Returns
 // nothing - the value-add idempotence is the expected behavior; callers that want to know whether
 // it was new should `contains()` first.
-pub fn add(self: &Set($T), value: T) {
-    self.__inner.set(value, 1u8)
+pub fn add(self: &UnmanagedSet($T), value: T, allocator: &Allocator) {
+    self.__inner.set(value, 1u8, allocator)
+}
+
+// String-key insert for `UnmanagedSet(OwnedString)`: the view is copied into an owned key only when
+// it is new to the set.
+pub fn add(self: &UnmanagedSet(OwnedString), value: String, allocator: &Allocator) {
+    self.__inner.set(value, 1u8, allocator)
+}
+
+// Free the backing storage. Each live key's `deinit()` runs first. Idempotent.
+pub fn deinit(self: &UnmanagedSet($T), allocator: &Allocator) {
+    self.__inner.deinit(allocator)
+}
+
+// The elements `pred` accepts, as a new set.
+pub fn filter(self: &UnmanagedSet($T), pred: $F, allocator: &Allocator) UnmanagedSet(T) {
+    let out: UnmanagedSet(T)
+    for x in self.iter() {
+        if pred(x) {
+            out.add(x, allocator)
+        }
+    }
+    return out
+}
+
+// The elements as a fresh list, in unspecified order.
+pub fn to_list(self: &UnmanagedSet($T), allocator: &Allocator) UnmanagedList(T) {
+    let out: UnmanagedList(T) = unmanaged_list(self.len(), allocator)
+    for x in self.iter() {
+        out.push(x, allocator)
+    }
+    return out
+}
+
+// =============================================================================
+// UnmanagedSet: in-place mutation and reads
+// =============================================================================
+
+// Number of distinct elements currently in the set.
+pub fn len(self: &UnmanagedSet($T)) usize {
+    return self.__inner.len()
+}
+
+// True when the set holds no elements.
+pub fn is_empty(self: &UnmanagedSet($T)) bool {
+    return self.__inner.is_empty()
 }
 
 // Test membership.
-pub fn contains(self: &Set($T), value: T) bool {
+pub fn contains(self: &UnmanagedSet($T), value: T) bool {
+    return self.__inner.contains(value)
+}
+
+pub fn contains(self: &UnmanagedSet(OwnedString), value: String) bool {
     return self.__inner.contains(value)
 }
 
 // Remove a value. Returns `true` iff the value was present.
-pub fn remove(self: &Set($T), value: T) bool {
+pub fn remove(self: &UnmanagedSet($T), value: T) bool {
+    return self.__inner.remove(value).is_some()
+}
+
+pub fn remove(self: &UnmanagedSet(OwnedString), value: String) bool {
     return self.__inner.remove(value).is_some()
 }
 
 // Drop every element, deiniting each. Backing storage is kept for reuse.
-pub fn clear(self: &Set($T)) {
+pub fn clear(self: &UnmanagedSet($T)) {
     self.__inner.clear()
 }
 
-// =============================================================================
-// String-key convenience overloads for `Set(OwnedString)`.
-//
-// Mirror `Dict(OwnedString, V)`'s pattern: callers pass a borrowed `String` view; the set
-// materialises an OwnedString on insertion when needed.
-// =============================================================================
-
-pub fn add(self: &Set(OwnedString), value: String) {
-    self.__inner.set(value, 1u8)
+// Run `f` on every element. Iteration order is unspecified.
+pub fn each(self: &UnmanagedSet($T), f: $F) {
+    for x in self.iter() {
+        f(x)
+    }
 }
 
-pub fn contains(self: &Set(OwnedString), value: String) bool {
-    return self.__inner.contains(value)
+// Whether any element satisfies `pred`. False for an empty set.
+pub fn any(self: &UnmanagedSet($T), pred: $F) bool {
+    for x in self.iter() {
+        if pred(x) {
+            return true
+        }
+    }
+    return false
 }
 
-pub fn remove(self: &Set(OwnedString), value: String) bool {
-    return self.__inner.remove(value).is_some()
+// Whether every element satisfies `pred`. True for an empty set.
+pub fn all(self: &UnmanagedSet($T), pred: $F) bool {
+    for x in self.iter() {
+        let ok: bool = pred(x)
+        if !ok {
+            return false
+        }
+    }
+    return true
 }
 
 // =============================================================================
@@ -84,7 +153,7 @@ pub type SetIterator = struct(T) {
     __inner: DictIterator(T, u8)
 }
 
-pub fn iter(self: &Set($T)) SetIterator(T) {
+pub fn iter(self: &UnmanagedSet($T)) SetIterator(T) {
     return .{ __inner = self.__inner.iter() }
 }
 
@@ -102,55 +171,68 @@ pub fn next(it: &SetIterator($T)) T? {
 }
 
 // =============================================================================
-// Functional utilities (callbacks are duck-typed $F, RFC-014)
+// Set: the managed API
+//
+// The same operations over the set's own allocator. A derived container takes an optional allocator
+// for its result and otherwise uses the receiver's.
 // =============================================================================
+
+// Insert a value; a no-op when it is already present.
+pub fn add(self: &Set($T), value: T) {
+    self.__storage.add(value, self.allocator)
+}
+
+pub fn add(self: &Set(OwnedString), value: String) {
+    self.__storage.add(value, self.allocator)
+}
+
+// Free the backing storage. Each live key's `deinit()` runs first. Idempotent.
+pub fn deinit(self: &Set($T)) {
+    self.__storage.deinit(self.allocator)
+}
+
+// Indexing and `for` resolve through `op_deref` since 2026-09-07 (spec.md §7), but the committed
+// seed's checker still stops at the wrapper; these wrappers stay until the next promote.
+pub fn iter(self: &Set($T)) SetIterator(T) {
+    return self.__storage.iter()
+}
 
 // The elements `pred` accepts, as a new set.
 pub fn filter(self: &Set($T), pred: $F, allocator: &Allocator? = null) Set(T) {
-    let out: Set(T) = set(allocator)
-    for x in self.iter() {
-        if pred(x) {
-            out.add(x)
-        }
-    }
-    return out
-}
-
-// Run `f` on every element. Iteration order is unspecified.
-pub fn each(self: &Set($T), f: $F) {
-    for x in self.iter() {
-        f(x)
-    }
-}
-
-// Whether any element satisfies `pred`. False for an empty set.
-pub fn any(self: &Set($T), pred: $F) bool {
-    for x in self.iter() {
-        if pred(x) {
-            return true
-        }
-    }
-    return false
-}
-
-// Whether every element satisfies `pred`. True for an empty set.
-pub fn all(self: &Set($T), pred: $F) bool {
-    for x in self.iter() {
-        let ok: bool = pred(x)
-        if !ok {
-            return false
-        }
-    }
-    return true
+    const alloc = allocator ?? self.allocator
+    return .{ __storage = self.__storage.filter(pred, alloc), allocator = alloc }
 }
 
 // The elements as a fresh List, in unspecified order.
 pub fn to_list(self: &Set($T), allocator: &Allocator? = null) List(T) {
-    let out: List(T) = list(self.len(), allocator)
-    for x in self.iter() {
-        out.push(x)
+    const alloc = allocator ?? self.allocator
+    return .{ __storage = self.__storage.to_list(alloc), allocator = alloc }
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+test "an UnmanagedSet takes its allocator at every allocating call" {
+    let counting = counting_allocator(global())
+    const alloc = counting.allocator()
+    let s: UnmanagedSet(i32)
+    s.add(1i32, &alloc)
+    s.add(2i32, &alloc)
+    s.add(2i32, &alloc)
+    assert_eq(s.len(), 2 as usize, "a duplicate does not add")
+    assert_true(s.contains(2i32), "contains")
+    assert_true(s.remove(1i32), "remove reports presence")
+    let sum = 0i32
+    for x in s {
+        sum = sum + x
     }
-    return out
+    assert_eq(sum, 2i32, "for over the live elements")
+    const xs = s.to_list(&alloc)
+    assert_eq(xs.len, 1 as usize, "to_list with explicit allocator")
+    xs.deinit(&alloc)
+    s.deinit(&alloc)
+    assert_eq(counting.live_bytes, 0 as usize, "everything went back through that allocator")
 }
 
 test "set functional utilities" {

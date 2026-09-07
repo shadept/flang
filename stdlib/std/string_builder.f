@@ -43,19 +43,19 @@ pub fn string_builder(capacity: usize = 0, allocator: &Allocator? = null) String
 }
 
 // Create a new empty StringBuilder with the given initial capacity.
-#deprecated ("use string_builder(capacity)")
+#deprecated("use string_builder(capacity)")
 pub fn string_builder_with_capacity(capacity: usize) StringBuilder {
     return string_builder(capacity, null)
 }
 
 // Create a new empty StringBuilder with default capacity.
-#deprecated ("use string_builder(allocator=allocator)")
+#deprecated("use string_builder(allocator=allocator)")
 pub fn string_builder_with_allocator(allocator: &Allocator) StringBuilder {
     return string_builder(0, Some(allocator))
 }
 
 // Create a new empty StringBuilder with the given initial capacity.
-#deprecated ("use string_builder(capacity, allocator)")
+#deprecated("use string_builder(capacity, allocator)")
 pub fn string_builder_with_capacity_and_allocator(capacity: usize,
     allocator: &Allocator?) StringBuilder {
     return string_builder(capacity, allocator)

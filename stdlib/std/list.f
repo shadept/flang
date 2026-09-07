@@ -1,4 +1,4 @@
-// Growable arrays in two flavours, Zig's managed and unmanaged split (spec §9.4):
+// Growable arrays in two flavours, the managed and unmanaged split of spec §9.4:
 //
 //   UnmanagedList(T)  the buffer: `ptr`, `len`, `cap`, and every operation on it. The ones that
 //                     allocate or free take the allocator as an argument (`xs.push(v, alloc)`), so
@@ -288,7 +288,7 @@ pub fn pop(list: &UnmanagedList($T)) T? {
 
 // Set the element at the given index.
 // Panics if index is out of bounds.
-#deprecated ("Prefer index syntax: list[idx] = value")
+#deprecated("Prefer index syntax: list[idx] = value")
 pub fn set(list: &UnmanagedList($T), index: usize, value: T) {
     if index >= list.len {
         panic("List: index out of bounds")
@@ -664,8 +664,7 @@ pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
 // List: the managed API
 //
 // The same operations over the list's own allocator. A transformation takes an optional allocator
-// for its result and otherwise uses the receiver's. Indexing and `for` are spelled out because they
-// do not resolve through `op_deref` (docs/known-issues.md).
+// for its result and otherwise uses the receiver's.
 // =============================================================================
 
 // Ensures room for at least `capacity` elements. Panics when the allocation fails.
@@ -702,22 +701,20 @@ pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
     return (self.__storage.to_owned_slice(self.allocator), self.allocator)
 }
 
-// Indexes an element: `xs[i]`, `xs[i] = v` and `&xs[i]`. Panics past the end.
+// Indexing and `for` resolve through `op_deref` since 2026-09-07 (spec.md §7), but the committed
+// seed's checker still stops at the wrapper; these wrappers stay until the next promote.
 pub fn op_index_ref(self: &List($T), index: usize) &T {
     return self.__storage.op_index_ref(index)
 }
 
-// Slices the live elements: `xs[a..b]`, bounds clamped.
 pub fn op_index(self: &List($T), range: Range(usize)) T[] {
     return self.__storage.op_index(range)
 }
 
-// Iterates the elements by value, in order.
 pub fn iter(self: &List($T)) ListIterator(T) {
     return self.__storage.iter()
 }
 
-// Iterates the elements by reference, in order: `for &x in xs`.
 pub fn iter_ref(self: &List($T)) SliceRefIterator(T) {
     return self.__storage.iter_ref()
 }

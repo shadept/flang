@@ -349,14 +349,48 @@ its own `self.len`), so the fix was bootstrapped through the previous stdlib cop
 
 ### Indexing and `for` Do Not Peel `op_deref`
 
-**Status:** Open (found 2026-09-06)
+**Status:** Resolved 2026-09-07 (found 2026-09-06) - `xs[i]`, `xs[i] = v` and `for x in xs`
+resolve their operator (`op_index_ref`/`op_index`, `op_set_index`, `iter`/`iter_ref`) through
+`receiver_pick`, the same receiver-shape ranking a spelled method call uses, and lowering replays
+the recorded hop chain for the receiver; `for x in w` is code-identical to `w.iter()` plus the
+`next` loop. Pinned by `op_deref/op_deref_index_for.f` and the `ranking:` tests in `checker.f`.
+The wrappers below stay until the next promote: the committed seed's checker still stops at the
+wrapper, and the stdlib is built with the seed (seed rule, CLAUDE.md). Still open: the `&&Wrap`
+note at the end.
 **Affected:** `lib/flang_typer/src/checker.f`, every `op_deref` wrapper
 
 spec.md §7 promises `op_deref` for `x.field` and `x.method()`, and that is all the checker does:
 `xs[i]`, `&xs[i]`, `xs[a..b]` and `for x in xs` on a wrapper whose inner type has `op_index_ref`,
-`op_index` and `iter` are E2028 / E2021. `List` spells out four one-line wrappers
-(`op_index_ref`, `op_index`, `iter`, `iter_ref`) to cover it. Extending the retry to the index and
-iterator resolutions deletes them. The one index form that does go through the
+`op_index` and `iter` are E2028 / E2021:
+
+```flang
+type Inner = struct { a: i64  b: i64  c: i64 }
+fn op_index_ref(x: &Inner, i: usize) &i64 { ... }
+fn iter(x: &Inner) InnerIter { ... }            // next(&InnerIter) i64?
+fn sum(x: &Inner) i64 { ... }
+
+type Wrap = struct { tag: i64  inner: Inner }
+fn op_deref(w: &Wrap) &Inner { return &w.inner }
+
+let s = w.sum()      // ok: peels to sum(&Inner)
+let f = w.a          // ok: peels to Inner.a
+let v = w[1]         // E2028 type does not support indexing
+w[2] = 9             // E2028
+for x in w { ... }   // E2021 type is not iterable
+```
+
+`List` spells out four one-line wrappers
+(`op_index_ref`, `op_index`, `iter`, `iter_ref`) to cover it, and `Dict` (`op_index`, `iter`),
+`Set` (`iter`) and `Deque` (`iter`) do the same. Extending the retry to the index and iterator
+resolutions deletes them.
+
+~~The retry also never ran when a catch-all overload matched the wrapper directly: with std.iter
+imported, `d.any(f)` on a `Dict` resolved to `any(it: $I, pred: $F)` and handed `f` one `Entry`
+instead of `(key, value)`, and `xs.last()` on a `List` walked the iterator instead of reading the
+slice.~~ Resolved 2026-09-07: for UFCS calls the peeled receivers are shapes in the one overload
+ranking (`RecvAlt`, spec.md §7), so an overload naming the wrapped type outranks a bare `$I`.
+Pinned by the `ranking:` tests in `checker.f`, `op_deref/op_deref_beats_catch_all.f`,
+`op_deref/op_deref_beats_iter_catch_all.f` and `generics/overload_structural_specificity.f`. The one index form that does go through the
 hops is the `len` an open range `xs[a..]` synthesises for its end: `check_index` records the chain
 on the range node (`member_deref_retry_at`) and `lower_partial_range_arg` follows it.
 
@@ -1490,9 +1524,11 @@ Two independent bugs, the second unmasked by fixing the first:
 
 ### Composite Structs Duplicate the Allocator Pointer Per Child Container
 
-**Status:** In progress — `List` has its unmanaged flavour (2026-09-06: `UnmanagedList` is the
-storage and takes the allocator per allocating call; `List` wraps it and reaches it through
-`op_deref`); `Dict`, `Set`, `Deque`, `Stack` follow the same split, each its own pass
+**Status:** Stdlib side done — every collection has its unmanaged flavour (2026-09-06:
+`UnmanagedList` is the storage and takes the allocator per allocating call; `List` wraps it and
+reaches it through `op_deref`. 2026-09-07: `UnmanagedDict`, `UnmanagedSet`, `UnmanagedStack`,
+`UnmanagedDeque` the same way, the set and stack over the unmanaged dict and list). What remains
+is migrating the composites below to store one allocator and hold unmanaged children
 **Affected:** any struct composing several allocator-carrying containers — `UnionFind` (nodes Dict + undo Stack of Lists + own field), `Engine`, `Checker`, and every similar composite
 
 Header-owned allocators mean a composite stores the same `&Allocator?` once
@@ -1503,7 +1539,7 @@ no cross-field invariants), but the duplication is conceptual debt that grows
 with every composite.
 
 **Direction chosen when this gets picked up:** combine the arena-owning-parent
-pattern with Zig-style explicit parameters — the composite stores a *single*
+pattern with explicit allocator parameters — the composite stores a *single*
 allocator (or owns an arena over the caller's), its child containers store
 none, and the allocator is passed as an argument to the children's allocating
 methods (`nodes.set(alloc, k, v)`, `undo.push(alloc, frame)`). One stored

@@ -163,7 +163,7 @@ touching a disk. The two functions that did read the world, `cwd` and
 - **Eager monomorphization.** Generic functions are instantiated with concrete types during type checking. `HmTypeChecker.EnsureSpecialization()` deep-clones the generic body, substitutes type parameters, and type-checks the specialization. Generic templates never reach IR.
 - **Iterator protocol:** Any type used in `for` must have `iter()` returning a type with `next()` returning `Option[E]`.
 - **`TypeLayoutService`** computes memory layouts (alignment, offsets) for struct types, used by lowering for implicit reference passing of large values.
-- **`op_deref` fallback:** When `ResolveFieldAccess()` can't find a field on a nominal type, or when UFCS call resolution fails, the compiler tries `TryResolveOperator("op_deref", [&Type])`. For field access, the resolved function is appended to `MemberAccessExpressionNode.OpDerefChain`. For UFCS calls, the chain is stored in `CallExpressionNode.UfcsOpDerefChain`. Lowering replays the chain as function calls before the field GEP or function call.
+- **`op_deref` peel:** For field access, when `member_deref_retry` can't find a field on a nominal type it resolves `op_deref(&Type)` and retries on the target, hop by hop. For UFCS calls the peel is not a fallback: `resolve_overload` ranks every candidate against the receiver's shapes - as written, adapted value↔`&T`, then each `op_deref` hop by reference and by value (`RecvAlt`, built lazily by `deref_alternatives` only when a candidate that failed as written could still outrank the best match, `peel_could_win`). Specificity ranks before the per-shape penalty, so `any(&UnmanagedDict($K,$V), $F)` beats std.iter's `any($I, $F)` on a `Dict` receiver, while `push(&List($T), T)` beats nothing through the peel at equal specificity. The winner's `hops` selects the chain prefix `commit_deref_chain` records on the call node (`receiver_derefs`); lowering replays it as function calls before the field GEP or function call. The protocol operators go through the same path via `receiver_pick`: `check_index` (`op_index_ref`/`op_index`, chain on the index node), `try_set_index_assignment` (`op_set_index`, chain on the assignment node) and `resolve_for_protocol` (`iter`/`iter_ref`, chain on the body node beside the `iter` pick), and `index_operator_call`, `set_index_operator_call` and `lower_for_iter` replay them through `lower_deref_receiver`. So `xs[i]` and `for x in xs` on a wrapper compile exactly as `xs.op_index_ref(i)` and `xs.iter()` would.
 
 **Ownership pass.** After a body is checked, `own_check_body` walks it a
 second time to decide liveness for non-copyable values (RFC-028). It is a
@@ -512,6 +512,13 @@ Design:
   deeper than statement indent. Joining is conditional on the previous
   token being able to end an expression: after an open brace, `(` opens a
   statement of its own and is left alone.
+- **Token spacing.** One space between tokens by default; the exceptions are
+  pairs that glue. `(` glues to what it applies to - a name (`f(x)`, `List(T)`,
+  `Box(Inner) { ... }`, `Some(x)`), a call's closing bracket (`f()(x)`), or a
+  `struct`/`enum`/`fn` opening a parameter list - and stands off after anything
+  else: an operator, `=`, `,`, or a keyword such as `return` or `if`, where it
+  opens a tuple or a grouping (`fn f() (i32, i32)`, `return (a, b)`). `[` glues
+  in `a[i]` and `T[]`; `.`, `&` as a prefix, `#` and `$` glue to what follows.
 - **Structure is authored, layout is width-driven.** A newline can end a
   statement, so breaks between statements and inside brace bodies always
   stand, as do blank lines and comment placement. Breaks inside `(`/`[`

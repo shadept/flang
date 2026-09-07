@@ -2370,9 +2370,16 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
 
     // `iter(&xs)`: an aggregate iterable's value IS its address; a reference value is already the
     // pointer the parameter wants. A fixed array decays into the `{ptr, len}` view `iter(&T[])`
-    // takes (`lower_adapted` against the parameter's pointee).
+    // takes (`lower_adapted` against the parameter's pointee). An iterable that resolved through
+    // op_deref hops (recorded on the body node beside the `iter` pick) calls each hop first, as
+    // `xs.iter()` would.
+    let hops = ctx_receiver_deref(ctx, node_id_of(f.body.span))
     let iter_recv_ty = peel_ref(ctx, ig.params[0])
-    let recv = lower_adapted(ctx, bb, env, f.iterable, &iter_recv_ty)
+    let recv = if hops.is_some() {
+        lower_deref_receiver(ctx, bb, env, f.iterable, hops.unwrap(), &ig.params[0])
+    } else {
+        lower_adapted(ctx, bb, env, f.iterable, &iter_recv_ty)
+    }
     let iargs: List(Operand) = list(2, ctx.allocator)
     iargs.push(recv)
     let state = emit_call(ctx, bb, isym.unwrap(), &ig, iargs)
@@ -3104,10 +3111,11 @@ fn lower_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, wan
     return lower_expr(ctx, bb, env, recv)
 }
 
-// A UFCS receiver that resolved through op_deref hops (checker's `deref_retry`): call each hop on
-// the previous pointer - the wrapper's own address first - and hand the last hop's `&inner` to the
-// winner. Every hop is `(&Wrapper) &Inner`, scalar ptr in and out. When the winner takes the inner
-// value as a scalar prim, load through.
+// A receiver that resolved through op_deref hops (a method call, an index, an index assignment or a
+// `for` iterable - the checker records the chain beside the pick): call each hop on the previous
+// pointer - the wrapper's own address first - and hand the last hop's `&inner` to the winner. Every
+// hop is `(&Wrapper) &Inner`, scalar ptr in and out. When the winner takes the inner value as a
+// scalar prim, load through.
 fn lower_deref_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr,
     chain: &List(ResolvedTarget), want: &Ty) Operand {
     let cur = deref_hop_base(ctx, bb, env, recv)
@@ -5066,7 +5074,8 @@ fn lower_assignment(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, a: &Assignment
             _ => null
         }
         ix_opt match {
-            Some(ix) => return set_index_operator_call(ctx, bb, env, &ix, a.rhs, &setop.unwrap())
+            Some(ix) => return set_index_operator_call(ctx, bb, env, &ix, a.rhs, &setop.unwrap(),
+                ctx_receiver_deref(ctx, node_id_of(a.span)))
             None => {}
         }
     }
@@ -5566,11 +5575,15 @@ fn index_operator_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexE
             return unlowerable(ctx)
         }
     }
-    let recv = if o.is_ref_form {
+    // A base that resolved through op_deref hops (recorded on the index node) calls each hop, as a
+    // method receiver would; otherwise a ref-form takes the address and a value form adapts like
+    // any argument - an array base decays into the slice view the winner's param expects.
+    let hops = ctx_receiver_deref(ctx, node_id_of(ix.span))
+    let recv = if hops.is_some() {
+        lower_deref_receiver(ctx, bb, env, ix.receiver, hops.unwrap(), &sig.params[0])
+    } else if o.is_ref_form {
         lower_base_address(ctx, bb, env, ix.receiver)
     } else {
-        // A value-form receiver adapts like any argument - an array base decays into the slice view
-        // the winner's param expects.
         lower_adapted(ctx, bb, env, ix.receiver, &sig.params[0])
     }
     let idx = lower_index_arg(ctx, bb, env, ix, recv)
@@ -5583,7 +5596,7 @@ fn index_operator_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexE
 // `base[key] = value` through `op_set_index(&Self, K, V)` (or value-self): an ordinary
 // three-argument call; the assignment yields no value.
 fn set_index_operator_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexExpr, rhs: &Expr,
-    o: &ResolvedOperator) Operand {
+    o: &ResolvedOperator, hops: &List(ResolvedTarget)?) Operand {
     let sym = op_symbol(ctx, o)
     let sig_opt = op_sig(ctx, o)
     if sym.is_none() {
@@ -5597,7 +5610,11 @@ fn set_index_operator_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &In
         return unlowerable(ctx)
     }
     const self_is_ref = tn(ctx, sig.params[0]) match { NRef(_) => true, _ => false }
-    let recv = if self_is_ref {
+    // The hop chain, when the base resolved through op_deref, sits on the assignment node beside
+    // the operator.
+    let recv = if hops.is_some() {
+        lower_deref_receiver(ctx, bb, env, ix.receiver, hops.unwrap(), &sig.params[0])
+    } else if self_is_ref {
         lower_base_address(ctx, bb, env, ix.receiver)
     } else {
         lower_adapted(ctx, bb, env, ix.receiver, &sig.params[0])

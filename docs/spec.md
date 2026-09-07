@@ -557,7 +557,7 @@ Operators on primitive types are compiler built-ins, resolved and emitted direct
 
 **`op_call`** (RFC-014): when `t(args)` is invoked and `t`'s type defines `fn op_call(self: T, ...)` or `fn op_call(self: &T, ...)`, the call rewrites to `op_call(t, args...)` (or `op_call(&t, args...)`). Any type can become callable — comparators with state, function objects, iterator-like wrappers, and (Phase 2) capturing closures. Multiple `op_call` overloads on the same type are resolved by the existing overload mechanism. `op_call` resolution chains through `op_deref`: `Owned(F)` is callable when `F` is, no special-casing required. `op_call` dispatch also applies in field position: `h.f(args)` where field `f`'s type defines `op_call` (e.g. a capturing closure stored in a struct field) rewrites to `op_call(&h.f, args...)`, calling in place through the field — no local copy needed.
 
-**`op_deref`**: When `x.field` or `x.method()` fails to resolve on type `X`, the compiler looks for `fn op_deref(self: &X) &T`. If found, resolution retries on `T`. This applies to both field access and UFCS method calls. Chains through multiple layers: `Rc(Wrapper(Point)).x` resolves through two `op_deref` calls. Own fields and methods on `X` always take priority — `op_deref` is only consulted when direct resolution fails. This is a general-purpose language feature, not specific to smart pointers: `List` reaches its `UnmanagedList` storage through it (§9.4).
+**`op_deref`**: When `x.field` fails to resolve on type `X`, the compiler looks for `fn op_deref(self: &X) &T`. If found, resolution retries on `T`. Chains through multiple layers: `Rc(Wrapper(Point)).x` resolves through two `op_deref` calls. Own fields on `X` always take priority — for field access `op_deref` is only consulted when direct resolution fails. For a UFCS call `x.method()` the peeled receivers are further *shapes of the receiver* in the one overload ranking: an overload naming the wrapped type outranks a catch-all `$I` that happens to match `X` directly (structural specificity ranks first), while at equal specificity the overload matching `X` as written wins over one reached through a hop. So `d.any(f)` on a `Dict` picks `any(&UnmanagedDict($K, $V), $F)` over std.iter's `any($I, $F)`. Indexing and `for` are that same resolution, since they are method calls in disguise: `xs[i]` resolves `op_index_ref`/`op_index`, `xs[i] = v` resolves `op_set_index`, and `for x in xs` resolves `iter` (or `iter_ref` for `for &x`) exactly as `xs.iter()` would, so `for` over a wrapper compiles to the same code as its desugaring. This is a general-purpose language feature, not specific to smart pointers: `List` reaches its `UnmanagedList` storage through it (§9.4), indexing and iteration included.
 
 `op_deref` only ever turns a reference into another reference, `&W → &I`. It applies to the receiver today and, per RFC-020, to every reference-typed argument of a call, spelled either way (`w.f()` and `f(&w)` resolve the same); it never yields a value from a reference, and nothing yields a reference from a value outside the UFCS sugar (§7.2).
 
@@ -1006,11 +1006,13 @@ std/io/         input/output, filesystem, readers/writers
 std/            collections (List, Dict), text (string, string_builder), allocator
 ```
 
-**Collections come in a managed and an unmanaged flavour**, Zig's split. `UnmanagedList(T)` is
+**Collections come in a managed and an unmanaged flavour**. `UnmanagedList(T)` is
 the buffer and every operation on it; the ones that allocate take the allocator at the call
 (`xs.push(v, alloc)`), so a composite stores one allocator for all its children. `List(T)` pairs an
 `UnmanagedList` with an allocator and allocates through that (`xs.push(v)`), reaching the storage
 through `op_deref` so `xs.len`, `xs.pop()` and the rest read the same on either. The storage field
 is `__storage`: readable, as every field is, and by convention not touched. A null `&Allocator` is
 the global allocator (§4.1), so a zero-initialised `List` is a valid empty list. `Dict`, `Set`,
-`Deque` and `Stack` follow.
+`Stack` and `Deque` follow the same split (`UnmanagedDict`, `UnmanagedSet`, `UnmanagedStack`,
+`UnmanagedDeque`); the set and stack flavours wrap the dict and list of the matching flavour, so
+an unmanaged composite stores no allocator at any depth.

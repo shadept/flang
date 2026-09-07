@@ -3924,27 +3924,25 @@ fn try_set_index_assignment(self: &Checker, a: &AssignmentExpr, ix: &IndexExpr) 
         return false
     }
     const key = check_expr(self, ix.index)
-    const already_ref = ty_node(self, rbase) match { NRef(_) => true, _ => false }
-    const ref_base = if already_ref { base } else { self.engine.mk_ref(base) }
-    // A declared ref-form place wins over op_set_index.
-    if index_operator(self, "op_index_ref", ref_base, key, ix.span).is_some() {
+    // A declared ref-form place wins over op_set_index - reached the same way `check_index` will
+    // reach it (through `op_deref` included), so the key's type commits here and the place path
+    // re-checks a settled index rather than minting a second literal var.
+    let key_only: List(Ty) = list(1, self.allocator)
+    key_only.push(key)
+    const has_place = receiver_pick(self, "op_index_ref", base, &key_only, ix.span, ix.span)
+    key_only.deinit()
+    if has_place.is_some() {
         return false
     }
 
     const value = check_expr(self, a.rhs)
-    let args: List(Ty) = list(3, self.allocator)
-    args.push(ref_base)
-    args.push(key)
-    args.push(value)
-    let pick = operator_pick(self, "op_set_index", &args, a.span)
-    if pick.is_none() {
-        args.clear()
-        args.push(base)
-        args.push(key)
-        args.push(value)
-        pick = operator_pick(self, "op_set_index", &args, a.span)
-    }
-    args.deinit()
+    // Resolved as the method call it desugars to - `&Self`, value self, or through `op_deref` -
+    // with the hop chain recorded on the assignment node beside the operator.
+    let extra: List(Ty) = list(2, self.allocator)
+    extra.push(key)
+    extra.push(value)
+    let pick = receiver_pick(self, "op_set_index", base, &extra, a.span, a.span)
+    extra.deinit()
     if pick.is_none() {
         return false
     }
@@ -4414,21 +4412,30 @@ fn check_index(self: &Checker, idx: &IndexExpr) Ty {
         return elem.unwrap()
     }
 
-    // `xs[a..]` on a user type fills its end from `xs.len`. When the receiver has no `len` of its
-    // own but reaches one through `op_deref` (a `List` over its storage), the hop chain is recorded
-    // on the range node for lowering to follow.
-    if ranged {
-        idx.index.* match {
-            Range(r) => {
-                if r.end.is_none() and !has_direct_field(self, rbase, "len") {
-                    let _ty = member_deref_retry_at(self, "len", r.span, rbase)
-                }
-            }
-            _ => {}
-        }
-    }
-
     return user_index(self, idx, base_ty, rbase, index_ty)
+}
+
+// The span of an open-ended range index (`xs[a..]`, `xs[..]`), whose end the receiver's `len`
+// fills; null for any other index.
+fn open_range_span(idx: &IndexExpr) SourceSpan? {
+    return idx.index.* match {
+        Range(r) => if r.end.is_none() { Some(r.span) } else { null }
+        _ => null
+    }
+}
+
+// `xs[a..]` on a user type fills its end from `xs.len`. When the receiver has no `len` of its own,
+// or the index itself resolved through `op_deref` (so the `len` that matters is the inner one), the
+// hop chain from the receiver as written to the `len` is recorded on the range node for lowering to
+// follow.
+fn record_open_range_len(self: &Checker, idx: &IndexExpr, rbase: Ty, hops: usize) {
+    let rs = open_range_span(idx)
+    if rs.is_none() {
+        return
+    }
+    if hops > 0 or !has_direct_field(self, rbase, "len") {
+        let _ty = member_deref_retry_at(self, "len", rs.unwrap(), rbase)
+    }
 }
 
 // Whether `recv` (one reference peeled) is a nominal declaring `member` itself.
@@ -4461,10 +4468,13 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty:
         return self.engine.fresh_var()
     }
 
-    let already_ref = ty_node(self, rbase) match { NRef(_) => true, _ => false }
-    let ref_base = if already_ref { base_ty } else { self.engine.mk_ref(base_ty) }
+    // Each form is resolved as the method call it desugars to: the base as written, as `&Self` or
+    // the pointee, or peeled through `op_deref` (a `List` indexing its storage), one ranked set.
+    let extra: List(Ty) = list(1, self.allocator)
+    defer extra.deinit()
+    extra.push(index_ty)
 
-    let ref_pick = index_operator(self, "op_index_ref", ref_base, index_ty, idx.span)
+    let ref_pick = receiver_pick(self, "op_index_ref", base_ty, &extra, idx.span, idx.span)
     if ref_pick.is_some() {
         // Both forms declared for one (Self, Idx): the ref form wins deterministically, but the two
         // patterns are mutually exclusive by design - say so rather than silently picking (E2077).
@@ -4487,20 +4497,11 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty:
             spec_id = null,
         })
         note_pending(self, idx.span, true, &p)
+        record_open_range_len(self, idx, rbase, p.hops)
         return inner
     }
 
-    // Value form, tried against the base as written, as `&Self`, and - for a reference base -
-    // against the pointee.
-    let value_pick = index_operator(self, "op_index", base_ty, index_ty, idx.span)
-    if value_pick.is_none() and !already_ref {
-        value_pick = index_operator(self, "op_index", self.engine.mk_ref(base_ty), index_ty,
-            idx.span)
-    }
-    if value_pick.is_none() and already_ref {
-        let inner = ty_node(self, rbase) match { NRef(i) => i, _ => base_ty }
-        value_pick = index_operator(self, "op_index", inner, index_ty, idx.span)
-    }
+    let value_pick = receiver_pick(self, "op_index", base_ty, &extra, idx.span, idx.span)
     if value_pick.is_some() {
         let p = value_pick.unwrap()
         self.results.record_operator(self.node_of(idx.span), ResolvedOperator {
@@ -4511,6 +4512,7 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty:
             spec_id = null,
         })
         note_pending(self, idx.span, true, &p)
+        record_open_range_len(self, idx, rbase, p.hops)
         return p.ret
     }
 
@@ -5234,16 +5236,12 @@ fn protocol_pick(self: &Checker, name: String, arg: Ty, span: SourceSpan) Overlo
 
 fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     let z = self.engine.resolve(it_ty)
-    let recv = ty_node(self, z) match {
-        NRef(_) => z
-        _ => self.engine.mk_ref(z)
-    }
-    // `for &x in xs` asks for the by-reference protocol entry, `iter_ref`.
+    // `for &x in xs` asks for the by-reference protocol entry, `iter_ref`. Either is resolved as
+    // the method call `for` desugars to (`xs.iter()`): the iterable as written, by reference, or
+    // through `op_deref`, with the hop chain recorded beside the pick on the body node.
     const iter_name = if fs.by_ref { "iter_ref" } else { "iter" }
-    let ip = protocol_pick(self, iter_name, recv, expr_span(fs.iterable))
-    if ip.is_none() {
-        ip = protocol_pick(self, iter_name, z, expr_span(fs.iterable))
-    }
+    let no_args: List(Ty) = list(0, self.allocator)
+    let ip = receiver_pick(self, iter_name, z, &no_args, expr_span(fs.iterable), fs.body.span)
     if ip.is_none() {
         // An unresolved iterable may still become something iterable; a concrete one without `iter`
         // never will (E2021).
@@ -5963,11 +5961,15 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
         NRef(inner) => inner
         _ => self.engine.mk_ref(r)
     }
+    // The receiver's `op_deref` targets compete in that same set, as more receiver shapes.
+    let chain: List(OverloadPick) = list(0, self.allocator)
+    defer chain.deinit()
+    let ctx = PeelCtx { vis = &vis, chain = &chain }
     self.overload_deferred = false
     let pick = receiver_overload(self, &candidates, recv_ty, arg_tys, call.span, Some(adapted),
-        named)
-    if pick.is_none() and !self.overload_deferred {
-        pick = deref_retry(self, &candidates, recv_ty, arg_tys, call.span, named)
+        named, Some(&ctx))
+    if pick.is_some() {
+        commit_deref_chain(self, &chain, pick.unwrap().hops, call.span)
     }
     candidates.deinit()
     if pick.is_none() and self.overload_deferred {
@@ -5987,46 +5989,77 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
 // One overload-resolution attempt with `recv` prepended as the first argument. `alt_recv` is its
 // adapted value <-> &T shape, competing in the same ranked set.
 fn receiver_overload(self: &Checker, candidates: &List(FunctionScheme), recv: Ty,
-    arg_tys: &List(Ty), span: SourceSpan, alt_recv: Ty? = null,
-    named: &NamedArgs? = null) OverloadPick? {
+    arg_tys: &List(Ty), span: SourceSpan, alt_recv: Ty? = null, named: &NamedArgs? = null,
+    peel: &PeelCtx? = null) OverloadPick? {
     let full = list(arg_tys.len + 1, self.allocator)
     full.push(recv)
     full.push_all(arg_tys.as_slice())
-    let pick = resolve_overload(self, candidates, &full, span, alt_recv, named, 1usize)
+    let pick = resolve_overload(self, candidates, &full, span, alt_recv, named, 1usize, false, peel)
     full.deinit()
     return pick
 }
 
-// Peel `op_deref` wrappers: a receiver whose type defines it retries the method against the wrapped
-// inner value, both by reference and by value (mirrors the reference checker's UFCS deref chain,
-// with the same depth bound). A winning chain is recorded on the call node (`receiver_derefs`,
-// outermost hop first) so lowering calls each hop instead of passing the wrapper's address as the
-// receiver - dropping the peel was a silent field-offset-shift miscompile (the stage-2
-// `Owned(StringBuilder).append` segfault). A dead-end chain leaves its committed deref unifications
-// behind - parity with the reference checker, which also resolves each hop non-speculatively.
-fn deref_retry(self: &Checker, candidates: &List(FunctionScheme), recv_ty: Ty, arg_tys: &List(Ty),
-    span: SourceSpan, named: &NamedArgs? = null) OverloadPick? {
-    let chain: List(OverloadPick) = list(1, self.allocator)
+// Resolve `name` as a method of `recv` with `extra` arguments - the receiver as written, adapted
+// value <-> &T, or peeled through `op_deref`, all in one ranked set (`resolve_overload`) - and
+// record the winner's hop chain on `record_span`'s node for lowering. The protocol operators
+// (`op_index_ref`, `op_set_index`, `iter`) go through here so `xs[i]` and `for x in xs` resolve
+// exactly as `xs.op_index_ref(i)` and `xs.iter()` would. Null when nothing matches; never reports,
+// so a caller that tries several names reports once at the end.
+fn receiver_pick(self: &Checker, name: String, recv: Ty, extra: &List(Ty), span: SourceSpan,
+    record_span: SourceSpan) OverloadPick? {
+    let vis = fn_visibility(self)
+    defer vis.visible.deinit()
+    let cands = self.functions.lookup(name, &vis) match {
+        FnLookFound(c) => Some(c)
+        _ => null
+    }
+    if cands.is_none() {
+        return null
+    }
+    let candidates = cands.unwrap()
+    defer candidates.deinit()
+    let r = self.engine.resolve(recv)
+    let adapted = ty_node(self, r) match {
+        NRef(inner) => inner
+        _ => self.engine.mk_ref(r)
+    }
+    let chain: List(OverloadPick) = list(0, self.allocator)
     defer chain.deinit()
-    let pick = peel_op_deref(self, candidates, recv_ty, arg_tys, span, &chain, named)
+    let ctx = PeelCtx { vis = &vis, chain = &chain }
+    let pick = receiver_overload(self, &candidates, recv, extra, span, Some(adapted), null,
+        Some(&ctx))
     if pick.is_some() {
-        commit_deref_chain(self, &chain, span)
+        commit_deref_chain(self, &chain, pick.unwrap().hops, record_span)
     }
     return pick
 }
 
-// Record a winning deref chain for lowering: one target per hop on the call node, plus a pending
-// specialization per generic hop (the drain rewrites that hop's entry to `RtSpecialized`, keyed by
-// `deref_index`).
-fn commit_deref_chain(self: &Checker, chain: &List(OverloadPick), span: SourceSpan) {
-    let targets: List(ResolvedTarget) = list(chain.len, self.allocator)
-    for i in 0..chain.len {
+// The `op_deref` overloads visible to the current function, for `PeelCtx`; null when there are
+// none, so `resolve_overload` skips the peel outright.
+fn deref_candidates(self: &Checker, vis: &Visibility) List(FunctionScheme)? {
+    return self.functions.lookup("op_deref", vis) match {
+        FnLookFound(c) => Some(c)
+        _ => null
+    }
+}
+
+// Record the first `hops` entries of a winning deref chain for lowering: one target per hop on the
+// call node (outermost first), plus a pending specialization per generic hop (the drain rewrites
+// that hop's entry to `RtSpecialized`, keyed by `deref_index`). Lowering calls each hop instead of
+// passing the wrapper's address as the receiver - dropping the peel was a silent field-offset-shift
+// miscompile (the stage-2 `Owned(StringBuilder).append` segfault). Nothing to record for zero hops.
+fn commit_deref_chain(self: &Checker, chain: &List(OverloadPick), hops: usize, span: SourceSpan) {
+    if hops == 0 {
+        return
+    }
+    let targets: List(ResolvedTarget) = list(hops, self.allocator)
+    for i in 0..hops {
         targets.push(ResolvedTarget.RtFunction(chain[i].id))
     }
     // Recorded BEFORE the pendings are noted: a pick that instantiates immediately rewrites its hop
     // through `update_receiver_deref`, which needs the chain to already be there.
     self.results.record_receiver_deref(self.node_of(span), targets)
-    for i in 0..chain.len {
+    for i in 0..hops {
         note_pending(self, span, false, &chain[i], Some(i))
     }
 }
@@ -6554,57 +6587,52 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
     let candidates = cands.unwrap()
     defer candidates.deinit()
 
-    // `op_call(&T, …)` and `op_call(T, …)` compete in one ranked set.
-    let pick = receiver_overload(self, &candidates, recv, arg_tys, span,
-        Some(self.engine.mk_ref(recv)))
-    let chain: List(OverloadPick) = list(1, self.allocator)
+    // `op_call(&T, …)`, `op_call(T, …)` and the receiver's `op_deref` targets compete in one
+    // ranked set.
+    let chain: List(OverloadPick) = list(0, self.allocator)
     defer chain.deinit()
-
+    let ctx = PeelCtx { vis = &vis, chain = &chain }
+    let pick = receiver_overload(self, &candidates, recv, arg_tys, span,
+        Some(self.engine.mk_ref(recv)), null, Some(&ctx))
     if pick.is_none() {
-        pick = peel_op_deref(self, &candidates, recv, arg_tys, span, &chain)
-        if pick.is_none() {
-            return null
-        }
+        return null
     }
-    commit_deref_chain(self, &chain, span)
+    const hops = pick.unwrap().hops
+    commit_deref_chain(self, &chain, hops, span)
+    if hops == 0 {
+        // The chain record, even empty, is lowering's signal that this plain-looking callee is an
+        // `op_call` dispatch (the AST shows no receiver).
+        let none: List(ResolvedTarget) = list(0, self.allocator)
+        self.results.record_receiver_deref(self.node_of(span), none)
+    }
     let no_exprs: List(Expr) = list(0, self.allocator)
     defer no_exprs.deinit()
     return Some(commit_pick(self, pick, "op_call", arg_tys.len, span, 1usize, &no_exprs, null))
 }
 
-// Peel `op_deref` hops off `recv` until one of the inner types answers the call with `candidates`.
-// Each winning hop is appended to `chain` for the caller to record (`commit_deref_chain`); a dead
-// end leaves it as it found it. Shared by UFCS method calls (`deref_retry`) and RFC-014 `op_call`
-// dispatch - the only difference was who commits.
-fn peel_op_deref(self: &Checker, candidates: &List(FunctionScheme), recv: Ty, arg_tys: &List(Ty),
-    span: SourceSpan, chain: &List(OverloadPick), named: &NamedArgs? = null) OverloadPick? {
-    let vis = fn_visibility(self)
-    defer vis.visible.deinit()
-    let dcands = self.functions.lookup("op_deref", &vis) match {
-        FnLookFound(c) => Some(c)
-        _ => null
-    }
+// Append the receiver shapes reachable from `recv` through `op_deref` to `alts`: per hop, the
+// wrapped value by reference then by value, with each hop's pick on `ctx.chain` (mirrors the
+// reference checker's UFCS deref chain, with the same depth bound). Stops at a receiver that is not
+// a nominal or has no `op_deref`. Each hop is resolved non-speculatively, so a chain the winner
+// does not use leaves its deref unifications behind - parity with the reference checker.
+fn deref_alternatives(self: &Checker, recv: Ty, span: SourceSpan, ctx: &PeelCtx,
+    alts: &List(RecvAlt)) {
+    let dcands = deref_candidates(self, ctx.vis)
     if dcands.is_none() {
-        return null
+        return
     }
     let dc = dcands.unwrap()
     defer dc.deinit()
-
     let current = self.engine.resolve(recv)
-    let depth = 0usize
-    loop {
-        if depth >= 10 {
-            return null
-        }
-        depth = depth + 1
-
+    let hops = 0usize
+    while hops < 10 {
         let peeled = ty_node(self, current) match {
             NRef(inner) => self.engine.resolve(inner)
             _ => current
         }
         let is_nominal = ty_node(self, peeled) match { NNominal(_) => true, _ => false }
         if !is_nominal {
-            return null
+            return
         }
 
         let dargs = list(1, self.allocator)
@@ -6612,24 +6640,20 @@ fn peel_op_deref(self: &Checker, candidates: &List(FunctionScheme), recv: Ty, ar
         let dpick = resolve_overload(self, &dc, &dargs, span)
         dargs.deinit()
         if dpick.is_none() {
-            return null
+            return
         }
-        chain.push(dpick.unwrap())
+        ctx.chain.push(dpick.unwrap())
+        hops = hops + 1
 
         let dret = self.engine.resolve(dpick.unwrap().ret)
         let inner = ty_node(self, dret) match {
             NRef(i) => self.engine.resolve(i)
-            _ => return null
+            _ => return
         }
-
-        let pick = receiver_overload(self, candidates, dret, arg_tys, span, Some(inner), named)
-        if pick.is_some() {
-            return pick
-        }
-
+        alts.push(RecvAlt { ty = dret, penalty = (2 * hops) as u32, hops = hops })
+        alts.push(RecvAlt { ty = inner, penalty = (2 * hops + 1) as u32, hops = hops })
         current = inner
     }
-    return null
 }
 
 // The winning overload for a call site: registry id plus instantiated return type. For a generic
@@ -6642,6 +6666,38 @@ type OverloadPick = struct {
     // default arguments (M11).
     params: List(Ty)
     inst: PickInst?
+    // How many `op_deref` hops the receiver went through to match: the prefix of the caller's peel
+    // chain to record for lowering. Zero for a receiver matched as written or adapted.
+    hops: usize
+}
+
+// One shape a receiver may take in overload resolution besides as written: adapted between value
+// and reference, or the wrapped value reached through `op_deref` hops. `penalty` orders the shapes
+// at equal specificity (adapted, then each hop by reference before by value); `hops` is how many
+// entries of the peel chain lead to it.
+type RecvAlt = struct {
+    ty: Ty
+    penalty: u32
+    hops: usize
+}
+
+// `resolve_overload`'s bookkeeping for one candidate: its probe against the receiver shapes tried
+// so far (null while it matches none), which shape it matched (`RecvAlt` index + 1, 0 for as
+// written), and its structural specificity - walked once for a match, and by `peel_could_win` for a
+// failure it weighs.
+type CandProbe = struct {
+    cost: ProbeCost?
+    used: usize
+    spec: u32
+}
+
+// What `resolve_overload` needs to try a receiver through `op_deref`: the visibility to look the
+// `op_deref` overloads up in (only once a peel is actually attempted - most calls never get there),
+// and the chain each hop's pick is appended to. The caller records the winner's `hops` prefix of it
+// (`commit_deref_chain`).
+type PeelCtx = struct {
+    vis: &Visibility
+    chain: &List(OverloadPick)
 }
 
 // A generic winner's instantiated shape: the quantified-id → fresh-var
@@ -6664,18 +6720,66 @@ type PickInst = struct {
 // quantified vars, then registration order.
 fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: &List(Ty),
     span: SourceSpan, alt_recv: Ty? = null, named: &NamedArgs? = null, ufcs_offset: usize = 0usize,
-    report_ambiguity: bool = false) OverloadPick? {
-    // `alt_recv` is the UFCS receiver's adapted value <-> &T shape. It rides along per candidate
-    // (+1 cost) instead of running as a second pass, so adapted candidates compete in the SAME
-    // ranked set: a catch-all that matches the un-adapted receiver must not preempt a structurally
-    // more specific overload that needs the adaptation.
-    let alt_args: List(Ty) = list(0, self.allocator)
+    report_ambiguity: bool = false, peel: &PeelCtx? = null) OverloadPick? {
+    // The receiver shapes, tried in order per candidate: as written (`arg_tys` itself), then
+    // `alt_recv` - the UFCS receiver adapted value <-> &T (+1 cost) - then, built on demand below,
+    // the wrapped values reached through `op_deref`. Every shape competes in the SAME ranked set: a
+    // catch-all that matches the un-adapted receiver must not preempt a structurally more specific
+    // overload that needs the adaptation or the peel. `st[ci].used` is 0 for as written, else 1 +
+    // the index into `alts`. Both lists allocate only once a shape is pushed: a plain direct call
+    // never pays for them.
+    let alts: List(RecvAlt) = list(0, self.allocator)
+    defer alts.deinit()
+    let alt_args: List(List(Ty)) = list(0, self.allocator)
     defer alt_args.deinit()
-    let has_alt = alt_recv.is_some() and arg_tys.len > 0
-    if has_alt {
-        alt_args.push(alt_recv.unwrap())
-        for i in 1..arg_tys.len {
-            alt_args.push(arg_tys[i])
+    if alt_recv.is_some() and arg_tys.len > 0 {
+        alts.push(RecvAlt { ty = alt_recv.unwrap(), penalty = 1u32, hops = 0usize })
+        alt_args.push(args_with_recv(self, arg_tys, alt_recv.unwrap()))
+    }
+
+    let st: List(CandProbe) = list(candidates.len, self.allocator)
+    defer st.deinit()
+    for ci in 0..candidates.len {
+        let c = &candidates[ci]
+        let u = 0usize
+        let probed = probe_candidate(self, c, arg_tys, named, ufcs_offset)
+        if probed.is_none() and alts.len > 0 {
+            let ap = probe_candidate(self, c, &alt_args[0], named, ufcs_offset)
+            if ap.is_some() {
+                u = 1
+                probed = Some(ProbeCost { coercions = ap.unwrap().coercions,
+                    penalty = ap.unwrap().penalty + alts[0].penalty })
+            }
+        }
+        const spec = if probed.is_some() { scheme_specificity(self, &c.signature,
+                arg_tys) } else { 0u32 }
+        st.push(CandProbe { cost = probed, used = u, spec = spec })
+    }
+
+    // The peel, only when it can change the outcome: nothing matched yet, the best match had to
+    // coerce, or a candidate that failed as written is structurally more specific than the best
+    // match (specificity outranks cost, so a peeled hit of higher specificity wins).
+    if peel.is_some() and arg_tys.len > 0 and peel_could_win(self, candidates, &st, arg_tys,
+        named) {
+        let first = alts.len
+        deref_alternatives(self, arg_tys[0], span, peel.unwrap(), &alts)
+        for ai in first..alts.len {
+            alt_args.push(args_with_recv(self, arg_tys, alts[ai].ty))
+        }
+        for ci in 0..candidates.len {
+            if st[ci].cost.is_some() {
+                continue
+            }
+            for ai in first..alts.len {
+                let ap = probe_candidate(self, &candidates[ci], &alt_args[ai], named, ufcs_offset)
+                if ap.is_some() {
+                    st[ci].cost = Some(ProbeCost { coercions = ap.unwrap().coercions,
+                        penalty = ap.unwrap().penalty + alts[ai].penalty })
+                    st[ci].used = ai + 1
+                    st[ci].spec = scheme_specificity(self, &candidates[ci].signature, arg_tys)
+                    break
+                }
+            }
         }
     }
 
@@ -6684,28 +6788,18 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     let best_cost = 0u32
     let best_generics = 0usize
     let best_spec = 0u32
-    let best_used_alt = false
     let ambiguous = false
     let var_ambiguous = false
 
     for ci in 0..candidates.len {
         let c = &candidates[ci]
-        let used_alt = false
-        let probed = probe_candidate(self, c, arg_tys, named, ufcs_offset)
-        if probed.is_none() and has_alt {
-            let alt_probed = probe_candidate(self, c, &alt_args, named, ufcs_offset)
-            if alt_probed.is_some() {
-                used_alt = true
-                let ap = alt_probed.unwrap()
-                probed = Some(ProbeCost { coercions = ap.coercions, penalty = ap.penalty + 1u32 })
-            }
-        }
+        let probed = st[ci].cost
         if probed.is_some() {
             const p = probed.unwrap()
             let coercions = p.coercions
             let cost = p.total()
             let generics = c.signature.quantified.len()
-            let spec = scheme_specificity(self, &c.signature, arg_tys)
+            let spec = st[ci].spec
             let better = best.is_none() or coercions < best_coercions
                 or (coercions == best_coercions and spec > best_spec)
                 or (coercions == best_coercions and spec == best_spec and cost < best_cost)
@@ -6717,7 +6811,6 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
                 best_cost = cost
                 best_generics = generics
                 best_spec = spec
-                best_used_alt = used_alt
                 ambiguous = false
             } else if best.is_some() {
                 // An exact tie on every ranking key. Who breaks it decides what happens: an
@@ -6774,9 +6867,10 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
         fparams.push(self.engine.interner.child_at(f.params, i))
     }
     let checked = non_variadic_arg_count(w, fparams.len, arg_tys.len)
+    let best_used = st[best.unwrap()].used
     for i in 0..checked {
         // Commit with the receiver shape the winner actually matched.
-        let arg = if i == 0 and best_used_alt { alt_args[0] } else { arg_tys[i] }
+        let arg = if i == 0 and best_used > 0 { alts[best_used - 1].ty } else { arg_tys[i] }
         const o = self.engine.unify(arg, fparams[i])
         report_unify(self, &o, E_TYPE_MISMATCH, span)
     }
@@ -6812,7 +6906,86 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     } else {
         binds.deinit()
     }
-    return Some(OverloadPick { id = w.id, ret = f.ret, params = fparams, inst = inst })
+    let hops = if best_used > 0 { alts[best_used - 1].hops } else { 0usize }
+    return Some(OverloadPick { id = w.id, ret = f.ret, params = fparams, inst = inst, hops = hops })
+}
+
+// Whether trying the receiver through `op_deref` could change `resolve_overload`'s outcome, given
+// the as-written probes: nothing matched yet, the best match coerced an argument, or a candidate
+// that failed is structurally more specific than the best match and could still take the call
+// through a hop - its arity window admits the arguments, and its receiver parameter is not the
+// receiver's own nominal (a hop always lands on a different one). The two filters keep the hot
+// paths (`d.set(k, v)` against the four-parameter unmanaged `set` and the `Dict(OwnedString, V)`
+// overload) from building a peel that cannot win.
+fn peel_could_win(self: &Checker, candidates: &List(FunctionScheme), st: &List(CandProbe),
+    arg_tys: &List(Ty), named: &NamedArgs?) bool {
+    let best_spec = 0u32
+    let matched = false
+    for ci in 0..candidates.len {
+        if st[ci].cost.is_none() {
+            continue
+        }
+        if st[ci].cost.unwrap().coercions > 0 {
+            return true
+        }
+        if !matched or st[ci].spec > best_spec {
+            best_spec = st[ci].spec
+        }
+        matched = true
+    }
+    if !matched {
+        return true
+    }
+    let recv_head = head_nominal(self, arg_tys[0])
+    let n_named = if named.is_some() { named.unwrap().names.len } else { 0usize }
+    for ci in 0..candidates.len {
+        if st[ci].cost.is_some() {
+            continue
+        }
+        let c = &candidates[ci]
+        let f = scheme_fn_ty(self, &c.signature)
+        if f.is_none() or f.unwrap().params.len == 0 {
+            continue
+        }
+        if !arity_accepts(c, f.unwrap().params.len, arg_tys.len + n_named) {
+            continue
+        }
+        let param_head = head_nominal(self, self.engine.interner.child_at(f.unwrap().params, 0))
+        if param_head.is_some() and recv_head.is_some()
+            and param_head.unwrap() == recv_head.unwrap() {
+            continue
+        }
+        st[ci].spec = scheme_specificity(self, &c.signature, arg_tys)
+        if st[ci].spec > best_spec {
+            return true
+        }
+    }
+    return false
+}
+
+// Whether `supplied` arguments fall in the candidate's arity window: at least the required ones,
+// and no more than declared unless a variadic tail takes the surplus.
+fn arity_accepts(c: &FunctionScheme, n_params: usize, supplied: usize) bool {
+    return supplied >= c.required_params and (c.has_variadic or supplied <= n_params)
+}
+
+// The nominal a type names, through any reference layers; null for anything else.
+fn head_nominal(self: &Checker, t: Ty) NominalId? {
+    return ty_node(self, self.engine.resolve(t)) match {
+        NRef(inner) => head_nominal(self, inner)
+        NNominal(nn) => Some(nn.id)
+        _ => null
+    }
+}
+
+// `arg_tys` with its first entry - the receiver - replaced by `recv`.
+fn args_with_recv(self: &Checker, arg_tys: &List(Ty), recv: Ty) List(Ty) {
+    let out: List(Ty) = list(arg_tys.len, self.allocator)
+    out.push(recv)
+    for i in 1..arg_tys.len {
+        out.push(arg_tys[i])
+    }
+    return out
 }
 
 // Whether the tie between two equally-ranked candidates turns on an argument that is a still-open
@@ -6970,8 +7143,7 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty),
         }
     }
     let supplied = arg_tys.len + n_named
-    let arity_ok = supplied >= c.required_params and (c.has_variadic or supplied <= n_params)
-    if !arity_ok {
+    if !arity_accepts(c, n_params, supplied) {
         if slots.is_some() {
             let dead = slots.unwrap()
             dead.deinit()
@@ -7519,7 +7691,7 @@ fn member_deref_retry_at(self: &Checker, member: String, span: SourceSpan, recv_
 
         let fty = struct_field_lookup(self, inner, member)
         if fty.is_some() {
-            commit_deref_chain(self, &chain, span)
+            commit_deref_chain(self, &chain, chain.len, span)
             return fty
         }
 
@@ -11033,6 +11205,163 @@ test "structural specificity outranks quantifier count in overload ranking" {
     let errs = count_check_errors(["pub type Pair = struct(A, B) { a: A b: B }\npub fn pick(x: Pair($A, $B)) i32 { return 1 }\npub fn pick(x: $T) bool { return true }\nfn main() i32 { let p: Pair(i32, u8) p.a = 1i32 p.b = 2u8 return pick(p) }\n"],
         ["m"])
     assert_eq(errs, 0 as usize, "the structured overload wins despite more quantified vars")
+}
+
+// =============================================================================
+// Overload ranking: given the signatures in scope, which one a call resolves to
+// =============================================================================
+
+// What one call resolved to: the winner's declared type rendered with nominal names (`fn(&Inner)
+// i64`; a type parameter renders as `?N`) and the `op_deref` chain length recorded on the call for
+// lowering.
+type ResolvedCall = struct {
+    signature: OwnedString
+    hops: usize
+}
+
+// Check `src` as module `m` and report the overload its one call to `callee` resolved to - a
+// spelled call (`resolved_targets`) or a protocol operator such as `op_index_ref` or `iter`
+// (`resolved_ops`). A generic winner is read back through its specialization.
+fn resolved_call(src: String, callee: String) ResolvedCall {
+    let res = check_result_of([src], ["m"])
+    defer res.deinit()
+    let sb = string_builder(64)
+    let hops = 0usize
+    for e in res.resolved_targets {
+        let fid: u32? = e.value match {
+            RtFunction(id) => Some(id)
+            RtSpecialized(sid) => Some(res.specializations.get(sid).function_id)
+            _ => null
+        }
+        if fid.is_some() {
+            note_resolved(&res, e.key, fid.unwrap(), callee, &sb, &hops)
+        }
+    }
+    for o in res.resolved_ops {
+        let fid = o.value.spec_id match {
+            Some(sid) => res.specializations.get(sid).function_id
+            None => o.value.function_id
+        }
+        note_resolved(&res, o.key, fid, callee, &sb, &hops)
+    }
+    return .{ signature = sb.to_string(), hops = hops }
+}
+
+// Render `fid`'s signature into `sb` and read the hop chain on `node` when `fid` is `callee`.
+fn note_resolved(res: &TypeCheckResult, node: NodeId, fid: u32, callee: String, sb: &StringBuilder,
+    hops: &usize) {
+    let scheme = res.functions.find_by_id(fid)
+    if scheme.is_none() or scheme.unwrap().name != callee {
+        return
+    }
+    format_with_names(&res.interner, scheme.unwrap().signature.body, sb, Some(&res.nominals))
+    let chain = res.receiver_derefs.get(node)
+    if chain.is_some() {
+        hops.* = chain.unwrap().len
+    }
+}
+
+// `Inner`, and `Wrap` reaching it through `op_deref`, in front of `rest`.
+fn with_wrap(rest: String) OwnedString {
+    let sb = string_builder(256)
+    sb.append("pub type Inner = struct { value: i64 }\n")
+    sb.append("pub type Wrap = struct { pad: i64 inner: Inner }\n")
+    sb.append("pub fn op_deref(w: &Wrap) &Inner { return &w.inner }\n")
+    sb.append(rest)
+    return sb.to_string()
+}
+
+test "ranking: a concrete parameter beats a catch-all on a direct call" {
+    let src = with_wrap("pub fn f(x: Inner) i64 { return 1 }\npub fn f(x: $T) i64 { return 2 }\nfn main() i64 { let i: Inner return f(i) }\n")
+    defer src.deinit()
+    let r = resolved_call(src.as_view(), "f")
+    defer r.signature.deinit()
+    assert_true(r.signature.as_view() == "fn(Inner) i64",
+        "the nominal parameter is the stricter match")
+}
+
+test "ranking: a value receiver adapts to a reference parameter and still beats a catch-all" {
+    let src = with_wrap("pub fn f(x: &Inner) i64 { return 1 }\npub fn f(x: $T) i64 { return 2 }\nfn main(i: Inner) i64 { return i.f() }\n")
+    defer src.deinit()
+    let r = resolved_call(src.as_view(), "f")
+    defer r.signature.deinit()
+    assert_true(r.signature.as_view() == "fn(&Inner) i64",
+        "adaptation costs less than losing specificity")
+    assert_eq(r.hops, 0 as usize, "no op_deref hop")
+}
+
+test "ranking: a direct hit beats an equally specific overload through op_deref" {
+    let src = with_wrap("pub fn f(x: &Wrap) i64 { return 1 }\npub fn f(x: &Inner) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n")
+    defer src.deinit()
+    let r = resolved_call(src.as_view(), "f")
+    defer r.signature.deinit()
+    assert_true(r.signature.as_view() == "fn(&Wrap) i64", "the wrapper's own overload wins")
+    assert_eq(r.hops, 0 as usize, "no op_deref hop")
+}
+
+test "ranking: a concrete overload through op_deref beats a catch-all" {
+    let src = with_wrap("pub fn f(x: &Inner) i64 { return 1 }\npub fn f(x: $I) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n")
+    defer src.deinit()
+    let r = resolved_call(src.as_view(), "f")
+    defer r.signature.deinit()
+    assert_true(r.signature.as_view() == "fn(&Inner) i64", "the peeled receiver's overload wins")
+    assert_eq(r.hops, 1 as usize, "one op_deref hop recorded for lowering")
+}
+
+test "ranking: the peel also runs through a generic wrapper" {
+    let src = with_wrap("pub type Box = struct(T) { pad: i64 inner: T }\npub fn op_deref(b: &Box($T)) &T { return &b.inner }\npub fn f(x: &Inner) i64 { return 1 }\npub fn f(x: $I) i64 { return 2 }\nfn main(b: &Box(Inner)) i64 { return b.f() }\n")
+    defer src.deinit()
+    let r = resolved_call(src.as_view(), "f")
+    defer r.signature.deinit()
+    assert_true(r.signature.as_view() == "fn(&Inner) i64", "the peeled receiver's overload wins")
+    assert_eq(r.hops, 1 as usize, "one op_deref hop recorded for lowering")
+}
+
+test "ranking: the peel chains through two wrappers" {
+    let src = with_wrap("pub type Outer = struct { tag: i64 w: Wrap }\npub fn op_deref(o: &Outer) &Wrap { return &o.w }\npub fn f(x: &Inner) i64 { return 1 }\npub fn f(x: $I) i64 { return 2 }\nfn main(o: &Outer) i64 { return o.f() }\n")
+    defer src.deinit()
+    let r = resolved_call(src.as_view(), "f")
+    defer r.signature.deinit()
+    assert_true(r.signature.as_view() == "fn(&Inner) i64", "the innermost receiver's overload wins")
+    assert_eq(r.hops, 2 as usize, "both hops recorded for lowering")
+}
+
+test "ranking: a catch-all with a callback resolves by the peeled receiver too" {
+    // The `Dict.any(fn(k, v) ...)` shape: std.iter's `any($I, $F)` matches the wrapper directly and
+    // would hand the callback one argument.
+    let src = with_wrap("pub fn any(x: &Inner, pred: $F) bool { return pred(x.value, x.value) }\npub fn any(it: $I, pred: $F) bool { return pred(0i64) }\nfn main(w: &Wrap) bool { return w.any(fn(a, b) { a == b }) }\n")
+    defer src.deinit()
+    let r = resolved_call(src.as_view(), "any")
+    defer r.signature.deinit()
+    assert_true(r.signature.as_view().starts_with("fn(&Inner, "), "the entry-wise overload wins")
+    assert_eq(r.hops, 1 as usize, "one op_deref hop recorded for lowering")
+}
+
+test "ranking: indexing resolves op_index_ref through op_deref, like the call it desugars to" {
+    let src = with_wrap("pub fn op_index_ref(x: &Inner, i: usize) &i64 { return &x.value }\nfn main(w: &Wrap) i64 { return w[0usize] }\n")
+    defer src.deinit()
+    let r = resolved_call(src.as_view(), "op_index_ref")
+    defer r.signature.deinit()
+    assert_true(r.signature.as_view() == "fn(&Inner, usize) &i64", "the inner type's operator")
+    assert_eq(r.hops, 1 as usize, "one op_deref hop recorded on the index node")
+}
+
+test "ranking: for resolves iter through op_deref, like the call it desugars to" {
+    let src = with_wrap("pub type It = struct { n: i64 }\npub fn iter(x: &Inner) It { return It { n = x.value } }\npub fn next(it: &It) i64? { if it.n == 0 { return null } it.n = it.n - 1 return Some(it.n) }\nfn main(w: &Wrap) i64 { let t = 0i64 for x in w { t = t + x } return t }\n")
+    defer src.deinit()
+    let r = resolved_call(src.as_view(), "iter")
+    defer r.signature.deinit()
+    assert_true(r.signature.as_view() == "fn(&Inner) It", "the inner type's iter")
+    assert_eq(r.hops, 1 as usize, "one op_deref hop recorded beside the iter pick")
+}
+
+test "ranking: the catch-all still wins when nothing through the peel matches" {
+    let src = with_wrap("pub type Other = struct { n: i64 }\npub fn f(x: &Other) i64 { return 1 }\npub fn f(x: $I) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n")
+    defer src.deinit()
+    let r = resolved_call(src.as_view(), "f")
+    defer r.signature.deinit()
+    assert_true(r.signature.as_view().starts_with("fn(?"), "only the catch-all matches")
+    assert_eq(r.hops, 0 as usize, "no op_deref hop")
 }
 
 test "generic template bodies only report when instantiated" {
