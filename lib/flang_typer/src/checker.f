@@ -28,6 +28,7 @@ import std.allocator
 import std.collections.dict
 import std.collections.list
 import std.collections.set
+import std.collections.string_pool
 import std.option
 import std.string
 import std.string_builder
@@ -10048,14 +10049,15 @@ fn harvest_spec_caches(self: &Checker) {
 // skipped pass cannot have changed anything.
 // ─────────────────────────────────────────────────────────────────────
 
-// The retiring modules' constant types, FQN -> handle. An unannotated constant's handle is its
+// The retiring modules' constant types, name id -> handle. An unannotated constant's handle is its
 // variable, which the aligned stream re-mints at the same id, so handle equality holds exactly when
 // the constant re-registers the same.
-fn snapshot_constants(self: &Checker, retiring: &Set(String)) Dict(String, Ty) {
-    let out: Dict(String, Ty) = dict(self.allocator)
+fn snapshot_constants(self: &Checker, retiring: &Set(String)) Dict(StrId, Ty) {
+    let out: Dict(StrId, Ty) = dict(self.allocator)
     for entry in self.constants.entries {
-        const dot = last_dot(entry.key)
-        if !retiring.contains(module_of(entry.key, dot)) {
+        const fqn = self.constants.name(entry.key)
+        const dot = last_dot(fqn)
+        if !retiring.contains(module_of(fqn, dot)) {
             continue
         }
         out.set(entry.key, entry.value)
@@ -10065,11 +10067,12 @@ fn snapshot_constants(self: &Checker, retiring: &Set(String)) Dict(String, Ty) {
 
 // Whether the retiring modules' constants changed across the signature phase: one added, removed,
 // or re-registered at a different type.
-fn constants_differ(self: &Checker, old: &Dict(String, Ty), retiring: &Set(String)) bool {
+fn constants_differ(self: &Checker, old: &Dict(StrId, Ty), retiring: &Set(String)) bool {
     let count: usize = 0
     for entry in self.constants.entries {
-        const dot = last_dot(entry.key)
-        if !retiring.contains(module_of(entry.key, dot)) {
+        const fqn = self.constants.name(entry.key)
+        const dot = last_dot(fqn)
+        if !retiring.contains(module_of(fqn, dot)) {
             continue
         }
         count = count + 1
@@ -10245,14 +10248,16 @@ fn default_texts_differ(old: &List(OwnedString), new: &List(OwnedString)) bool {
 // modules' alias bodies across the eviction.
 // ─────────────────────────────────────────────────────────────────────
 
-// The retiring modules' alias bodies, FQN -> canonical spelling. Keys are the alias registry's
-// stable FQN views, which eviction leaves in place. A body with no canonical spelling is left out;
-// `aliases_differ` then counts its re-registration as a change, which is the safe direction.
-fn snapshot_aliases(self: &Checker, retiring: &Set(String)) Dict(String, OwnedString) {
-    let out: Dict(String, OwnedString) = dict(self.allocator)
+// The retiring modules' alias bodies, name id -> canonical spelling. Ids are the alias registry's
+// interned names, which eviction leaves in place and a re-registration lands on again. A body with
+// no canonical spelling is left out; `aliases_differ` then counts its re-registration as a change,
+// which is the safe direction.
+fn snapshot_aliases(self: &Checker, retiring: &Set(String)) Dict(StrId, OwnedString) {
+    let out: Dict(StrId, OwnedString) = dict(self.allocator)
     for entry in self.aliases.entries {
-        const dot = last_dot(entry.key)
-        if !retiring.contains(module_of(entry.key, dot)) {
+        const fqn = self.aliases.name(entry.key)
+        const dot = last_dot(fqn)
+        if !retiring.contains(module_of(fqn, dot)) {
             continue
         }
         let sb = string_builder(32, self.allocator)
@@ -10268,11 +10273,12 @@ fn snapshot_aliases(self: &Checker, retiring: &Set(String)) Dict(String, OwnedSt
 
 // Whether the retiring modules' aliases changed across re-collection: one added, one removed, one
 // whose body spells differently, or one whose body cannot be spelled at all.
-fn aliases_differ(self: &Checker, old: &Dict(String, OwnedString), retiring: &Set(String)) bool {
+fn aliases_differ(self: &Checker, old: &Dict(StrId, OwnedString), retiring: &Set(String)) bool {
     let current: usize = 0
     for entry in self.aliases.entries {
-        const dot = last_dot(entry.key)
-        if !retiring.contains(module_of(entry.key, dot)) {
+        const fqn = self.aliases.name(entry.key)
+        const dot = last_dot(fqn)
+        if !retiring.contains(module_of(fqn, dot)) {
             continue
         }
         current = current + 1

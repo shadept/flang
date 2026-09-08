@@ -1008,7 +1008,7 @@ Requires `import std.test`. Test blocks are module-scoped, not exported. Run wit
 ```
 core/             runtime bindings, platform integration (auto-imported)
 std/              standard modules: text (string, string_builder), allocator, option, result, ...
-std/collections/  List, Dict, Set, Stack, Deque, Bitset, the iterator combinators, Journal, MultiMap
+std/collections/  List, Dict, Set, Stack, Deque, Bitset, the iterator combinators, Journal, MultiMap, StringPool
 std/encoding/     serialization (JSON, codec)
 std/io/           input/output, filesystem, readers/writers
 ```
@@ -1036,4 +1036,6 @@ since a new collection needs storage of its own. Only the building blocks come i
 A composite built on them is managed only, storing its allocator once: `Journal(T)` (std.journal),
 an undo log with nested checkpoints whose two buffers are reused across regions; `MultiMap(K, V)`
 (std.multimap), a key-to-many-values table whose values share one pool, chained per key, so the
-map is two allocations whatever the key count.
+map is two allocations whatever the key count; `StringPool` (std.string_pool), interned strings in
+one buffer named by a dense `StrId`, so a table that keys by name keys by an integer and every
+name is stored once, whatever the number of tables citing it.

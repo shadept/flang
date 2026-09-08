@@ -1551,7 +1551,9 @@ over a field for the scope where its allocator is known, and the managed wrapper
 `#managed_list`/`#managed_dict` generators, one implementation per operation). What remains is
 migrating the composites below to store one allocator and hold unmanaged children; the survey of
 2026-09-07 ranks them: ~~`Tarjan` (demand.f), `BuildOptions`, `FqnMap`, lower's `Env`,
-`TypeEnv`, `UnionFind`~~ (done, one allocator each), then `InferenceResults`+`CapturedKeys`,
+`TypeEnv`, `UnionFind`~~ (done, one allocator each; 2026-09-08: `FqnMap` also keys by
+`StrId` over a `std.string_pool`, so a registry's names live in one buffer instead of one
+`OwnedString` block each), then `InferenceResults`+`CapturedKeys`,
 `TypeInterner`, `OwnPass`, `TemplateState`, `LowerCtx`; `Checker`, `TypeCheckResult`, `AnalyzedProject` and the FIR structs stay managed (their
 containers are handed out as managed values or live under two allocators)
 **Affected:** any struct composing several allocator-carrying containers — `UnionFind` (nodes Dict + undo Stack of Lists + own field), `Engine`, `Checker`, and every similar composite

@@ -11,3 +11,4 @@ pub import std.collections.list
 pub import std.collections.multimap
 pub import std.collections.set
 pub import std.collections.stack
+pub import std.collections.string_pool

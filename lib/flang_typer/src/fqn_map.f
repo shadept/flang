@@ -1,13 +1,19 @@
-// FQN-keyed map with import-visibility lookup - the shared shape behind the alias and constant
-// registries (type-alias bodies, module-level constant types), and any future "named thing per
-// module" table.
+// A registry of values named by fully qualified name, looked up with import visibility: the shared
+// shape behind the alias and constant registries (type-alias bodies, module-level constant types),
+// and any future "named thing per module" table.
 //
 // Lookup mirrors `NominalRegistry.lookup`'s visibility rules: a dotted name is self-authorising, a
 // bare name resolves against the current module then scans visible modules.
+//
+// Names are interned in a `StringPool` and the table keys by `StrId`, so a name is stored once and
+// lookups hash and compare integers. A name is never forgotten: evicting a module drops its values
+// and a re-registration under the same name lands on the same id, which is what lets a snapshot
+// taken before an eviction be compared after the re-registration by id.
 
 import std.allocator
 import std.collections.dict
 import std.collections.list
+import std.collections.string_pool
 import std.option
 import std.string
 import std.string_builder
@@ -15,15 +21,12 @@ import std.string_builder
 import flang_typer.nominal_registry
 import flang_typer.visibility
 
-// A registry of values named by fully qualified name, looked up with import visibility: a dotted
-// name resolves as itself, a bare name resolves against the current module and then the modules it
-// can see. One allocator serves the table and the key buffers it owns.
+// A registry of `V`s named by FQN. One allocator serves the table and the name pool.
 pub type FqnMap = struct(V) {
-    // FQN -> value. Keys are views into `owned_fqns`; values are stored as-is and never freed here
-    // (they borrow the AST or the engine's allocator).
-    entries: UnmanagedDict(String, V)
-    owned_fqns: UnmanagedList(OwnedString)
-    // The one allocator both containers allocate through.
+    // Name id -> value. Values are stored as-is and never freed here: they borrow the AST or the
+    // engine's allocator.
+    entries: UnmanagedDict(StrId, V)
+    names: StringPool
     allocator: &Allocator
 }
 
@@ -33,95 +36,110 @@ pub type FqnMap = struct(V) {
 pub fn fqn_map(allocator: &Allocator? = null) FqnMap($V) {
     let out: FqnMap(V)
     out.allocator = allocator.or_global()
+    out.names = string_pool(out.allocator)
     return out
 }
 
+// Frees the table and the name pool. The values are not deinited: the map never owned them.
 pub fn deinit(self: &FqnMap($V)) {
-    self.owned_fqns.deinit(self.allocator)
     self.entries.deinit(self.allocator)
+    self.names.deinit()
 }
 
-// True when a value is already registered under this exact FQN.
+// Returns whether a value is registered under exactly `fqn`.
 pub fn contains(self: &FqnMap($V), fqn: String) bool {
-    return self.entries.contains(fqn)
+    return self.names.find(fqn) match {
+        Some(id) => self.entries.contains(id)
+        None => false
+    }
 }
 
-// Register a value. The caller transfers ownership of `fqn_owned`; its heap buffer keeps the key
-// view stable for the map's lifetime.
-pub fn register(self: &FqnMap($V), fqn_owned: OwnedString, value: V) {
-    let idx = self.owned_fqns.len
-    self.owned_fqns.push(fqn_owned, self.allocator)
-    let stable = self.owned_fqns[idx].as_view()
-    self.entries.set(stable, value, self.allocator)
+// Registers `value` under `fqn`, replacing a value already there. Takes ownership of `fqn`: the
+// name is copied into the pool and `fqn` is freed, whether or not it was already interned. Panics
+// when the pool or the table cannot grow.
+pub fn register(self: &FqnMap($V), fqn: OwnedString, value: V) {
+    const id = self.names.intern(fqn.as_view())
+    fqn.deinit()
+    self.entries.set(id, value, self.allocator)
 }
 
-// Drop every entry whose FQN sits directly in `module`. The key buffers stay in `owned_fqns`:
-// nothing else views them, and a re-registration brings its own.
+// Returns the name with id `id`, as a view valid until the next `register`. Panics on an id the map
+// never handed out.
+pub fn name(self: &FqnMap($V), id: StrId) String {
+    return self.names.get(id)
+}
+
+// Drops every value whose FQN sits directly in `module`. The names stay interned, so a value
+// registered again under one of them lands on the same id.
 pub fn evict_module(self: &FqnMap($V), module: String) {
-    let doomed: List(String) = list(0, self.allocator)
+    let doomed: List(StrId) = list(0, self.allocator)
     defer doomed.deinit()
     for entry in self.entries {
-        const dot = last_dot(entry.key)
-        if module_of(entry.key, dot) == module {
+        const fqn = self.names.get(entry.key)
+        const dot = last_dot(fqn)
+        if module_of(fqn, dot) == module {
             doomed.push(entry.key)
         }
     }
-    for k in doomed {
-        const _gone = self.entries.remove(k)
+    for id in doomed {
+        const _gone = self.entries.remove(id)
     }
 }
 
-// Direct FQN read, no visibility scope.
+// Returns the value registered under exactly `fqn`, or null.
 pub fn get_fqn(self: &FqnMap($V), fqn: String) V? {
-    return self.entries.get(fqn)
+    return self.names.find(fqn) match {
+        Some(id) => self.entries.get(id)
+        None => null
+    }
 }
 
-// A visibility-scoped hit that also names the winning FQN. `fqn` is the map's stable key view
-// (owned_fqns-backed), valid for the map's lifetime.
+// A visibility-scoped hit: the winning FQN, as a view into the name pool valid until the next
+// `register`, and its value.
 pub type FqnHit = struct(V) {
     fqn: String
     value: V
 }
 
-// Like `lookup`, but returns the stable FQN key alongside the value - for consumers that need to
-// cite WHICH constant won (RtConst). One linear scan per case; these maps are small.
+// Resolves `name` in `vis`'s scope and returns the winning FQN alongside the value, for a caller
+// that must cite which name won. A dotted or exact name matches itself; a bare name matches the
+// current module's, then the first visible module's, in table order.
 pub fn lookup_entry(self: &FqnMap($V), name: String, vis: &Visibility) FqnHit($V)? {
-    // Dotted (or exact) name: match the stored key itself, so the returned view is the stable one,
-    // not the caller's transient buffer.
-    for entry in self.entries {
-        if entry.key == name {
-            return Some(.{ fqn = entry.key, value = entry.value })
+    const exact = self.names.find(name)
+    if exact.is_some() {
+        const hit = self.entries.get(exact.unwrap())
+        if hit.is_some() {
+            return Some(.{ fqn = self.names.get(exact.unwrap()), value = hit.unwrap() })
         }
     }
 
     if vis.current_module.is_some() {
         let cur = vis.current_module.unwrap()
         let qualified = $"{cur}.{name}"
-        for entry in self.entries {
-            if entry.key == qualified.as_view() {
-                qualified.deinit()
-                return Some(.{ fqn = entry.key, value = entry.value })
+        defer qualified.deinit()
+        const own = self.names.find(qualified.as_view())
+        if own.is_some() {
+            const hit = self.entries.get(own.unwrap())
+            if hit.is_some() {
+                return Some(.{ fqn = self.names.get(own.unwrap()), value = hit.unwrap() })
             }
         }
-        qualified.deinit()
     }
 
     for entry in self.entries {
-        let fqn = entry.key
-        let dot = last_dot(fqn)
-        let short = short_name_of(fqn, dot)
-        if short != name {
+        const fqn = self.names.get(entry.key)
+        const dot = last_dot(fqn)
+        if short_name_of(fqn, dot) != name {
             continue
         }
-        let module = module_of(fqn, dot)
-        if vis.allows(module) {
-            return Some(.{ fqn = entry.key, value = entry.value })
+        if vis.allows(module_of(fqn, dot)) {
+            return Some(.{ fqn = fqn, value = entry.value })
         }
     }
     return null
 }
 
-// Resolve a name in the caller's visibility scope.
+// Resolves `name` in `vis`'s scope and returns the value, or null.
 pub fn lookup(self: &FqnMap($V), name: String, vis: &Visibility) V? {
     return self.lookup_entry(name, vis) match {
         Some(h) => Some(h.value)
