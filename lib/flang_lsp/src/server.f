@@ -37,10 +37,10 @@ import flang_analysis.resolver
 import flang_core.diagnostic
 import flang_core.span
 import flang_fmt.fmt
+import flang_parser.trivia
 import flang_typer.checker
 import flang_typer.function_registry
 import flang_typer.inference_results
-import flang_typer.interner
 import flang_typer.nominal_registry
 import flang_typer.reporter
 import flang_typer.result
@@ -1261,6 +1261,14 @@ fn decl_label(self: &LspServer, pi: ProjectId, span: SourceSpan) String? {
     return Some(text[span.start..end])
 }
 
+// The docstring of the declaration at `span` - the comment run glued above its first token.
+fn doc_for(self: &LspServer, pi: ProjectId, span: SourceSpan) OwnedString? {
+    if !self.location_span_ok(pi, span) {
+        return null
+    }
+    return doc_above(self.ws.projects[pi].unit.sources[span.file_id as usize].as_view(), span.start)
+}
+
 // What brings the binding declared at exactly `span` into scope - `let`, `const`, `param`, `for` -
 // or null when no binder's name node sits there. The returned string is a literal, safe past the
 // binder list's teardown.
@@ -1305,6 +1313,21 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     const result = &unit.result
     const text = unit.sources[fid as usize].as_view()
 
+    // An import names one file: its path, with that module's docstring. Never falls through - a
+    // path segment like `list` would otherwise hover as every declaration of that name.
+    const imp = import_at(&unit.modules[fid as usize], offset)
+    if imp.is_some() {
+        let ref = imp.unwrap()
+        defer ref.deinit()
+        const target = file_id_of_fqn(unit, ref.path.as_view())
+        let doc: OwnedString? = null
+        if target.is_some() {
+            doc = module_doc(unit.sources[target.unwrap() as usize].as_view())
+        }
+        self.respond_hover(msg, $"import {ref.path.as_view()}", doc, text, ref.span)
+        return
+    }
+
     const word = identifier_at(text, offset)
     if word.is_none() {
         self.respond_null(msg)
@@ -1317,6 +1340,8 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     const th = typed_at(result, fid, offset)
 
     let label: OwnedString? = null
+    // The declaration whose docstring joins the label, when the label came from one.
+    let doc_span: SourceSpan? = null
 
     // A resolved target answers when its node is anchored to the word: starting at it (reads,
     // callees), ending at it (enum variant refs `Color.Red`), or - for function targets only -
@@ -1350,6 +1375,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
                 const l = self.decl_label(pi, dspan.unwrap())
                 if l.is_some() {
                     label = Some(from_view(l.unwrap()))
+                    doc_span = dspan
                 }
             }
         }
@@ -1399,6 +1425,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
             const rendered = render_ty(result, fh.unwrap().ty, Some(vars))
             label = Some($"field {wname}: {rendered.as_view()}")
             rendered.deinit()
+            doc_span = Some(fh.unwrap().decl_span)
         }
     }
 
@@ -1436,7 +1463,11 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         const wend = wstart + wname.len
         const call_shaped = wend < text.len and text[wend] == '('
         if !is_member or call_shaped {
-            label = self.registry_hover(pi, wname)
+            const rh = self.registry_hover(pi, wname)
+            if rh.is_some() {
+                label = Some(rh.unwrap().label)
+                doc_span = rh.unwrap().sole
+            }
         }
     }
 
@@ -1444,7 +1475,14 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         self.respond_null(msg)
         return
     }
+    const doc = if doc_span.is_some() { self.doc_for(pi, doc_span.unwrap()) } else { null }
+    self.respond_hover(msg, label.unwrap(), doc, text, span)
+}
 
+// The hover response: `label` as a flang code block, `doc` (consumed) as markdown prose below it,
+// over `span` in `text`.
+fn respond_hover(self: &LspServer, msg: &RpcMessage, label: OwnedString, doc: OwnedString?,
+    text: String, span: SourceSpan) {
     let sb = string_builder(512)
     defer sb.deinit()
     let jenc = json_encoder(sb.writer())
@@ -1456,7 +1494,17 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     e.key("kind")
     e.encode_str("markdown")
     e.key("value")
-    const md = $"```flang\n{label.unwrap().as_view()}\n```"
+    let md = string_builder(label.len + 32)
+    md.append("```flang\n")
+    md.append(label.as_view())
+    md.append("\n```")
+    if doc.is_some() {
+        const prose = doc_markdown(doc.unwrap().as_view())
+        md.append("\n\n")
+        md.append(prose.as_view())
+        prose.deinit()
+        doc.unwrap().deinit()
+    }
     e.encode_str(md.as_view())
     md.deinit()
     e.end_map()
@@ -1467,7 +1515,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     e.end_map()
     e.end_map()
     write_frame(self.writer, sb.as_view())
-    label.unwrap().deinit()
+    label.deinit()
 }
 
 // Every declaration named `name` in project `pi`'s registries: the function overload set, then
@@ -1503,19 +1551,27 @@ fn registry_decl_spans(self: &LspServer, pi: ProjectId, name: String) List(Sourc
     return out
 }
 
-// Those declarations as stacked labels, capped so a wide overload set stays readable.
-fn registry_hover(self: &LspServer, pi: ProjectId, name: String) OwnedString? {
+// Those declarations as stacked labels, capped so a wide overload set stays readable. `sole` is the
+// one declaration when the name has exactly one - the docstring belongs to it alone.
+type RegistryHover = struct {
+    label: OwnedString
+    sole: SourceSpan?
+}
+
+fn registry_hover(self: &LspServer, pi: ProjectId, name: String) RegistryHover? {
     let spans = self.registry_decl_spans(pi, name)
     defer spans.deinit()
     let sb = string_builder(128)
     let count: usize = 0
     let shown: usize = 0
+    let sole: SourceSpan? = null
     for &span in spans {
         const l = self.decl_label(pi, span.*)
         if l.is_none() {
             continue
         }
         count = count + 1
+        sole = if count == 1 { Some(span.*) } else { null }
         if shown >= 5 {
             continue
         }
@@ -1536,7 +1592,7 @@ fn registry_hover(self: &LspServer, pi: ProjectId, name: String) OwnedString? {
     }
     const out = sb.to_string()
     sb.deinit()
-    return Some(out)
+    return Some(RegistryHover { label = out, sole = sole })
 }
 
 // ---- textDocument/definition ----
@@ -2342,7 +2398,7 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
 
 // A small analyzed project for the cursor-request tests, fabricated in memory: one file at
 // /t/m.f, no disk, no stdlib.
-const DEMO_SRC: String = "pub fn point(q: i32) i32 { return q }\npub type P = struct { x: i32 }\npub fn go(n: i32) i32 {\n    let a = point(3)\n    let s = P { x = 1 }\n    for v in 0..n {\n        let b = v\n    }\n    return a\n}\n// see Wide\npub fn pick(x: $T) $T { return x }\npub fn wait(k: i32) {\n    while k > 0 {\n        k = k - 1\n    }\n}\npub fn use_pick() i32 { return pick(7) }\npub fn wrap(y: $T) i32 { return point(8) }\npub fn use_wrap() i32 { return wrap(true) }\npub fn lone(z: $T) i32 { return point(4) }\npub fn read_x(pp: P) i32 { return pp.x }\npub fn solo(w: $T, point: i32) i32 { return point }\npub type E = enum { A B }\npub fn pick_e() E { return E.A }\n"
+const DEMO_SRC: String = "pub fn point(q: i32) i32 { return q }\npub type P = struct { x: i32 }\npub fn go(n: i32) i32 {\n    let a = point(3)\n    let s = P { x = 1 }\n    for v in 0..n {\n        let b = v\n    }\n    return a\n}\n// see Wide\npub fn pick(x: $T) $T { return x }\npub fn wait(k: i32) {\n    while k > 0 {\n        k = k - 1\n    }\n}\npub fn use_pick() i32 { return pick(7) }\npub fn wrap(y: $T) i32 { return point(8) }\npub fn use_wrap() i32 { return wrap(true) }\npub fn lone(z: $T) i32 { return point(4) }\npub fn read_x(pp: P) i32 { return pp.x }\npub fn solo(w: $T, point: i32) i32 { return point }\npub type E = enum { A B }\npub fn pick_e() E { return E.A }\npub type Q = struct {\n    // The y.\n    y: i32\n}\npub fn read_y(qq: Q) i32 { return qq.y }\n"
 
 fn demo_project_into(srv: &LspServer) {
     let srcs: List(OwnedString) = list(2)
@@ -2613,6 +2669,24 @@ test "the qualifier of Enum.Variant resolves to the enum, the member to the vari
     demo_run("{\"jsonrpc\":\"2.0\",\"id\":35,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":24,\"character\":27}}}",
         &out3)
     assert_true(contains(out3.as_view(), "pub type E = enum"), "qualifier hovers as the enum")
+}
+
+test "hover on a callee shows the function's docstring" {
+    let out = string_builder(4096)
+    defer out.deinit()
+    demo_run("{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":17,\"character\":33}}}",
+        &out)
+    assert_true(contains(out.as_view(), "pub fn pick(x: $T) $T\\n```\\n\\nsee Wide"),
+        "the comment run above the declaration follows the code block")
+}
+
+test "hover on a member field shows the field's docstring" {
+    let out = string_builder(4096)
+    defer out.deinit()
+    demo_run("{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":29,\"character\":37}}}",
+        &out)
+    assert_true(contains(out.as_view(), "field y: i32\\n```\\n\\nThe y."),
+        "indented field docstring")
 }
 
 test "hover on keywords and annotations answers null" {

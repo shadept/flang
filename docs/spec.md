@@ -294,6 +294,8 @@ Comma-separated lists accept a trailing comma uniformly: function-call arguments
 
 `// line comment to end of line` is the only comment form. There is no `/* */` block comment, no `///` doc comment. Editor tooling handles "comment out a block" by inserting `//` per line.
 
+**Docstrings.** A run of `//` lines directly above a declaration is its docstring: each line holds nothing but indentation before the `//`, and no blank line sits between the run and the declaration's first token (`pub`, a `#directive`, a field or variant name). The rule is positional, not lexical - there is no `///`. It applies to every declaration: functions, types, fields, enum variants, consts. The run a file opens with is the module's docstring when a blank line (or the end of the file) separates it from what follows; glued to the first declaration, it documents that declaration instead. Read as prose, a docstring drops each line's `//` and one following space; what remains is structured the way Go doc comments are: a blank line (`//` alone) separates paragraphs and wrapped prose lines flow together; a line opening with `- `, `* `, `+ ` or `1. `, indented or not, is a list item and indented lines under it continue the item; any other run of indented lines is a code block, shown verbatim; backtick spans are inline code. Nothing else is syntax, though tooling renders the text as markdown so its other constructs work where a client supports them. Docstrings have no semantic effect; tooling (the LSP hover) surfaces them.
+
 ---
 
 ## 3. Value Semantics
