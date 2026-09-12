@@ -123,6 +123,17 @@ type PendingAnon = struct {
     fields: List(AnonFieldRec)
 }
 
+// A field access on a receiver whose type had not settled when the member was checked - a lambda
+// parameter that only the callee's instantiation pins. `placeholder` stands in for the field's type
+// until `resolve_pending_members` looks the field up on the settled receiver and unifies.
+type PendingMember = struct {
+    span: SourceSpan
+    recv: Ty
+    member: String
+    placeholder: Ty
+    module: String?
+}
+
 pub fn deinit(self: &PendingAnon) {
     self.fields.deinit()
 }
@@ -151,6 +162,9 @@ type PendingSpec = struct {
     // checks, so the template body resolves overloads the call site can see (the
     // `hash()`-for-`Dict` contract).
     caller_module: String
+    // Noted while a parked call was being redone. Kept out of the slot's pick log: the replay
+    // re-runs the parked call itself, which notes the pick again.
+    from_parked: bool
 }
 
 // The drain owns `tp_binds` and `inst_params`: it frees them when a pick is processed and carries
@@ -260,6 +274,11 @@ pub type Checker = struct {
     // Anonymous literals awaiting their nominal - resolved per body scope, before that scope's
     // specialization drain (a pinned field can be what makes a generic pick's signature concrete).
     pending_anons: List(PendingAnon)
+    // Member accesses on receivers still open when checked - resolved once the body's inference and
+    // its specialization drain have pinned the receiver.
+    pending_members: List(PendingMember)
+    // True while `resolve_pending_calls` redoes parked calls, so the picks they note are tagged.
+    resolving_parked: bool
     // Overloaded function NAMES in value position (`.map(deinit)`, `owned(v, deinit)`) awaiting
     // instantiation-time resolution: once the surrounding inference pins the slot's Func shape, the
     // overload
@@ -617,6 +636,8 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         spec_depth = 0usize,
         pending_literals = list(0, allocator),
         pending_anons = list(0, allocator),
+        pending_members = list(0, allocator),
+        resolving_parked = false,
         pending_fn_names = list(0, allocator),
         visible_by_module = dict(allocator),
         project_globals = list(0, allocator),
@@ -825,6 +846,7 @@ pub fn deinit(self: &Checker) {
     self.spec_call_spans.deinit()
     self.pending_literals.deinit()
     self.pending_anons.deinit()
+    self.pending_members.deinit()
     self.pending_fn_names.deinit()
     self.visible_by_module.deinit()
     for &g in self.project_globals { g.deinit() }
@@ -2371,8 +2393,11 @@ fn pending_ready(self: &Checker, p: &PendingSpec) bool {
 // `to_list(it)`'s `$T` comes from the `next` that drives it, and `next`'s own instantiation is
 // queued behind it. Each pass instantiates every ready pending and re-queues the rest (plus
 // anything the instantiations enqueued); the loop stops when a whole pass resolves nothing new, and
-// whatever is left is genuinely un-inferable.
-fn drain_pending_specs(self: &Checker) {
+// whatever is left is genuinely un-inferable - unless `report` is off: a first drain, run before
+// the scope's parked member accesses and calls are settled, leaves what it could not place queued
+// for the drain after them (a parked `x.double()` is what pins the lambda parameter `x` that an
+// `apply(f, x)` pick is waiting on).
+fn drain_pending_specs(self: &Checker, report: bool = true) {
     let queue = self.pending_specs
     self.pending_specs = list(0, self.allocator)
     loop {
@@ -2406,9 +2431,13 @@ fn drain_pending_specs(self: &Checker) {
         }
     }
     for p in queue {
-        report_uninferable_spec(self, &p)
-        p.tp_binds.deinit()
-        p.inst_params.deinit()
+        if report {
+            report_uninferable_spec(self, &p)
+            p.tp_binds.deinit()
+            p.inst_params.deinit()
+        } else {
+            self.pending_specs.push(p)
+        }
     }
     queue.deinit()
 }
@@ -2428,7 +2457,7 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
         params.push(self.engine.zonk(p.inst_params[i]))
     }
     let ret = self.engine.zonk(p.inst_ret)
-    if self.slot_log_on and self.spec_depth == 0 {
+    if self.slot_log_on and self.spec_depth == 0 and !p.from_parked {
         log_pick(self, p, &params, ret)
     }
     // Readiness is the drain's business (`pending_ready`); by here the only free vars left sit
@@ -2905,11 +2934,13 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     let saved_results = self.results
     let saved_pending = self.pending_specs
     let saved_anons = self.pending_anons
+    let saved_members = self.pending_members
     let saved_fn_names = self.pending_fn_names
     let saved_module = self.current_module
     self.results = inference_results(self.allocator)
     self.pending_specs = list(0, self.allocator)
     self.pending_anons = list(0, self.allocator)
+    self.pending_members = list(0, self.allocator)
     self.pending_fn_names = list(0, self.allocator)
     self.current_module = Some(template.module)
     self.spec_callers.push(p.caller_module)
@@ -2935,7 +2966,16 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
 
     check_function_body(self, &template.decl)
     resolve_anon_literals(self)
+    resolve_pending_members(self)
     resolve_fn_name_values(self)
+    // The frame's own parked calls settle between two drains, as a slot's do: the first drain pins
+    // what the body could not, the calls resolve against it, the second places the picks they made.
+    // A parked call is work a reuse cannot replay, so the frame stays live either way.
+    const frame_calls0 = self.spec_frames[self.spec_frames.len - 1].calls0
+    drain_pending_specs(self, false)
+    resolve_pending_members(self)
+    const had_calls = self.pending_calls.len > frame_calls0
+    resolve_pending_calls(self, frame_calls0)
     drain_pending_specs(self)
 
     self.env.pop_scope()
@@ -2949,7 +2989,7 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     // re-checking every demand).
     let frame = self.spec_frames.pop().unwrap()
     frame.hints.deinit()
-    const clean = self.diagnostics.len == frame.diags0 and self.pending_calls.len == frame.calls0
+    const clean = self.diagnostics.len == frame.diags0 and !had_calls
     self.specs.set_cache_info(sid, frame.vars0, frame.synth0, frame.lambda0,
         self.engine.var_counter - frame.vars0 - frame.child_vars,
         self.next_synth - frame.synth0 - frame.child_synth,
@@ -2969,6 +3009,7 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     self.results = saved_results
     self.pending_specs = saved_pending
     self.pending_anons = saved_anons
+    self.pending_members = saved_members
     self.pending_fn_names = saved_fn_names
     self.current_module = saved_module
 
@@ -5945,13 +5986,17 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     }
     let candidates = cands.unwrap()
 
-    // A still-unbound receiver (a construct inference doesn't cover yet) cannot arbitrate an
-    // overload set - committing the first match would bind it arbitrarily. Leave the call untyped
-    // until the receiver is known.
-    let recv_unbound = self.engine.is_var(self.engine.resolve(recv_ty))
-    if recv_unbound and candidates.len > 1 {
+    // A still-unbound receiver (a lambda parameter the callee's instantiation pins, a parked member
+    // access) cannot arbitrate an overload set, and even a lone candidate would bind it to the
+    // parameter's shape - `&Option($T)` for a value the call should auto-reference. Park the call:
+    // it resolves after the body's drain, when the receiver is known.
+    if self.engine.is_var(self.engine.resolve(recv_ty)) {
         candidates.deinit()
-        return Some(self.engine.fresh_var())
+        let full: List(Ty) = list(arg_tys.len + 1, self.allocator)
+        full.push(recv_ty)
+        full.push_all(arg_tys.as_slice())
+        return Some(park_call(self, call, ma.member, &full, pos_exprs, 1usize,
+                Some(self.engine.mk_ref(recv_ty))))
     }
 
     // Receiver adaptation: a value receiver also matches `&T` overloads and a reference receiver
@@ -6084,6 +6129,7 @@ fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &Over
         inst_params = inst.params,
         inst_ret = inst.ret,
         caller_module = self.current_module.unwrap(),
+        from_parked = self.resolving_parked,
     }
     // Parked, not instantiated here: the body scope's drain runs it once the enclosing inference
     // has settled. Instantiating EAGERLY at the call - which is what the reference does, and what
@@ -6180,9 +6226,15 @@ fn park_call(self: &Checker, call: &CallExpr, name: String, arg_tys: &List(Ty),
 // Redo every parked call now that inference has finished. A call whose argument settled resolves
 // and commits exactly as it would have at the call site; one still undecided is the genuinely
 // ambiguous case and reports (E2011) rather than picking by declaration order.
-fn resolve_pending_calls(self: &Checker) {
-    let parked = self.pending_calls
-    self.pending_calls = list(0, self.allocator)
+fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
+    let parked: List(PendingCall) = list(self.pending_calls.len - from, self.allocator)
+    for k in from..self.pending_calls.len {
+        parked.push(self.pending_calls[k])
+    }
+    self.pending_calls.truncate(from)
+    const was_resolving = self.resolving_parked
+    self.resolving_parked = true
+    defer self.resolving_parked = was_resolving
     for &pc in parked {
         let saved = self.current_module
         self.current_module = pc.module
@@ -6207,7 +6259,15 @@ fn resolve_pending_calls(self: &Checker) {
                 const pc_recv: Ty? = if pc.recv_extra > 0 { Some(pc.arg_tys[0]) } else { null }
                 let t = commit_pick(self, pick, pc.name, n_args, pc.span, pc.recv_extra,
                     &pc.pos_exprs, null, pc_recv)
-                self.results.record_type(self.node_of(pc.span), t)
+                // The placeholder `park_call` handed the call site flowed into the enclosing
+                // inference; the resolved type has to reach those uses, not just the node.
+                const node = self.node_of(pc.span)
+                const held = self.results.node_types.get(node)
+                if held.is_some() {
+                    const o = self.engine.unify(held.unwrap(), t)
+                    report_unify(self, &o, E_TYPE_MISMATCH, pc.span)
+                }
+                self.results.record_type(node, t)
             }
         }
         self.current_module = saved
@@ -7580,7 +7640,46 @@ fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
         push_diag_e(self, ma.span, E_FIELD_NOT_FOUND, $"no field `{ma.member}` on this type")
         return TY_ERROR
     }
-    return self.engine.fresh_var()
+    // An open receiver: the access is parked and its placeholder unified once the receiver settles.
+    const placeholder = self.engine.fresh_var()
+    if self.engine.is_var(self.engine.zonk(recv)) {
+        self.pending_members.push(PendingMember {
+            span = ma.span,
+            recv = recv,
+            member = ma.member,
+            placeholder = placeholder,
+            module = self.current_module,
+        })
+    }
+    return placeholder
+}
+
+// Finish every parked member access whose receiver has settled since: look the field up on the
+// receiver's nominal and unify the placeholder with its type, so a generic pick made through the
+// placeholder (`entry.prev.is_some()`) closes its `$T`. Runs before and after a body scope's drain,
+// since the drain is what pins a lambda parameter; a receiver still open afterwards stays parked
+// (its placeholder a var, which whatever needed it reports) until the scope discards it.
+fn resolve_pending_members(self: &Checker) {
+    let parked = self.pending_members
+    self.pending_members = list(0, self.allocator)
+    for &pm in parked {
+        const z = self.engine.zonk(pm.recv)
+        if self.engine.is_var(z) {
+            self.pending_members.push(pm.*)
+            continue
+        }
+        let saved = self.current_module
+        self.current_module = pm.module
+        const fty = struct_field_lookup(self, z, pm.member)
+        if fty.is_some() {
+            const o = self.engine.unify(pm.placeholder, fty.unwrap())
+            report_unify(self, &o, E_TYPE_MISMATCH, pm.span)
+        } else if struct_without_field(self, z, pm.member) {
+            push_diag_e(self, pm.span, E_FIELD_NOT_FOUND, $"no field `{pm.member}` on this type")
+        }
+        self.current_module = saved
+    }
+    parked.deinit()
 }
 
 // The field type an as-yet-unpinned anonymous literal records for `name`. Null when `recv` is not
@@ -8102,11 +8201,26 @@ fn zonk_specializations(self: &Checker) {
             continue
         }
         let ps: List(Ty) = list(sp.concrete_params.len, self.allocator)
+        let changed = false
         for k in 0..sp.concrete_params.len {
-            ps.push(self.engine.zonk(sp.concrete_params[k]))
+            const z = self.engine.zonk(sp.concrete_params[k])
+            changed = changed or z != sp.concrete_params[k]
+            ps.push(z)
         }
         let r = self.engine.zonk(sp.concrete_return)
+        changed = changed or r != sp.concrete_return
         self.specs.set_signature(sp.id, ps, r)
+        // A signature that moved carried the open var into the body too: the overlay was zonked at
+        // the end of `instantiate`, before the caller's drain pinned it (`is_some(&Option($T))` on
+        // a lambda parameter's field, settled only by the callee's own instantiation), and a var
+        // left there reaches layout. Re-zonk the body under the settled engine.
+        if changed {
+            let zonked: Dict(NodeId, Ty) = dict(sp.overlay.node_types.len(), self.allocator)
+            for entry in sp.overlay.node_types {
+                zonked.set(entry.key, self.engine.zonk(entry.value))
+            }
+            sp.overlay.replace_node_types(zonked)
+        }
     }
 }
 
@@ -9350,6 +9464,7 @@ type SigWatermark = struct {
     pending_calls: usize
     pending_fn_names: usize
     pending_anons: usize
+    pending_members: usize
 }
 
 fn sig_watermark(self: &Checker) SigWatermark {
@@ -9370,6 +9485,7 @@ fn sig_watermark(self: &Checker) SigWatermark {
         pending_calls = self.pending_calls.len,
         pending_fn_names = self.pending_fn_names.len,
         pending_anons = self.pending_anons.len,
+        pending_members = self.pending_members.len,
     }
 }
 
@@ -9399,6 +9515,7 @@ fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark,
         and self.pending_specs.len == w.pending_specs and self.pending_calls.len == w.pending_calls
         and self.pending_fn_names.len == w.pending_fn_names
         and self.pending_anons.len == w.pending_anons
+        and self.pending_members.len == w.pending_members
 
     let facts = self.sig_nodes
     self.sig_nodes = list(0, self.allocator)
@@ -9558,6 +9675,10 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
     const bodies_ns = elapsed_ns(bodies_start)
     const settle_start = monotonic_ns()
     resolve_anon_literals(self)
+    resolve_pending_members(self)
+    // A member access the drain has yet to settle unifies live, off the replay's script: the slot
+    // re-runs every demand rather than replaying with the receiver open.
+    const members_clean = self.pending_members.len == 0
     resolve_fn_name_values(self)
     let keys = self.results.end_capture()
     const var_burn = (self.engine.var_counter - vars0) as usize
@@ -9571,14 +9692,14 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
     self.slot_log_on = true
     self.site_log_on = true
     self.slot_uninferable = 0
-    drain_pending_specs(self)
-    self.slot_log_on = false
-    let picks = self.slot_picks
-    self.slot_picks = list(0, self.allocator)
-
+    drain_pending_specs(self, false)
+    resolve_pending_members(self)
     resolve_pending_calls(self)
     drain_pending_specs(self)
+    self.slot_log_on = false
     self.site_log_on = false
+    let picks = self.slot_picks
+    self.slot_picks = list(0, self.allocator)
     validate_literals(self, lit0, self.pending_literals.len)
     // The window's literal verdicts cannot be replayed - a flagged one keeps the module running.
     // Decided here, where the verdicts are final (nothing after the slot can pin its literals), so
@@ -9615,7 +9736,7 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
         picks = picks,
         calls = calls,
         spec_sites = sites,
-        cacheable = self.slot_uninferable == 0 and lits_clean,
+        cacheable = self.slot_uninferable == 0 and lits_clean and members_clean,
         fresh = true,
     }
     store_body_cache(self, path, cache)
@@ -9698,6 +9819,7 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
             tp_binds = cp.tp_binds,
             inst_params = cp.inst_params,
             inst_ret = cp.inst_ret,
+            from_parked = false,
             caller_module = cp.caller_module,
         }
         process_pending(self, &p)
@@ -9705,6 +9827,7 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
     for k in 0..c.calls.len {
         self.pending_calls.push(copy_pending_call(self, &c.calls[k], false))
     }
+    resolve_pending_members(self)
     resolve_pending_calls(self)
     drain_pending_specs(self)
     validate_literals(self, lit_mark, self.pending_literals.len)
@@ -9754,6 +9877,7 @@ fn mark_flagged_slot_specs(self: &Checker, from: usize) {
 // also what keeps `is_literal_var`'s scan short.
 fn seal_slot(self: &Checker, lit_floor: usize) {
     self.pending_anons.clear()
+    self.pending_members.clear()
     let names = self.pending_fn_names
     self.pending_fn_names = list(0, self.allocator)
     names.deinit()

@@ -118,9 +118,10 @@ rejected copies.
 
 ---
 
-### A Generic Method on an Unannotated Lambda Parameter's Field Reaches Layout Unresolved
+### A Generic Method on an Unannotated Lambda Parameter's Field Reaches Layout Unresolved — RESOLVED
 
-**Status:** Open (found 2026-09-07, while moving the engine's undo stacks onto `std.journal`)
+**Status:** Resolved 2026-09-12. `check_member` on an open receiver now parks the access (`pending_members`) and `resolve_method_call` parks a call whose receiver is a bare var instead of committing a lone candidate against it; both resolve after the body's specialization drain, which is what pins the lambda parameter. A parked call's placeholder is unified with the resolved type, and `zonk_specializations` re-zonks the overlay of any specialization whose signature moved. Original report follows.
+**Was:** Open (found 2026-09-07, while moving the engine's undo stacks onto `std.journal`)
 **Affected:** `lib/flang_typer/src/checker.f` (lambda parameter pinning against the pending
 specialization drain), `lib/flang_driver` (the layout panic that reports it)
 
@@ -133,7 +134,8 @@ parameter itself settles once the callee's specialization pins it, but the recor
 layout - checker bug`. Calling a non-generic function on the field, or a method on the parameter
 itself, is fine; the field-of-parameter plus generic-callee combination is what trips it.
 Annotating the parameter (`fn(entry: BindingUndo)`) sidesteps it, which is what the engine and
-`UnionFind` do. Pinned by `closures/lambda_param_option_field_method.f`, failing until fixed.
+`UnionFind` do. Pinned by `closures/lambda_param_option_field_method.f` and
+`closures/lambda_param_field_call_bound_local.f`.
 
 ---
 
@@ -3641,3 +3643,18 @@ takes `null` for a global with no relocations, so the fix is one field per liter
 
 Neither tool is covered by `dotnet test.cs` or `dotnet test-all.cs`, which is why the break went
 unnoticed; `flang check` from either directory reports it.
+
+---
+
+### Fake-Generic Instantiations Are Not Shared by Layout Class
+
+**Status:** Open (noted 2026-09-12).
+**Affected:** specialization emission in `lib/flang_driver` / `lib/flang_codegen`.
+
+`is_some(&Option($T))`, `is_none`, `Option.deinit` and the like never touch the payload: their code
+depends only on the representation family of `Option($T)` - the pointer niche for `Option(&T)`,
+the tagged enum otherwise - not on `T`. Every distinct `T` still gets its own instantiation and its
+own C function, so a program pays one body per payload type for a function with two real shapes.
+A dedup keyed on layout class (pointer vs value at minimum, the full `Layout` at best) would emit
+one body per class and alias the rest. Optimization only: the checker still has to settle `T`
+before layout, since the class is derived from it.
