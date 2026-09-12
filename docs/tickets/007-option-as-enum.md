@@ -1,9 +1,11 @@
-# RFC-007: Option as Enum, `null` as `Option.None`
+---
+status: implemented
+type: language
+created: 2026-05-03
+implemented: 2026-05-03
+---
 
-**Type:** Language semantics + stdlib migration
-**Status:** Landed (with transitional shims; see `docs/known-issues.md` "RFC-007 Follow-ups")
-**Depends on:** None
-**Blocks:** RFC-009 (`op_try`), RFC-010 (`?.` flattening generalization, pattern grammar extensions), Q20 (`is`/`matches!` shorthand)
+# RFC-007: Option as Enum, `null` as `Option.None`
 
 ## Summary
 

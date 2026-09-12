@@ -1,8 +1,11 @@
-# RFC-006: Syntax Cleanup — Quick Wins
+---
+status: implemented
+type: language
+created: 2026-05-03
+implemented: 2026-05-03
+---
 
-**Type:** Syntax / Documentation / Small parser changes
-**Status:** Proposed
-**Depends on:** None
+# RFC-006: Syntax Cleanup — Quick Wins
 
 ## Summary
 

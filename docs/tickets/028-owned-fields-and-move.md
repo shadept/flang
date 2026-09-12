@@ -1,12 +1,11 @@
-# RFC-028: `owned` fields, non-copyable types, and `move`
+---
+status: accepted
+type: language
+created: 2026-08-30
+relates: [RFC-026, RFC-020, RFC-016]
+---
 
-**Type:** Language feature (field modifier + expression form) + compiler check
-**Status:** Draft
-**Depends on:** None
-**Relates to:** spec §3.1 (assignment), §3.2 (function arguments), §3.4.1 (place
-expressions), §7.5 (match binding mode), §4.1 (allocator pattern); RFC-026
-(copy-on-write parameters); RFC-020 (`op_deref` argument coercion); RFC-016
-(`#auto_deinit`)
+# RFC-028: `owned` fields, non-copyable types, and `move`
 
 ## Summary
 
@@ -539,7 +538,8 @@ the stdlib frame as a note.
 
    `OwnedString.op_eq` is blocked: operator dispatch has no reference form, so
    `op_eq(&OwnedString, &OwnedString)` is E2017 at every `==`. It must land
-   before step 6 annotates `OwnedString.ptr`. `OwnedString.hash` is converted,
+   before step 6 annotates `OwnedString.ptr`. Scoped as RFC-030, which carries
+   the operator ownership hole noted in step 4 with it. `OwnedString.hash` is converted,
    with `Dict.hash_key` and `derive` calling through the UFCS form to reach it -
    a free call does not adapt a value argument to a `&T` parameter. Both defects
    are recorded in `docs/known-issues.md`.
@@ -579,10 +579,35 @@ the stdlib frame as a note.
    instantiation. The fix is a `move` in stdlib source, which the seed has to
    parse first - step 5, then 6. `for_ref_loop` and `move_index_element` are
    skipped on it, which makes step 5 gated by step 4 as well as by step 6.
+
+   Enforcement has one hole: operator operands never reach the ownership pass.
+   `h == g` over a non-copyable type is accepted where `op_eq(h, g)` is `E2124`
+   twice, so every comparison of an owning value silently mints two untracked
+   owners. It is unreachable in tree today - `FileHandle` declares no operators -
+   but it is live the moment one does. Fixed in RFC-030, which needs the same
+   code path as the reference form step 1 is blocked on.
 5. **Seed promote.** The gate is step 6: stdlib source is about to contain
    `owned`, so the seed has to parse it first.
 6. **Annotate leaf resource types** — `File.fd`, `OwnedString.ptr`. `List` and
    `Dict` last.
+
+   `OwnedString` is where RFC-031 takes over: rather than annotating `ptr` on a
+   standalone struct, `OwnedString` becomes `Owned(String)` and the bit derives
+   from the wrapper. `List` and `Dict` move-awareness stays here and gates it,
+   because a non-copyable key or element is `E2124` at the container's own
+   stores either way.
+
+   `FileHandle.fd` is done, which takes `File` and every `Result(File, E)`
+   with it. The fallout: the by-value receiver on `Option`/`Result`'s
+   consuming members (nine call sites became `unwrap(move r)`), the payload
+   transfers inside those members, and `std.list.push`/`insert`, which is what
+   clears `for_ref_loop` and `move_index_element`.
+
+   It also exposed a false `E2123`: a match arm's pattern binding is declared
+   where the arm matches, so it is a new binding each iteration, and the
+   ownership pass was carrying the back edge's move into it. `own_match`
+   unmarks an arm's bindings on entry now, pinned by
+   `move_match_binding_in_loop`.
 7. **Per-specialization element `deinit` resolution**; retire the blanket.
 8. **Remove what the check rejects for non-copyable `T`:** `get`, `first`,
    `last`, `peek`, `peek_front`, `peek_back`, `get_or`, `get_or_else` — the

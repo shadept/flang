@@ -35,7 +35,7 @@ pub fn is_none(self: &Option($T)) bool {
 
 pub fn expect(self: Option($T), msg: String) T {
     return self match {
-        Some(v) => v
+        Some(v) => move v
         None => panic(msg)
     }
 }
@@ -43,7 +43,7 @@ pub fn expect(self: Option($T), msg: String) T {
 // Unwrap the Some payload, panicking on None. Use `unwrap_or` / `match` when None is reachable;
 // reserve `unwrap` for invariants you've already checked (e.g. inside an `if x.is_some()` branch).
 pub fn unwrap(self: Option($T)) T {
-    return self.expect("called `unwrap` on a `None` value")
+    return expect(move self, "called `unwrap` on a `None` value")
 }
 
 // The payload, or `fallback`. The argument is evaluated whether or not the option is empty;

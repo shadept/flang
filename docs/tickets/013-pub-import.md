@@ -1,6 +1,11 @@
-# RFC-013 — `pub import` and non-transitive import enforcement
+---
+status: implemented
+type: language
+created: 2026-05-03
+implemented: 2026-05-03
+---
 
-**Status:** Implemented (2026-05-03)
+# RFC-013 — `pub import` and non-transitive import enforcement
 
 ## Problem
 

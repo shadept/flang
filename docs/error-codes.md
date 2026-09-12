@@ -3020,13 +3020,16 @@ Report the issue with sample code that reproduces the error.
 
 ### E2115: Unsupported Pattern Form
 
-A pattern the front end cannot yet represent: or-patterns (`1 | 2`), range
-patterns (`1..5`), and struct/tuple destructuring in match position.
+A token run in pattern position that is not one of the pattern shapes: a
+binding, `_`, a literal, `Variant(...)`, `Enum.Variant`, `a | b`, `lo..hi`,
+`Name { ... }`, or `(a, b)`. The parser stores a pattern as raw tokens and the
+projector shapes them, so anything it cannot read lands here rather than being
+guessed at.
 
 ```flang
-x match {
-    1 | 2 => "low",   // ERROR E2115: unsupported pattern form
-    _     => "other",
+o match {
+    Some(move v) => v,   // ERROR E2115: `move` is not a pattern form
+    None         => 0,
 }
 ```
 
@@ -3035,8 +3038,11 @@ from a wildcard, so accepting it silently would make the arm match
 everything and take the wrong branch at runtime — a miscompile instead of a
 diagnostic.
 
-Applies to the self-hosted front end. Use an explicit arm per value until
-these forms land.
+**Raised at projection, not at check time.** The shape is a fact about the
+tokens and needs no types, and a body that is never checked — an uninstantiated
+generic template — would otherwise carry it silently. `#allow(E2115)` on the
+declaration still suppresses it: the filter runs over the assembled list,
+whichever phase raised it.
 
 ### E3XXX: Code Generation
 
@@ -3738,6 +3744,10 @@ The check runs over the control-flow graph, and a value moved on *any* path into
 the merge - there are no drop flags. A `defer` body is checked where it *runs*, at scope exit, on
 every path that leaves the scope; a `return expr` evaluates `expr` first (spec 4.1), so a return
 that moves the value a defer touches leaves the defer reading a moved binding.
+
+A binding declared inside a loop body is a new binding each iteration - a `let`, a match arm's
+pattern binding - so the back edge carries no move into it. Only a binding that outlives the loop
+can be moved twice by one.
 
 #### Example
 

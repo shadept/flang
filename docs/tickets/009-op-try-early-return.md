@@ -1,8 +1,12 @@
-# RFC-009: `op_try` Early-Return Operator
+---
+status: implemented
+type: language
+created: 2026-05-03
+implemented: 2026-05-03
+requires: [RFC-007]
+---
 
-**Type:** Language feature (operator + stdlib)
-**Status:** Implemented (optimization phase deferred)
-**Depends on:** RFC-007 (Option as enum)
+# RFC-009: `op_try` Early-Return Operator
 
 ## Implementation notes
 

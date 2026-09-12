@@ -1,3 +1,9 @@
+---
+status: draft
+type: language
+created: 2026-08-20
+---
+
 # 019 — Deferred designs from the lambda/stdlib-combinator milestone
 
 Status: open design notes (2026-08-20). Successor to ticket 018's

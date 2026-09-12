@@ -1,9 +1,12 @@
-# RFC-099: `#stack` types and stack-only bindings
+---
+status: deferred
+type: language
+created: 2026-08-27
+requires: [RFC-014]
+relates: [RFC-005, RFC-012]
+---
 
-**Type:** Language feature
-**Status:** Draft
-**Depends on:** RFC-014 (closures capture by value)
-**Related:** RFC-005 (async runtime), RFC-012 (`Owned(T)` transfer tracking)
+# RFC-099: `#stack` types and stack-only bindings
 
 ## Summary
 

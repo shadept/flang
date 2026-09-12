@@ -1,8 +1,11 @@
-# RFC-012: `Owned(T)` — transfer-aware cleanup helper
+---
+status: implemented
+type: stdlib
+created: 2026-05-03
+implemented: 2026-05-03
+---
 
-**Type:** Stdlib addition
-**Status:** Implemented
-**Depends on:** RFC-009 (op_try) — composes with `?` but doesn't require it
+# RFC-012: `Owned(T)` — transfer-aware cleanup helper
 
 ## Summary
 

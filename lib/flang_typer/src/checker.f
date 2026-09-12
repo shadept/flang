@@ -3577,11 +3577,9 @@ fn check_pattern(self: &Checker, pat: &Pattern, expected: Ty, is_sub: bool = fal
         }
         Struct(s) => check_struct_pattern(self, &s, expected)
         Tuple(t) => check_tuple_pattern(self, &t, expected)
-        // The front end could not represent this pattern (or-patterns, ranges, struct and tuple
-        // destructuring - see the projector). It must be reported: left silent it is
-        // indistinguishable from a wildcard, and the arm would match everything.
-        Error(e) => push_diag_e(self, e.span, E_UNSUPPORTED_PATTERN,
-            from_view("unsupported pattern form: or-patterns, ranges, and struct/tuple destructuring are not implemented yet"))
+        // Projection reported it (E2115) and lowering refuses the match, so there is nothing to
+        // check and nothing to bind.
+        Error(_) => {}
     }
 }
 
@@ -8234,6 +8232,38 @@ fn own_unmark(p: &OwnPass, decl: NodeId) {
     }
 }
 
+// A pattern's bindings are declared where the pattern matches, so entering an arm makes them live
+// however the state carried in from a back edge or an earlier arm has them.
+fn own_unmark_pattern(self: &Checker, p: &OwnPass, pat: &Pattern) {
+    pat.* match {
+        Variable(v) => own_unmark(p, self.node_of(v.span))
+        EnumVariant(ev) => {
+            for i in 0..ev.payloads.len {
+                own_unmark_pattern(self, p, &ev.payloads[i])
+            }
+        }
+        Or(o) => {
+            for i in 0..o.alternatives.len {
+                own_unmark_pattern(self, p, &o.alternatives[i])
+            }
+        }
+        Struct(st) => {
+            for &f in st.fields {
+                f.binding match {
+                    Some(sub) => own_unmark_pattern(self, p, sub)
+                    None => own_unmark(p, self.node_of(f.span))
+                }
+            }
+        }
+        Tuple(t) => {
+            for i in 0..t.elements.len {
+                own_unmark_pattern(self, p, &t.elements[i])
+            }
+        }
+        _ => {}
+    }
+}
+
 fn own_snapshot(self: &Checker, src: &List(MovedRec)) List(MovedRec) {
     let out: List(MovedRec) = list(src.len, self.allocator)
     out.push_all(src.as_slice())
@@ -8791,6 +8821,7 @@ fn own_match(self: &Checker, p: &OwnPass, m: &MatchExpr, slot: OwnSlot) {
     let reached = false
     for &arm in m.arms {
         own_restore(&p.moved, &entry)
+        own_unmark_pattern(self, p, arm.pattern)
         p.diverged = false
         arm.guard match {
             Some(g) => own_expr(self, p, g, own_read())

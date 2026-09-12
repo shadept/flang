@@ -1,10 +1,14 @@
+---
+status: draft
+type: compiler
+created: 2026-08-23
+supersedes: [RFC-011]
+relates: [ADR-0006]
+---
+
 # RFC-021: Template Expansion Redesign — single-pass, in-memory, self-host parity
 
-**Type:** Compiler mechanism + source-generator DSL revision
-**Status:** Proposed
-**Supersedes:** RFC-011 (template DSL extensions) — its `#let`/`#match` are deferred, not rejected
-**Amends:** ADR-0006 §5 (templates emitting directive `#if`) — withdrawn, see §3
-**Depends on:** None
+Amends ADR-0006 §5 (templates emitting directive `#if`) — withdrawn, see §3
 
 ## Summary
 

@@ -1,9 +1,11 @@
-# RFC-026: Copy-on-write parameters - elide the shadow when nothing writes or escapes
+---
+status: implemented
+type: compiler
+created: 2026-08-29
+implemented: 2026-08-30
+---
 
-**Type:** Compiler mechanism (lowering) + language rule (casts)
-**Status:** Landed 2026-08-30 - all four parts, with three deviations recorded below
-**Depends on:** None
-**Relates to:** spec §3.2 (function arguments), §5.4 (casting), §3.6 (safety model)
+# RFC-026: Copy-on-write parameters - elide the shadow when nothing writes or escapes
 
 ## Summary
 

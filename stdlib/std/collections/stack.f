@@ -59,7 +59,7 @@ pub fn stack(capacity: usize, allocator: &Allocator? = null) Stack($T) {
 // Pushes `value` on top, growing when full. The stack owns it from here. Panics when the allocation
 // fails.
 pub fn push(self: &UnmanagedStack($T), value: T, allocator: &Allocator) {
-    self.__inner.push(value, allocator)
+    self.__inner.push(move value, allocator)
 }
 
 // Deinits every element and frees the storage. Idempotent: a second call is a no-op.
@@ -129,7 +129,7 @@ pub fn iter_rev(self: &UnmanagedStack($T)) SliceRevIterator(T) {
 // Pushes `value` on top, growing when full. The stack owns it from here. Panics when the allocation
 // fails.
 pub fn push(self: &Stack($T), value: T) {
-    self.__storage.push(value, self.allocator)
+    self.__storage.push(move value, self.allocator)
 }
 
 // Deinits every element and frees the storage. Idempotent: a second call is a no-op.

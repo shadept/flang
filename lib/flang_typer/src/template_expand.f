@@ -469,7 +469,7 @@ fn parse_chunk(chk: &Checker, text: String, file_id: i32) Module {
     let p = parser(tokens, text, chk.allocator)
     p.set_file_id(file_id)
     const cst = p.tree.node_at(p.parse_module())
-    let module = project_module(cst, file_id, chk.allocator)
+    let module = project_module(cst, file_id, chk.allocator, Some(&chk.diagnostics))
     flatten_module_decls(&module, &chk.comptime, &chk.diagnostics, chk.allocator)
     const taken = p.diagnostics.to_owned_slice()
     for &d in taken.0 { chk.diagnostics.push(error(d.code, d.message, d.span)) }

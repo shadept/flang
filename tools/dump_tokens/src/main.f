@@ -7,10 +7,10 @@
 // Each piece is one whitespace run or one line comment, printed escaped. Omitted when that side has
 // no trivia.
 
+import std.collections.list
 import std.env
 import std.io.file
 import std.io.print
-import std.collections.list
 import std.option
 import std.result
 import std.string
@@ -41,7 +41,7 @@ pub fn main() i32 {
         println(msg.as_view())
         return 1
     }
-    let file = open_result.unwrap()
+    let file = unwrap(move open_result)
     const read_result = read_all(&file)
     close_file(&file)
     if read_result.is_err() {

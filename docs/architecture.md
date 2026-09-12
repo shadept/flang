@@ -174,7 +174,11 @@ AST rather than a built CFG: the lattice is the set of moved bindings,
 keyed by the declaration node a name resolves to; branches take the union
 of the paths that reach the merge, and a loop takes the union of its entry
 with what its back edge carries, silently, before the reporting pass runs
-from that state. `defer` bodies are held per open scope and walked where
+from that state. A binding declared inside the body is live again at the
+top of every iteration: a `let` at its declaration, a match arm's pattern
+bindings when the arm is entered. The back edge's state therefore reaches
+only bindings that outlive the loop. `defer`
+bodies are held per open scope and walked where
 they fire, on every path that exits: falling off the block, `return`,
 `break` and `continue`. Nothing in it unifies, and it reports at the
 outermost open instantiation, so a copy rejected inside a generic body

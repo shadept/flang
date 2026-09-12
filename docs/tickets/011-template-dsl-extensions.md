@@ -1,8 +1,11 @@
-# RFC-011: Source Generator Template DSL Extensions
+---
+status: superseded
+type: compiler
+created: 2026-05-03
+superseded-by: RFC-021
+---
 
-**Type:** Source generator language extension
-**Status:** Proposed
-**Depends on:** None
+# RFC-011: Source Generator Template DSL Extensions
 
 ## Summary
 

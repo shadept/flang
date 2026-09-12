@@ -63,7 +63,7 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
     let tokens = lx.tokenize()
     let p = parser(tokens, src, allocator)
     const cst = p.tree.node_at(p.parse_module())
-    let module = project_module(cst, 0i32, allocator)
+    let module = project_module(cst, 0i32, allocator, Some(&diagnostics))
 
     // Decl-level #if resolves once, before anything walks the decls: only the active branch's
     // declarations survive into collection.
@@ -735,10 +735,11 @@ pub fn write_generated(self: &AnalyzedProject) usize {
     for &e in self.generated.emitted {
         const path = generated_path(e.origin_path)
         defer path.deinit()
-        let f = open_file(path.as_view(), FileMode.Write) match {
-            Ok(f) => f
-            Err(_) => continue
+        let opened = open_file(path.as_view(), FileMode.Write)
+        if opened.is_err() {
+            continue
         }
+        let f = unwrap(move opened)
         const w = f.write(e.text.as_view())
         const _c = close_file(&f)
         if w.is_ok() {
@@ -759,7 +760,7 @@ fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List
     let tokens = lx.tokenize()
     let p = parser(tokens, src, alloc)
     let cst = p.tree.node_at(p.parse_module())
-    let module = project_module(cst, file_id, alloc)
+    let module = project_module(cst, file_id, alloc, Some(diags))
     flatten_module_decls(&module, target, diags, alloc)
     drain_diagnostics(diags, &p.diagnostics)
     p.deinit()

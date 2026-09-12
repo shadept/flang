@@ -1,8 +1,11 @@
-# RFC-008: Single Declaration Form for Structs and Enums
+---
+status: implemented
+type: language
+created: 2026-05-03
+implemented: 2026-05-03
+---
 
-**Type:** Syntax / parser change + project-wide migration
-**Status:** Implemented
-**Depends on:** None
+# RFC-008: Single Declaration Form for Structs and Enums
 
 ## Implementation notes
 

@@ -3543,6 +3543,39 @@ Adding the adaptation to `operator_pick_2` alone is not enough: a flipped
 operand still unifies with a blanket operator's type variable, so the retry
 picks the blanket over the concrete overload it was added to reach.
 
+Scoped as RFC-030, together with the ownership hole below.
+
+---
+
+### Operator Operands Skip the Ownership Check
+
+**Status:** Open.
+**Affected:** `lib/flang_typer/src/checker.f` (`comparison`, `own_check_body`)
+
+An operator's operands never reach the ownership pass, so a non-copyable value
+crosses a by-value parameter boundary unchecked. The same function called by
+name is rejected:
+
+```flang
+type Handle = struct {
+    owned fd: i32
+}
+
+fn op_eq(a: Handle, b: Handle) bool {
+    return a.fd == b.fd
+}
+
+let viaop   = h == g        // accepted, copies both operands
+let viacall = op_eq(h, g)   // error[E2124] twice
+```
+
+Every comparison of an owning value therefore mints two untracked owners of the
+same resource. Unreachable in tree today because no annotated type declares an
+operator, and live the moment one does.
+
+Fixed in RFC-030: routing operands through the check makes the by-value operator
+`E2124`, which is why the reference form has to land with it rather than after.
+
 ---
 
 ### An `import` After a Declaration Hangs the Compiler
@@ -3595,3 +3628,16 @@ at the `{`: the parser cannot tell a type argument from a value argument. A lite
 unaffected (`let outer = 3` followed by a block parses), so the trigger is specifically a call.
 
 Workarounds: put the block first, or give the binding a non-call initializer.
+
+---
+
+### `tools/codegen_demo` and `tools/inliner_test` Do Not Type-Check
+
+**Status:** Open.
+**Affected:** `tools/codegen_demo/src/main.f`, `tools/inliner_test/src/main.f`.
+
+Six `FirGlobal` literals leave the `relocs` field out, which E2050 now rejects. `relocs: Reloc[]?`
+takes `null` for a global with no relocations, so the fix is one field per literal.
+
+Neither tool is covered by `dotnet test.cs` or `dotnet test-all.cs`, which is why the break went
+unnoticed; `flang check` from either directory reports it.

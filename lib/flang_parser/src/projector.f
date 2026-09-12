@@ -16,7 +16,9 @@
 import std.allocator
 import std.collections.list
 import std.option
+import std.string
 
+import flang_core.diagnostic
 import flang_core.span
 
 import flang_parser.ast
@@ -34,16 +36,20 @@ import flang_parser.token
 type Projector = struct {
     alloc: &Allocator
     file_id: i32
+    // Where `error_pattern` reports. Null discards it, which is what a consumer that wants only the
+    // shape passes - a CST dump, an editor query that never checks.
+    diags: &List(Diagnostic)?
 }
 
 // Project a parsed CST `Module` node into the typed AST `Module`. `allocator` is the backing
 // allocator for the arena (defaults to the global allocator). `file_id` is forwarded into every
 // produced `SourceSpan` - pass the workspace-stable id, or `-1` for "none".
-pub fn project_module(cst: CstNode, file_id: i32, allocator: &Allocator? = null) Module {
+pub fn project_module(cst: CstNode, file_id: i32, allocator: &Allocator? = null,
+    diags: &List(Diagnostic)? = null) Module {
     const backing = allocator.or_global()
     let arena = arena_allocator(backing)
     let arena_a = arena.allocator()
-    const p: Projector = .{ alloc = &arena_a, file_id = file_id }
+    const p: Projector = .{ alloc = &arena_a, file_id = file_id, diags = diags }
 
     let decls: List(Decl) = list(0, Some(p.alloc))
     for i in 0..cst.child_count() {
@@ -150,6 +156,18 @@ fn first_ident_text(cst: CstNode) String {
 // ─────────────────────────────────────────────────────────────────────────
 // Declarations
 // ─────────────────────────────────────────────────────────────────────────
+
+// A pattern shape this projector cannot read. Reported here rather than at check time: the shape is
+// a fact about the tokens, and a body that is never checked - an uninstantiated generic template -
+// would otherwise carry it silently.
+fn error_pattern(self: &Projector, span: SourceSpan) Pattern {
+    self.diags match {
+        Some(d) => d.push(error("E2115",
+                from_view("unsupported pattern form: this shape is not a pattern"), span))
+        None => {}
+    }
+    return Pattern.Error(ErrorPattern { span = span })
+}
 
 fn project_decl(self: &Projector, cst: CstNode) Decl {
     return cst.kind match {
@@ -1227,7 +1245,7 @@ fn is_expr_kind(kind: NodeKind) bool {
 // Project one expression CST outside a module (template expressions). `allocator` must outlive the
 // returned Expr - callers pass the arena that owns the rest of their template state.
 pub fn project_expression(cst: CstNode, file_id: i32, allocator: &Allocator) Expr {
-    const p: Projector = .{ alloc = allocator, file_id = file_id }
+    const p: Projector = .{ alloc = allocator, file_id = file_id, diags = null }
     return p.project_expr(cst)
 }
 
@@ -2992,8 +3010,7 @@ fn has_top_level_brace(tokens: List(Token)) bool {
 }
 
 // `(p0, p1, …)` - the parenthesised run split at top-level commas. An
-// unbalanced or trailing-garbage run degrades to `Error` (E2115 at check time) rather than guess a
-// shape.
+// unbalanced or trailing-garbage run degrades to `Error` (E2115) rather than guess a shape.
 fn tuple_pattern_from_tokens(self: &Projector, tokens: List(Token), span: SourceSpan) Pattern {
     let elements: List(Pattern) = list(2, Some(self.alloc))
     let depth: i32 = 0
@@ -3023,7 +3040,7 @@ fn tuple_pattern_from_tokens(self: &Projector, tokens: List(Token), span: Source
         i = i + 1
     }
     if !closed or i != tokens.len {
-        return Pattern.Error(ErrorPattern { span = span })
+        return self.error_pattern(span)
     }
     return Pattern.Tuple(TuplePattern { span = span, elements = elements })
 }
@@ -3037,7 +3054,7 @@ fn struct_pattern_from_tokens(self: &Projector, tokens: List(Token), span: Sourc
     let has_rest = false
     let i = 1usize
     if i >= tokens.len or tokens[i].kind != TokenKind.OpenBrace {
-        return Pattern.Error(ErrorPattern { span = span })
+        return self.error_pattern(span)
     }
     i = i + 1
     let depth: i32 = 1
@@ -3102,28 +3119,28 @@ fn push_struct_pattern_field(self: &Projector, fields: &List(StructPatternField)
 }
 
 // `lo..hi` in pattern position: at most one literal token on either side of the range token;
-// anything fancier degrades to Error (E2115 at check time) rather than guess.
+// anything fancier degrades to Error (E2115) rather than guess.
 fn range_pattern_from(self: &Projector, tokens: List(Token), dd: usize, inclusive: bool,
     span: SourceSpan) Pattern {
     let start_ref: &Expr? = null
     let end_ref: &Expr? = null
     if dd > 0 {
         if dd != 1 {
-            return Pattern.Error(ErrorPattern { span = span })
+            return self.error_pattern(span)
         }
         const b = self.range_bound_expr(tokens[0])
         if b.is_none() {
-            return Pattern.Error(ErrorPattern { span = span })
+            return self.error_pattern(span)
         }
         start_ref = Some(self.boxed(b.unwrap()))
     }
     if dd + 1 < tokens.len {
         if dd + 2 != tokens.len {
-            return Pattern.Error(ErrorPattern { span = span })
+            return self.error_pattern(span)
         }
         const b2 = self.range_bound_expr(tokens[dd + 1])
         if b2.is_none() {
-            return Pattern.Error(ErrorPattern { span = span })
+            return self.error_pattern(span)
         }
         end_ref = Some(self.boxed(b2.unwrap()))
     }
@@ -3241,7 +3258,7 @@ fn literal_pattern_for(self: &Projector, tok: Token, span: SourceSpan) Pattern {
     if tok.kind == TokenKind.Null {
         return Pattern.Literal(LiteralPattern { span = span, value = LiteralValue.Null })
     }
-    return Pattern.Error(ErrorPattern { span = span })
+    return self.error_pattern(span)
 }
 
 fn enum_variant_pattern_from_tokens(self: &Projector, tokens: List(Token),
@@ -3274,7 +3291,7 @@ fn enum_variant_pattern_from_tokens(self: &Projector, tokens: List(Token),
     }
     // Expect `(` - anything else is a shape this projector cannot read.
     if tokens[idx].kind != TokenKind.OpenParenthesis {
-        return Pattern.Error(ErrorPattern { span = span })
+        return self.error_pattern(span)
     }
     idx = idx + 1
     let depth: i32 = 1

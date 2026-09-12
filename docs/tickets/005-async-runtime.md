@@ -1,8 +1,10 @@
-# RFC-005: Async / Coroutines
+---
+status: draft
+type: language
+created: 2026-04-21
+---
 
-**Type:** Feature (runtime + stdlib; minimal compiler changes)
-**Status:** Proposed
-**Depends on:** None (self-host planned; this RFC locks the design now, implementation lands after self-host)
+# RFC-005: Async / Coroutines
 
 ## Summary
 

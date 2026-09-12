@@ -1,8 +1,10 @@
-# RFC-015: FIR optimization pipeline (inliner + DCE + cleanup passes)
+---
+status: draft
+type: compiler
+created: 2026-05-05
+---
 
-**Type:** Compiler (optimizations)
-**Status:** Proposed — design captured, no code yet
-**Depends on:** Nothing structural. Complements every frontend feature that monomorphises into many small functions (closures, iterator adapters, `op_*` overloads).
+# RFC-015: FIR optimization pipeline (inliner + DCE + cleanup passes)
 
 This RFC replaces the C#-IR-era skeleton with a FIR-era plan informed by what implementing the C# compiler taught us.
 

@@ -1,9 +1,12 @@
-# RFC-027: Diagnostic rendering - source snippets, carets and color
+---
+status: implemented
+type: tooling
+created: 2026-08-30
+implemented: 2026-08-30
+relates: [RFC-023]
+---
 
-**Type:** Compiler UX (CLI rendering)
-**Status:** Landed 2026-08-30 - phases 1-5; deferred items unchanged
-**Depends on:** None
-**Relates to:** RFC-023 (language server, shares the line index), spec §7 (diagnostics)
+# RFC-027: Diagnostic rendering - source snippets, carets and color
 
 ## Summary
 

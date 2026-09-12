@@ -329,7 +329,7 @@ pub fn read_text(path: String) OwnedString? {
     if r.is_err() {
         return null
     }
-    let f = r.unwrap()
+    let f = unwrap(move r)
     let rd = read_all(&f)
     close_file(&f)
     if rd.is_err() {

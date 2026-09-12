@@ -246,7 +246,7 @@ pub fn push(s: &UnmanagedList($T), value: T, allocator: &Allocator) {
     s.reserve(s.len + 1, allocator)
     s.len = s.len + 1
     let data = s.as_slice()
-    data[s.len - 1] = value
+    data[s.len - 1] = move value
 }
 
 // Appends every element of `xs`, in order, growing when needed. Panics when the allocation fails.
@@ -273,10 +273,10 @@ pub fn insert(s: &UnmanagedList($T), index: usize, value: T, allocator: &Allocat
     let data = s.as_slice()
     let i = s.len - 1
     while i > index {
-        data[i] = data[i - 1]
+        data[i] = move data[i - 1]
         i = i - 1
     }
-    data[index] = value
+    data[index] = move value
 }
 
 // Deinits every live element, frees the buffer and resets to empty, so a second call is a no-op.
@@ -736,7 +736,7 @@ pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
 
     // Appends `value`, growing when full. Panics when the allocation fails.
     pub fn push(self: &#(Self)($T), value: T) {
-        self.__storage.push(value, self.allocator)
+        self.__storage.push(move value, self.allocator)
     }
 
     // Appends every element of `xs`, in order. `xs` must not alias the list's own storage.
@@ -747,7 +747,7 @@ pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
     // Inserts `value` at `index`, shifting everything at and after it one slot toward the end.
     // `index == len` appends. Panics past the end.
     pub fn insert(self: &#(Self)($T), index: usize, value: T) {
-        self.__storage.insert(index, value, self.allocator)
+        self.__storage.insert(index, move value, self.allocator)
     }
 
     // Returns a new list of `f(x)` for every element, in order.

@@ -1,3 +1,10 @@
+---
+status: implemented
+type: language
+created: 2026-08-20
+implemented: 2026-08-23
+---
+
 # 020 — `op_deref` argument coercion (deref chains at call sites)
 
 Status: **accepted** (2026-08-20), rule pinned 2026-09-06 to the borrow leg

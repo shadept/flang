@@ -1,8 +1,10 @@
-# RFC-003: Promote BasicBlock to IR Builder with CFG Construction
+---
+status: withdrawn
+type: compiler
+created: 2026-03-26
+---
 
-**Type:** Refactor
-**Status:** Proposed
-**Depends on:** None (independent of RFC-001/RFC-002, though benefits from them)
+# RFC-003: Promote BasicBlock to IR Builder with CFG Construction
 
 ## Summary
 

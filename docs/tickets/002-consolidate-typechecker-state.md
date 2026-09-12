@@ -1,8 +1,11 @@
-# RFC-002: Consolidate HmTypeChecker State into Typed Registries
+---
+status: withdrawn
+type: compiler
+created: 2026-03-25
+requires: [RFC-001]
+---
 
-**Type:** Refactor
-**Status:** Proposed
-**Depends on:** RFC-001 (Decouple HmAstLowering from HmTypeChecker)
+# RFC-002: Consolidate HmTypeChecker State into Typed Registries
 
 ## Summary
 

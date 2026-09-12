@@ -1105,7 +1105,7 @@ fn fmt_file(path: String, cfg: &FmtConfig, check: bool) FmtStatus {
     const wr = open_file(path, FileMode.Write)
     let wrote = false
     if !wr.is_err() {
-        let handle = wr.unwrap()
+        let handle = unwrap(move wr)
         wrote = !write(&handle, formatted.as_view()).is_err()
         close_file(&handle)
     }

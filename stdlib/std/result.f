@@ -14,8 +14,8 @@ pub type Result = enum(T, E) {
 // type must match.
 pub fn op_try(self: Result($T, $E)) TryResult(T, Result($U, E)) {
     return self match {
-        Ok(v) => TryResult.Continue(v)
-        Err(e) => TryResult.Return(Err(e))
+        Ok(v) => TryResult.Continue(move v)
+        Err(e) => TryResult.Return(Err(move e))
     }
 }
 
@@ -37,7 +37,7 @@ pub fn is_err(self: &Result($T, $E)) bool {
 
 pub fn ok(self: Result($T, $E)) T? {
     return self match {
-        Ok(v) => Some(v)
+        Ok(v) => Some(move v)
         Err(_) => None
     }
 }
@@ -46,7 +46,7 @@ pub fn ok(self: Result($T, $E)) T? {
 pub fn err(self: Result($T, $E)) E? {
     return self match {
         Ok(_) => None
-        Err(e) => Some(e)
+        Err(e) => Some(move e)
     }
 }
 
@@ -86,7 +86,7 @@ pub fn and_then(self: Result($T, $E), f: $F) Result($U, E) {
 
 pub fn except(self: Result($T, $E), msg: String) T {
     return self match {
-        Ok(value) => value
+        Ok(value) => move value
         Err(_) => panic(msg)
     }
 }
@@ -94,14 +94,14 @@ pub fn except(self: Result($T, $E), msg: String) T {
 pub fn expect_err(self: Result($T, $E), msg: String) E {
     return self match {
         Ok(_) => panic(msg)
-        Err(error) => error
+        Err(error) => move error
     }
 }
 
 // Unwrap the Ok value, panic if Err
 pub fn unwrap(self: Result($T, $E)) T {
     return self match {
-        Ok(value) => value
+        Ok(value) => move value
         Err(_) => panic("called unwrap on an Err value")
     }
 }
@@ -118,7 +118,7 @@ pub fn unwrap_or(self: Result($T, $E), default: T) T {
 pub fn unwrap_err(self: Result($T, $E)) E {
     return self match {
         Ok(_) => panic("called unwrap_err on an Ok value")
-        Err(error) => error
+        Err(error) => move error
     }
 }
 

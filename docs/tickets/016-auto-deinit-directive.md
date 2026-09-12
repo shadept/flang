@@ -1,8 +1,10 @@
-# RFC-016: `#auto_deinit` directive and the managed-lifecycle contract
+---
+status: draft
+type: language
+created: 2026-05-11
+---
 
-**Type:** Language feature (declarative; auto-defer behavior deferred to a follow-up)
-**Status:** Draft
-**Depends on:** RFC-012 (Owned transfer tracking) — background only; not load-bearing
+# RFC-016: `#auto_deinit` directive and the managed-lifecycle contract
 
 ## Summary
 

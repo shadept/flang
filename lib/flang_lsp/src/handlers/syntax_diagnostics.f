@@ -35,7 +35,7 @@ pub fn parse_doc(text: String, allocator: &Allocator? = null) ParsedDoc {
     let tokens = lx.tokenize()
     let p = parser(tokens, text, allocator)
     let cst = p.tree.node_at(p.parse_module())
-    let module = project_module(cst, 0i32, allocator)
+    let module = project_module(cst, 0i32, allocator, Some(&diagnostics))
     const cctx = host_ctx()
     flatten_module_decls(&module, &cctx, &diagnostics, allocator)
     const taken = p.diagnostics.to_owned_slice()

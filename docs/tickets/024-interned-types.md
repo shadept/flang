@@ -1,9 +1,12 @@
-# RFC-024: Interned types - `Ty` becomes a handle
+---
+status: implemented
+type: compiler
+created: 2026-08-26
+implemented: 2026-08-26
+relates: [RFC-022]
+---
 
-**Type:** Compiler mechanism (typer)
-**Status:** Implemented 2026-08-26
-**Depends on:** None
-**Relates to:** RFC-022 (demand-driven checker) - 5b inherits what this settles
+# RFC-024: Interned types - `Ty` becomes a handle
 
 ## Summary
 

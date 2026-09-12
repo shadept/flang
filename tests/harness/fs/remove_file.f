@@ -14,7 +14,7 @@ fn write_fixture(path: String) bool {
     if opened.is_err() {
         return false
     }
-    let f = opened.unwrap()
+    let f = unwrap(move opened)
     const w = write(&f, "doomed")
     const c = close_file(&f)
     return w.is_ok() and c.is_ok()

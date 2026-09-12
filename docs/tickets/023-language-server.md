@@ -1,9 +1,15 @@
+---
+status: accepted
+type: tooling
+created: 2026-08-25
+requires: [RFC-022]
+---
+
 # RFC-023: Language server - in-process, self-hosted, retires FLang.Lsp
 
-**Type:** Compiler tool + stdlib addition
-**Status:** In progress - phases 1-7 landed (`std.rpc.jsonrpc`; `lib/flang_lsp` skeleton: lifecycle, encoding negotiation, full sync, line index; in-process `flang lsp -s <stdlib>`; publishDiagnostics + `$/progress` over lazily-opened projects with buffer overrides; tier 1: documentSymbol, foldingRange, syntax diagnostics per keystroke; `flang/serverStatus` + extension status bar + `flang.serverFlavor` switch; ModuleIndex + workspace/symbol)
-**Depends on:** RFC-022 (demand-driven checker)
-**Retires:** `src/FLang.Lsp` (3,729 lines, C#, OmniSharp)
+In progress - phases 1-7 landed (`std.rpc.jsonrpc`; `lib/flang_lsp` skeleton: lifecycle, encoding negotiation, full sync, line index; in-process `flang lsp -s <stdlib>`; publishDiagnostics + `$/progress` over lazily-opened projects with buffer overrides; tier 1: documentSymbol, foldingRange, syntax diagnostics per keystroke; `flang/serverStatus` + extension status bar + `flang.serverFlavor` switch; ModuleIndex + workspace/symbol)
+
+Retires `src/FLang.Lsp` (3,729 lines, C#, OmniSharp)
 
 ## Summary
 

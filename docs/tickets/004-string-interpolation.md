@@ -1,8 +1,10 @@
-# RFC-004: String Interpolation
+---
+status: draft
+type: language
+created: 2026-04-19
+---
 
-**Type:** Feature (language syntax + frontend)
-**Status:** Proposed
-**Depends on:** None
+# RFC-004: String Interpolation
 
 ## Summary
 

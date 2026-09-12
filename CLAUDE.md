@@ -23,6 +23,7 @@ You own and maintain these docs. They are the source of truth for the project. W
 - `docs/error-codes.md` — error code registry (add entries when creating new error codes)
 - `docs/known-issues.md` — known bugs, limitations, technical debt (add entries when discovering issues)
 - `docs/self-host.md` — self-host feature coverage matrix and milestone roadmap (update in the same commit as any lowering-coverage change)
+- `docs/tickets/` — RFCs. YAML frontmatter (`status`, `type`, `created`, optional `implemented`/`requires`/`supersedes`/`superseded-by`/`relates`), free-form body; vocab and index in `docs/tickets/README.md`. Keep `status` and the index row current when an RFC moves.
 
 ## Rules
 

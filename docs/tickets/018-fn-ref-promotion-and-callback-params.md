@@ -1,3 +1,9 @@
+---
+status: withdrawn
+type: compiler
+created: 2026-08-20
+---
+
 # 018 — `fn(T)` → `fn(&T)` promotion, and `&T` callback parameters in the stdlib
 
 Status: **resolved by redesign** (2026-08-20). The session that took this

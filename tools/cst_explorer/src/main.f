@@ -9,11 +9,11 @@
 //                         reports min/avg/max on stderr
 //   -n, --iterations N    iteration count for --time (default 1)
 
+import std.collections.list
 import std.conv
 import std.env
 import std.io.file
 import std.io.print
-import std.collections.list
 import std.option
 import std.result
 import std.string
@@ -96,7 +96,7 @@ fn read_source(path: String) OwnedString? {
         println(msg.as_view())
         return null
     }
-    let file = open_result.unwrap()
+    let file = unwrap(move open_result)
     const read_result = read_all(&file)
     close_file(&file)
     if read_result.is_err() {

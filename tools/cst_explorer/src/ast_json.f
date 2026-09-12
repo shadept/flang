@@ -481,6 +481,13 @@ fn emit_expr(sb: &StringBuilder, e: &Expr) {
             emit_expr(sb, ao.operand)
             sb.append("}")
         }
+        Move(mv) => {
+            sb.append("{\"kind\":\"Move\",")
+            emit_span(sb, mv.span)
+            sb.append(",\"operand\":")
+            emit_expr(sb, mv.operand)
+            sb.append("}")
+        }
         Dereference(d) => {
             sb.append("{\"kind\":\"Dereference\",")
             emit_span(sb, d.span)

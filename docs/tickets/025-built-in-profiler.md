@@ -1,9 +1,12 @@
-# RFC-025: Built-in profiler
+---
+status: provisional
+type: tooling
+created: 2026-08-27
+requires: [RFC-015]
+relates: [RFC-023]
+---
 
-**Type:** Compiler + runtime feature
-**Status:** Phase 1 implemented (self-hosted compiler; see `docs/architecture.md` § Profiler)
-**Depends on:** RFC-015 (FIR optimization pipeline)
-**Related:** RFC-023 (LSP: long-lived processes need phase-scoped profiling)
+# RFC-025: Built-in profiler
 
 ## Summary
 

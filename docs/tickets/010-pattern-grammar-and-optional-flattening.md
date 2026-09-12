@@ -1,8 +1,12 @@
-# RFC-010: Pattern Grammar Extensions and `?.` Flattening
+---
+status: implemented
+type: language
+created: 2026-05-03
+implemented: 2026-05-04
+requires: [RFC-006, RFC-007]
+---
 
-**Type:** Language semantics + type checker
-**Status:** Implemented (phases 1–5, 7); phase 6 deferred — see `docs/known-issues.md`
-**Depends on:** RFC-007 (Option as enum), RFC-006 §5 (match arm syntax)
+# RFC-010: Pattern Grammar Extensions and `?.` Flattening
 
 ## Summary
 

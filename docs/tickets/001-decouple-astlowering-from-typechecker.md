@@ -1,8 +1,10 @@
-# RFC-001: Decouple HmAstLowering from HmTypeChecker
+---
+status: withdrawn
+type: compiler
+created: 2026-03-25
+---
 
-**Type:** Refactor
-**Status:** Proposed
-**Blocks:** RFC-002 (Consolidate HmTypeChecker state into typed registries)
+# RFC-001: Decouple HmAstLowering from HmTypeChecker
 
 ## Summary
 
