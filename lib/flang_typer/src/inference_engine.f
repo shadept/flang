@@ -165,14 +165,14 @@ pub fn engine(allocator: &Allocator? = null) Engine {
     let pu: Journal(PrimConstraintUndo) = journal(allocator)
     let lu: Journal(LevelUndo) = journal(allocator)
     return .{
-        uf = uf,
+        uf = move uf,
         interner = type_interner(allocator),
-        bindings = bindings,
-        prim_constraints = prim_constraints,
-        levels = levels,
-        binding_undo = bu,
-        prim_undo = pu,
-        level_undo = lu,
+        bindings = move bindings,
+        prim_constraints = move prim_constraints,
+        levels = move levels,
+        binding_undo = move bu,
+        prim_undo = move pu,
+        level_undo = move lu,
         var_counter = 0u32,
         level = 0u32,
         nominals = null,
@@ -198,13 +198,18 @@ pub fn deinit(self: &Engine) {
     self.level_undo.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Engine, allocator: &Allocator) {
+    self.deinit()
+}
+
 // Hand the filled type table to the caller and leave a stand-in. The bindings still name handles of
 // the moved table, so nothing may resolve through this engine afterwards - the next demand readies
 // a fresh one.
 pub fn take_interner(self: &Engine) TypeInterner {
-    let out = self.interner
+    let out = move self.interner
     self.interner = type_interner(self.allocator, 0)
-    return out
+    return move out
 }
 
 // Replace the engine's table with one carried from an earlier demand, so the handles already minted
@@ -212,7 +217,7 @@ pub fn take_interner(self: &Engine) TypeInterner {
 // Only sound on an engine that has not interned anything of its own yet.
 pub fn set_interner(self: &Engine, it: TypeInterner) {
     self.interner.deinit()
-    self.interner = it
+    self.interner = move it
 }
 
 // The shape behind a handle - engine-side shorthand.
@@ -353,7 +358,7 @@ fn zonk_span(self: &Engine, span: ChildSpan) List(Ty) {
     for i in 0..span.len {
         out.push(self.zonk(self.interner.child_at(span, i)))
     }
-    return out
+    return move out
 }
 
 fn zonk_func(self: &Engine, f: &NFuncNode) Ty {
@@ -602,7 +607,7 @@ fn unify_concrete(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
 
     let coerced = try_coercion(self, a, b)
     return coerced match {
-        Some(c) => apply_coercion(self, c, structural)
+        Some(c) => apply_coercion(self, move c, structural)
         None => structural
     }
 }
@@ -621,15 +626,15 @@ fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
     // allocation.
     let r1 = try_integer_widening(it, raw_from, raw_to, self.allocator)
     if r1.is_some() {
-        return r1
+        return move r1
     }
     let r2 = try_float_widening(it, raw_from, raw_to, self.allocator)
     if r2.is_some() {
-        return r2
+        return move r2
     }
     let r8 = try_char_to_u8(it, raw_from, raw_to, self.allocator)
     if r8.is_some() {
-        return r8
+        return move r8
     }
     self.nominals match {
         Some(reg) => {
@@ -639,23 +644,23 @@ fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
             let to = self.zonk(raw_to)
             let r4 = try_string_to_byte_slice(it, from, to, reg, self.allocator)
             if r4.is_some() {
-                return r4
+                return move r4
             }
             let r10 = try_byte_slice_to_string(it, from, to, reg, self.allocator)
             if r10.is_some() {
-                return r10
+                return move r10
             }
             let r5 = try_array_decay(it, from, to, reg, self.allocator)
             if r5.is_some() {
-                return r5
+                return move r5
             }
             let r7 = try_nominal_to_type(it, from, to, reg, self.allocator)
             if r7.is_some() {
-                return r7
+                return move r7
             }
             let r9 = try_type_to_typeinfo(it, from, to, reg, self.allocator)
             if r9.is_some() {
-                return r9
+                return move r9
             }
         }
         None => {}
@@ -1046,14 +1051,18 @@ pub fn generalize(self: &Engine, t: Ty) Scheme {
     let z = self.zonk(t)
     let quantified: Set(VarId) = set(self.allocator)
     free_vars(&self.interner, z, self.level, &quantified)
-    return .{ quantified = quantified, body = z }
+    if quantified.len() == 0 {
+        quantified.deinit()
+        return .{ quantified = null, body = z }
+    }
+    return .{ quantified = Some(self.interner.own_quantifiers(move quantified)), body = z }
 }
 
 // Instantiate `s` with engine-fresh variables substituted for every quantified id. The fresh vars
 // carry the engine's current level - they're eligible for further unification but won't be
 // re-quantified by `generalize` at the same level.
 pub fn specialize(self: &Engine, s: &Scheme) Ty {
-    if s.quantified.len() == 0 {
+    if s.quantified.is_none() {
         return s.body
     }
     let subst: Dict(VarId, Ty) = dict(self.allocator)
@@ -1066,10 +1075,11 @@ pub fn specialize(self: &Engine, s: &Scheme) Ty {
 // `out` (untouched for a monomorphic scheme). The specialization pass zonks those fresh vars once
 // inference settles to learn the concrete type each signature parameter was instantiated at (M10).
 pub fn specialize_capture(self: &Engine, s: &Scheme, out: &Dict(VarId, Ty)) Ty {
-    if s.quantified.len() == 0 {
-        return s.body
+    const q = s.quantified match {
+        Some(q) => q
+        None => return s.body
     }
-    for old_id in s.quantified {
+    for old_id in q.* {
         let fresh = self.fresh_var()
         out.set(old_id, fresh)
     }
@@ -1236,7 +1246,7 @@ test "generalize then specialize yields a fresh quantified var" {
     let inner = eng.fresh_var()
     eng.exit_level()
     let scheme = eng.generalize(inner)
-    assert_true(scheme.quantified.len() == 1, "one quantified var")
+    assert_true(scheme.quantified_len() == 1, "one quantified var")
     let inst = eng.specialize(&scheme)
     assert_true(eng.is_var(inst), "the instantiation is a var")
     assert_true(inst != inner, "specialised var is fresh")
@@ -1263,8 +1273,8 @@ fn cp_struct(params: List(VarId), fields: List(Field)) StructDef {
         fqn = "",
         module = "m",
         is_pub = true,
-        type_params = params,
-        fields = fields,
+        type_params = move params,
+        fields = move fields,
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
@@ -1286,7 +1296,7 @@ fn cp_nominal(eng: &Engine, id: NominalId, args: List(Ty)) Ty {
 fn cp_handle(reg: &NominalRegistry) NominalId {
     let fs: List(Field) = list(1)
     fs.push(cp_field("fd", prim_of(PrimitiveKind.I32), true))
-    return reg.register(NominalDef.NomStruct(cp_struct(list(0), fs)), $"m.Handle")
+    return reg.register(NominalDef.NomStruct(cp_struct(list(0), move fs)), $"m.Handle")
 }
 
 test "an owned field clears the bit, and nothing else does" {
@@ -1298,7 +1308,7 @@ test "an owned field clears the bit, and nothing else does" {
 
     let plain: List(Field) = list(1)
     plain.push(cp_field("fd", prim_of(PrimitiveKind.I32), false))
-    const p = reg.register(NominalDef.NomStruct(cp_struct(list(0), plain)), $"m.Plain")
+    const p = reg.register(NominalDef.NomStruct(cp_struct(list(0), move plain)), $"m.Plain")
     const h = cp_handle(&reg)
 
     assert_true(eng.is_copyable(cp_nominal(&eng, p, list(0))),
@@ -1320,11 +1330,11 @@ test "the bit is transitive through by-value fields, and stops at a reference" {
     // `struct { h: Handle }` holds the resource; `struct { h: &Handle }` only views it.
     let by_value: List(Field) = list(1)
     by_value.push(cp_field("h", handle, false))
-    const owner = reg.register(NominalDef.NomStruct(cp_struct(list(0), by_value)), $"m.Owner")
+    const owner = reg.register(NominalDef.NomStruct(cp_struct(list(0), move by_value)), $"m.Owner")
 
     let by_ref: List(Field) = list(1)
     by_ref.push(cp_field("h", eng.mk_ref(handle), false))
-    const viewer = reg.register(NominalDef.NomStruct(cp_struct(list(0), by_ref)), $"m.Viewer")
+    const viewer = reg.register(NominalDef.NomStruct(cp_struct(list(0), move by_ref)), $"m.Viewer")
 
     assert_true(!eng.is_copyable(cp_nominal(&eng, owner, list(0))),
         "a non-copyable field type is inherited")
@@ -1351,15 +1361,16 @@ test "the bit follows the instantiation, not the declaration" {
     params.push(tv)
     let fs: List(Field) = list(1)
     fs.push(cp_field("v", eng.interner.var_of(TyVar { id = tv, level = 0u32 }), false))
-    const box = reg.register(NominalDef.NomStruct(cp_struct(params, fs)), $"m.Box")
+    const box = reg.register(NominalDef.NomStruct(cp_struct(move params, move fs)), $"m.Box")
 
     let with_handle: List(Ty) = list(1)
     with_handle.push(handle)
     let with_int: List(Ty) = list(1)
     with_int.push(prim_of(PrimitiveKind.I32))
 
-    assert_true(!eng.is_copyable(cp_nominal(&eng, box, with_handle)), "Box(Handle) is not copyable")
-    assert_true(eng.is_copyable(cp_nominal(&eng, box, with_int)), "Box(i32) is")
+    assert_true(!eng.is_copyable(cp_nominal(&eng, box, move with_handle)),
+        "Box(Handle) is not copyable")
+    assert_true(eng.is_copyable(cp_nominal(&eng, box, move with_int)), "Box(i32) is")
 }
 
 test "a view over a non-copyable element stays copyable" {
@@ -1381,11 +1392,12 @@ test "a view over a non-copyable element stays copyable" {
     fs.push(cp_field("ptr", eng.mk_ref(eng.interner.var_of(TyVar { id = tv, level = 0u32 })),
             false))
     fs.push(cp_field("len", prim_of(PrimitiveKind.USize), false))
-    const view = reg.register(NominalDef.NomStruct(cp_struct(params, fs)), $"m.View")
+    const view = reg.register(NominalDef.NomStruct(cp_struct(move params, move fs)), $"m.View")
 
     let args: List(Ty) = list(1)
     args.push(handle)
-    assert_true(eng.is_copyable(cp_nominal(&eng, view, args)), "View(Handle) views, so it copies")
+    assert_true(eng.is_copyable(cp_nominal(&eng, view, move args)),
+        "View(Handle) views, so it copies")
 }
 
 test "an enum variant payload propagates the bit" {
@@ -1402,13 +1414,13 @@ test "an enum variant payload propagates the bit" {
     payload.push(handle)
     let variants: List(VariantDef) = list(2)
     variants.push(VariantDef { name = "None", payloads = list(0), decl_span = none_span() })
-    variants.push(VariantDef { name = "Some", payloads = payload, decl_span = none_span() })
+    variants.push(VariantDef { name = "Some", payloads = move payload, decl_span = none_span() })
     const maybe = reg.register(NominalDef.NomEnum(EnumDef {
         fqn = "",
         module = "m",
         is_pub = true,
         type_params = list(0),
-        variants = variants,
+        variants = move variants,
         tag_values = null,
         decl_span = none_span(),
         deprecation = null,

@@ -94,10 +94,10 @@ pub fn nominal_registry(allocator: &Allocator? = null) NominalRegistry {
     let by_fqn: Dict(String, NominalId) = dict(allocator)
     let owned_fqns: List(OwnedString) = list(0, allocator)
     return .{
-        defs = defs,
+        defs = move defs,
         next_id = 0 as NominalId,
-        by_fqn = by_fqn,
-        owned_fqns = owned_fqns,
+        by_fqn = move by_fqn,
+        owned_fqns = move owned_fqns,
         allocator = allocator,
     }
 }
@@ -106,6 +106,11 @@ pub fn deinit(self: &NominalRegistry) {
     self.defs.deinit()
     self.by_fqn.deinit()
     self.owned_fqns.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &NominalRegistry, allocator: &Allocator) {
+    self.deinit()
 }
 
 // Register a new nominal. The caller transfers ownership of `fqn_owned` to the registry - the heap
@@ -119,10 +124,10 @@ pub fn register(self: &NominalRegistry, def: NominalDef, fqn_owned: OwnedString)
     let id: NominalId = self.next_id
     self.next_id = id + 1
     let idx = self.owned_fqns.len
-    self.owned_fqns.push(fqn_owned)
+    self.owned_fqns.push(move fqn_owned)
     let stable: String = self.owned_fqns[idx].as_view()
-    let fixed = with_fqn(def, stable)
-    self.defs.set(id, fixed)
+    let fixed = with_fqn(move def, stable)
+    self.defs.set(id, move fixed)
     self.by_fqn.set(stable, id)
     return id
 }
@@ -135,8 +140,8 @@ fn with_fqn(def: NominalDef, new_fqn: String) NominalDef {
             fqn = new_fqn,
             module = s.module,
             is_pub = s.is_pub,
-            type_params = s.type_params,
-            fields = s.fields,
+            type_params = move s.type_params,
+            fields = move s.fields,
             decl_span = s.decl_span,
             deprecation = s.deprecation,
             is_simd = s.is_simd,
@@ -146,9 +151,9 @@ fn with_fqn(def: NominalDef, new_fqn: String) NominalDef {
             fqn = new_fqn,
             module = e.module,
             is_pub = e.is_pub,
-            type_params = e.type_params,
-            variants = e.variants,
-            tag_values = e.tag_values,
+            type_params = move e.type_params,
+            variants = move e.variants,
+            tag_values = move e.tag_values,
             decl_span = e.decl_span,
             deprecation = e.deprecation,
         })
@@ -159,8 +164,8 @@ fn with_fqn(def: NominalDef, new_fqn: String) NominalDef {
 // already owns. `next_id` is untouched, so an id retired by `evict` and put back here keeps naming
 // the same declaration.
 pub fn register_at(self: &NominalRegistry, id: NominalId, def: NominalDef, fqn_stable: String) {
-    let fixed = with_fqn(def, fqn_stable)
-    self.defs.set(id, fixed)
+    let fixed = with_fqn(move def, fqn_stable)
+    self.defs.set(id, move fixed)
     self.by_fqn.set(fqn_stable, id)
 }
 
@@ -173,7 +178,7 @@ pub fn carried_copy(self: &NominalRegistry, allocator: &Allocator? = null) Nomin
     // Through a reference: a mutating call on a field of a local value struct mutates a copy (see
     // docs/known-issues.md, mutation through a field chain).
     fill_carried(&out, self, allocator)
-    return out
+    return move out
 }
 
 fn fill_carried(out: &NominalRegistry, src: &NominalRegistry, allocator: &Allocator?) {
@@ -191,13 +196,14 @@ fn fill_carried(out: &NominalRegistry, src: &NominalRegistry, allocator: &Alloca
 }
 
 fn clone_def(def: &NominalDef, allocator: &Allocator?) NominalDef {
+    const a = allocator.or_global()
     return def.* match {
         NomStruct(s) => NominalDef.NomStruct(StructDef {
             fqn = s.fqn,
             module = s.module,
             is_pub = s.is_pub,
-            type_params = clone_list(&s.type_params, allocator),
-            fields = clone_list(&s.fields, allocator),
+            type_params = s.type_params.clone(a),
+            fields = s.fields.clone(a),
             decl_span = s.decl_span,
             deprecation = s.deprecation,
             is_simd = s.is_simd,
@@ -207,42 +213,36 @@ fn clone_def(def: &NominalDef, allocator: &Allocator?) NominalDef {
             fqn = e.fqn,
             module = e.module,
             is_pub = e.is_pub,
-            type_params = clone_list(&e.type_params, allocator),
-            variants = clone_variants(&e.variants, allocator),
-            tag_values = clone_tags(e.tag_values, allocator),
+            type_params = e.type_params.clone(a),
+            variants = clone_variants(&e.variants, a),
+            tag_values = clone_tags(&e, a),
             decl_span = e.decl_span,
             deprecation = e.deprecation,
         })
     }
 }
 
-fn clone_list(xs: &List($T), allocator: &Allocator?) List(T) {
-    let out: List(T) = list(xs.len, allocator)
-    out.push_all(xs.as_slice())
-    return out
-}
-
-fn clone_variants(xs: &List(VariantDef), allocator: &Allocator?) List(VariantDef) {
-    let out: List(VariantDef) = list(xs.len, allocator)
+fn clone_variants(xs: &List(VariantDef), a: &Allocator) List(VariantDef) {
+    let out: List(VariantDef) = list(xs.len, a)
     for &v in xs {
         out.push(VariantDef {
             name = v.name,
-            payloads = clone_list(&v.payloads, allocator),
+            payloads = v.payloads.clone(a),
             decl_span = v.decl_span,
         })
     }
-    return out
+    return move out
 }
 
-fn clone_tags(tags: Dict(String, i64)?, allocator: &Allocator?) Dict(String, i64)? {
-    if tags.is_none() {
-        return null
+fn clone_tags(e: &EnumDef, a: &Allocator) Dict(String, i64)? {
+    return e.tag_values match {
+        Some(t) => Some(t.clone(a))
+        None => null
     }
-    let out: Dict(String, i64) = dict(allocator)
-    for e in tags.unwrap() {
-        out.set(e.key, e.value)
-    }
-    return Some(out)
+}
+
+pub fn deinit(self: &NominalDef, allocator: &Allocator) {
+    free_body(self)
 }
 
 // Free the lists a resolved body owns: type params, fields, variant payloads, tag values. The
@@ -292,7 +292,7 @@ pub fn len(self: &NominalRegistry) usize {
 // def from the old one's field and type-param lists and keep owning them.
 pub fn put(self: &NominalRegistry, id: NominalId, def: NominalDef) {
     let slot = self.defs.get_ref(id).unwrap()
-    slot.* = def
+    slot.* = move def
 }
 
 // Drop the definition at `id` and its FQN mapping. The id is retired, not recycled: `find` reports
@@ -377,7 +377,7 @@ pub fn lookup_variant(self: &NominalRegistry, name: String, arity: usize,
         }
         let d = found.unwrap()
         let ed = d.* match {
-            NomEnum(e) => Some(e)
+            NomEnum(e) => Some(&e)
             _ => null
         }
         if ed.is_none() {
@@ -512,9 +512,9 @@ test "a carried copy keeps ids, holes and bodies" {
         decl_span = none_span(),
         owned = false,
     })
-    let bd = reg.get(b).* match { NomStruct(s) => s, _ => probe_struct() }
-    bd.fields = fields
-    reg.put(b, NominalDef.NomStruct(bd))
+    let bd = reg.get(b).* match { NomStruct(s) => move s, _ => probe_struct() }
+    bd.fields = move fields
+    reg.put(b, NominalDef.NomStruct(move bd))
 
     let next = reg.carried_copy()
     defer next.deinit()
@@ -546,8 +546,8 @@ fn probe_struct() StructDef {
         fqn = "",
         module = "m",
         is_pub = true,
-        type_params = no_params,
-        fields = no_fields,
+        type_params = move no_params,
+        fields = move no_fields,
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,

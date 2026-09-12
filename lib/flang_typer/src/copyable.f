@@ -105,5 +105,5 @@ pub fn param_subst(it: &TypeInterner, params: &List(VarId), args: ChildSpan,
         }
         subst.set(params[i], it.child_at(args, i))
     }
-    return subst
+    return move subst
 }

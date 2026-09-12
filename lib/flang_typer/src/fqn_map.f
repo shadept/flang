@@ -37,13 +37,18 @@ pub fn fqn_map(allocator: &Allocator? = null) FqnMap($V) {
     let out: FqnMap(V)
     out.allocator = allocator.or_global()
     out.names = string_pool(out.allocator)
-    return out
+    return move out
 }
 
 // Frees the table and the name pool. The values are not deinited: the map never owned them.
 pub fn deinit(self: &FqnMap($V)) {
     self.entries.deinit(self.allocator)
     self.names.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &FqnMap($V), allocator: &Allocator) {
+    self.deinit()
 }
 
 // Returns whether a value is registered under exactly `fqn`.
@@ -82,7 +87,7 @@ pub fn evict_module(self: &FqnMap($V), module: String) {
         }
     }
     for id in doomed {
-        const _gone = self.entries.remove(id)
+        const _gone = self.entries.remove(id, self.allocator)
     }
 }
 

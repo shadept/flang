@@ -694,6 +694,18 @@ pub type BlockExpr = struct {
 // tree element-wise would free through allocator pointers into a view that no longer exists.
 pub fn deinit(self: &BlockExpr) {}
 
+// The AST enums are arena-owned like `BlockExpr`: a container of nodes frees its own buffer and
+// releases nothing per element.
+pub fn deinit(self: &Expr, allocator: &Allocator) {}
+
+pub fn deinit(self: &Stmt, allocator: &Allocator) {}
+
+pub fn deinit(self: &Decl, allocator: &Allocator) {}
+
+pub fn deinit(self: &TypeExpr, allocator: &Allocator) {}
+
+pub fn deinit(self: &Pattern, allocator: &Allocator) {}
+
 // Element form (README, Expected functions). The value carries its own allocator.
 pub fn deinit(self: &BlockExpr, allocator: &Allocator) {}
 

@@ -11,28 +11,37 @@
 
 import std.allocator
 import std.collections.set
+import std.option
 
 import flang_typer.interner
 import flang_typer.type
 
-// `forall {quantified}. body`. A scheme with empty `quantified` is monomorphic - `specialize`
-// short-circuits.
+// `forall {quantified}. body`. A null `quantified` is monomorphic - `specialize` short-circuits.
+//
+// The set is a shared view: `generalize` allocates it once and every copy of the scheme - registry
+// entries, candidate lists, bindings - reads the same one, so a scheme is copyable and nothing ever
+// frees the set (docs/known-issues.md, scheme ownership).
 pub type Scheme = struct {
-    quantified: Set(VarId)
+    quantified: &Set(VarId)?
     body: Ty
 }
 
-// Construct a monomorphic scheme around `body`. `allocator` is used only for the empty `quantified`
-// set's lazy backing storage.
-pub fn mono(body: Ty, allocator: &Allocator? = null) Scheme {
-    let q: Set(VarId) = set(allocator)
-    return .{ quantified = q, body = body }
+// Construct a monomorphic scheme around `body`.
+pub fn mono(body: Ty) Scheme {
+    return .{ quantified = null, body = body }
 }
 
-// Monomorphic - `quantified.len == 0`. A `Scheme` is the engine's canonical "binding" type even for
+// Monomorphic - nothing is quantified. A `Scheme` is the engine's canonical "binding" type even for
 // monotypes; this predicate covers the let-binding fast path.
 pub fn is_monomorphic(self: &Scheme) bool {
-    return self.quantified.len() == 0
+    return self.quantified.is_none()
+}
+
+pub fn quantified_len(self: &Scheme) usize {
+    return self.quantified match {
+        Some(q) => q.len()
+        None => 0
+    }
 }
 
 // Walk `body`'s node graph collecting the ids of every free `TyVar` whose `level` is strictly

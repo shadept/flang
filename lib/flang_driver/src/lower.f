@@ -2697,7 +2697,7 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
                 args.deinit()
                 return unlowerable(ctx)
             }
-            args.push(lower_adapted(ctx, bb, env, &ordered[i], &sig.params[args.len]))
+            args.push(lower_adapted(ctx, bb, env, ordered[i], &sig.params[args.len]))
         }
     } else if call_has_named(call) {
         args.deinit()
@@ -2735,7 +2735,7 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
                 return unlowerable(ctx)
             }
             for i in 0..defaults.len {
-                args.push(lower_expr(ctx, bb, env, &defaults[i]))
+                args.push(lower_expr(ctx, bb, env, defaults[i]))
             }
         }
     }
@@ -6756,7 +6756,7 @@ fn call_has_named(call: &CallExpr) bool {
 
 // The complete parameter-ordered argument list for the call at `id` (M12), through the active
 // overlay first like every table read.
-fn ctx_arg_list(ctx: &LowerCtx, id: NodeId) &List(Expr)? {
+fn ctx_arg_list(ctx: &LowerCtx, id: NodeId) &List(&Expr)? {
     ctx.overlay match {
         Some(ov) => {
             let a = ov.arg_lists.get_ref(id)
@@ -6769,7 +6769,7 @@ fn ctx_arg_list(ctx: &LowerCtx, id: NodeId) &List(Expr)? {
     return ctx.result.get_arg_list(id)
 }
 
-fn ctx_default_args(ctx: &LowerCtx, id: NodeId) &List(Expr)? {
+fn ctx_default_args(ctx: &LowerCtx, id: NodeId) &List(&Expr)? {
     ctx.overlay match {
         Some(ov) => {
             let d = ov.default_args.get_ref(id)

@@ -43,8 +43,8 @@ pub type Coercion = struct {
 
 // Build a side-effect-free coercion. Most widening rules use this.
 #inline pub fn simple(result_ty: Ty, allocator: &Allocator? = null) Coercion {
-    let empty = list(0, allocator)
-    return .{ result_ty = result_ty, cost = 1u32, side_unifications = empty }
+    let empty: List(Constraint) = list(0, allocator)
+    return .{ result_ty = result_ty, cost = 1u32, side_unifications = move empty }
 }
 
 fn prim_kind_of(it: &TypeInterner, t: Ty) PrimitiveKind? {
@@ -287,13 +287,13 @@ fn decay_to_slice(it: &TypeInterner, to: Ty, n: &NNominalNode, elem: Ty, reg: &N
     }
     let side = list(1, allocator)
     side.push(Constraint { a = elem, b = it.child_ids(n.args)[0] })
-    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = side })
+    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
 }
 
 fn decay_to_ref(to: Ty, target_inner: Ty, elem: Ty, allocator: &Allocator?) Coercion? {
     let side = list(1, allocator)
     side.push(Constraint { a = elem, b = target_inner })
-    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = side })
+    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
 }
 
 // `T → Type(T)` for RTTI handles. The result wraps `from` in a
@@ -329,5 +329,5 @@ pub fn try_nominal_to_type(it: &TypeInterner, from: Ty, to: Ty, reg: &NominalReg
     }
     let side = list(1, allocator)
     side.push(Constraint { a = from, b = it.child_ids(tn.args)[0] })
-    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = side })
+    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
 }

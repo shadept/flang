@@ -43,7 +43,7 @@ const MAX_GENERATIONS: u32 = 8
 // A `#define`, captured with its body text (a view into its source).
 pub type GenDefEntry = struct {
     name: String
-    params: List(GenParam)
+    params: &List(GenParam)
     body: String
     base: usize
     file_id: i32
@@ -93,19 +93,30 @@ pub fn empty_template_output(allocator: &Allocator? = null) TemplateOutput {
 }
 
 pub fn take_output(self: &TemplateState) TemplateOutput {
-    const out: TemplateOutput = .{ chunk_modules = self.chunk_modules, emitted = self.emitted }
+    const out: TemplateOutput = .{ chunk_modules = move self.chunk_modules,
+        emitted = move self.emitted }
     self.chunk_modules = list(0, self.allocator)
     self.emitted = list(0, self.allocator)
-    return out
+    return move out
 }
 
 pub fn deinit(self: &EmittedFile) {
     self.text.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &EmittedFile, allocator: &Allocator) {
+    self.deinit()
+}
+
 pub fn deinit(self: &TemplateOutput) {
     self.chunk_modules.deinit()
     self.emitted.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &TemplateOutput, allocator: &Allocator) {
+    self.deinit()
 }
 
 // Deliberately leak the output (single-unit analysis has no slot to keep it alive; the appended
@@ -125,9 +136,14 @@ pub fn deinit(self: &TemplateState) {
     rest.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &TemplateState, allocator: &Allocator) {
+    self.deinit()
+}
+
 type WorkItem = struct {
     module: usize
-    inv: GenInvoke
+    inv: &GenInvoke
     generation: u32
 }
 
@@ -165,7 +181,7 @@ fn resolve_type_decl(raw: &u8, name: String) &TypeDecl? {
     const mods: &List(Module) = ctx.modules
     const decl: &Decl = &mods[r.module].decls[r.decl]
     decl.* match {
-        Type(td) => return Some(box(ctx.alloc, td))
+        Type(td) => return Some(box(ctx.alloc, move td))
         _ => return null
     }
 }
@@ -213,7 +229,9 @@ pub fn expand_templates(chk: &Checker, state: &TemplateState, modules: &List(Mod
             for &item in parked { report_unknown_types(chk, state, paths, item) }
             break
         }
-        work = parked
+        const done = move work
+        done.deinit()
+        work = move parked
         if work.len == 0 {
             break
         }
@@ -231,7 +249,7 @@ fn index_module(state: &TemplateState, module: &Module, m: usize, decl_base: usi
             GenDef(g) => {
                 state.defs[$"{g.name}"] = GenDefEntry {
                     name = g.name,
-                    params = g.params,
+                    params = &g.params,
                     body = source[g.body_start..g.body_end],
                     base = g.body_start,
                     file_id = module.span.file_id,
@@ -239,7 +257,7 @@ fn index_module(state: &TemplateState, module: &Module, m: usize, decl_base: usi
             }
             GenInvoke(inv) => { work.push(WorkItem {
                     module = m,
-                    inv = inv,
+                    inv = &inv,
                     generation = generation,
                 }) }
             Type(td) => {
@@ -285,7 +303,7 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
         vis = current_visibility(chk),
         alloc = &a,
     }
-    defer ectx.vis.visible.deinit()
+    defer ectx.vis.deinit()
     const lookup: CtLookup = .{ ctx = &ectx as &u8, resolve = resolve_type_decl,
         name = no_name }
     let env = ct_env(&chk.comptime, &a, lookup)
@@ -316,7 +334,7 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
     const nodes = parse_template_body(def.body, def.base, def.file_id, &a, &parse_diags)
     if parse_diags.len > 0 {
         const taken = parse_diags.to_owned_slice()
-        for &d in taken.0 { chk.diagnostics.push(error(d.code, d.message, d.span)) }
+        for &d in taken.0 { chk.diagnostics.push(move d.*) }
         taken.1.free(taken.0)
         return Outcome.Failed
     }
@@ -376,7 +394,7 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
     origin.append_decls(&chunk_module.decls)
     index_module(state, &chunk_module, item.module, decl_base, paths[item.module],
         sources[sources.len - 1].as_view(), parked, item.generation + 1)
-    state.chunk_modules.push(chunk_module)
+    state.chunk_modules.push(move chunk_module)
     return Outcome.Expanded
 }
 
@@ -396,7 +414,7 @@ fn bind_arg(chk: &Checker, env: &CtEnv, param: &GenParam, arg: &GenArg, gen_name
         return arg.* match {
             // Boxed: the match payload is a copy, and CtTypeInfo retains the pointer past this call
             // (FromSyntax).
-            TypeArg(te) => Ok(CtValue.TypeInfo(type_info_of(env, box(a, te))))
+            TypeArg(te) => Ok(CtValue.TypeInfo(type_info_of(env, box(a, move te))))
             IdentArg(id) => {
                 if !type_is_collected(chk, id.name) {
                     return Err(Outcome.UnknownType)
@@ -406,7 +424,7 @@ fn bind_arg(chk: &Checker, env: &CtEnv, param: &GenParam, arg: &GenArg, gen_name
                     name = id.name,
                     generic_args = list(0, Some(a)),
                 })
-                Ok(CtValue.TypeInfo(type_info_of(env, box(a, named))))
+                Ok(CtValue.TypeInfo(type_info_of(env, box(a, move named))))
             }
         }
     }
@@ -426,8 +444,8 @@ fn type_is_collected(chk: &Checker, name: String) bool {
     if is_primitive_name(name) {
         return true
     }
-    const vis = current_visibility(chk)
-    defer vis.visible.deinit()
+    let vis = current_visibility(chk)
+    defer vis.deinit()
     return chk.nominals.lookup(name, &vis) match {
         NomLookFound(_) => true
         _ => false
@@ -467,16 +485,16 @@ fn report_unknown_types(chk: &Checker, state: &TemplateState, paths: &List(Strin
 fn parse_chunk(chk: &Checker, text: String, file_id: i32) Module {
     let lx = lexer(text, chk.allocator)
     let tokens = lx.tokenize()
-    let p = parser(tokens, text, chk.allocator)
+    let p = parser(move tokens, text, chk.allocator)
     p.set_file_id(file_id)
     const cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, file_id, chk.allocator, Some(&chk.diagnostics))
     flatten_module_decls(&module, &chk.comptime, &chk.diagnostics, chk.allocator)
     const taken = p.diagnostics.to_owned_slice()
-    for &d in taken.0 { chk.diagnostics.push(error(d.code, d.message, d.span)) }
+    for &d in taken.0 { chk.diagnostics.push(move d.*) }
     taken.1.free(taken.0)
     p.deinit()
-    return module
+    return move module
 }
 
 fn emitted_for(state: &TemplateState, allocator: &Allocator?, origin_path: String) &EmittedFile {
@@ -489,7 +507,7 @@ fn emitted_for(state: &TemplateState, allocator: &Allocator?, origin_path: Strin
     text.append("// Generated from ")
     text.append(base_name(origin_path))
     text.append("\n\n")
-    state.emitted.push(EmittedFile { origin_path = origin_path, text = text, lines = 2 })
+    state.emitted.push(EmittedFile { origin_path = origin_path, text = move text, lines = 2 })
     return &state.emitted[state.emitted.len - 1]
 }
 

@@ -43,12 +43,6 @@ pub type FunctionScheme = struct {
     retired: bool
 }
 
-// Does NOT free `signature.quantified`, the entry's one piece of heap, and so leaks it. `FnLookup`
-// hands a caller a COPY of the candidate list, every overload resolution drops that copy, and a
-// scheme that freed on drop would take the registry's set with it. Freeing here means making lookup
-// hand back a borrow first. See docs/known-issues.md on scheme ownership.
-pub fn deinit(self: &FunctionScheme) {}
-
 // Multi-payload variants where one payload is a generic-typed value (`List(FunctionScheme)`)
 // confuse the FLang parser - the comma inside the generic argument list is ambiguous with the
 // variant-payload separator. Wrapping the multi-payload case in its own struct keeps the variant
@@ -80,11 +74,16 @@ pub type FunctionRegistry = struct {
 
 pub fn function_registry(allocator: &Allocator? = null) FunctionRegistry {
     let by_name: Dict(String, List(FunctionScheme)) = dict(allocator)
-    return .{ by_name = by_name, next_id = 0u32, changed = false, allocator = allocator }
+    return .{ by_name = move by_name, next_id = 0u32, changed = false, allocator = allocator }
 }
 
 pub fn deinit(self: &FunctionRegistry) {
     self.by_name.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &FunctionRegistry, allocator: &Allocator) {
+    self.deinit()
 }
 
 // Register `scheme` under `scheme.name`. Returns the assigned id. Duplicate-signature detection is
@@ -97,7 +96,7 @@ pub fn deinit(self: &FunctionRegistry) {
 pub fn register(self: &FunctionRegistry, scheme: FunctionScheme) u32 {
     if self.by_name.get_ref(scheme.name).is_none() {
         let fresh: List(FunctionScheme) = list(1, self.allocator)
-        self.by_name.set(scheme.name, fresh)
+        self.by_name.set(scheme.name, move fresh)
     }
     // In place through the stored list: the get-copy-push-set dance both leaked and double-freed
     // once `Dict.set` started deiniting overwritten values (the copy shares the stored buffer).
@@ -139,7 +138,7 @@ fn with_id(scheme: &FunctionScheme, id: u32) FunctionScheme {
 // that only moved resolves identically.
 fn reclaim_equal(old: &FunctionScheme, new: &FunctionScheme) bool {
     return old.signature.body == new.signature.body
-        and old.signature.quantified.len() == new.signature.quantified.len()
+        and old.signature.quantified_len() == new.signature.quantified_len()
         and old.is_pub == new.is_pub and old.is_foreign == new.is_foreign
         and old.required_params == new.required_params and old.has_variadic == new.has_variadic
         and same_deprecation(old.deprecation, new.deprecation)
@@ -176,7 +175,7 @@ fn key_list(self: &FunctionRegistry) List(String) {
     for entry in self.by_name {
         names.push(entry.key)
     }
-    return names
+    return move names
 }
 
 // Take module `module`'s entries out of resolution so its signature pass can register them again.
@@ -227,7 +226,7 @@ pub fn purge_retired(self: &FunctionRegistry) List(u32) {
         lst.push_all(keep.as_slice())
         keep.deinit()
     }
-    return dropped
+    return move dropped
 }
 
 // A copy of every live entry at the id and list position it holds, for the checker to carry into
@@ -237,17 +236,17 @@ pub fn purge_retired(self: &FunctionRegistry) List(u32) {
 pub fn carried_copy(self: &FunctionRegistry, allocator: &Allocator? = null) FunctionRegistry {
     let out = function_registry(allocator)
     fill_fn_carried(&out, self, allocator)
-    return out
+    return move out
 }
 
 fn fill_fn_carried(out: &FunctionRegistry, src: &FunctionRegistry, allocator: &Allocator?) {
     for entry in src.by_name {
-        let overloads: List(FunctionScheme) = entry.value
+        const overloads = &entry.value
         let cl: List(FunctionScheme) = list(overloads.len, allocator)
         for &f in overloads {
             cl.push(f.*)
         }
-        out.by_name.set(entry.key, cl)
+        out.by_name.set(entry.key, move cl)
     }
     out.next_id = src.next_id
 }
@@ -269,7 +268,7 @@ pub fn find_by_id(self: &FunctionRegistry, id: u32) &FunctionScheme? {
 // nothing is reachable but some hidden overloads exist, returns one of them along with its module
 // for the diagnostic hint.
 pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup {
-    let overloads_opt = self.by_name.get(name)
+    let overloads_opt = self.by_name.get_ref(name)
     if overloads_opt.is_none() {
         return FnLookup.FnLookMissing
     }
@@ -299,13 +298,13 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
         }
     }
     if visible.len > 0 {
-        return FnLookup.FnLookFound(visible)
+        return FnLookup.FnLookFound(move visible)
     }
     if hidden_module.is_some() {
         let one: List(FunctionScheme) = list(1, self.allocator)
         one.push(overloads[hidden_at])
         return FnLookup.FnLookHidden(FnLookHiddenInfo {
-            candidates = one,
+            candidates = move one,
             module = hidden_module.unwrap(),
         })
     }
@@ -359,7 +358,7 @@ test "a retired entry stops resolving until it is registered again" {
     const a = reg.register(probe_scheme("f", "m"))
     reg.retire_module("m")
     let scope: Set(String) = set()
-    let vis = visibility(Some("m"), scope)
+    let vis = visibility(Some("m"), move scope)
     defer vis.visible.deinit()
     let missing = reg.lookup("f", &vis) match {
         FnLookMissing => true

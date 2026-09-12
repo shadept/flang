@@ -22,6 +22,7 @@
 import std.allocator
 import std.collections.dict
 import std.collections.list
+import std.collections.set
 import std.derive
 import std.option
 import std.string
@@ -148,6 +149,9 @@ pub type TypeInterner = struct {
     // ponytail: measurement scaffolding for the RFC-024 key rework; drop once the numbers land.
     n_calls: usize
     n_hits: usize
+    // The quantifier sets every `Scheme` points at (scheme.f): boxed here by `generalize`, shared
+    // by every copy of a scheme, freed with the table the var ids belong to.
+    quantifier_sets: List(&Set(VarId))
     allocator: &Allocator?
 }
 
@@ -180,6 +184,7 @@ pub fn type_interner(allocator: &Allocator?, capacity: usize) TypeInterner {
         kids_next = 1,
         n_calls = 0,
         n_hits = 0,
+        quantifier_sets = list(0, allocator),
         allocator = allocator,
     }
     seed_leaf(&self, TyNode.NVoid)
@@ -193,7 +198,7 @@ pub fn type_interner(allocator: &Allocator?, capacity: usize) TypeInterner {
     for p in prims {
         seed_leaf(&self, TyNode.NPrim(p))
     }
-    return self
+    return move self
 }
 
 fn probe(self: &TypeInterner, key: TyKey) Ty? {
@@ -266,6 +271,23 @@ pub fn deinit(self: &TypeInterner) {
     self.by_key.deinit()
     self.kids.deinit()
     self.field_kids.deinit()
+    for q in self.quantifier_sets {
+        q.deinit()
+        self.allocator.or_global().free(q)
+    }
+    self.quantifier_sets.deinit()
+}
+
+// Takes ownership of a quantifier set for the table's lifetime and hands back the shared view.
+pub fn own_quantifiers(self: &TypeInterner, q: Set(VarId)) &Set(VarId) {
+    const boxed = box(self.allocator.or_global(), move q)
+    self.quantifier_sets.push(boxed)
+    return boxed
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &TypeInterner, allocator: &Allocator) {
+    self.deinit()
 }
 
 pub fn len(self: &TypeInterner) usize {
@@ -446,7 +468,7 @@ fn substitute_span(self: &TypeInterner, span: ChildSpan, subst: &Dict(VarId, Ty)
     for i in 0..span.len {
         out.push(self.substitute(self.child_at(span, i), subst, alloc))
     }
-    return out
+    return move out
 }
 
 fn substitute_func(self: &TypeInterner, f: &NFuncNode, subst: &Dict(VarId, Ty),

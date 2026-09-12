@@ -41,7 +41,7 @@ pub type ReportCtx = struct {
 
 pub fn report_ctx(code: String, span: SourceSpan, nominals: &NominalRegistry? = null) ReportCtx {
     let empty: OwnedString? = null
-    return .{ code = code, span = span, message_override = empty, nominals = nominals }
+    return .{ code = code, span = span, message_override = move empty, nominals = nominals }
 }
 
 // Emit zero or one diagnostic depending on the outcome. `Unified` produces nothing. Every other
@@ -62,18 +62,18 @@ pub fn report(outcome: &UnifyOutcome, ctx: &ReportCtx, it: &TypeInterner, out: &
 fn report_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic),
     alloc: &Allocator) {
     let message = ctx.message_override match {
-        Some(msg) => msg
+        Some(msg) => move msg
         None => format_mismatch(m, ctx, it, alloc)
     }
     let empty_hint: OwnedString
     let diag = Diagnostic {
         severity = Severity.Error,
         code = ctx.code,
-        message = message,
-        hint = empty_hint,
+        message = move message,
+        hint = move empty_hint,
         span = ctx.span,
     }
-    out.push(diag)
+    out.push(move diag)
 }
 
 fn report_occurs(o: &OccursDetails, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic),
@@ -88,10 +88,10 @@ fn report_occurs(o: &OccursDetails, ctx: &ReportCtx, it: &TypeInterner, out: &Li
         severity = Severity.Error,
         code = E_OCCURS_CHECK,
         message = sb.to_string(),
-        hint = empty_hint,
+        hint = move empty_hint,
         span = ctx.span,
     }
-    out.push(diag)
+    out.push(move diag)
 }
 
 fn report_arity(a: &ArityDetails, ctx: &ReportCtx, out: &List(Diagnostic), alloc: &Allocator) {
@@ -109,10 +109,10 @@ fn report_arity(a: &ArityDetails, ctx: &ReportCtx, out: &List(Diagnostic), alloc
         severity = Severity.Error,
         code = ctx.code,
         message = sb.to_string(),
-        hint = empty_hint,
+        hint = move empty_hint,
         span = ctx.span,
     }
-    out.push(diag)
+    out.push(move diag)
 }
 
 fn report_prim_constraint(p: &PrimViolation, ctx: &ReportCtx, it: &TypeInterner,
@@ -142,10 +142,10 @@ fn report_prim_constraint(p: &PrimViolation, ctx: &ReportCtx, it: &TypeInterner,
         severity = Severity.Error,
         code = E_PRIM_CONSTRAINT,
         message = sb.to_string(),
-        hint = empty_hint,
+        hint = move empty_hint,
         span = ctx.span,
     }
-    out.push(diag)
+    out.push(move diag)
 }
 
 fn format_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner,

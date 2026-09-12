@@ -48,6 +48,11 @@ pub fn deinit(self: &ClosureFact) {
     self.sig.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &ClosureFact, allocator: &Allocator) {
+    self.deinit()
+}
+
 pub fn clone_fact(f: &ClosureFact, allocator: &Allocator? = null) ClosureFact {
     let fields: List(Field) = list(f.fields.len, allocator)
     fields.push_all(f.fields.as_slice())
@@ -55,7 +60,7 @@ pub fn clone_fact(f: &ClosureFact, allocator: &Allocator? = null) ClosureFact {
         id = f.id,
         fqn = from_view(f.fqn.as_view(), allocator),
         module = f.module,
-        fields = fields,
+        fields = move fields,
         decl_span = f.decl_span,
         sig = copy_sig(&f.sig, allocator),
     }
@@ -83,7 +88,7 @@ pub type Specialization = struct {
     key: OwnedString // canonical "fn_id@arg_tys" identity
     name: String // template function name
     module: String // template's defining module FQN
-    decl: FunctionDecl // template declaration (shared AST)
+    decl: &FunctionDecl // template declaration (shared AST)
     concrete_params: List(Ty)
     concrete_return: Ty
     overlay: InferenceResults
@@ -119,18 +124,18 @@ pub type Specialization = struct {
 // A fresh record with its reuse bookkeeping zeroed; `register` / `replace_at` stamp the demand
 // generation and assign the id.
 pub fn new_specialization(function_id: u32, key: OwnedString, name: String, module: String,
-    decl: FunctionDecl, concrete_params: List(Ty), concrete_return: Ty, overlay: InferenceResults,
+    decl: &FunctionDecl, concrete_params: List(Ty), concrete_return: Ty, overlay: InferenceResults,
     allocator: &Allocator? = null) Specialization {
     return Specialization {
         id = 0 as SpecId,
         function_id = function_id,
-        key = key,
+        key = move key,
         name = name,
         module = module,
         decl = decl,
-        concrete_params = concrete_params,
+        concrete_params = move concrete_params,
         concrete_return = concrete_return,
-        overlay = overlay,
+        overlay = move overlay,
         touched_gen = 0 as u64,
         stale = false,
         reusable = true,
@@ -155,6 +160,11 @@ pub fn deinit(self: &Specialization) {
     self.concrete_params.deinit()
     self.deps.deinit()
     self.closures.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Specialization, allocator: &Allocator) {
+    self.deinit()
 }
 
 pub type SpecializationRegistry = struct {
@@ -184,6 +194,11 @@ pub fn specialization_registry(allocator: &Allocator? = null) SpecializationRegi
 pub fn deinit(self: &SpecializationRegistry) {
     self.by_key.deinit()
     self.specs.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &SpecializationRegistry, allocator: &Allocator) {
+    self.deinit()
 }
 
 // Canonical key for `(function_id, concrete_params)`. Two specialisations with identical signatures
@@ -216,14 +231,14 @@ pub fn lookup(self: &SpecializationRegistry, key: String) SpecId? {
 pub fn register(self: &SpecializationRegistry, spec: Specialization) SpecId {
     let id: SpecId = self.next_id
     self.next_id = id + 1
-    let with_id = spec
+    let with_id = move spec
     with_id.id = id
     with_id.touched_gen = self.gen
     // The OwnedString's heap buffer is separate from the entry that holds it, so a later rehash
     // does not move it and this view remains valid for the registry's life.
     let stable_view = with_id.key.as_view()
     self.by_key.set(stable_view, id)
-    self.specs.set(id, with_id)
+    self.specs.set(id, move with_id)
     return id
 }
 
@@ -232,22 +247,22 @@ pub fn register(self: &SpecializationRegistry, spec: Specialization) SpecId {
 pub fn replace_at(self: &SpecializationRegistry, id: SpecId, spec: Specialization) {
     let old = self.specs.remove(id)
     if old.is_some() {
-        let d = old.unwrap()
+        let d = unwrap(move old)
         let _k = self.by_key.remove(d.key.as_view())
         d.deinit()
     }
-    let with_id = spec
+    let with_id = move spec
     with_id.id = id
     with_id.touched_gen = self.gen
     let stable_view = with_id.key.as_view()
     self.by_key.set(stable_view, id)
-    self.specs.set(id, with_id)
+    self.specs.set(id, move with_id)
 }
 
 // Attach the completed instantiation's result tables to `id`.
 pub fn set_overlay(self: &SpecializationRegistry, id: SpecId, overlay: InferenceResults) {
     let s = self.specs.get_ref(id).unwrap()
-    s.overlay = overlay
+    s.overlay = move overlay
 }
 
 // The specialization at `id`. Panics on a hole; use `find` when the id may be stale.
@@ -278,7 +293,7 @@ pub fn evict(self: &SpecializationRegistry, id: SpecId) {
     if dropped.is_none() {
         return
     }
-    let d = dropped.unwrap()
+    let d = unwrap(move dropped)
     d.deinit()
 }
 
@@ -315,9 +330,9 @@ pub fn mark_unreusable(self: &SpecializationRegistry, id: SpecId) {
 // against.
 pub fn take_deps(self: &SpecializationRegistry, id: SpecId) List(SpecDep) {
     let s = self.specs.get_ref(id).unwrap()
-    let out = s.deps
+    let out = move s.deps
     s.deps = list(0, self.allocator)
-    return out
+    return move out
 }
 
 // Frame bookkeeping, recorded when an instantiation's body re-check finishes: the stream anchors,
@@ -334,7 +349,7 @@ pub fn set_cache_info(self: &SpecializationRegistry, id: SpecId, vars_at: u32, s
     s.own_synth_burn = own_synth
     s.own_lambda_burn = own_lambda
     s.deps.deinit()
-    s.deps = deps
+    s.deps = move deps
     s.reusable = reusable
     s.stale = false
     s.harvested = false
@@ -347,7 +362,7 @@ pub fn finish_harvest(self: &SpecializationRegistry, id: SpecId, closures: List(
     sig_is_concrete: bool) {
     let s = self.specs.get_ref(id).unwrap()
     s.closures.deinit()
-    s.closures = closures
+    s.closures = move closures
     if !sig_is_concrete {
         s.reusable = false
     }
@@ -415,7 +430,7 @@ pub fn carried_copy(self: &SpecializationRegistry,
             name = s.name,
             module = s.module,
             decl = s.decl,
-            concrete_params = params,
+            concrete_params = move params,
             concrete_return = s.concrete_return,
             overlay = deep_copy(&s.overlay, allocator),
             touched_gen = s.touched_gen,
@@ -428,16 +443,16 @@ pub fn carried_copy(self: &SpecializationRegistry,
             own_var_burn = s.own_var_burn,
             own_synth_burn = s.own_synth_burn,
             own_lambda_burn = s.own_lambda_burn,
-            deps = deps,
-            closures = facts,
+            deps = move deps,
+            closures = move facts,
         }
         const view = copy.key.as_view()
         by_key.set(view, s.id)
-        specs.set(s.id, copy)
+        specs.set(s.id, move copy)
     }
     return SpecializationRegistry {
-        by_key = by_key,
-        specs = specs,
+        by_key = move by_key,
+        specs = move specs,
         next_id = self.next_id,
         gen = self.gen,
         allocator = allocator,
@@ -539,9 +554,9 @@ fn probe_spec(function_id: u32, name: String) Specialization {
     let decl = FunctionDecl {
         span = none_span(),
         is_pub = false,
-        directives = no_dirs,
+        directives = move no_dirs,
         name = name,
-        params = no_decl_params,
+        params = move no_decl_params,
         return_type = null,
         body = null,
     }
@@ -550,7 +565,7 @@ fn probe_spec(function_id: u32, name: String) Specialization {
     let no_params: List(Ty) = list(0)
     let ret = prim_of(PrimitiveKind.I32)
     return new_specialization(function_id, key_for(&it, function_id, &no_params, ret), name, "m",
-        decl, no_params, ret, inference_results())
+        &decl, move no_params, ret, inference_results())
 }
 
 // Replace a specialization's concrete signature - used when a signature that entered instantiation
@@ -558,7 +573,7 @@ fn probe_spec(function_id: u32, name: String) Specialization {
 pub fn set_signature(self: &SpecializationRegistry, id: SpecId, params: List(Ty), ret: Ty) {
     let s = self.specs.get_ref(id).unwrap()
     s.concrete_params.deinit()
-    s.concrete_params = params
+    s.concrete_params = move params
     s.concrete_return = ret
 }
 
@@ -578,7 +593,7 @@ pub fn rekey(self: &SpecializationRegistry, id: SpecId, new_key: OwnedString) bo
     let s = self.specs.get_ref(id).unwrap()
     let _old = self.by_key.remove(s.key.as_view())
     s.key.deinit()
-    s.key = new_key
+    s.key = move new_key
     self.by_key.set(s.key.as_view(), id)
     return true
 }

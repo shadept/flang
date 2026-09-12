@@ -30,6 +30,10 @@ pub type Scope = struct {
     bindings: UnmanagedDict(String, Binding)
 }
 
+pub fn deinit(self: &Scope, allocator: &Allocator) {
+    self.bindings.deinit(allocator)
+}
+
 // The lexical environment of the function being checked: a stack of scopes, innermost on top, each
 // mapping a name to its binding. Lookup walks from the innermost scope outward. One allocator
 // serves every scope's table.
@@ -43,15 +47,15 @@ pub fn type_env(allocator: &Allocator? = null) TypeEnv {
     let out: TypeEnv
     out.allocator = allocator.or_global()
     let initial: Scope
-    out.scopes.push(initial, out.allocator)
-    return out
+    out.scopes.push(move initial, out.allocator)
+    return move out
 }
 
 pub fn deinit(self: &TypeEnv) {
     loop {
         self.scopes.pop() match {
             Some(scope) => {
-                let s = scope
+                let s = move scope
                 s.bindings.deinit(self.allocator)
             }
             None => break
@@ -60,17 +64,22 @@ pub fn deinit(self: &TypeEnv) {
     self.scopes.deinit(self.allocator)
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &TypeEnv, allocator: &Allocator) {
+    self.deinit()
+}
+
 pub fn push_scope(self: &TypeEnv) {
     let fresh: Scope
-    self.scopes.push(fresh, self.allocator)
+    self.scopes.push(move fresh, self.allocator)
 }
 
 pub fn pop_scope(self: &TypeEnv) {
     if self.scopes.len() <= 1 {
         panic("pop_scope: cannot pop global scope")
     }
-    let s = self.scopes.pop().expect("pop_scope: no scope")
-    let scope = s
+    let s = expect(self.scopes.pop(), "pop_scope: no scope")
+    let scope = move s
     scope.bindings.deinit(self.allocator)
 }
 

@@ -44,11 +44,11 @@ pub type TypeCheckResult = struct {
     synth_strings: List(OwnedString)
     // M11: per call site, the callee's default expressions for omitted parameters, in parameter
     // order - see InferenceResults.default_args.
-    default_args: Dict(NodeId, List(Expr))
+    default_args: Dict(NodeId, List(&Expr))
     // M12: per call site, the complete parameter-ordered argument list for calls whose AST order is
     // not their argument order (named arguments, variadic packing) - see
     // InferenceResults.arg_lists.
-    arg_lists: Dict(NodeId, List(Expr))
+    arg_lists: Dict(NodeId, List(&Expr))
     // Per UFCS call site, the op_deref hops the receiver resolved through - see
     // InferenceResults.receiver_derefs.
     receiver_derefs: Dict(NodeId, List(ResolvedTarget))
@@ -148,6 +148,11 @@ pub fn deinit(self: &TypeCheckResult) {
     self.file_paths.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &TypeCheckResult, allocator: &Allocator) {
+    self.deinit()
+}
+
 // Free the tables a retired snapshot's readers no longer need, keeping the struct valid for a later
 // `deinit`. What survives is `synth_strings`: `RtConst` targets and desugared AST in later results
 // and module caches view those buffers. The interner is a stand-in by retirement time
@@ -190,9 +195,9 @@ pub fn slim_retire(self: &TypeCheckResult) {
 // the table so the handles its carried registry holds stay resolvable; this snapshot's own handles
 // remain valid in the table wherever it now lives, but no longer resolve through this struct.
 pub fn take_interner(self: &TypeCheckResult) TypeInterner {
-    let out = self.interner
+    let out = move self.interner
     self.interner = type_interner(out.allocator, 0)
-    return out
+    return move out
 }
 
 // Move the specialization registry out of the snapshot so the next demand carries it forward -
@@ -203,9 +208,9 @@ pub fn take_specs(self: &TypeCheckResult, keep: bool = false) SpecializationRegi
     if keep {
         return self.specializations.carried_copy(self.specializations.allocator)
     }
-    let out = self.specializations
+    let out = move self.specializations
     self.specializations = specialization_registry(out.allocator)
-    return out
+    return move out
 }
 
 pub fn get_type(self: &TypeCheckResult, id: NodeId) Ty? {
@@ -244,11 +249,11 @@ pub fn get_lambda(self: &TypeCheckResult, id: NodeId) &LambdaInfo? {
     return self.lambdas.get_ref(id)
 }
 
-pub fn get_default_args(self: &TypeCheckResult, id: NodeId) &List(Expr)? {
+pub fn get_default_args(self: &TypeCheckResult, id: NodeId) &List(&Expr)? {
     return self.default_args.get_ref(id)
 }
 
-pub fn get_arg_list(self: &TypeCheckResult, id: NodeId) &List(Expr)? {
+pub fn get_arg_list(self: &TypeCheckResult, id: NodeId) &List(&Expr)? {
     return self.arg_lists.get_ref(id)
 }
 

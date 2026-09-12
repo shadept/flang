@@ -3714,3 +3714,42 @@ The fix is a compile-time question the stdlib can ask about a function, not a ty
 
 Until either lands, a copyable type with a `deinit` must be released by hand wherever it is
 stored, and `#if type_info(T).copyable` in the stdlib is to be read as "has no deinit".
+
+---
+
+### A Pending Pick Whose Type Argument Is Still Open Counts as Ready
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (`pending_ready`, `drain_pending_specs`)
+
+`pending_ready` tests the pick's parameter and return types for being variables. A parameter that
+is a *reference* or a *nominal* wrapping an open variable passes: `deinit(&List(?T))` is ready as
+soon as it is picked, so the template body is instantiated with `T` open and every `#if
+type_info(T).copyable` cascade inside it resolves against `?` - reported as E2011 "no matching
+overload for `deinit` on `&?N`" at the stdlib line, with nothing naming the list that caused it.
+Before the blanket `deinit(&$T)` was retired the cascade accepted `?` and the instantiation
+silently did nothing, which is how such lists went unnoticed.
+
+The typer sweep leaves five of these in `lib/flang_typer` (`flang build --check`): lists whose
+element type is never pinned by any push and whose `deinit` pick was parked until the final drain.
+Bisecting with a probe list shows the ids are minted after every body, so they cannot be
+attributed by position.
+
+**Fix:** `pending_ready` should also require every `tp_binds` value to be settled; a pick left with
+an open type argument then reports E2001 at the call, naming the site, instead of instantiating.
+Requires rebuilding the compiler, which the sweep blocks until the whole tree checks: the typer
+now calls stdlib API the dist toolchain lacks (`clone(&Allocator)`, `Dict.clone`, `remove` with an
+allocator).
+
+---
+
+### `Rc` Cannot Sit Inside a Copyable View
+
+**Status:** Open
+**Affected:** `stdlib/std/rc.f`, RFC-028
+
+An `Rc(T)` handle owns its reference (`__inner` is `owned`) and every copy is a `retain`, so any
+struct holding one is non-copyable. There is no way to express "shared, copied freely, released by
+one owner" other than a plain reference plus an explicit owner, which is what `Scheme.quantified`
+does (a `&Set(VarId)?` owned by the `TypeInterner`). A shared handle with a copyable *view* type
+would need a language notion the model does not have. Decided after the ownership sweep.

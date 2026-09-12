@@ -54,14 +54,19 @@ pub fn union_find(allocator: &Allocator? = null) UnionFind($K) {
     let out: UnionFind(K)
     out.allocator = allocator.or_global()
     let undo: Journal(UnionFindUndo(K)) = journal(out.allocator)
-    out.undo = undo
-    return out
+    out.undo = move undo
+    return move out
 }
 
 // Frees the node table and the undo journal, open regions included. Idempotent.
 pub fn deinit(self: &UnionFind($K)) {
     self.nodes.deinit(self.allocator)
     self.undo.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &UnionFind($K), allocator: &Allocator) {
+    self.deinit()
 }
 
 // Find the representative of `k`'s partition, auto-inserting `k` as a singleton on first sight.
@@ -127,7 +132,7 @@ pub fn commit(self: &UnionFind($K)) {
 pub fn rollback(self: &UnionFind($K)) {
     self.undo.rollback(fn(entry: UnionFindUndo(K)) {
         if entry.was_new {
-            let _removed = self.nodes.remove(entry.key)
+            let _removed = self.nodes.remove(entry.key, self.allocator)
         } else {
             self.nodes.set(entry.key, .{
                 parent = entry.old_parent,

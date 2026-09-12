@@ -76,7 +76,7 @@ pub type FnFrame = struct {
 // module, and the signature's type params in declaration order. `decl` is a shallow copy - children
 // stay in the module's arena, which outlives the check.
 type GenericTemplate = struct {
-    decl: FunctionDecl
+    decl: &FunctionDecl
     module: String
     tps: List(SigTypeParam) // signature type params, declaration order
 }
@@ -84,6 +84,11 @@ type GenericTemplate = struct {
 // A re-registered signature's `Dict.set` overwrite frees the replaced template through this.
 pub fn deinit(self: &GenericTemplate) {
     self.tps.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &GenericTemplate, allocator: &Allocator) {
+    self.deinit()
 }
 
 // var_id -> declared `$T` name for every type parameter the checker has minted - signature and body
@@ -137,6 +142,11 @@ type PendingMember = struct {
 
 pub fn deinit(self: &PendingAnon) {
     self.fields.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &PendingAnon, allocator: &Allocator) {
+    self.deinit()
 }
 
 type AnonFieldRec = struct {
@@ -214,7 +224,7 @@ pub type Checker = struct {
     nominals: NominalRegistry
     // Type-alias bodies (expanded lazily at use) and module-level constant types, both FQN-keyed
     // with import-visibility lookup.
-    aliases: FqnMap(TypeExpr)
+    aliases: FqnMap(&TypeExpr)
     constants: FqnMap(Ty)
     functions: FunctionRegistry
     specs: SpecializationRegistry
@@ -393,6 +403,11 @@ pub fn deinit(self: &ModuleNomDiags) {
     self.bodies.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &ModuleNomDiags, allocator: &Allocator) {
+    self.deinit()
+}
+
 // One captured node from a module's signature pass: the id, the span it was minted from, and -
 // filled in at harvest, once the demand's final zonk has run - the type recorded for it, if any.
 // Replaying the facts reproduces the pass's span and node-type entries without running it.
@@ -438,6 +453,11 @@ pub fn deinit(self: &ModuleSigCache) {
     self.default_texts.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &ModuleSigCache, allocator: &Allocator) {
+    self.deinit()
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Carried bodies (RFC-022 5d) - the per-module body cache. One entry per module, holding everything
 // the module's slot wrote, so a demand can replay the slot instead of running it. Facts are
@@ -481,13 +501,23 @@ pub fn deinit(self: &NodeLambdaFact) {
     self.info.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &NodeLambdaFact, allocator: &Allocator) {
+    self.deinit()
+}
+
 pub type NodeExprsFact = struct {
     node: NodeId
-    exprs: List(Expr)
+    exprs: List(&Expr)
 }
 
 pub fn deinit(self: &NodeExprsFact) {
     self.exprs.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &NodeExprsFact, allocator: &Allocator) {
+    self.deinit()
 }
 
 pub type NodeDerefsFact = struct {
@@ -497,6 +527,11 @@ pub type NodeDerefsFact = struct {
 
 pub fn deinit(self: &NodeDerefsFact) {
     self.chain.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &NodeDerefsFact, allocator: &Allocator) {
+    self.deinit()
 }
 
 // One top-level generic pick as the drain processed it, types zonked at process time. A replay
@@ -517,6 +552,11 @@ pub type CapturedPick = struct {
 pub fn deinit(self: &CapturedPick) {
     self.tp_binds.deinit()
     self.inst_params.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &CapturedPick, allocator: &Allocator) {
+    self.deinit()
 }
 
 // One module's cached body slot. `keys` holds the capture window's table keys between capture and
@@ -572,10 +612,15 @@ pub fn deinit(self: &ModuleBodyCache) {
     self.calls.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &ModuleBodyCache, allocator: &Allocator) {
+    self.deinit()
+}
+
 // A declaration's parameter list, shared with the AST (M11 defaults). Deliberately no deinit: the
 // list buffer lives in the module arena.
 type DeclParams = struct {
-    params: List(FunctionParam)
+    params: &List(FunctionParam)
 }
 
 // A call whose overload choice was arbitrated by an argument that had not settled yet. Everything
@@ -586,7 +631,7 @@ type PendingCall = struct {
     name: String
     call: &CallExpr
     arg_tys: List(Ty)
-    pos_exprs: List(Expr)
+    pos_exprs: List(&Expr)
     // 1 when a UFCS receiver occupies `arg_tys[0]`.
     recv_extra: usize
     // The receiver's adapted value <-> &T shape, for the same in-set adaptation the first
@@ -605,6 +650,11 @@ type LambdaFrame = struct {
 
 // One overloaded-name-as-value site: the node, the fresh var its slot got, the name, and the module
 // whose visibility resolves it.
+pub fn deinit(self: &PendingCall, allocator: &Allocator) {
+    self.arg_tys.deinit()
+    self.pos_exprs.deinit()
+}
+
 type PendingFnName = struct {
     span: SourceSpan
     ty: Ty
@@ -694,21 +744,21 @@ pub fn checker(allocator: &Allocator? = null) Checker {
 // The carry list is the fields moved onto the replacement below; `checker` and `deinit` enumerate
 // the rest.
 pub fn begin_demand(self: &Checker) {
-    let noms = self.nominals
-    let aliases = self.aliases
-    let consts = self.constants
-    let fns = self.functions
-    let tmpls = self.templates
-    let decl_params = self.fn_decl_params
-    let deprecations = self.fn_deprecations
-    let anons = self.anon_structs
-    let recycled = self.recycled
-    let nom_diags = self.nominal_diags
-    let nom_diag_keys = self.nominal_diag_keys
-    let sig_caches = self.sig_caches
-    let sig_cache_keys = self.sig_cache_keys
-    let body_caches = self.body_caches
-    let body_cache_keys = self.body_cache_keys
+    let noms = move self.nominals
+    let aliases = move self.aliases
+    let consts = move self.constants
+    let fns = move self.functions
+    let tmpls = move self.templates
+    let decl_params = move self.fn_decl_params
+    let deprecations = move self.fn_deprecations
+    let anons = move self.anon_structs
+    let recycled = move self.recycled
+    let nom_diags = move self.nominal_diags
+    let nom_diag_keys = move self.nominal_diag_keys
+    let sig_caches = move self.sig_caches
+    let sig_cache_keys = move self.sig_cache_keys
+    let body_caches = move self.body_caches
+    let body_cache_keys = move self.body_cache_keys
     const ct = self.comptime
     // Hand the carried tables over before the teardown, which frees whatever the checker still
     // owns.
@@ -730,23 +780,23 @@ pub fn begin_demand(self: &Checker) {
     self.deinit()
 
     let next = checker(self.allocator)
-    next.nominals = noms
-    next.aliases = aliases
-    next.constants = consts
-    next.functions = fns
-    next.templates = tmpls
-    next.fn_decl_params = decl_params
-    next.fn_deprecations = deprecations
-    next.anon_structs = anons
-    next.recycled = recycled
-    next.nominal_diags = nom_diags
-    next.nominal_diag_keys = nom_diag_keys
-    next.sig_caches = sig_caches
-    next.sig_cache_keys = sig_cache_keys
-    next.body_caches = body_caches
-    next.body_cache_keys = body_cache_keys
+    next.nominals = move noms
+    next.aliases = move aliases
+    next.constants = move consts
+    next.functions = move fns
+    next.templates = move tmpls
+    next.fn_decl_params = move decl_params
+    next.fn_deprecations = move deprecations
+    next.anon_structs = move anons
+    next.recycled = move recycled
+    next.nominal_diags = move nom_diags
+    next.nominal_diag_keys = move nom_diag_keys
+    next.sig_caches = move sig_caches
+    next.sig_cache_keys = move sig_cache_keys
+    next.body_caches = move body_caches
+    next.body_cache_keys = move body_cache_keys
     next.comptime = ct
-    self.* = next
+    self.* = move next
 }
 
 // Start this demand's result tables at the previous demand's final sizes - a re-demand rewrites
@@ -761,7 +811,7 @@ pub fn presize_results(self: &Checker, sizes: &TableCaps) {
 // re-instantiate at the ids they hold, and whatever the demand never touches is swept.
 pub fn adopt_specs(self: &Checker, reg: SpecializationRegistry) {
     self.specs.deinit()
-    self.specs = reg
+    self.specs = move reg
 }
 
 // Install a type table carried from the previous demand's result, so the handles baked into the
@@ -772,7 +822,7 @@ pub fn adopt_interner(self: &Checker, it: TypeInterner) {
         it.deinit()
         return
     }
-    self.engine.set_interner(it)
+    self.engine.set_interner(move it)
 }
 
 // Retire the definitions of every module in `retiring` - declared type names and the generated
@@ -812,13 +862,13 @@ fn register_collected(self: &Checker, def: NominalDef, fqn_owned: OwnedString) N
     const previous = self.recycled.remove(fqn_owned.as_view())
     if previous.is_none() {
         self.saw_new_name = true
-        return self.nominals.register(def, fqn_owned)
+        return self.nominals.register(move def, move fqn_owned)
     }
     const prev = previous.unwrap()
     // The remembered view is the registry's own FQN buffer, which `evict` leaves in place - so the
     // id goes back under the string already owned and the caller's copy is dropped.
     fqn_owned.deinit()
-    self.nominals.register_at(prev.id, def, prev.fqn)
+    self.nominals.register_at(prev.id, move def, prev.fqn)
     return prev.id
 }
 
@@ -879,6 +929,11 @@ pub fn deinit(self: &Checker) {
     self.slot_new_specs.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Checker, allocator: &Allocator) {
+    self.deinit()
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Resolving TypeExpr → Ty
 //
@@ -922,7 +977,7 @@ fn resolve_anon_struct_type(self: &Checker, a: &AnonStructType) Ty {
             owned = a.fields[i].owned,
         })
     }
-    return anon_struct_ty(self, fields, a.span)
+    return anon_struct_ty(self, move fields, a.span)
 }
 
 // Intern an anonymous record as a synthesized nominal, keyed by its exact structure: two spellings
@@ -935,11 +990,11 @@ fn anon_struct_ty(self: &Checker, fields: List(Field), span: SourceSpan) Ty {
     const key = self.engine.interner.record_of(&fields)
 
     let no_args: List(Ty) = list(0, self.allocator)
-    let found = self.anon_structs.get(key)
+    let found = self.anon_structs.get_ref(key)
     if found.is_some() {
-        const id = found.unwrap()
+        const id = found.unwrap().*
         fields.deinit()
-        return mk_nominal(self, id, no_args)
+        return mk_nominal(self, id, move no_args)
     }
 
     // The registry FQN is a bare counter: no rendering of a record shape survives C identifier
@@ -949,15 +1004,15 @@ fn anon_struct_ty(self: &Checker, fields: List(Field), span: SourceSpan) Ty {
         fqn = "",
         module = "",
         is_pub = true,
-        type_params = empty_tps,
-        fields = fields,
+        type_params = move empty_tps,
+        fields = move fields,
         decl_span = span,
         deprecation = null,
         is_simd = false,
         is_foreign = false,
     }), $"__anon_{self.nominals.next_id}")
     self.anon_structs.set(key, nid)
-    return mk_nominal(self, nid, no_args)
+    return mk_nominal(self, nid, move no_args)
 }
 
 fn resolve_named(self: &Checker, n: &NamedType) Ty {
@@ -998,7 +1053,7 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
     if found_id.is_some() {
         warn_deprecated_type(self, found_id.unwrap(), n.name, n.span)
         let args = resolve_generic_args(self, n)
-        return mk_nominal(self, found_id.unwrap(), args)
+        return mk_nominal(self, found_id.unwrap(), move args)
     }
 
     // Alias? Expand its stored body lazily. Resolving the body here (rather than at registration)
@@ -1016,7 +1071,7 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
         }
         let body = alias_body.unwrap()
         self.alias_stack.push(n.name)
-        const out = resolve_type_expr(self, &body)
+        const out = resolve_type_expr(self, body)
         let _p = self.alias_stack.pop()
         return out
     }
@@ -1031,7 +1086,7 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
     if hidden_info.is_some() {
         let info = hidden_info.unwrap()
         let args = resolve_generic_args(self, n)
-        return mk_nominal(self, info.id, args)
+        return mk_nominal(self, info.id, move args)
     }
 
     push_diag_e(self, n.span, E_UNKNOWN_TYPE, $"unknown type `{n.name}`")
@@ -1061,7 +1116,7 @@ fn resolve_generic_args(self: &Checker, n: &NamedType) List(Ty) {
     for &arg in n.generic_args {
         out.push(resolve_type_expr(self, arg))
     }
-    return out
+    return move out
 }
 
 fn resolve_reference(self: &Checker, r: &ReferenceType) Ty {
@@ -1085,7 +1140,7 @@ fn resolve_optional(self: &Checker, o: &OptionalType) Ty {
     }
     let args: List(Ty) = list(1, self.allocator)
     args.push(inner)
-    return mk_nominal(self, opt_id.unwrap(), args)
+    return mk_nominal(self, opt_id.unwrap(), move args)
 }
 
 fn resolve_array(self: &Checker, a: &ArrayType) Ty {
@@ -1121,7 +1176,7 @@ fn slice_of(self: &Checker, elem: Ty) Ty {
     }
     let args: List(Ty) = list(1, self.allocator)
     args.push(elem)
-    return mk_nominal(self, slice_id.unwrap(), args)
+    return mk_nominal(self, slice_id.unwrap(), move args)
 }
 
 // A declared parameter's type. A variadic `..xs: T` is a `Slice(T)` inside the body and at the call
@@ -1140,7 +1195,7 @@ fn resolve_tuple(self: &Checker, t: &TupleType) Ty {
     for &e in t.elements {
         elems.push(resolve_type_expr(self, e))
     }
-    return mk_tuple(self, elems)
+    return mk_tuple(self, move elems)
 }
 
 fn resolve_function(self: &Checker, f: &FunctionType) Ty {
@@ -1152,7 +1207,7 @@ fn resolve_function(self: &Checker, f: &FunctionType) Ty {
         Some(rt) => resolve_type_expr(self, rt)
         None => TY_VOID
     }
-    return self.engine.mk_func(params, ret)
+    return self.engine.mk_func(move params, ret)
 }
 
 fn resolve_generic_bind(self: &Checker, g: &GenericBindType) Ty {
@@ -1169,7 +1224,7 @@ fn resolve_generic_bind(self: &Checker, g: &GenericBindType) Ty {
     self.sig_tps.push(SigTypeParam { name = g.name, var_id = vid })
     self.tp_names.set(vid, g.name)
     self.env.bind(g.name, Binding {
-        scheme = mono(fresh, self.allocator),
+        scheme = mono(fresh),
         decl = self.node_of(g.span),
         is_const = true,
         is_type_param = true,
@@ -1247,13 +1302,13 @@ pub fn current_visibility(self: &Checker) Visibility {
 // The modules visible from `m`, as a fresh caller-owned set.
 fn base_visible_set(self: &Checker, m: String) Set(String) {
     let fresh: Set(String) = set(self.allocator)
-    self.visible_by_module.get(m) match {
-        Some(src) => copy_set_into(&fresh, &src)
+    self.visible_by_module.get_ref(m) match {
+        Some(src) => copy_set_into(&fresh, src)
         None => {
             let _new = fresh.add(m)
         }
     }
-    return fresh
+    return move fresh
 }
 
 // Visibility for FUNCTION lookups. A template body under instantiation also dispatches to overloads
@@ -1273,12 +1328,12 @@ fn fn_visibility(self: &Checker) Visibility {
             let fresh = base_visible_set(self, m)
             for c in self.spec_callers {
                 fresh.add(c)
-                self.visible_by_module.get(c) match {
-                    Some(src) => copy_set_into(&fresh, &src)
+                self.visible_by_module.get_ref(c) match {
+                    Some(src) => copy_set_into(&fresh, src)
                     None => {}
                 }
             }
-            visibility(Some(m), fresh)
+            visibility(Some(m), move fresh)
         }
         None => open(self.allocator)
     }
@@ -1335,14 +1390,14 @@ fn build_visibility(self: &Checker, modules: &List(Module), paths: &List(String)
                 }
             }
         }
-        imports.push(imps)
-        reexports.push(reexps)
+        imports.push(move imps)
+        reexports.push(move reexps)
     }
 
     for i in 0..n {
         let vis: Set(String) = set(alloc)
         compute_visible(i, paths, &imports, &reexports, &vis, alloc)
-        self.visible_by_module.set(paths[i], vis)
+        self.visible_by_module.set(paths[i], move vis)
     }
 
     imports.deinit()
@@ -1488,9 +1543,9 @@ fn collect_one_name(self: &Checker, decl: &Decl, module_path: String) {
             // for an alias body (stored unresolved for lazy expansion at use).
             let kind = nominal_kind_of(td.body)
             kind match {
-                NkStruct => register_struct_placeholder(self, &td, fqn_owned)
-                NkEnum => register_enum_placeholder(self, &td, fqn_owned)
-                NkAlias => self.aliases.register(fqn_owned, td.body.*)
+                NkStruct => register_struct_placeholder(self, &td, move fqn_owned)
+                NkEnum => register_enum_placeholder(self, &td, move fqn_owned)
+                NkAlias => self.aliases.register(move fqn_owned, td.body)
             }
         }
         _ => {}
@@ -1534,8 +1589,8 @@ fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) 
         fqn = "",
         module = self.current_module.unwrap(),
         is_pub = td.is_pub,
-        type_params = empty_params,
-        fields = empty_fields,
+        type_params = move empty_params,
+        fields = move empty_fields,
         decl_span = td.span,
         deprecation = deprecation_of(&td.directives),
         // `#simd` over-aligns the type; `#foreign` locks its layout to the C ABI (spec 2.4 / 10).
@@ -1545,7 +1600,7 @@ fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) 
         is_simd = is_simd_directive(&td.directives),
         is_foreign = is_foreign_directive(&td.directives),
     }
-    const _id = register_collected(self, NominalDef.NomStruct(sd), fqn)
+    const _id = register_collected(self, NominalDef.NomStruct(move sd), move fqn)
 }
 
 fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) {
@@ -1555,13 +1610,13 @@ fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) {
         fqn = "",
         module = self.current_module.unwrap(),
         is_pub = td.is_pub,
-        type_params = empty_params,
-        variants = empty_variants,
+        type_params = move empty_params,
+        variants = move empty_variants,
         tag_values = null,
         decl_span = td.span,
         deprecation = deprecation_of(&td.directives),
     }
-    const _id = register_collected(self, NominalDef.NomEnum(ed), fqn)
+    const _id = register_collected(self, NominalDef.NomEnum(move ed), move fqn)
 }
 
 fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
@@ -1574,13 +1629,13 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let id = id_opt.unwrap()
 
     let anon_opt = td.body match {
-        AnonStruct(a) => Some(a)
+        AnonStruct(a) => Some(move a)
         _ => null
     }
     if anon_opt.is_none() {
         return
     }
-    let anon = anon_opt.unwrap()
+    let anon = unwrap(move anon_opt)
 
     // Bind generics into a fresh scope so field type-exprs can see them.
     self.env.push_scope()
@@ -1591,7 +1646,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
         type_params.push(id)
         self.tp_names.set(id, gp.name)
         self.env.bind(gp.name, Binding {
-            scheme = mono(fresh, self.allocator),
+            scheme = mono(fresh),
             decl = self.node_of(gp.span),
             is_const = true,
             is_type_param = true,
@@ -1621,15 +1676,15 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
                 fqn = sd.fqn,
                 module = sd.module,
                 is_pub = sd.is_pub,
-                type_params = type_params,
-                fields = fields,
+                type_params = move type_params,
+                fields = move fields,
                 decl_span = sd.decl_span,
                 deprecation = sd.deprecation,
                 is_simd = sd.is_simd,
                 is_foreign = sd.is_foreign,
             }
             free_body(existing)
-            self.nominals.put(id, NominalDef.NomStruct(updated))
+            self.nominals.put(id, NominalDef.NomStruct(move updated))
         }
         _ => {}
     }
@@ -1849,13 +1904,13 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let id = id_opt.unwrap()
 
     let anon_opt = td.body match {
-        AnonEnum(a) => Some(a)
+        AnonEnum(a) => Some(move a)
         _ => null
     }
     if anon_opt.is_none() {
         return
     }
-    let anon = anon_opt.unwrap()
+    let anon = unwrap(move anon_opt)
 
     self.env.push_scope()
     let type_params: List(VarId) = list(anon.generics.len, self.allocator)
@@ -1865,7 +1920,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
         type_params.push(vid)
         self.tp_names.set(vid, gp.name)
         self.env.bind(gp.name, Binding {
-            scheme = mono(fresh, self.allocator),
+            scheme = mono(fresh),
             decl = self.node_of(gp.span),
             is_const = true,
             is_type_param = true,
@@ -1916,14 +1971,13 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
             payloads.deinit()
             continue
         }
-        variants.push(VariantDef { name = v.name, payloads = payloads, decl_span = v.span })
+        variants.push(VariantDef { name = v.name, payloads = move payloads, decl_span = v.span })
     }
-    let tag_values: Dict(String, i64)? = null
-    if has_explicit_tag {
-        tag_values = Some(tag_by_name)
-    } else {
+    if !has_explicit_tag {
         tag_by_name.deinit()
     }
+    const tag_values: Dict(String,
+        i64)? = if has_explicit_tag { Some(move tag_by_name) } else { null }
     self.env.pop_scope()
 
     let existing = self.nominals.get(id)
@@ -1933,14 +1987,14 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
                 fqn = ed.fqn,
                 module = ed.module,
                 is_pub = ed.is_pub,
-                type_params = type_params,
-                variants = variants,
-                tag_values = tag_values,
+                type_params = move type_params,
+                variants = move variants,
+                tag_values = move tag_values,
                 decl_span = ed.decl_span,
                 deprecation = ed.deprecation,
             }
             free_body(existing)
-            self.nominals.put(id, NominalDef.NomEnum(updated))
+            self.nominals.put(id, NominalDef.NomEnum(move updated))
         }
         _ => {}
     }
@@ -1987,13 +2041,13 @@ fn duplicate_overload(self: &Checker, name: String, sig: &Scheme) bool {
     let vis = current_visibility(self)
     defer vis.visible.deinit()
     let found = self.functions.lookup(name, &vis) match {
-        FnLookFound(c) => Some(c)
+        FnLookFound(c) => Some(move c)
         _ => null
     }
     if found.is_none() {
         return false
     }
-    let cands = found.unwrap()
+    let cands = unwrap(move found)
     defer cands.deinit()
     let here = self.current_module.unwrap_or("")
     for &c in cands {
@@ -2021,7 +2075,7 @@ fn register_constant(self: &Checker, cd: &ConstDecl) {
         fqn.deinit()
         return
     }
-    self.constants.register(fqn, ty)
+    self.constants.register(move fqn, ty)
 }
 
 fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
@@ -2048,7 +2102,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
         Some(rt) => resolve_type_expr(self, rt)
         None => TY_VOID
     }
-    let fn_ty = self.engine.mk_func(params, ret)
+    let fn_ty = self.engine.mk_func(move params, ret)
 
     self.engine.exit_level()
     let scheme = self.engine.generalize(fn_ty)
@@ -2094,7 +2148,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     // materialize the default expressions (`materialize_default_args`); named-argument calls read
     // the same table for the parameter NAMES, so every function records, not just the defaulted
     // ones.
-    self.fn_decl_params.set(id, DeclParams { params = fd.params })
+    self.fn_decl_params.set(id, DeclParams { params = &fd.params })
     deprecation_of(&fd.directives) match {
         Some(msg) => self.fn_deprecations.set(id, msg)
         None => {}
@@ -2108,11 +2162,11 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
         Some(old) => old.tps.deinit()
         None => {}
     }
-    if scheme.quantified.len() > 0 {
+    if scheme.quantified_len() > 0 {
         self.templates.set(id, GenericTemplate {
-            decl = fd.*,
+            decl = fd,
             module = self.current_module.unwrap(),
-            tps = self.sig_tps,
+            tps = move self.sig_tps,
         })
         self.sig_tps = list(0, self.allocator)
     }
@@ -2212,7 +2266,7 @@ fn check_constant_init(self: &Checker, cd: &ConstDecl) {
     // The decl node carries its own FQN as an RtConst target - lowering's const pre-pass reads it
     // to name the global (M11), so no module-path plumbing is needed lowering-side. Interned;
     // outlives the checker.
-    let stable = self.results.add_synth_string(fqn)
+    let stable = self.results.add_synth_string(move fqn)
     self.results.record_target(self.node_of(cd.span), ResolvedTarget.RtConst(stable))
     let v = check_expr(self, cd.value)
     unify_expected(self, v, reg.unwrap(), E_TYPE_MISMATCH, cd.span)
@@ -2234,7 +2288,7 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
         const p_node = self.node_of(p.span)
         self.results.record_type(p_node, ty)
         self.env.bind(p.name, Binding {
-            scheme = mono(ty, self.allocator),
+            scheme = mono(ty),
             decl = p_node,
             is_const = false,
             is_type_param = false,
@@ -2470,31 +2524,32 @@ fn pending_ready(self: &Checker, p: &PendingSpec) bool {
 // for the drain after them (a parked `x.double()` is what pins the lambda parameter `x` that an
 // `apply(f, x)` pick is waiting on).
 fn drain_pending_specs(self: &Checker, report: bool = true) {
-    let queue = self.pending_specs
+    let queue = move self.pending_specs
     self.pending_specs = list(0, self.allocator)
     loop {
         let deferred: List(PendingSpec) = list(queue.len, self.allocator)
         let progressed = false
-        for p in queue {
-            if pending_ready(self, &p) {
-                process_pending(self, &p)
+        for &p in queue {
+            if pending_ready(self, p) {
+                process_pending(self, p)
                 // A processed pick's collections are done; a deferred one keeps its storage into
                 // the next pass, so the queue itself is never element-deinited.
                 p.tp_binds.deinit()
                 p.inst_params.deinit()
                 progressed = true
             } else {
-                deferred.push(p)
+                deferred.push(move p.*)
             }
         }
         // Picks the instantiations just made at THIS level join the queue.
-        for q in self.pending_specs {
-            deferred.push(q)
+        for &q in self.pending_specs {
+            deferred.push(move q.*)
             progressed = true
         }
         self.pending_specs.clear()
-        queue.deinit()
-        queue = deferred
+        const done = move queue
+        done.deinit()
+        queue = move deferred
         if !progressed {
             break
         }
@@ -2502,13 +2557,13 @@ fn drain_pending_specs(self: &Checker, report: bool = true) {
             break
         }
     }
-    for p in queue {
+    for &p in queue {
         if report {
-            report_uninferable_spec(self, &p)
+            report_uninferable_spec(self, p)
             p.tp_binds.deinit()
             p.inst_params.deinit()
         } else {
-            self.pending_specs.push(p)
+            self.pending_specs.push(move p.*)
         }
     }
     queue.deinit()
@@ -2516,7 +2571,7 @@ fn drain_pending_specs(self: &Checker, report: bool = true) {
 
 fn report_uninferable_spec(self: &Checker, p: &PendingSpec) {
     self.slot_uninferable = self.slot_uninferable + 1
-    let name = self.templates.get(p.function_id).unwrap().decl.name
+    let name = self.templates.get_ref(p.function_id).unwrap().decl.name
     push_diag_e(self, p.span, E_UNINFERRED,
         $"cannot infer the type arguments of generic function `{name}` at this call site")
 }
@@ -2551,8 +2606,8 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
         }
     }
     let id = existing match {
-        Some(sid) => resolve_against(self, p, key, params, ret, sid)
-        None => instantiate(self, p, key, params, ret)
+        Some(sid) => resolve_against(self, p, move key, move params, ret, sid)
+        None => instantiate(self, p, move key, move params, ret)
     }
 
     // Whatever the resolution minted - an instantiation's frame, a reuse's burns - is nested work
@@ -2615,7 +2670,7 @@ fn resolve_against(self: &Checker, p: &PendingSpec, key: OwnedString, params: Li
             trial.deinit()
         }
         if !ok {
-            return instantiate(self, p, key, params, ret, Some(sid))
+            return instantiate(self, p, move key, move params, ret, Some(sid))
         }
         touch_spec(self, sid)
     }
@@ -2747,7 +2802,7 @@ fn resolve_anon_literals(self: &Checker) {
                 })
             }
             let span = if pa.fields.len > 0 { pa.fields[0].span } else { synth_span(self) }
-            const o = self.engine.unify(pa.ty, anon_struct_ty(self, fields, span))
+            const o = self.engine.unify(pa.ty, anon_struct_ty(self, move fields, span))
             report_unify(self, &o, E_TYPE_MISMATCH, span)
             continue
         }
@@ -2968,21 +3023,22 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     }
     // The pick's id came from the function registry; a generic scheme without a template entry is a
     // compiler bug, not an input error.
-    let template = self.templates.get(p.function_id).unwrap()
+    let template = self.templates.get_ref(p.function_id).unwrap()
 
-    let fresh = new_specialization(p.function_id, key, template.decl.name, template.module,
-        template.decl, params, ret, inference_results(self.allocator), self.allocator)
+    let fresh = new_specialization(p.function_id, move key, template.decl.name, template.module,
+        template.decl, move params, ret, inference_results(self.allocator), self.allocator)
     let sid = 0 as SpecId
     let hints: List(SpecDep) = list(0, self.allocator)
     at match {
         Some(existing) => {
-            hints.deinit()
+            const unused = move hints
+            unused.deinit()
             hints = self.specs.take_deps(existing)
-            self.specs.replace_at(existing, fresh)
+            self.specs.replace_at(existing, move fresh)
             sid = existing
         }
         None => {
-            sid = self.specs.register(fresh)
+            sid = self.specs.register(move fresh)
         }
     }
     self.slot_new_specs.push(sid)
@@ -2994,7 +3050,7 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
         child_synth = 0u32,
         child_lambda = 0u32,
         deps = list(0, self.allocator),
-        hints = hints,
+        hints = move hints,
         diags0 = self.diagnostics.len,
         calls0 = self.pending_calls.len,
     })
@@ -3003,11 +3059,11 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     // the caller chain - see `current_visibility`), a fresh overlay for the result tables, and a
     // fresh pending list so nested generic picks drain inside this frame, while the overlay is
     // still the active table set.
-    let saved_results = self.results
-    let saved_pending = self.pending_specs
-    let saved_anons = self.pending_anons
-    let saved_members = self.pending_members
-    let saved_fn_names = self.pending_fn_names
+    let saved_results = move self.results
+    let saved_pending = move self.pending_specs
+    let saved_anons = move self.pending_anons
+    let saved_members = move self.pending_members
+    let saved_fn_names = move self.pending_fn_names
     let saved_module = self.current_module
     self.results = inference_results(self.allocator)
     self.pending_specs = list(0, self.allocator)
@@ -3034,14 +3090,14 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
         }
         self.inst_binds.push(conc)
         self.env.bind(template.tps[i].name, Binding {
-            scheme = mono(conc, self.allocator),
+            scheme = mono(conc),
             decl = self.node_of(template.decl.span),
             is_const = true,
             is_type_param = true,
         })
     }
 
-    check_function_body(self, &template.decl)
+    check_function_body(self, template.decl)
     resolve_anon_literals(self)
     resolve_pending_members(self)
     resolve_fn_name_values(self)
@@ -3065,13 +3121,13 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     // subtracted - it burns its own), the deps its drain resolved, and whether it stayed replayable
     // (a diagnostic or a parked call must be regenerated live, so either keeps the entry
     // re-checking every demand).
-    let frame = self.spec_frames.pop().unwrap()
+    let frame = unwrap(self.spec_frames.pop())
     frame.hints.deinit()
     const clean = self.diagnostics.len == frame.diags0 and !had_calls
     self.specs.set_cache_info(sid, frame.vars0, frame.synth0, frame.lambda0,
         self.engine.var_counter - frame.vars0 - frame.child_vars,
         self.next_synth - frame.synth0 - frame.child_synth,
-        self.next_lambda - frame.lambda0 - frame.child_lambda, frame.deps, clean)
+        self.next_lambda - frame.lambda0 - frame.child_lambda, move frame.deps, clean)
 
     // The shared final zonk only walks the program tables; the overlay zonks here, while the engine
     // is live. Lambda records checked inside this instantiation zonk with it (the global closure
@@ -3080,15 +3136,15 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     for entry in self.results.node_types {
         zonked.set(entry.key, self.engine.zonk(entry.value))
     }
-    self.results.replace_node_types(zonked)
+    self.results.replace_node_types(move zonked)
     zonk_lambda_table(self)
 
-    let overlay = self.results
-    self.results = saved_results
-    self.pending_specs = saved_pending
-    self.pending_anons = saved_anons
-    self.pending_members = saved_members
-    self.pending_fn_names = saved_fn_names
+    let overlay = move self.results
+    self.results = move saved_results
+    self.pending_specs = move saved_pending
+    self.pending_anons = move saved_anons
+    self.pending_members = move saved_members
+    self.pending_fn_names = move saved_fn_names
     self.current_module = saved_module
 
     // RTTI instantiations surface program-wide, not per overlay.
@@ -3104,10 +3160,10 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     }
     let fret = self.engine.zonk(sp.concrete_return)
     let fkey = key_for(&self.engine.interner, p.function_id, &fparams, fret, self.allocator)
-    self.specs.set_signature(sid, fparams, fret)
-    let _rk = self.specs.rekey(sid, fkey)
+    self.specs.set_signature(sid, move fparams, fret)
+    let _rk = self.specs.rekey(sid, move fkey)
 
-    self.specs.set_overlay(sid, overlay)
+    self.specs.set_overlay(sid, move overlay)
     return Some(sid)
 }
 
@@ -3258,21 +3314,21 @@ fn check_interp_owned(self: &Checker, interp: &InterpolatedStringExpr, given: &L
         name = name,
         name_span = let_span,
         type_annotation = null,
-        init = Some(self.synth_box(ctor)),
+        init = Some(self.synth_box(move ctor)),
     }))
     let no_args: List(CallArgument) = list(0, self.allocator)
     stmts.push(Stmt.Defer(DeferStmt {
         span = synth_span(self),
-        expr = self.synth_box(synth_method_call(self, name, "deinit", no_args)),
+        expr = self.synth_box(synth_method_call(self, name, "deinit", move no_args)),
     }))
     push_append_stmts(self, &stmts, name, interp)
 
     let empty_args: List(CallArgument) = list(0, self.allocator)
-    const done = synth_method_call(self, name, "to_string", empty_args)
+    const done = synth_method_call(self, name, "to_string", move empty_args)
     let block = box(or_global(self.allocator), BlockExpr {
         span = synth_span(self),
-        stmts = stmts,
-        trailing = Some(synth_box(self, done)),
+        stmts = move stmts,
+        trailing = Some(synth_box(self, move done)),
     })
     const ty = check_block(self, block)
     self.results.record_desugar(self.node_of(interp.span), block)
@@ -3303,7 +3359,7 @@ fn check_interp_into(self: &Checker, interp: &InterpolatedStringExpr, target: &E
     push_append_stmts(self, &stmts, tname, interp)
     let block = box(or_global(self.allocator), BlockExpr {
         span = synth_span(self),
-        stmts = stmts,
+        stmts = move stmts,
         trailing = null,
     })
     const ty = check_block(self, block)
@@ -3321,8 +3377,8 @@ fn push_append_stmts(self: &Checker, stmts: &List(Stmt), name: String,
                 if t.len > 0 {
                     let args: List(CallArgument) = list(1, self.allocator)
                     const lit = synth_string_lit(self, segment_literal_text(self, t))
-                    args.push(CallArgument.Positional(synth_box(self, lit)))
-                    push_expr_stmt(self, stmts, synth_method_call(self, name, "append", args))
+                    args.push(CallArgument.Positional(synth_box(self, move lit)))
+                    push_expr_stmt(self, stmts, synth_method_call(self, name, "append", move args))
                 }
             }
             Hole(h) => {
@@ -3332,11 +3388,11 @@ fn push_append_stmts(self: &Checker, stmts: &List(Stmt), name: String,
                     Some(spec) => {
                         const slit = synth_string_lit(self,
                             self.results.add_synth_string(escape_backslashes(self, spec)))
-                        args.push(CallArgument.Positional(synth_box(self, slit)))
+                        args.push(CallArgument.Positional(synth_box(self, move slit)))
                     }
                     None => {}
                 }
-                push_expr_stmt(self, stmts, synth_method_call(self, name, "append", args))
+                push_expr_stmt(self, stmts, synth_method_call(self, name, "append", move args))
             }
         }
     }
@@ -3344,42 +3400,45 @@ fn push_append_stmts(self: &Checker, stmts: &List(Stmt), name: String,
 
 fn push_expr_stmt(self: &Checker, stmts: &List(Stmt), e: Expr) {
     stmts.push(Stmt.Expression(ExpressionStmt { span = synth_span(self),
-        expr = self.synth_box(e) }))
+        expr = self.synth_box(move e) }))
 }
 
 // `$(…)` args onto `string_builder(capacity, allocator)`, full arity.
 fn builder_ctor_args(self: &Checker, given: &List(Expr)) List(CallArgument) {
-    let cap: Expr? = null
-    let alloc_arg: Expr? = null
-    if given.len >= 1 {
-        const first_is_addr = given[0] match { AddressOf(_) => true, _ => false }
-        if given.len == 1 and first_is_addr {
-            alloc_arg = Some(wrap_some(self, given[0]))
-        } else {
-            cap = Some(given[0])
-        }
+    // A lone `&alloc` is the allocator; otherwise the first argument is the capacity and a second
+    // one the allocator, wrapped in `Some` when it is an address.
+    const first_is_alloc = given.len == 1 and is_address_of(&given[0])
+    const cap_e: Expr = if given.len >= 1 and !first_is_alloc {
+        move given[0]
+    } else {
+        synth_int_lit(self, "0")
     }
-    if given.len >= 2 {
-        const second_is_addr = given[1] match { AddressOf(_) => true, _ => false }
-        if second_is_addr {
-            alloc_arg = Some(wrap_some(self, given[1]))
-        } else {
-            alloc_arg = Some(given[1])
-        }
+    const alloc_e: Expr = if first_is_alloc {
+        wrap_some(self, move given[0])
+    } else if given.len >= 2 and is_address_of(&given[1]) {
+        wrap_some(self, move given[1])
+    } else if given.len >= 2 {
+        move given[1]
+    } else {
+        synth_null(self)
     }
-
     let out: List(CallArgument) = list(2, self.allocator)
-    const cap_e = cap match { Some(e) => e, None => synth_int_lit(self, "0") }
-    out.push(CallArgument.Positional(synth_box(self, cap_e)))
-    const alloc_e = alloc_arg match { Some(e) => e, None => synth_null(self) }
-    out.push(CallArgument.Positional(synth_box(self, alloc_e)))
-    return out
+    out.push(CallArgument.Positional(synth_box(self, move cap_e)))
+    out.push(CallArgument.Positional(synth_box(self, move alloc_e)))
+    return move out
+}
+
+fn is_address_of(e: &Expr) bool {
+    return e.* match {
+        AddressOf(_) => true
+        _ => false
+    }
 }
 
 fn wrap_some(self: &Checker, e: Expr) Expr {
     let args: List(CallArgument) = list(1, self.allocator)
-    args.push(CallArgument.Positional(synth_box(self, e)))
-    return synth_free_call(self, "Some", args)
+    args.push(CallArgument.Positional(synth_box(self, move e)))
+    return synth_free_call(self, "Some", move args)
 }
 
 // ── desugar synthesis helpers ────────────────────────────────────────
@@ -3409,7 +3468,7 @@ fn synth_span(self: &Checker) SourceSpan {
 // Synthesized nodes live as long as the check result - allocated on the global allocator and
 // deliberately leaked with it.
 fn synth_box(self: &Checker, e: Expr) &Expr {
-    return box(or_global(self.allocator), e)
+    return box(or_global(self.allocator), move e)
 }
 
 fn synth_ident(self: &Checker, name: String) Expr {
@@ -3444,15 +3503,15 @@ fn synth_method_call(self: &Checker, recv_name: String, method: String,
         receiver = synth_box(self, synth_ident(self, recv_name)),
         member = method,
     })
-    return Expr.Call(CallExpr { span = synth_span(self), callee = synth_box(self, ma),
-        args = args })
+    return Expr.Call(CallExpr { span = synth_span(self), callee = synth_box(self, move ma),
+        args = move args })
 }
 
 fn synth_free_call(self: &Checker, name: String, args: List(CallArgument)) Expr {
     return Expr.Call(CallExpr {
         span = synth_span(self),
         callee = synth_box(self, synth_ident(self, name)),
-        args = args,
+        args = move args,
     })
 }
 
@@ -3485,7 +3544,7 @@ fn segment_literal_text(self: &Checker, raw: String) String {
     if decoded_opt.is_none() {
         return raw
     }
-    let decoded = decoded_opt.unwrap()
+    let decoded = unwrap(move decoded_opt)
     const out = self.results.add_synth_string(escape_backslashes(self, decoded.as_view()))
     decoded.deinit()
     return out
@@ -3548,12 +3607,12 @@ fn check_match_coverage(self: &Checker, m: &MatchExpr, scrutinee: Ty) {
         NNominal(nn) => Some(nn.id)
         _ => null
     }
-    let ed: EnumDef? = null
-    if nid.is_some() {
-        ed = self.nominals.get(nid.unwrap()).* match {
-            NomEnum(e) => Some(e)
+    const ed: &EnumDef? = nid match {
+        Some(id) => self.nominals.get(id).* match {
+            NomEnum(e) => Some(&e)
             _ => null
         }
+        None => null
     }
     if ed.is_none() {
         // A still-open scrutinee may yet become an enum; anything else concrete never will (E2030).
@@ -3572,10 +3631,10 @@ fn check_match_coverage(self: &Checker, m: &MatchExpr, scrutinee: Ty) {
         if arm.guard.is_some() {
             continue
         }
-        if pattern_is_catch_all(self, arm.pattern, &e) {
+        if pattern_is_catch_all(self, arm.pattern, e) {
             return
         }
-        collect_covered(self, arm.pattern, &e, &covered)
+        collect_covered(self, arm.pattern, e, &covered)
     }
     let missing: List(String) = list(0, self.allocator)
     defer missing.deinit()
@@ -3676,7 +3735,7 @@ fn check_pattern(self: &Checker, pat: &Pattern, expected: Ty, is_sub: bool = fal
                 let pick = operator_pick_2(self, "op_eq", self.engine.resolve(expected),
                     self.engine.resolve(lt), l.span)
                 if pick.is_some() {
-                    let p = pick.unwrap()
+                    let p = unwrap(move pick)
                     self.results.record_operator(self.node_of(l.span), ResolvedOperator {
                         function_id = p.id,
                         negate_result = false,
@@ -3779,7 +3838,7 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
     let n = nr.unwrap()
 
     let ed = self.nominals.get(n.id).* match {
-        NomEnum(e) => Some(e)
+        NomEnum(e) => Some(&e)
         _ => null
     }
     if ed.is_none() {
@@ -3853,7 +3912,7 @@ fn check_variable_pattern(self: &Checker, v: &VariablePattern, expected: Ty, is_
         // same shape IS a binding, which is why `is_sub` exists.
         if !is_sub {
             let ed = self.nominals.get(n.id).* match {
-                NomEnum(e) => Some(e)
+                NomEnum(e) => Some(&e)
                 _ => null
             }
             if ed.is_some() and !variant_named(&ed.unwrap().variants, v.name) {
@@ -3870,7 +3929,7 @@ fn check_variable_pattern(self: &Checker, v: &VariablePattern, expected: Ty, is_
 // is not an enum or has no such variant.
 fn nullary_variant_index(self: &Checker, id: NominalId, name: String) u32? {
     let ed = self.nominals.get(id).* match {
-        NomEnum(e) => Some(e)
+        NomEnum(e) => Some(&e)
         _ => null
     }
     if ed.is_none() {
@@ -3888,7 +3947,7 @@ fn nullary_variant_index(self: &Checker, id: NominalId, name: String) u32? {
 
 fn bind_pattern_var(self: &Checker, name: String, ty: Ty, span: SourceSpan) {
     self.env.bind(name, Binding {
-        scheme = mono(ty, self.allocator),
+        scheme = mono(ty),
         decl = self.node_of(span),
         is_const = true,
         is_type_param = false,
@@ -3997,7 +4056,7 @@ fn field_owner_elsewhere(self: &Checker, ma: &MemberAccessExpr) FieldOwner? {
         return null
     }
     let sd_opt = self.nominals.get(nid_opt.unwrap()).* match {
-        NomStruct(s) => Some(s)
+        NomStruct(s) => Some(&s)
         _ => null
     }
     if sd_opt.is_none() {
@@ -4066,7 +4125,7 @@ fn try_set_index_assignment(self: &Checker, a: &AssignmentExpr, ix: &IndexExpr) 
     if pick.is_none() {
         return false
     }
-    const p = pick.unwrap()
+    const p = unwrap(move pick)
     self.results.record_operator(self.node_of(a.span), ResolvedOperator {
         function_id = p.id,
         negate_result = false,
@@ -4281,7 +4340,7 @@ fn check_null_prop(self: &Checker, np: &NullPropagationExpr) Ty {
     }
     let args: List(Ty) = list(1, self.allocator)
     args.push(f)
-    return mk_nominal(self, id.unwrap(), args)
+    return mk_nominal(self, id.unwrap(), move args)
 }
 
 // `expr?` (RFC-009). The reference desugars into a synthesized `op_try(expr) match { Continue(v) =>
@@ -4314,7 +4373,7 @@ fn check_try(self: &Checker, t: &TryExpr) Ty {
             from_view("the `?` operator requires an `op_try` overload for the operand type"))
         return self.engine.fresh_var()
     }
-    let p = pick.unwrap()
+    let p = unwrap(move pick)
 
     let nr = ty_node(self, self.engine.resolve(p.ret)) match {
         NNominal(n) => Some(n)
@@ -4380,7 +4439,7 @@ fn user_deref(self: &Checker, t: Ty, span: SourceSpan) Ty {
     if pick.is_none() {
         return self.engine.fresh_var()
     }
-    let p = pick.unwrap()
+    let p = unwrap(move pick)
     let inner = ty_node(self, self.engine.resolve(p.ret)) match {
         NRef(i) => i
         _ => return self.engine.fresh_var()
@@ -4426,7 +4485,7 @@ fn mk_range(self: &Checker, elem: Ty) Ty {
     }
     let args: List(Ty) = list(1, self.allocator)
     args.push(elem)
-    return mk_nominal(self, id.unwrap(), args)
+    return mk_nominal(self, id.unwrap(), move args)
 }
 
 fn mk_slice_ty(self: &Checker, elem: Ty) Ty {
@@ -4436,7 +4495,7 @@ fn mk_slice_ty(self: &Checker, elem: Ty) Ty {
     }
     let args: List(Ty) = list(1, self.allocator)
     args.push(elem)
-    return mk_nominal(self, id.unwrap(), args)
+    return mk_nominal(self, id.unwrap(), move args)
 }
 
 // True when `t` is the well-known `Range` nominal. An index of range type selects the slicing form
@@ -4515,7 +4574,7 @@ fn check_index(self: &Checker, idx: &IndexExpr) Ty {
             // refuses at lowering.
             let pick = operator_pick_2(self, "op_index", rbase, rindex, idx.span)
             if pick.is_some() {
-                let p = pick.unwrap()
+                let p = unwrap(move pick)
                 self.results.record_operator(self.node_of(idx.span), ResolvedOperator {
                     function_id = p.id,
                     negate_result = false,
@@ -4603,7 +4662,7 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty:
             push_diag_e(self, idx.span, E_INDEX_AMBIGUOUS,
                 from_view("both `op_index` and `op_index_ref` are declared for this type and index - declare only one"))
         }
-        let p = ref_pick.unwrap()
+        let p = unwrap(move ref_pick)
         // The declared return is `&T`; the expression's type is `T`.
         let inner = ty_node(self, self.engine.resolve(p.ret)) match {
             NRef(i) => i
@@ -4623,7 +4682,7 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty:
 
     let value_pick = receiver_pick(self, "op_index", base_ty, &extra, idx.span, idx.span)
     if value_pick.is_some() {
-        let p = value_pick.unwrap()
+        let p = unwrap(move value_pick)
         self.results.record_operator(self.node_of(idx.span), ResolvedOperator {
             function_id = p.id,
             negate_result = false,
@@ -4650,7 +4709,7 @@ fn index_operator(self: &Checker, name: String, self_ty: Ty, index_ty: Ty,
     args.push(index_ty)
     let pick = operator_pick(self, name, &args, span)
     args.deinit()
-    return pick
+    return move pick
 }
 
 // Resolve one operator function (`op_index`, `op_try`, ...) against the visible registry
@@ -4660,13 +4719,13 @@ fn operator_pick(self: &Checker, name: String, args: &List(Ty), span: SourceSpan
     let vis = fn_visibility(self)
     defer vis.visible.deinit()
     let cands = self.functions.lookup(name, &vis) match {
-        FnLookFound(c) => Some(c)
+        FnLookFound(c) => Some(move c)
         _ => null
     }
     if cands.is_none() {
         return null
     }
-    let candidates = cands.unwrap()
+    let candidates = unwrap(move cands)
 
     // Probe first: `resolve_overload` commits its unifications and reports mismatches, so a losing
     // shape would both pollute the substitution and emit a diagnostic the caller is about to
@@ -4680,7 +4739,7 @@ fn operator_pick(self: &Checker, name: String, args: &List(Ty), span: SourceSpan
     let pick = if viable { resolve_overload(self, &candidates, args, span) } else { null }
 
     candidates.deinit()
-    return pick
+    return move pick
 }
 
 // `expr as T` yields `T`; cast validity (representability, pointer compatibility) is a later pass,
@@ -4830,7 +4889,7 @@ fn check_tuple_lit(self: &Checker, t: &TupleLiteralExpr) Ty {
     for &e in t.elements {
         elems.push(check_expr(self, e))
     }
-    return mk_tuple(self, elems)
+    return mk_tuple(self, move elems)
 }
 
 fn check_literal(self: &Checker, lit: &LiteralExpr) Ty {
@@ -4898,7 +4957,7 @@ fn string_type(self: &Checker) Ty {
         return TY_ERROR
     }
     let empty: List(Ty) = list(0, self.allocator)
-    return mk_nominal(self, id.unwrap(), empty)
+    return mk_nominal(self, id.unwrap(), move empty)
 }
 
 fn option_of_fresh(self: &Checker) Ty {
@@ -4908,7 +4967,7 @@ fn option_of_fresh(self: &Checker) Ty {
     }
     let args: List(Ty) = list(1, self.allocator)
     args.push(self.engine.fresh_var())
-    return mk_nominal(self, id.unwrap(), args)
+    return mk_nominal(self, id.unwrap(), move args)
 }
 
 fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
@@ -4948,11 +5007,11 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
     // Try function registry.
     let look = self.functions.lookup(id.name, &vis)
     let found: List(FunctionScheme)? = look match {
-        FnLookFound(candidates) => Some(candidates)
+        FnLookFound(candidates) => Some(move candidates)
         _ => null
     }
     if found.is_some() {
-        let candidates = found.unwrap()
+        let candidates = unwrap(move found)
         defer candidates.deinit()
         if candidates.len == 1 {
             let c = &candidates[0]
@@ -5017,7 +5076,7 @@ fn reified_type_of(self: &Checker, t: Ty) Ty {
     }
     let args: List(Ty) = list(1, self.allocator)
     args.push(t)
-    return mk_nominal(self, id.unwrap(), args)
+    return mk_nominal(self, id.unwrap(), move args)
 }
 
 fn nominal_arity(self: &Checker, id: NominalId) usize {
@@ -5034,7 +5093,7 @@ fn nominal_with_fresh_args(self: &Checker, id: NominalId) Ty {
     }
     let args = list(n, self.allocator)
     for k in 0..n { args.push(self.engine.fresh_var()) }
-    return mk_nominal(self, id, args)
+    return mk_nominal(self, id, move args)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -5086,7 +5145,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     self.lambda_frames.push(LambdaFrame {
         boundary = boundary,
         lam_span = lam.span,
-        captures = caps,
+        captures = move caps,
     })
 
     // Parameters: an annotation resolves; a bare name (the projector records its type as
@@ -5100,7 +5159,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
         const p_node = self.node_of(p.span)
         self.results.record_type(p_node, ty)
         self.env.bind(p.name, Binding {
-            scheme = mono(ty, self.allocator),
+            scheme = mono(ty),
             decl = p_node,
             is_const = false,
             is_type_param = false,
@@ -5128,7 +5187,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     }
     let _f = self.fn_stack.pop()
     self.env.pop_scope()
-    let frame = self.lambda_frames.pop().unwrap()
+    let frame = unwrap(self.lambda_frames.pop())
 
     // E2113: a name this closure captures that an enclosing open closure ALSO captures would need
     // transitive-capture lowering.
@@ -5158,13 +5217,13 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
         fn_params.push_all(params.as_slice())
         self.results.record_lambda(node, LambdaInfo {
             span = lam.span,
-            params = params,
+            params = move params,
             ret = ret,
-            captures = frame.captures,
+            captures = move frame.captures,
             closure_id = null,
             symbol = $"__flang_lambda_{lid}",
         })
-        return self.engine.mk_func(fn_params, ret)
+        return self.engine.mk_func(move fn_params, ret)
     }
 
     // Capturing closure: synthesize the environment struct (fields = the captures, by value) and
@@ -5185,8 +5244,8 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
         fqn = "",
         module = module_name,
         is_pub = true,
-        type_params = empty_tps,
-        fields = fields,
+        type_params = move empty_tps,
+        fields = move fields,
         decl_span = lam.span,
         deprecation = null,
         is_simd = false,
@@ -5194,27 +5253,28 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     }
     // Registered by stable key: a re-demand's body pass reclaims the id the previous demand's
     // identically-ordered lambda held (see `begin_demand`).
-    let nid = register_collected(self, NominalDef.NomStruct(sd), $"{module_name}.__Closure_{lid}")
+    let nid = register_collected(self, NominalDef.NomStruct(move sd),
+        $"{module_name}.__Closure_{lid}")
 
     let sym = $"__flang_closure_call_{lid}"
     let sig_params: List(Ty) = list(params.len, self.allocator)
     sig_params.push_all(params.as_slice())
     self.closures.set(nid, ClosureSig {
-        params = sig_params,
+        params = move sig_params,
         ret = ret,
         symbol = from_view(sym.as_view()),
         lambda_node = node,
     })
     self.results.record_lambda(node, LambdaInfo {
         span = lam.span,
-        params = params,
+        params = move params,
         ret = ret,
-        captures = frame.captures,
+        captures = move frame.captures,
         closure_id = Some(nid),
-        symbol = sym,
+        symbol = move sym,
     })
     let no_args: List(Ty) = list(0, self.allocator)
-    return mk_nominal(self, nid, no_args)
+    return mk_nominal(self, nid, move no_args)
 }
 
 fn check_block(self: &Checker, blk: &BlockExpr) Ty {
@@ -5306,11 +5366,11 @@ fn check_error_directive(self: &Checker, ed: &ErrorDirective) bool {
     }
     self.diagnostics.push(error_diagnostic(move text, self.inst_sites[0].span))
     for i in 1..self.inst_sites.len {
-        push_diag(self, Severity.Info, self.inst_sites[i].span, E_ERROR_DIRECTIVE,
-            inst_note(self, i, "instantiated from here"), from_view(""))
+        push_diag(self, Severity.Info, self.inst_sites[i].span, E_ERROR_DIRECTIVE, inst_note(self,
+                i, "instantiated from here"), from_view(""))
     }
-    push_diag(self, Severity.Info, ed.span, E_ERROR_DIRECTIVE,
-        inst_note(self, self.inst_sites.len - 1, "raised by `#error` here"), from_view(""))
+    push_diag(self, Severity.Info, ed.span, E_ERROR_DIRECTIVE, inst_note(self,
+            self.inst_sites.len - 1, "raised by `#error` here"), from_view(""))
     return true
 }
 
@@ -5349,7 +5409,7 @@ fn check_if_directive_stmt(self: &Checker, ifd: &IfDirectiveStmt) bool {
             return diverges
         }
         Invalid(err) => {
-            push_diag_e(self, err.span, err.code, err.message)
+            self.diagnostics.push(into_diagnostic(move err))
             return false
         }
     }
@@ -5367,7 +5427,7 @@ fn check_for(self: &Checker, fs: &ForStmt) {
     const var_node = self.node_of(fs.var_span)
     self.results.record_type(var_node, elem)
     self.env.bind(fs.var_name, Binding {
-        scheme = mono(elem, self.allocator),
+        scheme = mono(elem),
         decl = var_node,
         is_const = true,
         is_type_param = false,
@@ -5396,7 +5456,7 @@ fn protocol_pick(self: &Checker, name: String, arg: Ty, span: SourceSpan) Overlo
     args.push(arg)
     let pick = operator_pick(self, name, &args, span)
     args.deinit()
-    return pick
+    return move pick
 }
 
 fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
@@ -5416,7 +5476,7 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         }
         return self.engine.fresh_var()
     }
-    let p = ip.unwrap()
+    let p = unwrap(move ip)
     self.results.record_operator(self.node_of(fs.body.span), ResolvedOperator {
         function_id = p.id,
         negate_result = false,
@@ -5429,9 +5489,10 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     let state = self.engine.resolve(p.ret)
     // A self-iterator's `iter` returns `&State`; `next(&State)` then takes it AS-IS - so try the
     // wrapped shape first, the state unchanged second (reference parity).
-    let np = protocol_pick(self, "next", self.engine.mk_ref(state), fs.span)
-    if np.is_none() {
-        np = protocol_pick(self, "next", state, fs.span)
+    const wrapped = protocol_pick(self, "next", self.engine.mk_ref(state), fs.span)
+    const np: OverloadPick? = wrapped match {
+        Some(p) => Some(move p)
+        None => protocol_pick(self, "next", state, fs.span)
     }
     if np.is_none() {
         if !self.engine.is_var(state) and !state.is_error() {
@@ -5440,7 +5501,7 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         }
         return self.engine.fresh_var()
     }
-    let n = np.unwrap()
+    let n = unwrap(move np)
     self.results.record_operator(self.node_of(fs.span), ResolvedOperator {
         function_id = n.id,
         negate_result = false,
@@ -5558,7 +5619,7 @@ fn check_let(self: &Checker, ls: &LetStmt) {
     const name_node = self.node_of(ls.name_span)
     self.results.record_type(name_node, bound_ty)
     self.env.bind(ls.name, Binding {
-        scheme = mono(bound_ty, self.allocator),
+        scheme = mono(bound_ty),
         decl = name_node,
         is_const = ls.is_const,
         is_type_param = false,
@@ -5728,7 +5789,7 @@ fn arithmetic(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
             $"no `{name}` implementation for these operand types")
         return lhs
     }
-    let p = pick.unwrap()
+    let p = unwrap(move pick)
     self.results.record_operator(self.node_of(bin.span), ResolvedOperator {
         function_id = p.id,
         negate_result = false,
@@ -5794,7 +5855,7 @@ fn comparison(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
 
     let direct = operator_pick_2(self, direct_op_name(bin.op), l, r, bin.span)
     if direct.is_some() {
-        let p = direct.unwrap()
+        let p = unwrap(move direct)
         self.results.record_operator(self.node_of(bin.span), ResolvedOperator {
             function_id = p.id,
             negate_result = false,
@@ -5810,7 +5871,7 @@ fn comparison(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
         let opposite = bin.op match { Eq => "op_ne", _ => "op_eq" }
         let neg = operator_pick_2(self, opposite, l, r, bin.span)
         if neg.is_some() {
-            let p = neg.unwrap()
+            let p = unwrap(move neg)
             self.results.record_operator(self.node_of(bin.span), ResolvedOperator {
                 function_id = p.id,
                 negate_result = true,
@@ -5825,7 +5886,7 @@ fn comparison(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
 
     let cmp = operator_pick_2(self, "op_cmp", l, r, bin.span)
     if cmp.is_some() {
-        let p = cmp.unwrap()
+        let p = unwrap(move cmp)
         self.results.record_operator(self.node_of(bin.span), ResolvedOperator {
             function_id = p.id,
             negate_result = false,
@@ -5872,7 +5933,7 @@ fn operator_pick_2(self: &Checker, name: String, l: Ty, r: Ty, span: SourceSpan)
     args.push(r)
     let pick = operator_pick(self, name, &args, span)
     args.deinit()
-    return pick
+    return move pick
 }
 
 fn payloadless_enum(self: &Checker, ty: Ty) bool {
@@ -5922,26 +5983,26 @@ fn arith_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
 
 fn check_call(self: &Checker, call: &CallExpr) Ty {
     let pos_tys = list(call.args.len, self.allocator)
-    let pos_exprs: List(Expr) = list(call.args.len, self.allocator)
+    let pos_exprs: List(&Expr) = list(call.args.len, self.allocator)
     // Filled as locals, then moved into the bundle: growing a list THROUGH a struct field of a
     // local copies the header and loses the push (docs/known-issues.md, two-hop mutation).
     let nnames: List(String) = list(0, self.allocator)
     let ntys: List(Ty) = list(0, self.allocator)
-    let nvalues: List(Expr) = list(0, self.allocator)
+    let nvalues: List(&Expr) = list(0, self.allocator)
     for &a in call.args {
         a.* match {
             Positional(e) => {
                 pos_tys.push(check_expr(self, e))
-                pos_exprs.push(e.*)
+                pos_exprs.push(e)
             }
             Named(n) => {
                 ntys.push(check_expr(self, n.value))
                 nnames.push(n.name)
-                nvalues.push(n.value.*)
+                nvalues.push(n.value)
             }
         }
     }
-    let named = NamedArgs { names = nnames, tys = ntys, values = nvalues }
+    let named = NamedArgs { names = move nnames, tys = move ntys, values = move nvalues }
     let named_seen = named.names.len > 0
     // Variant constructors take no named arguments, so their presence rules the variant
     // interpretation out before any lookup.
@@ -5988,13 +6049,18 @@ fn check_call(self: &Checker, call: &CallExpr) Ty {
 type NamedArgs = struct {
     names: List(String)
     tys: List(Ty)
-    values: List(Expr)
+    values: List(&Expr)
 }
 
 pub fn deinit(self: &NamedArgs) {
     self.names.deinit()
     self.tys.deinit()
     self.values.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &NamedArgs, allocator: &Allocator) {
+    self.deinit()
 }
 
 // Each named argument's parameter index in candidate `c`, or null when a name is not one of `c`'s
@@ -6006,7 +6072,7 @@ fn named_param_slots(self: &Checker, c: &FunctionScheme, named: &NamedArgs,
     if dp.is_none() {
         return null
     }
-    let decl = &dp.unwrap().params
+    let decl = dp.unwrap().params
     let out: List(usize) = list(named.names.len, self.allocator)
     for i in 0..named.names.len {
         let found: usize? = null
@@ -6021,14 +6087,14 @@ fn named_param_slots(self: &Checker, c: &FunctionScheme, named: &NamedArgs,
         }
         out.push(found.unwrap())
     }
-    return Some(out)
+    return Some(move out)
 }
 
 // Resolve a call to its target: registry overloads (direct, or UFCS with the receiver as first
 // argument), a Func-typed struct field, or a Func-typed value. Some(ty) is the call's type -
 // failures inside report a diagnostic and yield a fresh var so inference continues. Null means the
 // callee shape has no resolution path; the caller falls back.
-fn resolve_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty), pos_exprs: &List(Expr),
+fn resolve_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty), pos_exprs: &List(&Expr),
     named: &NamedArgs? = null) Ty? {
     return call.callee.* match {
         Identifier(ide) => resolve_direct_call(self, call, &ide, arg_tys, pos_exprs, named)
@@ -6040,15 +6106,15 @@ fn resolve_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty), pos_exprs: 
 // `foo(args)` - registry overloads win over value bindings, mirroring the reference checker's call
 // order; a value binding of function type is the fallback.
 fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, arg_tys: &List(Ty),
-    pos_exprs: &List(Expr), named: &NamedArgs? = null) Ty? {
+    pos_exprs: &List(&Expr), named: &NamedArgs? = null) Ty? {
     let vis = fn_visibility(self)
     defer vis.visible.deinit()
     let cands = self.functions.lookup(ide.name, &vis) match {
-        FnLookFound(c) => Some(c)
+        FnLookFound(c) => Some(move c)
         _ => null
     }
     if cands.is_some() {
-        let candidates = cands.unwrap()
+        let candidates = unwrap(move cands)
         self.overload_deferred = false
         let pick = resolve_overload(self, &candidates, arg_tys, call.span, null, named, 0usize,
             true)
@@ -6060,8 +6126,8 @@ fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, ar
         if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
             return Some(self.engine.fresh_var())
         }
-        return Some(commit_pick(self, pick, ide.name, arg_tys.len, call.span, 0usize, pos_exprs,
-                named))
+        return Some(commit_pick(self, move pick, ide.name, arg_tys.len, call.span, 0usize,
+                pos_exprs, named))
     }
     // A named argument cannot address a parameter of a function VALUE (no declaration, so no
     // parameter names) - leave the call for the caller's fallback rather than dropping the names
@@ -6077,7 +6143,7 @@ fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, ar
 // UFCS, as in the reference checker); otherwise the receiver becomes the first argument of a
 // registry overload, retried with the receiver adapted between value and reference forms.
 fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, arg_tys: &List(Ty),
-    pos_exprs: &List(Expr), named: &NamedArgs? = null) Ty? {
+    pos_exprs: &List(&Expr), named: &NamedArgs? = null) Ty? {
     let recv_ty = check_expr(self, ma.receiver)
 
     // A field holding a function value has no parameter names, so a named-argument call never
@@ -6093,7 +6159,7 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     let vis = fn_visibility(self)
     defer vis.visible.deinit()
     let cands = self.functions.lookup(ma.member, &vis) match {
-        FnLookFound(c) => Some(c)
+        FnLookFound(c) => Some(move c)
         _ => null
     }
     if cands.is_none() {
@@ -6107,7 +6173,7 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
         }
         return Some(self.engine.fresh_var())
     }
-    let candidates = cands.unwrap()
+    let candidates = unwrap(move cands)
 
     // A still-unbound receiver (a lambda parameter the callee's instantiation pins, a parked member
     // access) cannot arbitrate an overload set, and even a lone candidate would bind it to the
@@ -6137,8 +6203,9 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     self.overload_deferred = false
     let pick = receiver_overload(self, &candidates, recv_ty, arg_tys, call.span, Some(adapted),
         named, Some(&ctx))
-    if pick.is_some() {
-        commit_deref_chain(self, &chain, pick.unwrap().hops, call.span)
+    pick match {
+        Some(p) => commit_deref_chain(self, &chain, p.hops, call.span)
+        None => {}
     }
     candidates.deinit()
     if pick.is_none() and self.overload_deferred {
@@ -6151,8 +6218,8 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
         return Some(self.engine.fresh_var())
     }
-    return Some(commit_pick(self, pick, ma.member, arg_tys.len, call.span, 1usize, pos_exprs, named,
-            Some(recv_ty)))
+    return Some(commit_pick(self, move pick, ma.member, arg_tys.len, call.span, 1usize, pos_exprs,
+            named, Some(recv_ty)))
 }
 
 // One overload-resolution attempt with `recv` prepended as the first argument. `alt_recv` is its
@@ -6165,7 +6232,7 @@ fn receiver_overload(self: &Checker, candidates: &List(FunctionScheme), recv: Ty
     full.push_all(arg_tys.as_slice())
     let pick = resolve_overload(self, candidates, &full, span, alt_recv, named, 1usize, false, peel)
     full.deinit()
-    return pick
+    return move pick
 }
 
 // Resolves `name` as a method of `recv` with `extra` arguments, ranking every receiver shape in one
@@ -6181,13 +6248,13 @@ fn receiver_pick(self: &Checker, name: String, recv: Ty, extra: &List(Ty), span:
     let vis = fn_visibility(self)
     defer vis.visible.deinit()
     let cands = self.functions.lookup(name, &vis) match {
-        FnLookFound(c) => Some(c)
+        FnLookFound(c) => Some(move c)
         _ => null
     }
     if cands.is_none() {
         return null
     }
-    let candidates = cands.unwrap()
+    let candidates = unwrap(move cands)
     defer candidates.deinit()
     let r = self.engine.resolve(recv)
     let adapted = ty_node(self, r) match {
@@ -6199,17 +6266,18 @@ fn receiver_pick(self: &Checker, name: String, recv: Ty, extra: &List(Ty), span:
     let ctx = PeelCtx { vis = &vis, chain = &chain }
     let pick = receiver_overload(self, &candidates, recv, extra, span, Some(adapted), null,
         Some(&ctx))
-    if pick.is_some() {
-        commit_deref_chain(self, &chain, pick.unwrap().hops, record_span)
+    pick match {
+        Some(p) => commit_deref_chain(self, &chain, p.hops, record_span)
+        None => {}
     }
-    return pick
+    return move pick
 }
 
 // The `op_deref` overloads visible to the current function, for `PeelCtx`; null when there are
 // none, so `resolve_overload` skips the peel outright.
 fn deref_candidates(self: &Checker, vis: &Visibility) List(FunctionScheme)? {
     return self.functions.lookup("op_deref", vis) match {
-        FnLookFound(c) => Some(c)
+        FnLookFound(c) => Some(move c)
         _ => null
     }
 }
@@ -6228,7 +6296,7 @@ fn commit_deref_chain(self: &Checker, chain: &List(OverloadPick), hops: usize, s
     }
     // Recorded BEFORE the pendings are noted: a pick that instantiates immediately rewrites its hop
     // through `update_receiver_deref`, which needs the chain to already be there.
-    self.results.record_receiver_deref(self.node_of(span), targets)
+    self.results.record_receiver_deref(self.node_of(span), move targets)
     for i in 0..hops {
         note_pending(self, span, false, &chain[i], Some(i))
     }
@@ -6242,14 +6310,17 @@ fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &Over
     if pick.inst.is_none() {
         return
     }
-    let inst = pick.inst.unwrap()
+    const inst: &PickInst = pick.inst match {
+        Some(i) => &i
+        None => return
+    }
     let p = PendingSpec {
         span = span,
         is_operator = is_operator,
         deref_index = deref_index,
         function_id = pick.id,
-        tp_binds = inst.tp_binds,
-        inst_params = inst.params,
+        tp_binds = inst.tp_binds.clone(),
+        inst_params = inst.params.clone(),
         inst_ret = inst.ret,
         caller_module = self.current_module.unwrap(),
         from_parked = self.resolving_parked,
@@ -6260,7 +6331,7 @@ fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &Over
     // and destabilises inference: re-entering the checker mid-expression nests a generalisation
     // level inside the caller's, and unrelated `xs.push(v)` arguments start typing as `Type(?)`.
     // See docs/known-issues.md §"return-only type parameters".
-    self.pending_specs.push(p)
+    self.pending_specs.push(move p)
 }
 
 // Record the winner on the call node and return its instantiated return type; report when no
@@ -6269,7 +6340,7 @@ fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &Over
 // diagnostic). `recv` is that receiver's type, and names it in the failure - which method is
 // missing matters far less than which type is missing it.
 fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize, span: SourceSpan,
-    recv_extra: usize, pos_exprs: &List(Expr), named: &NamedArgs?, recv: Ty? = null) Ty {
+    recv_extra: usize, pos_exprs: &List(&Expr), named: &NamedArgs?, recv: Ty? = null) Ty {
     return pick match {
         Some(p) => {
             self.results.record_target(self.node_of(span), ResolvedTarget.RtFunction(p.id))
@@ -6328,17 +6399,17 @@ fn check_consuming_receiver(self: &Checker, p: &OverloadPick, name: String, recv
 // needs and hand back a fresh var for the result. `resolve_pending_calls` finishes it after the
 // specialization drain, when the open argument has its real type.
 fn park_call(self: &Checker, call: &CallExpr, name: String, arg_tys: &List(Ty),
-    pos_exprs: &List(Expr), recv_extra: usize, alt_recv: Ty?) Ty {
+    pos_exprs: &List(&Expr), recv_extra: usize, alt_recv: Ty?) Ty {
     let args: List(Ty) = list(arg_tys.len, self.allocator)
     args.push_all(arg_tys.as_slice())
-    let pes: List(Expr) = list(pos_exprs.len, self.allocator)
+    let pes: List(&Expr) = list(pos_exprs.len, self.allocator)
     pes.push_all(pos_exprs.as_slice())
     self.pending_calls.push(PendingCall {
         span = call.span,
         name = name,
         call = call,
-        arg_tys = args,
-        pos_exprs = pes,
+        arg_tys = move args,
+        pos_exprs = move pes,
         recv_extra = recv_extra,
         alt_recv = alt_recv,
         module = self.current_module,
@@ -6351,10 +6422,17 @@ fn park_call(self: &Checker, call: &CallExpr, name: String, arg_tys: &List(Ty),
 // ambiguous case and reports (E2011) rather than picking by declaration order.
 fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
     let parked: List(PendingCall) = list(self.pending_calls.len - from, self.allocator)
-    for k in from..self.pending_calls.len {
-        parked.push(self.pending_calls[k])
+    let all = move self.pending_calls
+    self.pending_calls = list(all.len, self.allocator)
+    for k in 0..all.len {
+        if k < from {
+            self.pending_calls.push(move all[k])
+        } else {
+            parked.push(move all[k])
+        }
     }
-    self.pending_calls.truncate(from)
+    const shells = all.to_owned_slice()
+    shells.1.free(shells.0)
     const was_resolving = self.resolving_parked
     self.resolving_parked = true
     defer self.resolving_parked = was_resolving
@@ -6364,11 +6442,11 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
         let vis = fn_visibility(self)
         defer vis.visible.deinit()
         let cands = self.functions.lookup(pc.name, &vis) match {
-            FnLookFound(c) => Some(c)
+            FnLookFound(c) => Some(move c)
             _ => null
         }
         if cands.is_some() {
-            let candidates = cands.unwrap()
+            let candidates = unwrap(move cands)
             self.overload_deferred = false
             let pick = resolve_overload(self, &candidates, &pc.arg_tys, pc.span, pc.alt_recv, null,
                 pc.recv_extra, true)
@@ -6380,7 +6458,7 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
             } else {
                 const n_args = if pc.recv_extra > 0 { pc.arg_tys.len - 1 } else { pc.arg_tys.len }
                 const pc_recv: Ty? = if pc.recv_extra > 0 { Some(pc.arg_tys[0]) } else { null }
-                let t = commit_pick(self, pick, pc.name, n_args, pc.span, pc.recv_extra,
+                let t = commit_pick(self, move pick, pc.name, n_args, pc.span, pc.recv_extra,
                     &pc.pos_exprs, null, pc_recv)
                 // The placeholder `park_call` handed the call site flowed into the enclosing
                 // inference; the resolved type has to reach those uses, not just the node.
@@ -6436,14 +6514,14 @@ fn pick_is_variadic(self: &Checker, p: &OverloadPick) bool {
     if dp.is_none() {
         return false
     }
-    let decl = &dp.unwrap().params
+    let decl = dp.unwrap().params
     if decl.len == 0 {
         return false
     }
     return decl[decl.len - 1].is_variadic
 }
 
-fn materialize_arg_list(self: &Checker, p: &OverloadPick, pos_exprs: &List(Expr),
+fn materialize_arg_list(self: &Checker, p: &OverloadPick, pos_exprs: &List(&Expr),
     named: &NamedArgs?, recv_extra: usize, span: SourceSpan) {
     if self.default_depth >= MAX_DEFAULT_DEPTH {
         return
@@ -6452,7 +6530,7 @@ fn materialize_arg_list(self: &Checker, p: &OverloadPick, pos_exprs: &List(Expr)
     if dp.is_none() {
         return
     }
-    let decl_params = &dp.unwrap().params
+    let decl_params = dp.unwrap().params
     if decl_params.len != p.params.len {
         return
     }
@@ -6461,7 +6539,7 @@ fn materialize_arg_list(self: &Checker, p: &OverloadPick, pos_exprs: &List(Expr)
     }
 
     self.default_depth = self.default_depth + 1
-    let exprs: List(Expr) = list(decl_params.len - recv_extra, self.allocator)
+    let exprs: List(&Expr) = list(decl_params.len - recv_extra, self.allocator)
     let n_named = named match { Some(n) => n.names.len, None => 0usize }
     let used_named = 0usize
     let next_pos = 0usize
@@ -6474,7 +6552,8 @@ fn materialize_arg_list(self: &Checker, p: &OverloadPick, pos_exprs: &List(Expr)
         // literal - the reference's `BuildResolvedArguments` builds the same node, and the array
         // decays to the parameter's slice at the call.
         if decl_params[pi].is_variadic {
-            exprs.push(synth_variadic_pack(self, pos_exprs, next_pos, p.params[pi], span))
+            exprs.push(synth_box(self, synth_variadic_pack(self, pos_exprs, next_pos, p.params[pi],
+                        span)))
             next_pos = pos_exprs.len
             continue
         }
@@ -6509,7 +6588,7 @@ fn materialize_arg_list(self: &Checker, p: &OverloadPick, pos_exprs: &List(Expr)
             Some(e) => {
                 const t = check_expr(self, e)
                 unify_expected(self, t, p.params[pi], E_TYPE_MISMATCH, span)
-                exprs.push(e.*)
+                exprs.push(e)
             }
             None => ok = false
         }
@@ -6517,7 +6596,7 @@ fn materialize_arg_list(self: &Checker, p: &OverloadPick, pos_exprs: &List(Expr)
     self.default_depth = self.default_depth - 1
 
     if ok and next_pos == pos_exprs.len and used_named == n_named {
-        self.results.record_arg_list(self.node_of(span), exprs)
+        self.results.record_arg_list(self.node_of(span), move exprs)
     } else {
         exprs.deinit()
     }
@@ -6527,15 +6606,16 @@ fn materialize_arg_list(self: &Checker, p: &OverloadPick, pos_exprs: &List(Expr)
 // in this result set, and unified against the variadic parameter's slice element type so unsuffixed
 // literals pin. Synthetic span - node ids are span fingerprints, and this node exists nowhere in
 // the source.
-fn synth_variadic_pack(self: &Checker, pos_exprs: &List(Expr), from: usize, param_ty: Ty,
+fn synth_variadic_pack(self: &Checker, pos_exprs: &List(&Expr), from: usize, param_ty: Ty,
     span: SourceSpan) Expr {
+    // The pack holds its own copies of the arena nodes, like every synthesized literal.
     let elems: List(Expr) = list(pos_exprs.len - from, self.allocator)
     for i in from..pos_exprs.len {
-        elems.push(pos_exprs[i])
+        elems.push(move pos_exprs[i].*)
     }
     const arr = Expr.ArrayLit(ArrayLiteralExpr {
         span = synth_span(self),
-        kind = ArrayLiteralKind.Elements(elems),
+        kind = ArrayLiteralKind.Elements(move elems),
     })
     const at = check_expr(self, &arr)
     // The parameter is `Slice(T)`; unify the literal's element type with `T` so the arguments
@@ -6556,7 +6636,7 @@ fn synth_variadic_pack(self: &Checker, pos_exprs: &List(Expr), from: usize, para
             _ => {}
         }
     }
-    return arr
+    return move arr
 }
 
 // M11: a call that supplied fewer arguments than the winner's arity left the rest to defaults. The
@@ -6587,13 +6667,13 @@ fn materialize_default_args(self: &Checker, p: &OverloadPick, supplied: usize, s
     if dp.is_none() {
         return
     }
-    let decl_params = &dp.unwrap().params
+    let decl_params = dp.unwrap().params
     if decl_params.len != p.params.len {
         return
     }
 
     self.default_depth = self.default_depth + 1
-    let exprs: List(Expr) = list(p.params.len - supplied, self.allocator)
+    let exprs: List(&Expr) = list(p.params.len - supplied, self.allocator)
     let ok = true
     for i in supplied..decl_params.len {
         if !ok {
@@ -6607,7 +6687,7 @@ fn materialize_default_args(self: &Checker, p: &OverloadPick, supplied: usize, s
             Some(e) => {
                 const t = check_expr(self, e)
                 unify_expected(self, t, p.params[i], E_TYPE_MISMATCH, span)
-                exprs.push(e.*)
+                exprs.push(e)
             }
             None => ok = false
         }
@@ -6615,7 +6695,7 @@ fn materialize_default_args(self: &Checker, p: &OverloadPick, supplied: usize, s
     self.default_depth = self.default_depth - 1
 
     if ok {
-        self.results.record_default_args(self.node_of(span), exprs)
+        self.results.record_default_args(self.node_of(span), move exprs)
     } else {
         exprs.deinit()
     }
@@ -6739,7 +6819,7 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
         let ps = list(arg_tys.len, self.allocator)
         ps.push_all(arg_tys.as_slice())
         let ret = self.engine.fresh_var()
-        const o = self.engine.unify(callee_ty, self.engine.mk_func(ps, ret))
+        const o = self.engine.unify(callee_ty, self.engine.mk_func(move ps, ret))
         report_unify(self, &o, E_TYPE_MISMATCH, span)
         return ret
     }
@@ -6763,13 +6843,13 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
     let vis = fn_visibility(self)
     defer vis.visible.deinit()
     let cands = self.functions.lookup("op_call", &vis) match {
-        FnLookFound(c) => Some(c)
+        FnLookFound(c) => Some(move c)
         _ => null
     }
     if cands.is_none() {
         return null
     }
-    let candidates = cands.unwrap()
+    let candidates = unwrap(move cands)
     defer candidates.deinit()
 
     // `op_call(&T, …)`, `op_call(T, …)` and the receiver's `op_deref` targets compete in one
@@ -6782,17 +6862,20 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
     if pick.is_none() {
         return null
     }
-    const hops = pick.unwrap().hops
+    const hops = pick match {
+        Some(p) => p.hops
+        None => 0usize
+    }
     commit_deref_chain(self, &chain, hops, span)
     if hops == 0 {
         // The chain record, even empty, is lowering's signal that this plain-looking callee is an
         // `op_call` dispatch (the AST shows no receiver).
         let none: List(ResolvedTarget) = list(0, self.allocator)
-        self.results.record_receiver_deref(self.node_of(span), none)
+        self.results.record_receiver_deref(self.node_of(span), move none)
     }
-    let no_exprs: List(Expr) = list(0, self.allocator)
+    let no_exprs: List(&Expr) = list(0, self.allocator)
     defer no_exprs.deinit()
-    return Some(commit_pick(self, pick, "op_call", arg_tys.len, span, 1usize, &no_exprs, null))
+    return Some(commit_pick(self, move pick, "op_call", arg_tys.len, span, 1usize, &no_exprs, null))
 }
 
 // Appends to `alts` every receiver shape reachable from `recv` through `op_deref`, at most ten hops
@@ -6806,7 +6889,7 @@ fn deref_alternatives(self: &Checker, recv: Ty, span: SourceSpan, ctx: &PeelCtx,
     if dcands.is_none() {
         return
     }
-    let dc = dcands.unwrap()
+    let dc = unwrap(move dcands)
     defer dc.deinit()
     let current = self.engine.resolve(recv)
     let hops = 0usize
@@ -6827,10 +6910,11 @@ fn deref_alternatives(self: &Checker, recv: Ty, span: SourceSpan, ctx: &PeelCtx,
         if dpick.is_none() {
             return
         }
-        ctx.chain.push(dpick.unwrap())
+        const dp = unwrap(move dpick)
+        let dret = self.engine.resolve(dp.ret)
+        ctx.chain.push(move dp)
         hops = hops + 1
 
-        let dret = self.engine.resolve(dpick.unwrap().ret)
         let inner = ty_node(self, dret) match {
             NRef(i) => self.engine.resolve(i)
             _ => return
@@ -6983,7 +7067,7 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
             const p = probed.unwrap()
             let coercions = p.coercions
             let cost = p.total()
-            let generics = c.signature.quantified.len()
+            let generics = c.signature.quantified_len()
             let spec = st[ci].spec
             let better = best.is_none() or coercions < best_coercions
                 or (coercions == best_coercions and spec > best_spec)
@@ -7075,7 +7159,7 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
         let na = named.unwrap()
         let slots = named_param_slots(self, w, na, ufcs_offset)
         if slots.is_some() {
-            let sl = slots.unwrap()
+            let sl = unwrap(move slots)
             for i in 0..sl.len {
                 if sl[i] < fparams.len {
                     const on = self.engine.unify(na.tys[i], fparams[sl[i]])
@@ -7085,14 +7169,18 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
             sl.deinit()
         }
     }
-    let inst: PickInst? = null
-    if w.signature.quantified.len() > 0 {
-        inst = Some(PickInst { tp_binds = binds, params = fparams, ret = f.ret })
-    } else {
+    const generic = w.signature.quantified_len() > 0
+    if !generic {
         binds.deinit()
     }
+    const inst: PickInst? = if generic {
+        Some(PickInst { tp_binds = move binds, params = fparams.clone(), ret = f.ret })
+    } else {
+        null
+    }
     let hops = if best_used > 0 { alts[best_used - 1].hops } else { 0usize }
-    return Some(OverloadPick { id = w.id, ret = f.ret, params = fparams, inst = inst, hops = hops })
+    return Some(OverloadPick { id = w.id, ret = f.ret, params = move fparams, inst = move inst,
+        hops = hops })
 }
 
 // Returns whether trying the receiver through `op_deref` could change `resolve_overload`'s outcome,
@@ -7169,7 +7257,7 @@ fn args_with_recv(self: &Checker, arg_tys: &List(Ty), recv: Ty) List(Ty) {
     for i in 1..arg_tys.len {
         out.push(arg_tys[i])
     }
-    return out
+    return move out
 }
 
 // Whether the tie between two equally-ranked candidates turns on an argument that is a still-open
@@ -7316,20 +7404,21 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty),
     let n_params = f.params.len
     // Named arguments count toward the arity window and each must name a parameter of THIS
     // candidate; a name it does not declare rules it out.
-    let n_named = 0usize
-    let slots: List(usize)? = null
-    if named.is_some() {
-        let na = named.unwrap()
-        n_named = na.names.len
-        slots = named_param_slots(self, c, na, ufcs_offset)
-        if slots.is_none() {
-            return null
-        }
+    const n_named = named match {
+        Some(na) => na.names.len
+        None => 0usize
+    }
+    const slots: List(usize)? = named match {
+        Some(na) => named_param_slots(self, c, na, ufcs_offset)
+        None => null
+    }
+    if named.is_some() and slots.is_none() {
+        return null
     }
     let supplied = arg_tys.len + n_named
     if !arity_accepts(c, n_params, supplied) {
         if slots.is_some() {
-            let dead = slots.unwrap()
+            let dead = unwrap(move slots)
             dead.deinit()
         }
         return null
@@ -7374,7 +7463,7 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty),
         }
     }
     if slots.is_some() {
-        let sl = slots.unwrap()
+        let sl = unwrap(move slots)
         let na = named.unwrap()
         let j = 0usize
         while ok and j < sl.len {
@@ -7545,7 +7634,7 @@ fn type_instantiation_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List(
     for i in 0..arg_tys.len {
         args.push(unreify_type(self, arg_tys[i]))
     }
-    let inst = mk_nominal(self, id, args)
+    let inst = mk_nominal(self, id, move args)
     // `Type(T)` written out IS the reified form - wrapping it again would make `Type(Type(T))`.
     let type_id = self.nominals.by_fqn.get(FQN_TYPE)
     let is_type_ctor = type_id match {
@@ -7614,7 +7703,7 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
             recs.push(AnonFieldRec { name = fi.name, ty = v, span = fi.span })
         }
         let anon_var = self.engine.fresh_var()
-        self.pending_anons.push(PendingAnon { ty = anon_var, fields = recs })
+        self.pending_anons.push(PendingAnon { ty = anon_var, fields = move recs })
         return anon_var
     }
     let ty = resolve_type_expr(self, lit.type_expr.unwrap())
@@ -7641,7 +7730,7 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
     if missing.is_some() {
         let n = missing.unwrap()
         const msg = $"generic struct `{n}` requires type arguments, use `{n}(...)` or `.{{ ... }}`"
-        push_diag_e(self, lit.span, E_GENERIC_NEEDS_ARGS, msg)
+        push_diag_e(self, lit.span, E_GENERIC_NEEDS_ARGS, move msg)
         // Field expressions still check for their own errors; the literal itself has no usable
         // type.
         for i in 0..lit.fields.len {
@@ -7676,7 +7765,7 @@ fn report_missing_fields(self: &Checker, ty: Ty, present: &List(String), span: S
         _ => return
     }
     let sd = self.nominals.get(nn.id).* match {
-        NomStruct(st) => st
+        NomStruct(st) => move st
         _ => return
     }
     for i in 0..sd.fields.len {
@@ -7702,7 +7791,7 @@ fn generic_struct_missing_args(self: &Checker, ty: Ty) String? {
         _ => return null
     }
     let sd = self.nominals.get(nn.id).* match {
-        NomStruct(s) => s
+        NomStruct(s) => move s
         _ => return null
     }
     if nn.args.len == sd.type_params.len {
@@ -7783,7 +7872,7 @@ fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
 // since the drain is what pins a lambda parameter; a receiver still open afterwards stays parked
 // (its placeholder a var, which whatever needed it reports) until the scope discards it.
 fn resolve_pending_members(self: &Checker) {
-    let parked = self.pending_members
+    let parked = move self.pending_members
     self.pending_members = list(0, self.allocator)
     for &pm in parked {
         const z = self.engine.zonk(pm.recv)
@@ -7844,7 +7933,7 @@ fn struct_without_field(self: &Checker, recv: Ty, name: String) bool {
         return false
     }
     let sd = self.nominals.get(nid.unwrap()).* match {
-        NomStruct(s) => Some(s)
+        NomStruct(s) => Some(&s)
         _ => null
     }
     if sd.is_none() {
@@ -7868,13 +7957,13 @@ fn member_deref_retry_at(self: &Checker, member: String, span: SourceSpan, recv_
     let vis = fn_visibility(self)
     defer vis.visible.deinit()
     let dcands = self.functions.lookup("op_deref", &vis) match {
-        FnLookFound(c) => Some(c)
+        FnLookFound(c) => Some(move c)
         _ => null
     }
     if dcands.is_none() {
         return null
     }
-    let dc = dcands.unwrap()
+    let dc = unwrap(move dcands)
     defer dc.deinit()
 
     let chain: List(OverloadPick) = list(1, self.allocator)
@@ -7904,9 +7993,10 @@ fn member_deref_retry_at(self: &Checker, member: String, span: SourceSpan, recv_
         if dpick.is_none() {
             return null
         }
-        chain.push(dpick.unwrap())
+        const dp = unwrap(move dpick)
+        let dret = self.engine.resolve(dp.ret)
+        chain.push(move dp)
 
-        let dret = self.engine.resolve(dpick.unwrap().ret)
         let inner = ty_node(self, dret) match {
             NRef(i) => self.engine.resolve(i)
             _ => return null
@@ -8006,7 +8096,7 @@ fn enum_receiver(self: &Checker, recv: &Expr) NominalId? {
 }
 
 fn construct_nullary(self: &Checker, id: NominalId, vname: String, span: SourceSpan) Ty? {
-    let empty = list(0, self.allocator)
+    let empty: List(Ty) = list(0, self.allocator)
     let out = construct_variant(self, id, vname, &empty, span, self.node_of(span))
     empty.deinit()
     return out
@@ -8019,7 +8109,7 @@ fn construct_nullary(self: &Checker, id: NominalId, vname: String, span: SourceS
 fn construct_variant(self: &Checker, id: NominalId, vname: String, arg_tys: &List(Ty),
     span: SourceSpan, node: NodeId) Ty? {
     let ed = self.nominals.get(id).* match {
-        NomEnum(e) => Some(e)
+        NomEnum(e) => Some(&e)
         _ => null
     }
     if ed.is_none() {
@@ -8057,7 +8147,7 @@ fn construct_variant(self: &Checker, id: NominalId, vname: String, arg_tys: &Lis
     }
     subst.deinit()
     self.results.record_target(node, ResolvedTarget.RtEnumVariant(id, vnum))
-    return Some(mk_nominal(self, id, args))
+    return Some(mk_nominal(self, id, move args))
 }
 
 // A struct field's declared type by name, substituted against the receiver instance's type
@@ -8091,7 +8181,7 @@ fn struct_field_lookup(self: &Checker, recv: Ty, name: String) Ty? {
     }
     let def_node = self.nominals.get(nr.id)
     let sd_opt = def_node.* match {
-        NomStruct(s) => Some(s)
+        NomStruct(s) => Some(&s)
         _ => null
     }
     if sd_opt.is_none() {
@@ -8172,11 +8262,11 @@ fn zonk_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
     }
     return LambdaInfo {
         span = info.span,
-        params = ps,
+        params = move ps,
         ret = ret,
-        captures = caps,
+        captures = move caps,
         closure_id = info.closure_id,
-        symbol = info.symbol,
+        symbol = info.symbol.clone(),
     }
 }
 
@@ -8190,11 +8280,10 @@ fn zonk_lambda_table(self: &Checker) {
     for e in self.results.lambdas {
         // Annotated: the self-hosted checker types for-over-iterator variables as unconstrained
         // vars (protocol resolution is post-M10), so the entry needs the pin.
-        let info: LambdaInfo = e.value
-        let key: NodeId = e.key
-        zl.set(key, zonk_lambda_info(self, &info))
+        const key: NodeId = e.key
+        zl.set(key, zonk_lambda_info(self, &e.value))
     }
-    self.results.replace_lambdas(zl)
+    self.results.replace_lambdas(move zl)
 }
 
 // Zonk the global closure table and each closure nominal's registry fields (capture types recorded
@@ -8207,16 +8296,16 @@ fn zonk_closures(self: &Checker) {
     let zc: Dict(NominalId, ClosureSig) = dict(self.allocator)
     for e in self.closures {
         // Annotated pins for the self-hosted checker (see zonk_lambda_table).
-        let cs: ClosureSig = e.value
-        let key: NominalId = e.key
+        const cs = &e.value
+        const key: NominalId = e.key
         let ps: List(Ty) = list(cs.params.len, self.allocator)
         for i in 0..cs.params.len {
             ps.push(self.engine.zonk(cs.params[i]))
         }
         zc.set(key, ClosureSig {
-            params = ps,
+            params = move ps,
             ret = self.engine.zonk(cs.ret),
-            symbol = cs.symbol,
+            symbol = cs.symbol.clone(),
             lambda_node = cs.lambda_node,
         })
 
@@ -8237,19 +8326,19 @@ fn zonk_closures(self: &Checker) {
                     fqn = sd.fqn,
                     module = sd.module,
                     is_pub = sd.is_pub,
-                    type_params = sd.type_params,
-                    fields = zfields,
+                    type_params = sd.type_params.clone(),
+                    fields = move zfields,
                     decl_span = sd.decl_span,
                     deprecation = sd.deprecation,
                     is_simd = sd.is_simd,
                     is_foreign = sd.is_foreign,
                 }
-                self.nominals.put(e.key, NominalDef.NomStruct(updated))
+                self.nominals.put(e.key, NominalDef.NomStruct(move updated))
             }
             _ => {}
         }
     }
-    self.closures = zc
+    self.closures = move zc
 }
 
 // Drain the parked overloaded-name-as-value sites of the scope that
@@ -8257,7 +8346,7 @@ fn zonk_closures(self: &Checker) {
 // Func shape picks the overload those parameter types select, records the winner on the node, and
 // unifies the return. A slot nothing pinned stays a fresh var - its consumer refuses at lowering.
 fn resolve_fn_name_values(self: &Checker) {
-    let pend = self.pending_fn_names
+    let pend = move self.pending_fn_names
     self.pending_fn_names = list(0, self.allocator)
     for &pn in pend {
         let z = self.engine.resolve(pn.ty)
@@ -8280,11 +8369,11 @@ fn resolve_fn_name_values(self: &Checker) {
         let vis = fn_visibility(self)
         defer vis.visible.deinit()
         let cands = self.functions.lookup(pn.name, &vis) match {
-            FnLookFound(c) => Some(c)
+            FnLookFound(c) => Some(move c)
             _ => null
         }
         if cands.is_some() {
-            let cl = cands.unwrap()
+            let cl = unwrap(move cands)
             let pick = resolve_overload(self, &cl, &fparams, pn.span)
             cl.deinit()
             pick match {
@@ -8332,7 +8421,7 @@ fn zonk_specializations(self: &Checker) {
         }
         let r = self.engine.zonk(sp.concrete_return)
         changed = changed or r != sp.concrete_return
-        self.specs.set_signature(sp.id, ps, r)
+        self.specs.set_signature(sp.id, move ps, r)
         // A signature that moved carried the open var into the body too: the overlay was zonked at
         // the end of `instantiate`, before the caller's drain pinned it (`is_some(&Option($T))` on
         // a lambda parameter's field, settled only by the callee's own instantiation), and a var
@@ -8342,7 +8431,7 @@ fn zonk_specializations(self: &Checker) {
             for entry in sp.overlay.node_types {
                 zonked.set(entry.key, self.engine.zonk(entry.value))
             }
-            sp.overlay.replace_node_types(zonked)
+            sp.overlay.replace_node_types(move zonked)
         }
     }
 }
@@ -8504,7 +8593,7 @@ fn own_unmark_pattern(self: &Checker, p: &OwnPass, pat: &Pattern) {
 fn own_snapshot(self: &Checker, src: &List(MovedRec)) List(MovedRec) {
     let out: List(MovedRec) = list(src.len, self.allocator)
     out.push_all(src.as_slice())
-    return out
+    return move out
 }
 
 fn own_restore(dst: &List(MovedRec), src: &List(MovedRec)) {
@@ -8542,7 +8631,7 @@ fn own_claim(p: &OwnPass, node: NodeId) bool {
 // this instantiation is what made the type non-copyable. Reporting at the outermost open
 // instantiation names a line in the file the author is editing rather than one in the stdlib.
 fn own_report(self: &Checker, span: SourceSpan, code: String, msg: OwnedString) {
-    push_diag_e(self, span, code, msg)
+    push_diag_e(self, span, code, move msg)
 }
 
 fn own_type(self: &Checker, span: SourceSpan) Ty? {
@@ -8805,7 +8894,7 @@ fn own_param_moves(self: &Checker, call_span: SourceSpan, idx: usize, name: Stri
     if dp.is_none() {
         return false
     }
-    const decl = &dp.unwrap().params
+    const decl = dp.unwrap().params
     if name.len > 0 {
         for i in 0..decl.len {
             if decl[i].name == name {
@@ -9333,20 +9422,20 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     // Move the registries and result tables into the snapshot, then replace each moved-from field
     // with a fresh empty container so the caller's later `checker.deinit()` doesn't double-free
     // them.
-    let out_resolved_ops = self.results.resolved_ops
-    let out_resolved_targets = self.results.resolved_targets
-    let out_instantiated_types = self.results.instantiated_types
-    let out_specializations = self.specs
-    let out_desugars = self.results.desugars
-    let out_synth_strings = self.results.synth_strings
-    let out_default_args = self.results.default_args
-    let out_arg_lists = self.results.arg_lists
-    let out_receiver_derefs = self.results.receiver_derefs
-    let out_nominals = self.nominals
-    let out_functions = self.functions
-    let out_lambdas = self.results.lambdas
-    let out_spans = self.results.spans
-    let out_closures = self.closures
+    let out_resolved_ops = self.results.take_resolved_ops()
+    let out_resolved_targets = self.results.take_resolved_targets()
+    let out_instantiated_types = self.results.take_instantiated_types()
+    let out_specializations = move self.specs
+    let out_desugars = self.results.take_desugars()
+    let out_synth_strings = self.results.take_synth_strings()
+    let out_default_args = self.results.take_default_args()
+    let out_arg_lists = self.results.take_arg_lists()
+    let out_receiver_derefs = self.results.take_receiver_derefs()
+    let out_nominals = move self.nominals
+    let out_functions = move self.functions
+    let out_lambdas = self.results.take_lambdas()
+    let out_spans = self.results.take_spans()
+    let out_closures = move self.closures
     self.closures = dict(self.allocator)
     // The snapshot's tables share the interner's canonical storage, so the interner travels with
     // them; the next demand starts one afresh.
@@ -9376,23 +9465,23 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     retire_closures(self, &out_closures)
 
     return TypeCheckResult {
-        node_types = zonked,
-        interner = out_interner,
-        resolved_ops = out_resolved_ops,
-        resolved_targets = out_resolved_targets,
-        instantiated_types = out_instantiated_types,
-        specializations = out_specializations,
-        desugars = out_desugars,
-        synth_strings = out_synth_strings,
-        default_args = out_default_args,
-        arg_lists = out_arg_lists,
-        receiver_derefs = out_receiver_derefs,
-        nominals = out_nominals,
-        functions = out_functions,
-        lambdas = out_lambdas,
-        closures = out_closures,
-        spans = out_spans,
-        file_paths = out_paths,
+        node_types = move zonked,
+        interner = move out_interner,
+        resolved_ops = move out_resolved_ops,
+        resolved_targets = move out_resolved_targets,
+        instantiated_types = move out_instantiated_types,
+        specializations = move out_specializations,
+        desugars = move out_desugars,
+        synth_strings = move out_synth_strings,
+        default_args = move out_default_args,
+        arg_lists = move out_arg_lists,
+        receiver_derefs = move out_receiver_derefs,
+        nominals = move out_nominals,
+        functions = move out_functions,
+        lambdas = move out_lambdas,
+        closures = move out_closures,
+        spans = move out_spans,
+        file_paths = move out_paths,
         phases = CheckPhases {
             visibility_ns = visibility_ns,
             collect_ns = collect_ns,
@@ -9640,18 +9729,18 @@ fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark,
         and self.pending_anons.len == w.pending_anons
         and self.pending_members.len == w.pending_members
 
-    let facts = self.sig_nodes
+    let facts = move self.sig_nodes
     self.sig_nodes = list(0, self.allocator)
     let lit_tys: List(Ty) = list(0, self.allocator)
     for k in w.lits..self.pending_literals.len {
         lit_tys.push(self.pending_literals[k].ty)
     }
     let cache = ModuleSigCache {
-        facts = facts,
+        facts = move facts,
         var_burn = (self.engine.var_counter - w.vars) as usize,
         vars_at_start = w.vars,
-        lit_tys = lit_tys,
-        default_texts = default_texts,
+        lit_tys = move lit_tys,
+        default_texts = move default_texts,
         cacheable = clean,
         fresh = true,
     }
@@ -9660,7 +9749,7 @@ fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark,
     if found.is_none() {
         const idx = self.sig_cache_keys.len
         self.sig_cache_keys.push(from_view(path, self.allocator))
-        self.sig_caches.set(self.sig_cache_keys[idx].as_view(), cache)
+        self.sig_caches.set(self.sig_cache_keys[idx].as_view(), move cache)
         return
     }
     let slot = found.unwrap()
@@ -9668,7 +9757,7 @@ fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark,
         self.defaults_changed = true
     }
     slot.deinit()
-    slot.* = cache
+    slot.* = move cache
 }
 
 // Whether module `path`'s signature pass can be skipped this demand: a cache exists, nothing it
@@ -9821,7 +9910,7 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
     drain_pending_specs(self)
     self.slot_log_on = false
     self.site_log_on = false
-    let picks = self.slot_picks
+    let picks = move self.slot_picks
     self.slot_picks = list(0, self.allocator)
     validate_literals(self, lit0, self.pending_literals.len)
     // The window's literal verdicts cannot be replayed - a flagged one keeps the module running.
@@ -9835,7 +9924,7 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
     }
     mark_flagged_slot_specs(self, lit_window)
     seal_slot(self, lit0)
-    let sites = self.slot_sites
+    let sites = move self.slot_sites
     self.slot_sites = list(0, self.allocator)
 
     let cache = ModuleBodyCache {
@@ -9845,7 +9934,7 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
         synth_burn = synth_burn,
         lambda_at_start = lambda0,
         lambda_burn = lambda_burn,
-        keys = keys,
+        keys = move keys,
         types = list(0, self.allocator),
         spans = list(0, self.allocator),
         targets = list(0, self.allocator),
@@ -9856,13 +9945,13 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
         default_args = list(0, self.allocator),
         arg_lists = list(0, self.allocator),
         derefs = list(0, self.allocator),
-        picks = picks,
-        calls = calls,
-        spec_sites = sites,
+        picks = move picks,
+        calls = move calls,
+        spec_sites = move sites,
         cacheable = self.slot_uninferable == 0 and lits_clean and members_clean,
         fresh = true,
     }
-    store_body_cache(self, path, cache)
+    store_body_cache(self, path, move cache)
     return .{ bodies_ns = bodies_ns, settle_ns = elapsed_ns(settle_start) }
 }
 
@@ -9910,19 +9999,19 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
         self.results.record_lambda(f.node, copy_lambda(&f.info, self.allocator))
     }
     for &f in c.default_args {
-        let exprs: List(Expr) = list(f.exprs.len, self.allocator)
+        let exprs: List(&Expr) = list(f.exprs.len, self.allocator)
         exprs.push_all(f.exprs.as_slice())
-        self.results.record_default_args(f.node, exprs)
+        self.results.record_default_args(f.node, move exprs)
     }
     for &f in c.arg_lists {
-        let exprs: List(Expr) = list(f.exprs.len, self.allocator)
+        let exprs: List(&Expr) = list(f.exprs.len, self.allocator)
         exprs.push_all(f.exprs.as_slice())
-        self.results.record_arg_list(f.node, exprs)
+        self.results.record_arg_list(f.node, move exprs)
     }
     for &f in c.derefs {
         let chain: List(ResolvedTarget) = list(f.chain.len, self.allocator)
         chain.push_all(f.chain.as_slice())
-        self.results.record_receiver_deref(f.node, chain)
+        self.results.record_receiver_deref(f.node, move chain)
     }
     for _k in 0..c.var_burn {
         self.engine.burn_var()
@@ -9939,8 +10028,8 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
             is_operator = cp.is_operator,
             deref_index = cp.deref_index,
             function_id = cp.function_id,
-            tp_binds = cp.tp_binds,
-            inst_params = cp.inst_params,
+            tp_binds = cp.tp_binds.clone(),
+            inst_params = cp.inst_params.clone(),
             inst_ret = cp.inst_ret,
             from_parked = false,
             caller_module = cp.caller_module,
@@ -10001,10 +10090,10 @@ fn mark_flagged_slot_specs(self: &Checker, from: usize) {
 fn seal_slot(self: &Checker, lit_floor: usize) {
     self.pending_anons.clear()
     self.pending_members.clear()
-    let names = self.pending_fn_names
+    let names = move self.pending_fn_names
     self.pending_fn_names = list(0, self.allocator)
     names.deinit()
-    let calls = self.pending_calls
+    let calls = move self.pending_calls
     self.pending_calls = list(0, self.allocator)
     for &pc in calls {
         pc.arg_tys.deinit()
@@ -10031,8 +10120,8 @@ fn log_pick(self: &Checker, p: &PendingSpec, params: &List(Ty), ret: Ty) {
         is_operator = p.is_operator,
         deref_index = p.deref_index,
         function_id = p.function_id,
-        tp_binds = binds,
-        inst_params = ps,
+        tp_binds = move binds,
+        inst_params = move ps,
         inst_ret = ret,
         caller_module = p.caller_module,
     })
@@ -10046,7 +10135,7 @@ fn copy_parked_calls(self: &Checker, from: usize) List(PendingCall) {
     for k in from..self.pending_calls.len {
         out.push(copy_pending_call(self, &self.pending_calls[k], true))
     }
-    return out
+    return move out
 }
 
 fn copy_pending_call(self: &Checker, pc: &PendingCall, zonk_args: bool) PendingCall {
@@ -10054,7 +10143,7 @@ fn copy_pending_call(self: &Checker, pc: &PendingCall, zonk_args: bool) PendingC
     for t in pc.arg_tys {
         ats.push(if zonk_args { self.engine.zonk(t) } else { t })
     }
-    let pes: List(Expr) = list(pc.pos_exprs.len, self.allocator)
+    let pes: List(&Expr) = list(pc.pos_exprs.len, self.allocator)
     pes.push_all(pc.pos_exprs.as_slice())
     const recv = pc.alt_recv match {
         Some(a) => Some(if zonk_args { self.engine.zonk(a) } else { a })
@@ -10064,8 +10153,8 @@ fn copy_pending_call(self: &Checker, pc: &PendingCall, zonk_args: bool) PendingC
         span = pc.span,
         name = pc.name,
         call = pc.call,
-        arg_tys = ats,
-        pos_exprs = pes,
+        arg_tys = move ats,
+        pos_exprs = move pes,
         recv_extra = pc.recv_extra,
         alt_recv = recv,
         module = pc.module,
@@ -10082,14 +10171,14 @@ fn replay_closure(self: &Checker, f: &ClosureFact) {
         fqn = "",
         module = f.module,
         is_pub = true,
-        type_params = empty_tps,
-        fields = fields,
+        type_params = move empty_tps,
+        fields = move fields,
         decl_span = f.decl_span,
         deprecation = null,
         is_simd = false,
         is_foreign = false,
     }
-    const nid = register_collected(self, NominalDef.NomStruct(sd), from_view(f.fqn.as_view()))
+    const nid = register_collected(self, NominalDef.NomStruct(move sd), from_view(f.fqn.as_view()))
     self.closures.set(nid, copy_sig(&f.sig, self.allocator))
 }
 
@@ -10098,12 +10187,12 @@ fn store_body_cache(self: &Checker, path: String, cache: ModuleBodyCache) {
     if found.is_none() {
         const idx = self.body_cache_keys.len
         self.body_cache_keys.push(from_view(path, self.allocator))
-        self.body_caches.set(self.body_cache_keys[idx].as_view(), cache)
+        self.body_caches.set(self.body_cache_keys[idx].as_view(), move cache)
         return
     }
     let slot = found.unwrap()
     slot.deinit()
-    slot.* = cache
+    slot.* = move cache
 }
 
 // Fill this demand's fresh body caches from the finished tables, once the final zonk has run.
@@ -10200,9 +10289,9 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
         seen.add(n)
         const found = self.results.default_args.get_ref(n)
         if found.is_some() {
-            let exprs: List(Expr) = list(found.unwrap().len, self.allocator)
+            let exprs: List(&Expr) = list(found.unwrap().len, self.allocator)
             exprs.push_all(found.unwrap().as_slice())
-            c.default_args.push(NodeExprsFact { node = n, exprs = exprs })
+            c.default_args.push(NodeExprsFact { node = n, exprs = move exprs })
         }
     }
     seen.clear()
@@ -10213,9 +10302,9 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
         seen.add(n)
         const found = self.results.arg_lists.get_ref(n)
         if found.is_some() {
-            let exprs: List(Expr) = list(found.unwrap().len, self.allocator)
+            let exprs: List(&Expr) = list(found.unwrap().len, self.allocator)
             exprs.push_all(found.unwrap().as_slice())
-            c.arg_lists.push(NodeExprsFact { node = n, exprs = exprs })
+            c.arg_lists.push(NodeExprsFact { node = n, exprs = move exprs })
         }
     }
     seen.clear()
@@ -10228,7 +10317,7 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
         if found.is_some() {
             let chain: List(ResolvedTarget) = list(found.unwrap().len, self.allocator)
             chain.push_all(found.unwrap().as_slice())
-            c.derefs.push(NodeDerefsFact { node = n, chain = chain })
+            c.derefs.push(NodeDerefsFact { node = n, chain = move chain })
         }
     }
     seen.deinit()
@@ -10242,7 +10331,7 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
 fn harvest_closure(self: &Checker, c: &ModuleBodyCache, nid: NominalId) {
     const f = closure_fact_of(self, nid)
     if f.is_some() {
-        c.closures.push(f.unwrap())
+        c.closures.push(unwrap(move f))
     }
 }
 
@@ -10259,7 +10348,7 @@ fn closure_fact_of(self: &Checker, nid: NominalId) ClosureFact? {
     }
     let def = found.unwrap()
     const sd = def.* match {
-        NomStruct(s) => s
+        NomStruct(s) => move s
         _ => return null
     }
     let fields: List(Field) = list(sd.fields.len, self.allocator)
@@ -10268,7 +10357,7 @@ fn closure_fact_of(self: &Checker, nid: NominalId) ClosureFact? {
         id = nid,
         fqn = from_view(nominal_fqn(def), self.allocator),
         module = sd.module,
-        fields = fields,
+        fields = move fields,
         decl_span = sd.decl_span,
         sig = copy_sig(sig.unwrap(), self.allocator),
     })
@@ -10309,13 +10398,13 @@ fn harvest_spec_caches(self: &Checker) {
                 Some(nid) => {
                     const f = closure_fact_of(self, nid)
                     if f.is_some() {
-                        facts.push(f.unwrap())
+                        facts.push(unwrap(move f))
                     }
                 }
                 None => {}
             }
         }
-        self.specs.finish_harvest(i as SpecId, facts, sig_concrete(self, &sp.concrete_params,
+        self.specs.finish_harvest(i as SpecId, move facts, sig_concrete(self, &sp.concrete_params,
                 sp.concrete_return))
     }
 }
@@ -10340,7 +10429,7 @@ fn snapshot_constants(self: &Checker, retiring: &Set(String)) Dict(StrId, Ty) {
         }
         out.set(entry.key, entry.value)
     }
-    return out
+    return move out
 }
 
 // Whether the retiring modules' constants changed across the signature phase: one added, removed,
@@ -10395,7 +10484,7 @@ fn snapshot_nominal_defs(self: &Checker, retiring: &Set(String)) Dict(String, Ow
         render_def_fingerprint(def, &sb)
         out.set(nominal_fqn(def), sb.to_string())
     }
-    return out
+    return move out
 }
 
 fn nominal_defs_differ(self: &Checker, old: &Dict(String, OwnedString)) bool {
@@ -10474,7 +10563,7 @@ fn collect_default_texts(self: &Checker, module: &Module,
     sources: &List(OwnedString)) List(OwnedString) {
     let out: List(OwnedString) = list(0, self.allocator)
     if sources.len == 0 {
-        return out
+        return move out
     }
     for &decl in module.decls {
         decl.* match {
@@ -10490,7 +10579,7 @@ fn collect_default_texts(self: &Checker, module: &Module,
             _ => {}
         }
     }
-    return out
+    return move out
 }
 
 fn default_text_of(sources: &List(OwnedString), sp: SourceSpan) String {
@@ -10540,13 +10629,13 @@ fn snapshot_aliases(self: &Checker, retiring: &Set(String)) Dict(StrId, OwnedStr
         }
         let sb = string_builder(32, self.allocator)
         const body = entry.value
-        if !render_alias_body(&body, &sb) {
+        if !render_alias_body(body, &sb) {
             sb.deinit()
             continue
         }
         out.set(entry.key, sb.to_string())
     }
-    return out
+    return move out
 }
 
 // Whether the retiring modules' aliases changed across re-collection: one added, one removed, one
@@ -10567,7 +10656,7 @@ fn aliases_differ(self: &Checker, old: &Dict(StrId, OwnedString), retiring: &Set
         let sb = string_builder(32, self.allocator)
         defer sb.deinit()
         const body = entry.value
-        if !render_alias_body(&body, &sb) {
+        if !render_alias_body(body, &sb) {
             return true
         }
         if sb.as_view() != prev.unwrap().as_view() {
@@ -10694,7 +10783,7 @@ fn visit_sequence(self: &Checker, n: usize, order: &List(usize)?) List(usize) {
         for i in 0..n {
             seq.push(i)
         }
-        return seq
+        return move seq
     }
     let seen = list(n, self.allocator)
     defer seen.deinit()
@@ -10713,7 +10802,7 @@ fn visit_sequence(self: &Checker, n: usize, order: &List(usize)?) List(usize) {
             seq.push(i)
         }
     }
-    return seq
+    return move seq
 }
 
 // ---------------------------------------------------------------------
@@ -10723,11 +10812,11 @@ fn visit_sequence(self: &Checker, n: usize, order: &List(usize)?) List(usize) {
 fn parse_src(src: String, fid: i32) Module {
     let lx = lexer(src)
     let tokens = lx.tokenize()
-    let p = parser(tokens, src)
+    let p = parser(move tokens, src)
     let cst = p.tree.node_at(p.parse_module())
     let m = project_module(cst, fid)
     p.deinit()
-    return m
+    return move m
 }
 
 // Error counts of two demands on one checker over modules `b` then `a`: a first check of {b_first,
@@ -10756,7 +10845,7 @@ fn redemand_errors(b_first: String, b_again: String, a_src: String) RedemandErro
     chk.begin_demand()
     chk.adopt_interner(take_interner(&res1))
     chk.adopt_specs(take_specs(&res1))
-    let old_b = mods[0]
+    let old_b = move mods[0]
     mods[0] = parse_src(b_again, 0i32)
     let recollect: List(bool) = list(2)
     recollect.push(true)
@@ -10931,9 +11020,9 @@ test "a changed default value invalidates the carried slots" {
     chk.begin_demand()
     chk.adopt_interner(take_interner(&res1))
     chk.adopt_specs(take_specs(&res1))
-    let old_b = mods[0]
+    let old_b = move mods[0]
     mods[0] = parse_src(b2, 0i32)
-    let old_src = srcs[0]
+    let old_src = move srcs[0]
     srcs[0] = from_view(b2)
     let recollect: List(bool) = list(2)
     recollect.push(true)
@@ -11023,7 +11112,7 @@ test "a carried specialization keeps its id across a clean re-demand" {
     chk.begin_demand()
     chk.adopt_interner(take_interner(&res1))
     chk.adopt_specs(take_specs(&res1))
-    let old_b = mods[0]
+    let old_b = move mods[0]
     mods[0] = parse_src(b_src, 0i32)
     let recollect: List(bool) = list(2)
     recollect.push(true)
@@ -11067,7 +11156,7 @@ test "a removed call site sweeps its specialization" {
     chk.begin_demand()
     chk.adopt_interner(take_interner(&res1))
     chk.adopt_specs(take_specs(&res1))
-    let old_a = mods[1]
+    let old_a = move mods[1]
     mods[1] = parse_src(a2, 1i32)
     let recollect: List(bool) = list(2)
     recollect.push(false)
@@ -11457,7 +11546,7 @@ test "struct fields and enum variants carry their declaration span" {
                 }
             }
             NomEnum(ed) => {
-                for v in ed.variants {
+                for &v in ed.variants {
                     if !is_none(v.decl_span) {
                         variants_spanned = variants_spanned + 1
                     }
@@ -11541,9 +11630,9 @@ fn note_resolved(res: &TypeCheckResult, node: NodeId, fid: u32, callee: String, 
         return
     }
     format_with_names(&res.interner, scheme.unwrap().signature.body, sb, Some(&res.nominals))
-    let chain = res.receiver_derefs.get(node)
+    let chain = res.receiver_derefs.get_ref(node)
     if chain.is_some() {
-        hops.* = chain.unwrap().len
+        hops.* = unwrap(chain).len
     }
 }
 

@@ -310,6 +310,26 @@ pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: V, allocat
     const _placed = self.place(hash_key(&fake), from_view(key, allocator), move value)
 }
 
+// Returns a deep copy on `allocator`: copyable keys and values are copied bitwise, the others
+// through their own `clone`.
+pub fn clone(self: &UnmanagedDict($K, $V), allocator: &Allocator) UnmanagedDict(K, V) {
+    let out: UnmanagedDict(K, V) = unmanaged_dict(self.len(), allocator)
+    for entry in self {
+        #if type_info(K).copyable {
+            const k: K = entry.key
+        } else {
+            const k: K = entry.key.clone(allocator)
+        }
+        #if type_info(V).copyable {
+            const v: V = entry.value
+        } else {
+            const v: V = entry.value.clone(allocator)
+        }
+        out.set(move k, move v, allocator)
+    }
+    return move out
+}
+
 // Deinits every live key and value, frees the table and resets to empty, so a second call is a
 // no-op.
 pub fn deinit(self: &UnmanagedDict($K, $V), allocator: &Allocator) {
@@ -736,6 +756,19 @@ pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) Unm
 
 #managed_dict(Dict)
 #managed_dict(DictRef)
+
+// Returns a deep copy: copyable keys and values are copied bitwise, the others through their own
+// `clone`.
+//
+// - `allocator`: kept for the copy's whole life.
+pub fn clone(self: &Dict($K, $V), allocator: &Allocator) Dict(K, V) {
+    return .{ __storage = self.__storage.clone(allocator), allocator = allocator }
+}
+
+// A deep copy on the receiver's allocator.
+pub fn clone(self: &Dict($K, $V)) Dict(K, V) {
+    return self.clone(self.allocator)
+}
 
 // Deinits every live key and value and frees the table. Idempotent: a second call is a no-op.
 pub fn deinit(self: &Dict($K, $V)) {
