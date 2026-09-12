@@ -48,11 +48,11 @@ pub fn main() i32 {
     println("codegen_demo: lowering + invoking C compiler …")
     let r = compile(&m, &opts)
     if r.is_err() {
-        const err = r.unwrap_err()
+        const err = unwrap_err(move r)
         report_error(err)
         return 1
     }
-    let result = r.unwrap()
+    let result = unwrap(move r)
     defer result.deinit()
 
     const banner = $"codegen_demo: built {result.executable_path.as_view()}"
@@ -158,7 +158,7 @@ fn build_demo_module() IrModule {
     m.add_foreign(ForeignDecl {
         name = "puts",
         return_ty = puts_ret,
-        param_types = puts_params,
+        param_types = move puts_params,
         variadic = false,
         cc = CallConv.C,
     })
@@ -170,7 +170,7 @@ fn build_demo_module() IrModule {
     m.add_foreign(ForeignDecl {
         name = "printf",
         return_ty = printf_ret,
-        param_types = printf_params,
+        param_types = move printf_params,
         variadic = true,
         cc = CallConv.C,
     })
@@ -182,7 +182,7 @@ fn build_demo_module() IrModule {
     m.add_foreign(ForeignDecl {
         name = "__flang_get_argc",
         return_ty = argc_ret,
-        param_types = argc_params,
+        param_types = move argc_params,
         variadic = false,
         cc = CallConv.C,
     })
@@ -192,7 +192,7 @@ fn build_demo_module() IrModule {
     m.add_foreign(ForeignDecl {
         name = "__flang_get_arg",
         return_ty = getarg_ret,
-        param_types = getarg_params,
+        param_types = move getarg_params,
         variadic = false,
         cc = CallConv.C,
     })
@@ -204,6 +204,7 @@ fn build_demo_module() IrModule {
         size = hello.len as u64,
         align = 1u64,
         init_bytes = Some(hello.as_raw_bytes()),
+        relocs = null,
     })
 
     // printf format string: "sum_to(%d) = %d\n\0"
@@ -213,6 +214,7 @@ fn build_demo_module() IrModule {
         size = sum_fmt.len as u64,
         align = 1u64,
         init_bytes = Some(sum_fmt.as_raw_bytes()),
+        relocs = null,
     })
 
     // product format string: "product = %d\n\0"
@@ -222,6 +224,7 @@ fn build_demo_module() IrModule {
         size = prod_fmt.len as u64,
         align = 1u64,
         init_bytes = Some(prod_fmt.as_raw_bytes()),
+        relocs = null,
     })
 
     // argv format strings - used to prove the runtime captures argv.
@@ -231,6 +234,7 @@ fn build_demo_module() IrModule {
         size = argc_fmt.len as u64,
         align = 1u64,
         init_bytes = Some(argc_fmt.as_raw_bytes()),
+        relocs = null,
     })
     const argv0_fmt: String = "argv[0]   = %s\n\0"
     m.add_global(Global {
@@ -238,11 +242,12 @@ fn build_demo_module() IrModule {
         size = argv0_fmt.len as u64,
         align = 1u64,
         init_bytes = Some(argv0_fmt.as_raw_bytes()),
+        relocs = null,
     })
 
     m.add_function(build_sum_to())
     m.add_function(build_main())
-    return m
+    return move m
 }
 
 // fn sum_to(n: i32) -> i32 { let i = 0; let acc = 0; while i < n { acc += i; i++ }; ret acc }
@@ -258,7 +263,7 @@ fn build_sum_to() Function {
     let entry_args: List(Operand) = list(2)
     entry_args.push(int(0))
     entry_args.push(int(0))
-    entry.br_args("loop_head", entry_args)
+    entry.br_args("loop_head", move entry_args)
 
     // loop_head(i, acc): if i >= n goto exit(acc) else step(i, acc)
     const i = loop_blk.param(0)
@@ -269,7 +274,7 @@ fn build_sum_to() Function {
     let else_args: List(Operand) = list(2)
     else_args.push(i)
     else_args.push(acc)
-    loop_blk.br_if_args(done, "loop_exit", then_args, "loop_step", else_args)
+    loop_blk.br_if_args(done, "loop_exit", move then_args, "loop_step", move else_args)
 
     // step(i, acc): i1 = i+1; a1 = acc+i; loop(i1, a1)
     const si = step.param(0)
@@ -279,7 +284,7 @@ fn build_sum_to() Function {
     let back: List(Operand) = list(2)
     back.push(i1)
     back.push(a1)
-    step.br_args("loop_head", back)
+    step.br_args("loop_head", move back)
 
     // exit(r): ret r
     const r = exit_blk.param(0)
@@ -312,38 +317,38 @@ fn build_main() Function {
     let sum_extras_a: List((IrType, Operand)) = list(2)
     sum_extras_a.push((IrType.I32, int(10)))
     sum_extras_a.push((IrType.I32, s10))
-    entry.call_variadic("printf", IrType.I32, sum_fixed_a, sum_extras_a)
+    entry.call_variadic("printf", IrType.I32, move sum_fixed_a, move sum_extras_a)
 
     let sum_fixed_b: List(Operand) = list(1)
     sum_fixed_b.push(global("sum_fmt"))
     let sum_extras_b: List((IrType, Operand)) = list(2)
     sum_extras_b.push((IrType.I32, int(100)))
     sum_extras_b.push((IrType.I32, s100))
-    entry.call_variadic("printf", IrType.I32, sum_fixed_b, sum_extras_b)
+    entry.call_variadic("printf", IrType.I32, move sum_fixed_b, move sum_extras_b)
 
     const prod = entry.imul(IrType.I32, s10, s100)
     let prod_fixed: List(Operand) = list(1)
     prod_fixed.push(global("prod_fmt"))
     let prod_extras: List((IrType, Operand)) = list(1)
     prod_extras.push((IrType.I32, prod))
-    entry.call_variadic("printf", IrType.I32, prod_fixed, prod_extras)
+    entry.call_variadic("printf", IrType.I32, move prod_fixed, move prod_extras)
 
     // Prove the runtime captured argv. We call the same helpers std.env calls under the hood - the
     // values come from the globals populated by the wrapper main the C backend emits.
     let argc_args: List(Operand) = list(0)
-    const argc = entry.call("__flang_get_argc", IrType.I32, argc_args)
+    const argc = entry.call("__flang_get_argc", IrType.I32, move argc_args)
     let argc_fixed: List(Operand) = list(1)
     argc_fixed.push(global("argc_fmt"))
     let argc_extras: List((IrType, Operand)) = list(1)
     argc_extras.push((IrType.I32, argc))
-    entry.call_variadic("printf", IrType.I32, argc_fixed, argc_extras)
+    entry.call_variadic("printf", IrType.I32, move argc_fixed, move argc_extras)
 
     const argv0 = entry.call_one("__flang_get_arg", IrType.Ptr, int(0))
     let argv0_fixed: List(Operand) = list(1)
     argv0_fixed.push(global("argv0_fmt"))
     let argv0_extras: List((IrType, Operand)) = list(1)
     argv0_extras.push((IrType.Ptr, argv0))
-    entry.call_variadic("printf", IrType.I32, argv0_fixed, argv0_extras)
+    entry.call_variadic("printf", IrType.I32, move argv0_fixed, move argv0_extras)
 
     entry.ret(int(0))
     return fb.finish()

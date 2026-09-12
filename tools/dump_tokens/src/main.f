@@ -50,7 +50,7 @@ pub fn main() i32 {
         println(msg.as_view())
         return 1
     }
-    let source = read_result.unwrap()
+    let source = unwrap(move read_result)
     defer source.deinit()
 
     let lx = lexer(source.as_view())

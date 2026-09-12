@@ -182,6 +182,9 @@ type PendingSpec = struct {
 // them into the next pass when one is deferred, so dropping the queue must not touch them.
 pub fn deinit(self: &PendingSpec) {}
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &PendingSpec, allocator: &Allocator) {}
+
 // One instantiation frame's reuse bookkeeping (RFC-022 5e), pushed alongside `spec_callers`. The
 // counters at frame start plus what nested work minted give the frame's OWN burns; `deps` collects
 // the specializations its drain resolves, in process order; `hints` are the previous incarnation's
@@ -208,6 +211,17 @@ type SpecFrame = struct {
     hints: List(SpecDep)
     diags0: usize
     calls0: usize
+}
+
+// A frame still on the stack at teardown; a popped frame hands its lists to the registry.
+pub fn deinit(self: &SpecFrame) {
+    self.deps.deinit()
+    self.hints.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &SpecFrame, allocator: &Allocator) {
+    self.deinit()
 }
 
 // A stream position: where the variable, synthetic-node and lambda counters stand. A carried
@@ -646,6 +660,15 @@ type LambdaFrame = struct {
     boundary: usize
     lam_span: SourceSpan
     captures: List(CaptureRec)
+}
+
+pub fn deinit(self: &LambdaFrame) {
+    self.captures.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &LambdaFrame, allocator: &Allocator) {
+    self.deinit()
 }
 
 // One overloaded-name-as-value site: the node, the fresh var its slot got, the name, and the module
@@ -2495,52 +2518,25 @@ const MAX_SPEC_DEPTH: usize = 64
 // Drain the pending picks of the body scope that just finished. `process_pending` never appends to
 // this list: picks recorded during a nested instantiation's body check land on that frame's own
 // (swapped-in) list and drain there.
-// Whether a pending can be instantiated now. A bare var blocks, and so does a var nested inside a
-// PARAMETER's constructor (`deinit(&List(?T))`, `Dict(?K, u32)`): the body has nothing to derive it
-// from, and instantiating would run its `#if type_info(T)` cascades against `?`, reporting inside
-// the template with nothing naming the call. Function types are exempt: a lambda's parameter vars
-// are pinned by the instantiation's body re-check (spec 7.3), so `any(it, fn(v) { ... })` is ready
-// with `fn(?a) ?b` in its parameter.
+// Whether a pending can be instantiated now. The test is SHALLOW, and deliberately so (reference
+// parity): only a type that IS a bare var blocks. A type argument nested inside a known constructor
+// - `to_list(it: $I) List($T)`, `max(it: $I) $T?` - does NOT block, because instantiating runs the
+// template body, and it is the body that derives `$T` from the iterator it drives. The settled
+// signature is re-zonked and re-keyed at the end of `instantiate`, and once more program-wide in
+// `zonk_specializations` for the nested instantiations that finished before their caller's body
+// pinned the var. The same holds for a parameter: `Option(?lit).map(fn(i32) i32)` pins the literal
+// through the lambda inside the body, so a var nested in a parameter must not block either - see
+// docs/known-issues.md, "A Pending Pick Whose Type Argument Is Still Open Counts as Ready".
 //
-// The return stays SHALLOW (reference parity): `to_list(it: $I) List($T)`, `max(it: $I) $T?` derive
-// `$T` in the body from the iterator they drive. The settled signature is re-zonked and re-keyed at
-// the end of `instantiate`, and once more program-wide in `zonk_specializations` for the nested
-// instantiations that finished before their caller's body pinned the var.
-//
-// What stays deferred through the whole drain is the genuinely un-inferable call site (E2001).
+// A bare var, by contrast, gives the body nothing to work from - that is the genuinely un-inferable
+// call site (E2001).
 fn pending_ready(self: &Checker, p: &PendingSpec) bool {
     for i in 0..p.inst_params.len {
-        if has_open_arg(self, self.engine.zonk(p.inst_params[i])) {
+        if self.engine.is_var(self.engine.zonk(p.inst_params[i])) {
             return false
         }
     }
     return !self.engine.is_var(self.engine.zonk(p.inst_ret))
-}
-
-// Whether a zonked type still cites a variable anywhere outside a function type.
-fn has_open_arg(self: &Checker, t: Ty) bool {
-    const it = &self.engine.interner
-    if it.is_ground(t) {
-        return false
-    }
-    return it.node(t) match {
-        NVar(_) => true
-        NRef(inner) => has_open_arg(self, inner)
-        NArray(a) => has_open_arg(self, a.elem)
-        NTuple(span) => span_has_open_arg(self, span)
-        NRecord(r) => span_has_open_arg(self, r.tys)
-        NNominal(n) => span_has_open_arg(self, n.args)
-        _ => false
-    }
-}
-
-fn span_has_open_arg(self: &Checker, span: ChildSpan) bool {
-    for i in 0..span.len {
-        if has_open_arg(self, self.engine.interner.child_at(span, i)) {
-            return true
-        }
-    }
-    return false
 }
 
 // Drain the pending picks of the body scope that just finished, to a FIXPOINT. One pass is not
@@ -6969,6 +6965,19 @@ type OverloadPick = struct {
     hops: usize
 }
 
+pub fn deinit(self: &OverloadPick) {
+    self.params.deinit()
+    self.inst match {
+        Some(i) => i.deinit()
+        None => {}
+    }
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &OverloadPick, allocator: &Allocator) {
+    self.deinit()
+}
+
 // One shape a receiver may take in overload resolution besides as written: adapted between value
 // and reference, or the wrapped value reached through `op_deref` hops. `penalty` orders the shapes
 // at equal specificity (adapted, then each hop by reference before by value); `hops` is how many
@@ -7005,6 +7014,11 @@ type PickInst = struct {
     tp_binds: Dict(VarId, Ty)
     params: List(Ty)
     ret: Ty
+}
+
+pub fn deinit(self: &PickInst) {
+    self.tp_binds.deinit()
+    self.params.deinit()
 }
 
 // Pick the best candidate for the argument types and commit its unification. Each candidate is

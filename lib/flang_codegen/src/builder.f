@@ -43,13 +43,13 @@ pub fn function(name: String, return_ty: IrType?, allocator: &Allocator? = null)
     return FunctionBuilder {
         func = Function {
             name = name,
-            params = params,
+            params = move params,
             return_ty = return_ty,
-            blocks = blocks,
+            blocks = move blocks,
             variadic = false,
             cc = CallConv.C,
             next_value_id = 0u32,
-            label_storage = labels,
+            label_storage = move labels,
         },
         allocator = allocator,
     }
@@ -81,32 +81,30 @@ pub fn param(self: &FunctionBuilder, ty: IrType) Operand {
 
 // Create the entry block. The function's parameters (declared via `.param()`) are already in scope.
 pub fn entry(self: &FunctionBuilder) BlockBuilder {
-    let none: List(IrType) = list(0, self.allocator)
-    return self.block_internal("entry", none)
+    return self.block_internal("entry", list(0, self.allocator))
 }
 
 // Add a non-entry block with `label`. `param_types` is the list of types for the block's parameters
 // (commonly empty; non-empty for loop heads receiving values via `br`).
 pub fn block(self: &FunctionBuilder, label: String, param_types: List(IrType)) BlockBuilder {
-    return self.block_internal(label, param_types)
+    return self.block_internal(label, move param_types)
 }
 
 pub fn block(self: &FunctionBuilder, label: String) BlockBuilder {
-    let none: List(IrType) = list(0, self.allocator)
-    return self.block_internal(label, none)
+    return self.block_internal(label, list(0, self.allocator))
 }
 
 pub fn block(self: &FunctionBuilder, label: String, p0: IrType) BlockBuilder {
     let types: List(IrType) = list(1, self.allocator)
     types.push(p0)
-    return self.block_internal(label, types)
+    return self.block_internal(label, move types)
 }
 
 pub fn block(self: &FunctionBuilder, label: String, p0: IrType, p1: IrType) BlockBuilder {
     let types: List(IrType) = list(2, self.allocator)
     types.push(p0)
     types.push(p1)
-    return self.block_internal(label, types)
+    return self.block_internal(label, move types)
 }
 
 fn block_internal(self: &FunctionBuilder, label: String, param_types: List(IrType)) BlockBuilder {
@@ -119,20 +117,20 @@ fn block_internal(self: &FunctionBuilder, label: String, param_types: List(IrTyp
     let instrs: List(Instr) = list(0, self.allocator)
     let new_block = Block {
         label = label,
-        params = params,
-        instrs = instrs,
+        params = move params,
+        instrs = move instrs,
         terminator = Terminator.Unreachable,
     }
-    const idx = self.func.add_block(new_block)
+    const idx = self.func.add_block(move new_block)
     return BlockBuilder { fb = self, block_idx = idx }
 }
 
 // Move the built function out. The builder is left holding empty lists, so a `deinit` after
 // `finish` frees nothing - callers may pair every builder with a `deinit` unconditionally.
 pub fn finish(self: &FunctionBuilder) Function {
-    let f = self.func
+    let f = move self.func
     self.func.release_buffers(self.allocator)
-    return f
+    return move f
 }
 
 // Free a builder abandoned before `finish` (a refused body). Safe after `finish` too: the move left
@@ -454,8 +452,8 @@ pub fn call(self: &BlockBuilder, callee: String, return_ty: IrType, args: List(O
         result = result,
         result_ty = result_ty,
         callee = callee,
-        args = args,
-        variadic_arg_types = var_types,
+        args = move args,
+        variadic_arg_types = move var_types,
     }))
     return Operand.Local(id)
 }
@@ -470,8 +468,8 @@ pub fn call_void(self: &BlockBuilder, callee: String, args: List(Operand)) {
         result = result,
         result_ty = result_ty,
         callee = callee,
-        args = args,
-        variadic_arg_types = var_types,
+        args = move args,
+        variadic_arg_types = move var_types,
     }))
 }
 
@@ -488,9 +486,9 @@ pub fn call_indirect(self: &BlockBuilder, fn_ptr: Operand, param_types: List(IrT
         result = result,
         result_ty = result_ty,
         fn_ptr = fn_ptr,
-        param_types = param_types,
-        args = args,
-        variadic_arg_types = var_types,
+        param_types = move param_types,
+        args = move args,
+        variadic_arg_types = move var_types,
         cc = CallConv.C,
     }))
     return Operand.Local(id)
@@ -506,9 +504,9 @@ pub fn call_indirect_void(self: &BlockBuilder, fn_ptr: Operand, param_types: Lis
         result = result,
         result_ty = result_ty,
         fn_ptr = fn_ptr,
-        param_types = param_types,
-        args = args,
-        variadic_arg_types = var_types,
+        param_types = move param_types,
+        args = move args,
+        variadic_arg_types = move var_types,
         cc = CallConv.C,
     }))
 }
@@ -517,7 +515,7 @@ pub fn call_indirect_void(self: &BlockBuilder, fn_ptr: Operand, param_types: Lis
 pub fn call_one(self: &BlockBuilder, callee: String, return_ty: IrType, a0: Operand) Operand {
     let args: List(Operand) = list(1, self.fb.allocator)
     args.push(a0)
-    return self.call(callee, return_ty, args)
+    return self.call(callee, return_ty, move args)
 }
 
 pub fn call_two(self: &BlockBuilder, callee: String, return_ty: IrType, a0: Operand,
@@ -525,7 +523,7 @@ pub fn call_two(self: &BlockBuilder, callee: String, return_ty: IrType, a0: Oper
     let args: List(Operand) = list(2, self.fb.allocator)
     args.push(a0)
     args.push(a1)
-    return self.call(callee, return_ty, args)
+    return self.call(callee, return_ty, move args)
 }
 
 // Variadic foreign call. `fixed_args` are the named parameters of the foreign decl; `extras` are
@@ -546,8 +544,8 @@ pub fn call_variadic(self: &BlockBuilder, callee: String, return_ty: IrType,
         result = result,
         result_ty = result_ty,
         callee = callee,
-        args = fixed_args,
-        variadic_arg_types = var_types,
+        args = move fixed_args,
+        variadic_arg_types = move var_types,
     }))
     return Operand.Local(id)
 }
@@ -573,7 +571,7 @@ pub fn ret_void(self: &BlockBuilder) {
 // Unconditional branch to `label` with no block args.
 pub fn br(self: &BlockBuilder, label: String) {
     let args: List(Operand) = list(0, self.fb.allocator)
-    self.br_args(label, args)
+    self.br_args(label, move args)
 }
 
 // Unconditional branch passing one block argument - the dominant shape (an induction variable, a
@@ -582,20 +580,20 @@ pub fn br(self: &BlockBuilder, label: String) {
 pub fn br_arg(self: &BlockBuilder, label: String, arg: Operand) {
     let args: List(Operand) = list(1, self.fb.allocator)
     args.push(arg)
-    self.br_args(label, args)
+    self.br_args(label, move args)
 }
 
 // Unconditional branch with block arguments (passes ownership of args).
 pub fn br_args(self: &BlockBuilder, label: String, args: List(Operand)) {
     let block = &self.fb.func.blocks[self.block_idx]
-    block.set_terminator(Terminator.Br(BlockTarget { label = label, args = args }))
+    block.set_terminator(Terminator.Br(BlockTarget { label = label, args = move args }))
 }
 
 // Conditional branch to `then_label` / `else_label` with no block args.
 pub fn br_if(self: &BlockBuilder, cond: Operand, then_label: String, else_label: String) {
     let t_args: List(Operand) = list(0, self.fb.allocator)
     let e_args: List(Operand) = list(0, self.fb.allocator)
-    self.br_if_args(cond, then_label, t_args, else_label, e_args)
+    self.br_if_args(cond, then_label, move t_args, else_label, move e_args)
 }
 
 // Conditional branch with block arguments on each edge.
@@ -604,8 +602,8 @@ pub fn br_if_args(self: &BlockBuilder, cond: Operand, then_label: String, then_a
     let block = &self.fb.func.blocks[self.block_idx]
     block.set_terminator(Terminator.BrIf(BrIfTerm {
         cond = cond,
-        then_target = BlockTarget { label = then_label, args = then_args },
-        else_target = BlockTarget { label = else_label, args = else_args },
+        then_target = BlockTarget { label = then_label, args = move then_args },
+        else_target = BlockTarget { label = else_label, args = move else_args },
     }))
 }
 

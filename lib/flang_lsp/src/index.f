@@ -28,12 +28,22 @@ pub fn deinit(self: &IndexSymbol) {
     self.container.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &IndexSymbol, allocator: &Allocator) {
+    self.deinit()
+}
+
 pub type ModuleIndex = struct {
     symbols: List(IndexSymbol)
 }
 
 pub fn deinit(self: &ModuleIndex) {
     self.symbols.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &ModuleIndex, allocator: &Allocator) {
+    self.deinit()
 }
 
 // Build the index for one parsed module: the documentSymbol outline, flattened, members keeping
@@ -45,7 +55,7 @@ pub fn module_index(m: &Module, allocator: &Allocator? = null) ModuleIndex {
         flatten(&symbols, s, "", allocator)
     }
     tree.deinit()
-    return .{ symbols = symbols }
+    return .{ symbols = move symbols }
 }
 
 fn flatten(out: &List(IndexSymbol), s: &DocSymbol, container: String, alloc: &Allocator?) {

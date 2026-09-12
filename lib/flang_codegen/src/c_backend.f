@@ -245,19 +245,15 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
 
     // 2. Pick a place for the .c file. emit_c_path wins if set; otherwise
     //    we drop it next to the output executable with a ".c" extension.
-    let c_path_owned: OwnedString
-    let keep_c = options.keep_temps
-    options.emit_c_path match {
-        Some(p) => {
-            c_path_owned = from_view(p, alloc)
-            keep_c = true
-        }
+    let keep_c = options.keep_temps or options.emit_c_path.is_some()
+    let c_path_owned = options.emit_c_path match {
+        Some(p) => from_view(p, alloc)
         None => {
             let p = path(options.output_path, alloc)
             defer p.deinit()
             let q = p.with_extension("c")
             defer q.deinit()
-            c_path_owned = from_view(q.as_view(), alloc)
+            from_view(q.as_view(), alloc)
         }
     }
 
@@ -278,7 +274,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     if options.emit_only {
         return Ok(BuildResult {
             executable_path = from_view(options.output_path, alloc),
-            c_source_path = Some(c_path_owned),
+            c_source_path = Some(move c_path_owned),
             lower_ns = 0,
             translate_ns = translate_ns,
             cc_ns = 0,
@@ -293,9 +289,9 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
             remove_file_quiet(c_path_owned.as_view())
         }
         c_path_owned.deinit()
-        return Err(info_r.unwrap_err())
+        return Err(unwrap_err(move info_r))
     }
-    let info = info_r.unwrap()
+    let info = unwrap(move info_r)
     defer info.deinit()
 
     // MSVC writes one .obj per translation unit into the per-target objs directory (see
@@ -341,16 +337,16 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
 
     // 6. Build the result. Retain the c_source_path if requested.
     let exe_path = linked_artifact_path(options.output_path, alloc)
-    let c_kept: OwnedString? = null
-    if keep_c {
-        c_kept = Some(c_path_owned)
+    let c_kept: OwnedString? = if keep_c {
+        Some(move c_path_owned)
     } else {
         remove_file_quiet(c_path_owned.as_view())
         c_path_owned.deinit()
+        null
     }
     return Ok(BuildResult {
-        executable_path = exe_path,
-        c_source_path = c_kept,
+        executable_path = move exe_path,
+        c_source_path = move c_kept,
         lower_ns = 0,
         translate_ns = translate_ns,
         cc_ns = cc_ns,
@@ -837,7 +833,7 @@ fn targeted_labels(f: &Function) Dict(String, bool) {
             Unreachable => {}
         }
     }
-    return hit
+    return move hit
 }
 
 fn emit_function(f: &Function, sigs: &SigIndex, sb: &StringBuilder, opts: &BuildOptions? = null) {
@@ -1046,7 +1042,7 @@ fn build_sig_index(m: &IrModule) SigIndex {
     for i in 0..m.foreigns.len {
         by_name.set(m.foreigns[i].name, m.functions.len + i)
     }
-    return SigIndex { funcs = &m.functions, foreigns = &m.foreigns, by_name = by_name }
+    return SigIndex { funcs = &m.functions, foreigns = &m.foreigns, by_name = move by_name }
 }
 
 // Declared type of `callee`'s parameter `i`; null for an unknown callee or a position past the
@@ -1684,8 +1680,8 @@ fn discover_or_override(options: &BuildOptions, allocator: &Allocator?) Result(C
                 kind = kind,
                 name = from_view(p, allocator),
                 path = from_view(p, allocator),
-                extra_env_keys = env_keys,
-                extra_env_vals = env_vals,
+                extra_env_keys = move env_keys,
+                extra_env_vals = move env_vals,
                 allocator = allocator,
             })
         }
@@ -1773,8 +1769,8 @@ fn make_simple_info(kind: CompilerKind, name: String, allocator: &Allocator?) Co
         kind = kind,
         name = from_view(name, allocator),
         path = from_view(name, allocator),
-        extra_env_keys = env_keys,
-        extra_env_vals = env_vals,
+        extra_env_keys = move env_keys,
+        extra_env_vals = move env_vals,
         allocator = allocator,
     }
 }
@@ -1839,7 +1835,7 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
     if install_opt.is_none() {
         return null
     }
-    let install = install_opt.unwrap()
+    let install = unwrap(move install_opt)
     defer install.deinit()
 
     let tools = string_builder(install.len + 32, allocator)
@@ -1856,7 +1852,7 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
     if toolset_opt.is_none() {
         return null
     }
-    let toolset = toolset_opt.unwrap()
+    let toolset = unwrap(move toolset_opt)
     defer toolset.deinit()
 
     let toolset_dir = string_builder(tools.len + toolset.len + 2, allocator)
@@ -1893,9 +1889,10 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
     sdk_include_root.append("\\Include")
     nul_term(&sdk_include_root)
 
-    let sdk_ver_opt: OwnedString? = null
-    if dir_exists(sdk_include_root.as_view()) {
-        sdk_ver_opt = newest_subdir(sdk_include_root.as_view(), allocator)
+    let sdk_ver_opt: OwnedString? = if dir_exists(sdk_include_root.as_view()) {
+        newest_subdir(sdk_include_root.as_view(), allocator)
+    } else {
+        null
     }
 
     let include_paths = string_builder(256, allocator)
@@ -1963,10 +1960,7 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
     env_vals.push(from_view(path_with_bin.as_view(), allocator))
 
     sdk_ver_opt match {
-        Some(v) => {
-            let vv = v
-            vv.deinit()
-        }
+        Some(v) => v.deinit()
         None => {}
     }
 
@@ -1974,8 +1968,8 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
         kind = CompilerKind.Msvc,
         name = from_view("cl.exe", allocator),
         path = from_view(cl.as_view(), allocator),
-        extra_env_keys = env_keys,
-        extra_env_vals = env_vals,
+        extra_env_keys = move env_keys,
+        extra_env_vals = move env_vals,
         allocator = allocator,
     })
 }
@@ -2020,7 +2014,7 @@ fn run_vswhere(vswhere_path: String, allocator: &Allocator?) OwnedString? {
     }
     let result = from_view(trimmed, allocator)
     raw.deinit()
-    return Some(result)
+    return Some(move result)
 }
 
 // Write a trailing 0 byte without bumping the StringBuilder's logical length. Used to hand a
@@ -2067,20 +2061,21 @@ fn newest_subdir(parent: String, allocator: &Allocator?) OwnedString? {
         if !is_dir_entry {
             continue
         }
-        best match {
-            Some(b) => {
-                if e.name > b.as_view() {
-                    let bb = b
-                    bb.deinit()
-                    best = Some(from_view(e.name, allocator))
-                }
-            }
-            None => {
-                best = Some(from_view(e.name, allocator))
-            }
+        const better = best match {
+            Some(b) => e.name > b.as_view()
+            None => true
         }
+        if !better {
+            continue
+        }
+        const beaten = move best
+        beaten match {
+            Some(b) => b.deinit()
+            None => {}
+        }
+        best = Some(from_view(e.name, allocator))
     }
-    return best
+    return move best
 }
 
 // =============================================================================
@@ -2227,7 +2222,7 @@ fn build_compiler_argv(info: &CompilerInfo, c_path: String,
         for i in 0..options.ldflags.len {
             push_ldflag_words(&argv, options.ldflags[i], alloc)
         }
-        return argv
+        return move argv
     }
 
     // Unix-style (clang / gcc / xcrun clang).
@@ -2273,7 +2268,7 @@ fn build_compiler_argv(info: &CompilerInfo, c_path: String,
     for i in 0..options.ldflags.len {
         push_ldflag_words(&argv, options.ldflags[i], alloc)
     }
-    return argv
+    return move argv
 }
 
 // One manifest `ldflags` entry, split into separate argv words. A flag that takes a value is
@@ -2300,7 +2295,7 @@ test "emits each foreign symbol at most once" {
     m.add_foreign(ForeignDecl {
         name = "isatty",
         return_ty = Some(IrType.I32),
-        param_types = p1,
+        param_types = move p1,
         variadic = false,
         cc = CallConv.C,
     })
@@ -2310,7 +2305,7 @@ test "emits each foreign symbol at most once" {
     m.add_foreign(ForeignDecl {
         name = "isatty",
         return_ty = Some(IrType.I32),
-        param_types = p2,
+        param_types = move p2,
         variadic = false,
         cc = CallConv.C,
     })

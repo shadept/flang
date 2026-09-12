@@ -192,7 +192,7 @@ fn split_lines(source: String, eol: String) List(String) {
         i = i + 1
     }
     lines.push(source[start..source.len])
-    return lines
+    return move lines
 }
 
 // =============================================================================

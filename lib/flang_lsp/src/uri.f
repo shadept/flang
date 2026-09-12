@@ -130,19 +130,19 @@ fn hex_value(c: u8) u8? {
 test "windows uri decodes to a lowercase-drive forward-slash path" {
     let p = uri_to_path("file:///c%3A/Users/x%20y/a.f")
     assert_true(p.is_some(), "file scheme accepted")
-    let owned = p.unwrap()
+    let owned = unwrap(move p)
     defer owned.deinit()
     assert_eq(owned.as_view(), "c:/Users/x y/a.f", "decoded, unslashed, lowercased drive")
 
     let up = uri_to_path("file:///C:/a.f")
-    let owned2 = up.unwrap()
+    let owned2 = unwrap(move up)
     defer owned2.deinit()
     assert_eq(owned2.as_view(), "c:/a.f", "uppercase drive normalises down")
 }
 
 test "posix uri keeps its leading slash" {
     let p = uri_to_path("file:///home/u/a.f")
-    let owned = p.unwrap()
+    let owned = unwrap(move p)
     defer owned.deinit()
     assert_eq(owned.as_view(), "/home/u/a.f", "rooted path preserved")
 }
@@ -158,7 +158,7 @@ test "path round-trips through a uri" {
     assert_eq(u.as_view(), "file:///c:/Users/x%20y/a.f", "space encoded, drive kept")
 
     let back = uri_to_path(u.as_view())
-    let owned = back.unwrap()
+    let owned = unwrap(move back)
     defer owned.deinit()
     assert_eq(owned.as_view(), "c:/Users/x y/a.f", "and back")
 

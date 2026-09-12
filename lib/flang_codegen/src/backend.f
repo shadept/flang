@@ -101,17 +101,15 @@ pub type BuildOptions = struct {
 // - `allocator`: used for everything the backend allocates on the call's behalf. Null is the
 //   global allocator.
 pub fn build_options(output_path: String, allocator: &Allocator? = null) BuildOptions {
-    // A zero-initialised unmanaged list is the empty list; nothing allocates until the first add.
-    let none: UnmanagedList(String)
     return BuildOptions {
         output_path = output_path,
         mode = BuildMode.Debug,
-        extra_c_files = none,
-        extra_obj_files = none,
-        include_paths = none,
-        libs = none,
-        cflags = none,
-        ldflags = none,
+        extra_c_files = no_strings(),
+        extra_obj_files = no_strings(),
+        include_paths = no_strings(),
+        libs = no_strings(),
+        cflags = no_strings(),
+        ldflags = no_strings(),
         emit_c_path = null,
         keep_temps = false,
         emit_only = false,
@@ -122,6 +120,12 @@ pub fn build_options(output_path: String, allocator: &Allocator? = null) BuildOp
         profile_out = null,
         allocator = allocator,
     }
+}
+
+// A zero-initialised unmanaged list is the empty list; nothing allocates until the first add.
+fn no_strings() UnmanagedList(String) {
+    let none: UnmanagedList(String)
+    return move none
 }
 
 // Returns the allocator the option lists grow and free through: the caller's, else the global one.
@@ -244,10 +248,7 @@ pub fn set_lower_ns(self: &BuildResult, ns: u64) {
 pub fn deinit(self: &BuildResult) {
     self.executable_path.deinit()
     self.c_source_path match {
-        Some(p) => {
-            let pp = p
-            pp.deinit()
-        }
+        Some(p) => p.deinit()
         None => {}
     }
 }

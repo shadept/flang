@@ -2760,9 +2760,9 @@ break in two ways. Three changes closed them:
   that IS a bare var blocks instantiation. `List($T)` does not, so
   `to_list` instantiates and its body derives `$T` from the iterator it
   drives. The previous deep test refused and reported E2001
-  (`stdlib/dict_iter_chain.f`). Since 2026-09-12 the *parameter* side is
-  deep again, function types excepted; the return stays shallow. See "A
-  Pending Pick Whose Type Argument Is Still Open Counts as Ready".
+  (`stdlib/dict_iter_chain.f`). A deep parameter test was tried again on
+  2026-09-12 and reverted the same day; see "A Pending Pick Whose Type
+  Argument Is Still Open Counts as Ready" for why it cannot work.
 - **`zonk_specializations`**, a final program-wide re-zonk of every
   stored specialization signature. A nested instantiation can finish
   before its CALLER's body pins a type argument it inherited
@@ -3721,35 +3721,45 @@ stored, and `#if type_info(T).copyable` in the stdlib is to be read as "has no d
 
 ### A Pending Pick Whose Type Argument Is Still Open Counts as Ready
 
-**Status:** Fixed in source (2026-09-12), unverified until the compiler is rebuilt
-**Affected:** `lib/flang_typer/src/checker.f` (`pending_ready`, `drain_pending_specs`)
+**Status:** Open (a deep readiness test was tried and reverted 2026-09-12)
+**Affected:** `lib/flang_typer/src/checker.f` (`pending_ready`, `drain_pending_specs`, `instantiate`)
 
-`pending_ready` tests the pick's parameter and return types for being variables. A parameter that
-is a *reference* or a *nominal* wrapping an open variable passes: `deinit(&List(?T))` is ready as
-soon as it is picked, so the template body is instantiated with `T` open and every `#if
+`pending_ready` tests the pick's parameter and return types for being bare variables. A parameter
+that is a *reference* or a *nominal* wrapping an open variable passes: `deinit(&List(?T))` is
+ready as soon as it is picked, so the template body is instantiated with `T` open and every `#if
 type_info(T).copyable` cascade inside it resolves against `?` - reported as E2011 "no matching
 overload for `deinit` on `&?N`" at the stdlib line, with nothing naming the list that caused it.
-Before the blanket `deinit(&$T)` was retired the cascade accepted `?` and the instantiation
-silently did nothing, which is how such lists went unnoticed.
+`let xs = list(0); defer xs.deinit()` with no push is the whole reproduction.
 
-The typer sweep leaves five of these in `lib/flang_typer` (`flang build --check`): lists whose
-element type is never pinned by any push and whose `deinit` pick was parked until the final drain.
-Bisecting with a probe list shows the ids are minted after every body, so they cannot be
-attributed by position. `lib/flang_analysis` adds three more (eight under its `check`, five of
-them the typer's); annotating every unannotated container construction in its sources, stripping
-its test blocks, and pinning the inner lists pushed into `List(List(T))` each leave the count at
-eight, so the open argument is minted inside a dependency's or the stdlib's generic body, not at
-an analysis `let`.
+**Why readiness cannot be made deep.** A variable nested in a parameter is routinely pinned BY
+the body being instantiated, so blocking on it is wrong: `Ok(21).map(fn(v: i32) i32 { ... })` -
+`Result(?lit, ?E)` in receiver position - pins the literal through the lambda call inside `map`
+(`stdlib/std/result.f`'s own test block), and `size_of(Type(T))` inside `list(0)` waits on the
+caller's body to pin `T` (`stdlib/dict_iter_chain.f`). Exempting function types and the enclosing
+instantiations' open type arguments (`inst_binds`) covered the second, not the first, and the
+premise is false in general: whether a var gets pinned is only known after the body runs. The
+shallow rule stays, reference parity.
 
-**Fix:** `pending_ready` now walks each parameter type (`has_open_arg`): a variable anywhere under
-a reference, array, tuple, record or nominal blocks the pick, so it stays deferred through the
-drain's fixpoint and `report_uninferable_spec` reports E2001 at the call span, naming the site.
-Function types are skipped: a lambda's parameter vars are pinned by the instantiation's body
-re-check (spec 7.3). The return is still tested shallowly, for the return-only type parameters
-above. Pinned by `tests/harness/errors/error_e2001_unpinned_list_element.f`. The rebuild that
-verifies it, and re-attributes the eight residual E2011 to their `let`s, is blocked until the whole
-tree checks: the typer calls stdlib API the dist toolchain lacks (`clone(&Allocator)`,
-`Dict.clone`, `remove` with an allocator).
+**Where the fix belongs.** In reporting, not readiness: when a nested instantiation fails because
+one of its type arguments is still open at the end of its frame, report E2001 at the outermost
+call site, with notes walking inward - the `#error` rule of spec §7.7 - instead of the E2011 at
+the stdlib line. Separately, E2011 raised inside a nested instantiation prints the receiver as
+`&?N` rather than the zonked element type.
+
+**Not what it looked like.** The eight residual `&?N` E2011 the ownership sweep left in
+`lib/flang_analysis` (five of them the typer's) were first attributed to this. They were not: each
+came from a container whose element type lacked the element-form `deinit(&T, &Allocator)`, so the
+gated `for &elem in self { elem.deinit(allocator) }` in `List.deinit` had no overload to pick, and
+the nested-instantiation error rendered the element type as `&?N`. Adding the element form to
+`PendingSpec`, `SpecFrame`, `LambdaFrame`, `OverloadPick`, `VariantDef`, `DepRoot`,
+`DependencySpec`, `FmtEntry`, `Function`, `Block`, `Instr`, `ForeignDecl`, `AggDef`, `TestCase`,
+`Document`, `DocSymbol`, `IndexSymbol`, `ModuleIndex` and `OpenProject` took every library to zero.
+
+**Related hazard, element deinit.** `move x.*` out of a list element leaves the bits in place. A
+later `deinit()` of that list element-deinits them too, freeing what the move handed over:
+`retain_defined_tests` did exactly that and the test runner's name table was emitted from freed
+strings. Drain with `to_owned_slice` and free the slice, or pop the stale headers, never
+`deinit()` a list you moved elements out of.
 
 ---
 

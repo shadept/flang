@@ -37,10 +37,15 @@ pub fn deinit(self: &DocSymbol) {
     self.name.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &DocSymbol, allocator: &Allocator) {
+    self.deinit()
+}
+
 pub fn document_symbols(m: &Module, allocator: &Allocator? = null) List(DocSymbol) {
     let out: List(DocSymbol) = list(0, allocator)
-    for d in m.decls {
-        d match {
+    for &d in m.decls {
+        d.* match {
             Function(f) => out.push(leaf(f.name, SymbolKind.Function, f.span, allocator))
             Const(c) => out.push(leaf(c.name, SymbolKind.Constant, c.span, allocator))
             Type(t) => out.push(type_symbol(&t, allocator))
@@ -59,7 +64,7 @@ pub fn document_symbols(m: &Module, allocator: &Allocator? = null) List(DocSymbo
             _ => {}
         }
     }
-    return out
+    return move out
 }
 
 fn leaf(name: String, kind: SymbolKind, span: SourceSpan, alloc: &Allocator?) DocSymbol {
@@ -80,8 +85,8 @@ fn type_symbol(t: &TypeDecl, alloc: &Allocator?) DocSymbol {
             }
             let sym = leaf(t.name, SymbolKind.Struct, t.span, alloc)
             sym.children.deinit()
-            sym.children = children
-            return sym
+            sym.children = move children
+            return move sym
         }
         AnonEnum(en) => {
             let children: List(DocSymbol) = list(en.variants.len, alloc)
@@ -90,8 +95,8 @@ fn type_symbol(t: &TypeDecl, alloc: &Allocator?) DocSymbol {
             }
             let sym = leaf(t.name, SymbolKind.Enum, t.span, alloc)
             sym.children.deinit()
-            sym.children = children
-            return sym
+            sym.children = move children
+            return move sym
         }
         else => {}
     }
@@ -103,8 +108,8 @@ fn type_symbol(t: &TypeDecl, alloc: &Allocator?) DocSymbol {
 test "a single-line struct decl keeps its fields in the outline" {
     let doc = parse_doc("pub type P = struct { x: i32\n y: i32 }\n")
     let found = false
-    for d in doc.module.decls {
-        d match {
+    for &d in doc.module.decls {
+        d.* match {
             Type(t) => {
                 found = true
                 t.body match {

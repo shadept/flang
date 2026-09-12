@@ -3,8 +3,8 @@
 // colocated-test running is wired up.
 
 import std.allocator
-import std.io.print
 import std.collections.list
+import std.io.print
 import std.option
 import std.string
 import std.string_builder
@@ -127,13 +127,13 @@ fn build_sum_range() Function {
 
     let entry_args: List(Operand) = list(1)
     entry_args.push(int(0))
-    entry.br_args("loop", entry_args)
+    entry.br_args("loop", move entry_args)
 
     const acc = loop_blk.param(0)
     let call_args: List(Operand) = list(2)
     call_args.push(it_ptr)
     call_args.push(opt_ptr)
-    loop_blk.call_void("next", call_args)
+    loop_blk.call_void("next", move call_args)
     const tag_ptr = loop_blk.gep(opt_ptr, int(0))
     const tag = loop_blk.load(IrType.I8, tag_ptr)
     const is_none = loop_blk.icmp_eq(IrType.I8, tag, int(1))
@@ -144,7 +144,7 @@ fn build_sum_range() Function {
     const acc1 = pull.iadd(IrType.I32, acc, val)
     let back_args: List(Operand) = list(1)
     back_args.push(acc1)
-    pull.br_args("loop", back_args)
+    pull.br_args("loop", move back_args)
 
     done.ret(acc)
 

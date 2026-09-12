@@ -231,7 +231,7 @@ fn fields_layout(it: &TypeInterner, tys: &List(Ty), repr: Repr, reg: &NominalReg
 
     fls.deinit()
     order.deinit()
-    return .{ size = align_up(cursor, max_align), align = max_align, offsets = offsets }
+    return .{ size = align_up(cursor, max_align), align = max_align, offsets = move offsets }
 }
 
 // Physical placement order of declaration indices. `C` keeps source order. `Auto` emits fields by
@@ -245,7 +245,7 @@ fn field_order(fls: &List(Layout), repr: Repr, max_align: usize, alloc: &Allocat
     let is_c = repr match { C => true, Auto => false }
     if is_c {
         for i in 0..n { order.push(i) }
-        return order
+        return move order
     }
 
     let a = max_align
@@ -260,7 +260,7 @@ fn field_order(fls: &List(Layout), repr: Repr, max_align: usize, alloc: &Allocat
         }
         a = a / 2
     }
-    return order
+    return move order
 }
 
 // A tuple's full layout - size, align, and per-element offsets (M11 tuple literals and `t.N`
@@ -345,9 +345,9 @@ fn struct_layout_impl(it: &TypeInterner, def: &StructDef, args: &List(Ty), reg: 
     let sl = fields_layout(it, &tys, repr_of(def), reg, cache, alloc)
     tys.deinit()
     if def.is_simd {
-        return simd_layout(sl)
+        return simd_layout(move sl)
     }
-    return sl
+    return move sl
 }
 
 // SIMD vectors over-align to the next power-of-two of their byte size (min 16), so the C backend
@@ -369,13 +369,13 @@ pub fn variant_payload_offsets(it: &TypeInterner, def: &EnumDef, vnum: usize, ar
         out.push(el.payload_offset + pl.offsets[j])
     }
     pl.offsets.deinit()
-    return out
+    return move out
 }
 
 fn simd_layout(sl: StructLayout) StructLayout {
     let want = next_pow2(sl.size)
     let align = if want > 16 { want } else { 16 }
-    return .{ size = align_up(sl.size, align), align = align, offsets = sl.offsets }
+    return .{ size = align_up(sl.size, align), align = align, offsets = move sl.offsets }
 }
 
 fn enum_layout_impl(it: &TypeInterner, def: &EnumDef, args: &List(Ty), reg: &NominalRegistry,
@@ -483,7 +483,7 @@ fn subst_span(it: &TypeInterner, span: ChildSpan, params: &List(VarId), args: &L
     for i in 0..span.len {
         out.push(subst(it, it.child_at(span, i), params, args))
     }
-    return out
+    return move out
 }
 
 fn subst_tuple(it: &TypeInterner, span: ChildSpan, params: &List(VarId), args: &List(Ty)) Ty {
@@ -603,7 +603,7 @@ test "auto layout reorders fields by alignment to minimise padding" {
         module = "",
         is_pub = true,
         type_params = list(0),
-        fields = fields,
+        fields = move fields,
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
@@ -636,7 +636,7 @@ test "C repr keeps declaration order and C padding" {
         module = "",
         is_pub = true,
         type_params = list(0),
-        fields = fields,
+        fields = move fields,
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
@@ -675,8 +675,8 @@ test "generic struct substitutes type parameters" {
         fqn = "Pair",
         module = "",
         is_pub = true,
-        type_params = params,
-        fields = fields,
+        type_params = move params,
+        fields = move fields,
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
@@ -699,17 +699,17 @@ test "tagged enum reserves a tag plus the largest payload" {
     let variants: List(VariantDef) = list(3)
     let p_a: List(Ty) = list(1)
     p_a.push(prim_of(PrimitiveKind.I32))
-    variants.push(VariantDef { name = "A", payloads = p_a, decl_span = none_span() })
+    variants.push(VariantDef { name = "A", payloads = move p_a, decl_span = none_span() })
     let p_b: List(Ty) = list(1)
     p_b.push(prim_of(PrimitiveKind.I64))
-    variants.push(VariantDef { name = "B", payloads = p_b, decl_span = none_span() })
+    variants.push(VariantDef { name = "B", payloads = move p_b, decl_span = none_span() })
     variants.push(VariantDef { name = "C", payloads = list(0), decl_span = none_span() })
     let def = EnumDef {
         fqn = "E",
         module = "",
         is_pub = true,
         type_params = list(0),
-        variants = variants,
+        variants = move variants,
         tag_values = null,
         decl_span = none_span(),
         deprecation = null,
@@ -734,7 +734,7 @@ test "payloadless enum is just the tag" {
         module = "",
         is_pub = true,
         type_params = list(0),
-        variants = variants,
+        variants = move variants,
         tag_values = null,
         decl_span = none_span(),
         deprecation = null,
@@ -772,7 +772,7 @@ test "Option of a reference uses the pointer niche" {
     let some: List(Ty) = list(1)
     some.push(it.var_of(.{ id = 0, level = 0 }))
     let variants: List(VariantDef) = list(2)
-    variants.push(VariantDef { name = "Some", payloads = some, decl_span = none_span() })
+    variants.push(VariantDef { name = "Some", payloads = move some, decl_span = none_span() })
     variants.push(VariantDef { name = "None", payloads = list(0), decl_span = none_span() })
     let params: List(VarId) = list(1)
     params.push(0)
@@ -780,8 +780,8 @@ test "Option of a reference uses the pointer niche" {
         fqn = FQN_OPTION,
         module = "core.option",
         is_pub = true,
-        type_params = params,
-        variants = variants,
+        type_params = move params,
+        variants = move variants,
         tag_values = null,
         decl_span = none_span(),
         deprecation = null,

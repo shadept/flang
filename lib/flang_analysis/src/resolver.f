@@ -33,6 +33,16 @@ pub type DepRoot = struct {
     root: OwnedString
 }
 
+pub fn deinit(self: &DepRoot) {
+    self.name.deinit()
+    self.root.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &DepRoot, allocator: &Allocator) {
+    self.deinit()
+}
+
 // Everything import resolution needs about the project under build. All roots are stored normalised
 // (forward slashes, no trailing separator).
 pub type ResolveCtx = struct {
@@ -90,14 +100,9 @@ pub fn set_comptime(self: &ResolveCtx, c: ComptimeCtx) {
 pub fn deinit(self: &ResolveCtx) {
     self.project_name.deinit()
     self.project_source_root.deinit()
-    for &d in self.deps {
-        d.name.deinit()
-        d.root.deinit()
-    }
     self.deps.deinit()
     self.stdlib_root.deinit()
     self.cwd.deinit()
-    for &g in self.global_imports { g.deinit() }
     self.global_imports.deinit()
 }
 

@@ -41,7 +41,7 @@ pub fn instrument_profile(m: &IrModule, all: bool = false,
         if !all and is_stdlib_symbol(f.name) {
             continue
         }
-        m.displays.get(f.name) match {
+        m.displays.get_ref(f.name) match {
             Some(d) => names.append(d.as_view())
             None => names.append(f.name)
         }
@@ -68,7 +68,7 @@ pub fn instrument_profile(m: &IrModule, all: bool = false,
         relocs = null,
     })
     add_runtime_foreigns(m, allocator)
-    return blob
+    return move blob
 }
 
 // Whether a symbol belongs to the stdlib: its module path mangles to a `std__`/`core__` prefix, and
@@ -112,8 +112,8 @@ fn probe_call(callee: String, id: usize?, allocator: &Allocator?) Instr {
         result = null,
         result_ty = null,
         callee = callee,
-        args = args,
-        variadic_arg_types = variadic,
+        args = move args,
+        variadic_arg_types = move variadic,
     })
 }
 
@@ -127,8 +127,8 @@ fn register_call(count: usize, names_len: usize, allocator: &Allocator?) Instr {
         result = null,
         result_ty = null,
         callee = PROF_REGISTER,
-        args = args,
-        variadic_arg_types = variadic,
+        args = move args,
+        variadic_arg_types = move variadic,
     })
 }
 
@@ -140,7 +140,7 @@ fn add_runtime_foreigns(m: &IrModule, allocator: &Allocator?) {
     m.add_foreign(ForeignDecl {
         name = PROF_ENTER,
         return_ty = null,
-        param_types = enter_params,
+        param_types = move enter_params,
         variadic = false,
         cc = CallConv.C,
     })
@@ -149,7 +149,7 @@ fn add_runtime_foreigns(m: &IrModule, allocator: &Allocator?) {
     m.add_foreign(ForeignDecl {
         name = PROF_EXIT,
         return_ty = null,
-        param_types = exit_params,
+        param_types = move exit_params,
         variadic = false,
         cc = CallConv.C,
     })
@@ -161,7 +161,7 @@ fn add_runtime_foreigns(m: &IrModule, allocator: &Allocator?) {
     m.add_foreign(ForeignDecl {
         name = PROF_REGISTER,
         return_ty = null,
-        param_types = register_params,
+        param_types = move register_params,
         variadic = false,
         cc = CallConv.C,
     })

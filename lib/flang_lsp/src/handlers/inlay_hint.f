@@ -34,8 +34,8 @@ pub type Binder = struct {
 
 pub fn module_binders(m: &Module, allocator: &Allocator? = null) List(Binder) {
     let out: List(Binder) = list(16, allocator)
-    for d in m.decls {
-        d match {
+    for &d in m.decls {
+        d.* match {
             Function(f) => {
                 push_params(&out, &f.params, f.span)
                 f.body match {
@@ -47,7 +47,7 @@ pub fn module_binders(m: &Module, allocator: &Allocator? = null) List(Binder) {
             _ => {}
         }
     }
-    return out
+    return move out
 }
 
 // One place a type hint can render: right after the binder name ending at `offset`. `node` is the
@@ -69,7 +69,7 @@ pub fn hint_sites(m: &Module, allocator: &Allocator? = null) List(HintSite) {
         }
     }
     binders.deinit()
-    return out
+    return move out
 }
 
 // Hint sites for a buffer that has drifted from the analyzed text: positions come from a fresh
@@ -110,7 +110,7 @@ pub fn live_hint_sites(live_text: String, analyzed: &Module,
     anal.deinit()
     live.deinit()
     doc.deinit()
-    return out
+    return move out
 }
 
 fn push_params(out: &List(Binder), params: &List(FunctionParam), owner: SourceSpan) {

@@ -72,19 +72,19 @@ pub fn main() i32 {
     if source_opt.is_none() {
         return 1
     }
-    let source = source_opt.unwrap()
+    let source = unwrap(move source_opt)
     defer source.deinit()
 
     let lx = lexer(source.as_view())
     let tokens = lx.tokenize()
 
-    let p = parser(tokens, source.as_view())
+    let p = parser(move tokens, source.as_view())
     defer p.deinit()
     const cst = p.tree.node_at(p.parse_module())
 
     let ast = project_module(cst, 0i32)
     defer ast.deinit()
-    print_json(opts.path, source.as_view(), &tokens, &cst, &ast, &p.diagnostics)
+    print_json(opts.path, source.as_view(), &p.tree.tokens, &cst, &ast, &p.diagnostics)
     return if p.diagnostics.len > 0 { 1i32 } else { 0i32 }
 }
 
@@ -105,7 +105,7 @@ fn read_source(path: String) OwnedString? {
         println(msg.as_view())
         return null
     }
-    return Some(read_result.unwrap())
+    return Some(unwrap(move read_result))
 }
 
 fn print_usage() {
@@ -181,7 +181,7 @@ fn run_timing(path: String, iterations: usize) i32 {
     if source_opt.is_none() {
         return 1
     }
-    let source = source_opt.unwrap()
+    let source = unwrap(move source_opt)
     defer source.deinit()
     const view = source.as_view()
 
@@ -206,7 +206,7 @@ fn run_timing(path: String, iterations: usize) i32 {
         let tokens = lx.tokenize()
         const t_lex = monotonic_ns()
 
-        let p = parser(tokens, view)
+        let p = parser(move tokens, view)
         const cst = p.tree.node_at(p.parse_module())
         const t_parse = monotonic_ns()
 
@@ -250,7 +250,7 @@ fn run_timing(path: String, iterations: usize) i32 {
         }
         total_sum = total_sum + total_ns
 
-        tokens_seen = tokens.len
+        tokens_seen = p.tree.tokens.len
         diagnostics_seen = p.diagnostics.len
 
         ast.deinit()

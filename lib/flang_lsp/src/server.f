@@ -108,7 +108,7 @@ pub fn run(self: &LspServer) i32 {
     loop {
         const got = read_message(self.reader)
         if got.is_err() {
-            got.unwrap_err() match {
+            unwrap_err(move got) match {
                 BadJson | BadEnvelope => {
                     const nul = json_null()
                     write_error(self.writer, &nul, PARSE_ERROR, "invalid message")
@@ -120,7 +120,7 @@ pub fn run(self: &LspServer) i32 {
             }
             continue
         }
-        let msg = got.unwrap()
+        let msg = unwrap(move got)
         self.access_log("<-", &msg, null)
         const t0 = monotonic_ns()
         self.dispatch(&msg)
@@ -383,8 +383,7 @@ fn publish_project(self: &LspServer, pi: ProjectId) {
         let file_diags: List(Diagnostic) = list(0)
         for &d in unit.diagnostics {
             if d.span.file_id == fid as i32 {
-                // shallow copy: Diagnostic owns nothing that a List teardown frees
-                file_diags.push(d.*)
+                file_diags.push(clone_diag(d))
             }
         }
         const u = self.uri_for_path(unit.file_paths[fid].as_view())
@@ -425,7 +424,7 @@ fn progress_begin(self: &LspServer, title: String) OwnedString {
     e.end_map()
     e.end_map()
     write_frame(self.writer, sb.as_view())
-    return token
+    return move token
 }
 
 fn progress_end(self: &LspServer, token: String) {
@@ -564,7 +563,7 @@ fn collect_folders(self: &LspServer, params: &JsonValue?) {
     if path.is_none() {
         return
     }
-    const p = path.unwrap()
+    const p = unwrap(move path)
     const cut = rfind(p.as_view(), '/')
     const name = cut match {
         Some(i) => p.as_view()[(i + 1)..p.as_view().len]
@@ -585,7 +584,7 @@ fn initialize_result(self: &LspServer) JsonValue {
     let caps = json_object()
     const enc_name = if is_utf8_encoding(self.encoding) { "utf-8" } else { "utf-16" }
     caps.as_object().unwrap().json_set("positionEncoding", json_string(enc_name))
-    caps.as_object().unwrap().json_set("textDocumentSync", sync)
+    caps.as_object().unwrap().json_set("textDocumentSync", move sync)
     caps.as_object().unwrap().json_set("documentSymbolProvider", json_bool(true))
     caps.as_object().unwrap().json_set("foldingRangeProvider", json_bool(true))
     caps.as_object().unwrap().json_set("workspaceSymbolProvider", json_bool(true))
@@ -599,17 +598,17 @@ fn initialize_result(self: &LspServer) JsonValue {
     trig.as_array().unwrap().push(json_string("("))
     trig.as_array().unwrap().push(json_string(","))
     let sig = json_object()
-    sig.as_object().unwrap().json_set("triggerCharacters", trig)
-    caps.as_object().unwrap().json_set("signatureHelpProvider", sig)
+    sig.as_object().unwrap().json_set("triggerCharacters", move trig)
+    caps.as_object().unwrap().json_set("signatureHelpProvider", move sig)
 
     let info = json_object()
     info.as_object().unwrap().json_set("name", json_string("flang-lsp"))
     info.as_object().unwrap().json_set("version", json_string(self.version.as_view()))
 
     let root = json_object()
-    root.as_object().unwrap().json_set("capabilities", caps)
-    root.as_object().unwrap().json_set("serverInfo", info)
-    return root
+    root.as_object().unwrap().json_set("capabilities", move caps)
+    root.as_object().unwrap().json_set("serverInfo", move info)
+    return move root
 }
 
 fn is_utf8_encoding(enc: PositionEncoding) bool {
@@ -792,7 +791,7 @@ fn ensure_project(self: &LspServer, path: String) {
     if dir.is_none() {
         return
     }
-    const d = dir.unwrap()
+    const d = unwrap(move dir)
 
     const base = rfind(d.as_view(), '/') match {
         Some(i) => d.as_view()[(i + 1)..d.as_view().len]
@@ -881,7 +880,7 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
         if got.is_none() {
             continue
         }
-        let path = got.unwrap()
+        let path = unwrap(move got)
 
         if ends_with(path.as_view(), "/flang.toml") {
             const owner = self.ws.find_project(parent_dir(path.as_view()))
@@ -1317,14 +1316,15 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     // path segment like `list` would otherwise hover as every declaration of that name.
     const imp = import_at(&unit.modules[fid as usize], offset)
     if imp.is_some() {
-        let ref = imp.unwrap()
+        let ref = unwrap(move imp)
         defer ref.deinit()
         const target = file_id_of_fqn(unit, ref.path.as_view())
-        let doc: OwnedString? = null
-        if target.is_some() {
-            doc = module_doc(unit.sources[target.unwrap() as usize].as_view())
+        let doc: OwnedString? = if target.is_some() {
+            module_doc(unit.sources[target.unwrap() as usize].as_view())
+        } else {
+            null
         }
-        self.respond_hover(msg, $"import {ref.path.as_view()}", doc, text, ref.span)
+        self.respond_hover(msg, $"import {ref.path.as_view()}", move doc, text, ref.span)
         return
     }
 
@@ -1374,6 +1374,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
             if dspan.is_some() and self.location_span_ok(pi, dspan.unwrap()) {
                 const l = self.decl_label(pi, dspan.unwrap())
                 if l.is_some() {
+                    const none = move label
                     label = Some(from_view(l.unwrap()))
                     doc_span = dspan
                 }
@@ -1400,6 +1401,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
                     _ => {}
                 }
             }
+            const none = move label
             if intro.is_some() {
                 label = Some($"{intro.unwrap()} {wname}: {rendered.as_view()}")
                 rendered.deinit()
@@ -1407,7 +1409,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
                 label = Some($"{wname}: {rendered.as_view()}")
                 rendered.deinit()
             } else {
-                label = Some(rendered)
+                label = Some(move rendered)
             }
         }
     }
@@ -1423,6 +1425,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         if fh.is_some() {
             const vars = type_param_names(&unit.checker)
             const rendered = render_ty(result, fh.unwrap().ty, Some(vars))
+            const none = move label
             label = Some($"field {wname}: {rendered.as_view()}")
             rendered.deinit()
             doc_span = Some(fh.unwrap().decl_span)
@@ -1449,6 +1452,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
                 continue
             }
             const slice = text[a.start..(a.start + a.length)]
+            const none = move label
             label = Some($"{b.intro} {wname}: {slice}")
             break
         }
@@ -1465,8 +1469,10 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         if !is_member or call_shaped {
             const rh = self.registry_hover(pi, wname)
             if rh.is_some() {
-                label = Some(rh.unwrap().label)
-                doc_span = rh.unwrap().sole
+                let hover = unwrap(move rh)
+                const none = move label
+                label = Some(move hover.label)
+                doc_span = hover.sole
             }
         }
     }
@@ -1476,7 +1482,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         return
     }
     const doc = if doc_span.is_some() { self.doc_for(pi, doc_span.unwrap()) } else { null }
-    self.respond_hover(msg, label.unwrap(), doc, text, span)
+    self.respond_hover(msg, unwrap(move label), move doc, text, span)
 }
 
 // The hover response: `label` as a flang code block, `doc` (consumed) as markdown prose below it,
@@ -1498,12 +1504,15 @@ fn respond_hover(self: &LspServer, msg: &RpcMessage, label: OwnedString, doc: Ow
     md.append("```flang\n")
     md.append(label.as_view())
     md.append("\n```")
-    if doc.is_some() {
-        const prose = doc_markdown(doc.unwrap().as_view())
-        md.append("\n\n")
-        md.append(prose.as_view())
-        prose.deinit()
-        doc.unwrap().deinit()
+    doc match {
+        Some(d) => {
+            const prose = doc_markdown(d.as_view())
+            md.append("\n\n")
+            md.append(prose.as_view())
+            prose.deinit()
+            d.deinit()
+        }
+        None => {}
     }
     e.encode_str(md.as_view())
     md.deinit()
@@ -1548,7 +1557,7 @@ fn registry_decl_spans(self: &LspServer, pi: ProjectId, name: String) List(Sourc
             out.push(span)
         }
     }
-    return out
+    return move out
 }
 
 // Those declarations as stacked labels, capped so a wide overload set stays readable. `sole` is the
@@ -1592,7 +1601,7 @@ fn registry_hover(self: &LspServer, pi: ProjectId, name: String) RegistryHover? 
     }
     const out = sb.to_string()
     sb.deinit()
-    return Some(RegistryHover { label = out, sole = sole })
+    return Some(RegistryHover { label = move out, sole = sole })
 }
 
 // ---- textDocument/definition ----
@@ -1630,7 +1639,7 @@ fn on_definition(self: &LspServer, msg: &RpcMessage) {
     // LocationLink when the client takes one, so the whole dotted path highlights as the origin.
     const imp = import_at(&unit.modules[fid as usize], offset)
     if imp.is_some() {
-        let ref = imp.unwrap()
+        let ref = unwrap(move imp)
         defer ref.deinit()
         const target = file_id_of_fqn(unit, ref.path.as_view())
         if target.is_some() {
@@ -1964,7 +1973,7 @@ fn on_signature_help(self: &LspServer, msg: &RpcMessage) {
         self.respond_null(msg)
         return
     }
-    let cs = site.unwrap()
+    let cs = unwrap(move site)
     const result = &self.ws.projects[pi].unit.result
     const overloads = result.functions.by_name.get_ref(cs.name.as_view())
     if overloads.is_none() or overloads.unwrap().len == 0 {
@@ -2059,7 +2068,7 @@ fn on_formatting(self: &LspServer, msg: &RpcMessage) {
         self.respond_null(msg)
         return
     }
-    let formatted = res.unwrap()
+    let formatted = unwrap(move res)
     defer formatted.deinit()
 
     let sb = string_builder(formatted.as_view().len + 256)
@@ -2094,7 +2103,7 @@ fn apply_project_fmt(path: String, cfg: &FmtConfig) OwnedString {
     if dir.is_none() {
         return from_view("")
     }
-    let d = dir.unwrap()
+    let d = unwrap(move dir)
     const manifest = $"{d.as_view()}/flang.toml"
     d.deinit()
     const got = read_text(manifest.as_view())
@@ -2102,7 +2111,7 @@ fn apply_project_fmt(path: String, cfg: &FmtConfig) OwnedString {
     if got.is_none() {
         return from_view("")
     }
-    let toml = got.unwrap()
+    let toml = unwrap(move got)
     let proj = parse_project(toml.as_view())
     for &e in proj.fmt {
         const _ok = set_option(cfg, e.key.as_view(), e.value.as_view())
@@ -2110,7 +2119,7 @@ fn apply_project_fmt(path: String, cfg: &FmtConfig) OwnedString {
     const name = from_view(proj.name.as_view())
     proj.deinit()
     toml.deinit()
-    return name
+    return move name
 }
 
 // =============================================================================
@@ -2363,7 +2372,7 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
     srcs.push(from_view("pub fn point() i32 { return 1 }\npub type Point = struct { x: i32 }\n"))
     let fqns: List(String) = list(1)
     fqns.push("t.m")
-    let unit = analyze_source_set(srcs, &fqns)
+    let unit = analyze_source_set(move srcs, &fqns)
     fqns.deinit()
     // Pushed through an explicit reference: see known-issues "Method Mutation Through a One-Hop
     // Field of a By-Value Local Is Dropped" (reference compiler).
@@ -2376,9 +2385,9 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
     srv.ws.projects.push(OpenProject {
         dir = from_view("/t"),
         name = from_view("t"),
-        ctx = ctx,
-        unit = unit,
-        index = index,
+        ctx = move ctx,
+        unit = move unit,
+        index = move index,
     })
     srv.run()
 
@@ -2409,7 +2418,7 @@ fn demo_project_into(srv: &LspServer) {
     let fqns: List(String) = list(2)
     fqns.push("/t/m.f")
     fqns.push("/t/dep.f")
-    let unit = analyze_source_set(srcs, &fqns)
+    let unit = analyze_source_set(move srcs, &fqns)
     fqns.deinit()
     let origin = &unit.project_origin
     origin.push(true)
@@ -2421,9 +2430,9 @@ fn demo_project_into(srv: &LspServer) {
     srv.ws.projects.push(OpenProject {
         dir = from_view("/t"),
         name = from_view("t"),
-        ctx = ctx,
-        unit = unit,
-        index = index,
+        ctx = move ctx,
+        unit = move unit,
+        index = move index,
     })
 }
 
@@ -2439,7 +2448,7 @@ fn demo_src_json() OwnedString {
     }
     const out = sb.to_string()
     sb.deinit()
-    return out
+    return move out
 }
 
 fn demo_input(request: String) StringBuilder {
@@ -2450,7 +2459,7 @@ fn demo_input(request: String) StringBuilder {
     frame_into(&input, open.as_view())
     open.deinit()
     frame_into(&input, request)
-    return input
+    return move input
 }
 
 fn demo_run(request: String, out: &StringBuilder) {
@@ -2521,7 +2530,7 @@ fn demo_import_run(request: String, out: &StringBuilder, links: bool = false) {
     let fqns: List(String) = list(2)
     fqns.push("/t/imp.f")
     fqns.push("t.extra")
-    let unit = analyze_source_set(srcs, &fqns)
+    let unit = analyze_source_set(move srcs, &fqns)
     fqns.deinit()
     const origin = &unit.project_origin
     origin.push(true)
@@ -2533,9 +2542,9 @@ fn demo_import_run(request: String, out: &StringBuilder, links: bool = false) {
     srv.ws.projects.push(OpenProject {
         dir = from_view("/t"),
         name = from_view("t"),
-        ctx = ctx,
-        unit = unit,
-        index = index,
+        ctx = move ctx,
+        unit = move unit,
+        index = move index,
     })
     srv.run()
 }

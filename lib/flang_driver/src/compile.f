@@ -33,7 +33,7 @@ pub fn build_unit(unit: &AnalyzedUnit, output_path: String,
     let r = compile(&m, &opts)
     opts.deinit()
     m.deinit()
-    return r
+    return move r
 }
 
 // Lower a checked multi-module project to one FIR program and compile+link it to an executable at
@@ -143,15 +143,14 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     // Profiling (RFC-025): instrument after every other FIR transform, then link the probe runtime.
     // The runtime's companion `.c` is already in `runtime_c` when the project imports `std.profile`
     // - don't add it twice. `prof_blob` backs the name-table global; it must outlive `compile()`.
-    let prof_blob: OwnedString? = null
-    profile_runtime match {
+    let prof_blob: OwnedString? = profile_runtime match {
         Some(rt) => {
-            prof_blob = Some(instrument_profile(&m, profile_all, allocator))
             if !contains_path(&runtime_c, rt) {
                 let _p = opts.add_c_file(rt)
             }
+            Some(instrument_profile(&m, profile_all, allocator))
         }
-        None => {}
+        None => null
     }
 
     let r = compile(&m, &opts)
@@ -163,12 +162,12 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     m.deinit()
     runtime_c.deinit()
     if r.is_err() {
-        return r
+        return move r
     }
     // The backend times its own phases but never sees the lowering.
-    let artifact = r.unwrap()
+    let artifact = unwrap(move r)
     artifact.set_lower_ns(lower_ns)
-    return Ok(artifact)
+    return Ok(move artifact)
 }
 
 // Presentation only: stdlib symbols mangle from `std.*` / `core.*` fqns. A misclassification
@@ -253,9 +252,9 @@ fn companion_c_files(source_paths: &List(OwnedString),
             c_path.deinit()
             continue
         }
-        found.push(c_path)
+        found.push(move c_path)
     }
-    return found
+    return move found
 }
 
 // Whether `paths` already carries `path`, comparing with `/` and `\` collapsed - entries mix both
@@ -290,7 +289,7 @@ fn is_generated_c(path: String) bool {
     if src_opt.is_none() {
         return true
     }
-    let src = src_opt.unwrap()
+    let src = unwrap(move src_opt)
     defer src.deinit()
     const head = src.as_view()
     const limit = if head.len < 200 as usize { head.len } else { 200 as usize }

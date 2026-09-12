@@ -81,7 +81,7 @@ pub fn main() i32 {
 
     let r = compile(&m, &opts)
     if r.is_err() {
-        const err = r.unwrap_err()
+        const err = unwrap_err(move r)
         err match {
             NoCompilerFound => println("inliner_test: no C compiler found.")
             CompilerFailed(code) => {
@@ -95,7 +95,7 @@ pub fn main() i32 {
         }
         return 2
     }
-    let result = r.unwrap()
+    let result = unwrap(move r)
     defer result.deinit()
 
     let exe_sb = string_builder(result.executable_path.len + 4)
@@ -145,7 +145,7 @@ fn build_module() IrModule {
     m.add_foreign(ForeignDecl {
         name = "printf",
         return_ty = printf_ret,
-        param_types = printf_params,
+        param_types = move printf_params,
         variadic = true,
         cc = CallConv.C,
     })
@@ -156,6 +156,7 @@ fn build_module() IrModule {
         size = fmt.len as u64,
         align = 1u64,
         init_bytes = Some(fmt.as_raw_bytes()),
+        relocs = null,
     })
 
     m.add_function(build_inner())
@@ -163,7 +164,7 @@ fn build_module() IrModule {
     m.add_function(build_caller())
     m.add_function(build_middle())
     m.add_function(build_main())
-    return m
+    return move m
 }
 
 // inner(n) -> n + 1
@@ -215,7 +216,7 @@ fn build_main() Function {
     fixed.push(global("fmt"))
     let extras: List((IrType, Operand)) = list(1)
     extras.push((IrType.I32, v))
-    entry.call_variadic("printf", IrType.I32, fixed, extras)
+    entry.call_variadic("printf", IrType.I32, move fixed, move extras)
     entry.ret(int(0))
     return fb.finish()
 }

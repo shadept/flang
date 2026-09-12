@@ -80,7 +80,7 @@ pub fn param_labels(label: String, allocator: &Allocator? = null) List(String) {
     let out: List(String) = list(4, allocator)
     const open = find(label, '(')
     if open.is_none() {
-        return out
+        return move out
     }
     let depth: i32 = 0
     let start = open.unwrap() + 1
@@ -92,7 +92,7 @@ pub fn param_labels(label: String, allocator: &Allocator? = null) List(String) {
         } else if c == ')' or c == ']' or c == '}' {
             if depth == 0 and c == ')' {
                 push_trimmed(&out, label, start, i)
-                return out
+                return move out
             }
             depth = depth - 1
         } else if c == ',' and depth == 0 {
@@ -101,7 +101,7 @@ pub fn param_labels(label: String, allocator: &Allocator? = null) List(String) {
         }
         i = i + 1
     }
-    return out
+    return move out
 }
 
 fn push_trimmed(out: &List(String), label: String, start: usize, end: usize) {
@@ -124,7 +124,7 @@ test "call_site_at finds the callee and counts top-level commas" {
     const src = "let r = point(a, g(b, c), "
     const site = call_site_at(src, src.len)
     assert_true(site.is_some(), "cursor is inside the call")
-    let s = site.unwrap()
+    let s = unwrap(move site)
     assert_eq(s.name.as_view(), "point", "outer callee, not the nested one")
     assert_eq(s.active, 2 as usize, "nested call commas do not count")
     s.deinit()
@@ -139,7 +139,7 @@ test "call_site_at outside any call answers null" {
 test "call_site_at handles ufcs receivers" {
     const src = "xs.push("
     const site = call_site_at(src, src.len)
-    let s = site.unwrap()
+    let s = unwrap(move site)
     assert_eq(s.name.as_view(), "push", "method name only")
     assert_eq(s.active, 0 as usize, "first argument")
     s.deinit()

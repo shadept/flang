@@ -53,15 +53,15 @@ pub fn deinit(self: &ImportRef) {
 // The `import` declaration under `offset` in `module`, or null when the cursor is not inside one.
 // The declaration's span ends at its last path segment, so the path's span is its tail.
 pub fn import_at(module: &Module, offset: usize) ImportRef? {
-    for d in module.decls {
-        d match {
+    for &d in module.decls {
+        d.* match {
             Import(id) => {
                 if span_contains(id.span, offset) {
                     const path = id.path.join(".")
                     const end = id.span.start + id.span.length
                     const span = SourceSpan { file_id = id.span.file_id, start = end - path.len,
                         length = path.len }
-                    return Some(ImportRef { path = path, span = span })
+                    return Some(ImportRef { path = move path, span = span })
                 }
             }
             _ => {}
@@ -452,7 +452,7 @@ pub fn render_ty(result: &TypeCheckResult, ty: Ty, vars: &Dict(VarId, String)? =
     format_with_names(&result.interner, ty, &sb, reg, vars)
     const out = sb.to_string()
     sb.deinit()
-    return out
+    return move out
 }
 
 // Whether `ty` renders without leaking inference internals: ground, or every free variable in it
@@ -532,7 +532,7 @@ pub fn reference_spans(result: &TypeCheckResult, target: &ResolvedTarget,
             }
         }
     }
-    return out
+    return move out
 }
 
 fn push_unique(out: &List(SourceSpan), span: SourceSpan) {

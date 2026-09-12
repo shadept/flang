@@ -29,20 +29,15 @@ import flang_typer.inference_results
 import flang_typer.node_id
 import flang_typer.result
 
-// Whether each of `decl`'s parameters needs a shadow copy, parallel to `decl.params`. A parameter
-// that is not a by-value aggregate answers `true`, which its caller ignores.
-pub fn shadowed_params(decl: &FunctionDecl, result: &TypeCheckResult, overlay: &InferenceResults?,
-    allocator: &Allocator? = null) List(bool) {
-    let out: List(bool) = list(decl.params.len, allocator)
-    const body = decl.body
-    for &p in decl.params {
-        if body.is_none() {
-            out.push(true)
-            continue
-        }
-        out.push(needs_shadow(p.name, body.unwrap(), result, overlay, allocator))
+// Whether each of `params` needs a shadow copy given `body`, parallel to `params`. A parameter that
+// is not a by-value aggregate answers `true`, which its caller ignores.
+pub fn shadowed_params(params: &List(FunctionParam), body: &BlockExpr, result: &TypeCheckResult,
+    overlay: &InferenceResults?, allocator: &Allocator? = null) List(bool) {
+    let out: List(bool) = list(params.len, allocator)
+    for &p in params {
+        out.push(needs_shadow(p.name, body, result, overlay, allocator))
     }
-    return out
+    return move out
 }
 
 // One parameter. True means the body writes through it or lets its address escape.

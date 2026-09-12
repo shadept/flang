@@ -47,6 +47,11 @@ pub fn deinit(self: &OpenProject) {
     self.dir.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &OpenProject, allocator: &Allocator) {
+    self.deinit()
+}
+
 // Index into `Workspace.projects`. Stable for an entry's lifetime - projects are only appended or
 // replaced in place, never removed or reordered.
 pub type ProjectId = usize
@@ -82,12 +87,12 @@ fn canonical_root(p: String, alloc: &Allocator?) OwnedString {
     if wd.is_err() {
         return normalize_fs_path(rel)
     }
-    let base = wd.unwrap()
+    let base = unwrap(move wd)
     const joined = $"{base.as_view()}/{rel}"
     base.deinit()
     const norm = normalize_fs_path(joined.as_view())
     joined.deinit()
-    return norm
+    return move norm
 }
 
 fn is_abs(p: String) bool {
@@ -168,7 +173,7 @@ fn overrides_from(docs: &DocumentStore, allocator: &Allocator?) Dict(String, Str
             ov.set(p, e.value.text.as_view())
         }
     }
-    return ov
+    return move ov
 }
 
 // Analyze the project rooted at `dir` and add it to the workspace. Null when the manifest is
@@ -179,7 +184,7 @@ pub fn open_project(self: &Workspace, dir: String, docs: &DocumentStore,
     if loaded.is_none() {
         return null
     }
-    self.projects.push(loaded.unwrap())
+    self.projects.push(unwrap(move loaded))
     return Some(self.projects.len - 1)
 }
 
@@ -205,9 +210,9 @@ pub fn reopen_project(self: &Workspace, idx: ProjectId, docs: &DocumentStore,
     if fresh.is_none() {
         return false
     }
-    let old = self.projects[idx]
+    let old = move self.projects[idx]
     old.deinit()
-    self.projects[idx] = fresh.unwrap()
+    self.projects[idx] = unwrap(move fresh)
     return true
 }
 
@@ -219,7 +224,7 @@ fn load_project(self: &Workspace, dir: String, docs: &DocumentStore,
     if text.is_none() {
         return null
     }
-    let toml = text.unwrap()
+    let toml = unwrap(move text)
     defer toml.deinit()
     let proj = parse_project(toml.as_view(), allocator)
     defer proj.deinit()
@@ -254,9 +259,9 @@ fn load_project(self: &Workspace, dir: String, docs: &DocumentStore,
     return Some(OpenProject {
         dir = from_view(dir, allocator),
         name = from_view(proj.name.as_view(), allocator),
-        ctx = ctx,
-        unit = unit,
-        index = index,
+        ctx = move ctx,
+        unit = move unit,
+        index = move index,
     })
 }
 
@@ -271,7 +276,7 @@ pub fn build_indexes(unit: &AnalyzedProject, allocator: &Allocator? = null) List
             out.push(ModuleIndex { symbols = list(0, allocator) })
         }
     }
-    return out
+    return move out
 }
 
 // Tests

@@ -911,8 +911,7 @@ fn json_unary_op_str(op: UnaryOp) String {
 // ─────────────────────────────────────────────────────────────────────────
 
 fn emit_type_expr(sb: &StringBuilder, t: &TypeExpr) {
-    const t_val = t.*
-    t_val match {
+    t.* match {
         Named(n) => {
             sb.append("{\"kind\":\"Named\",")
             emit_span(sb, n.span)

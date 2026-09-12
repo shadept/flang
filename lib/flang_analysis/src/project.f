@@ -27,6 +27,11 @@ pub fn deinit(self: &DependencySpec) {
     self.path.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &DependencySpec, allocator: &Allocator) {
+    self.deinit()
+}
+
 // A `[build.<os>]` table - native toolchain inputs for one platform.
 pub type PlatformConfig = struct {
     headers: List(OwnedString)
@@ -45,6 +50,11 @@ pub type FmtEntry = struct {
 pub fn deinit(self: &FmtEntry) {
     self.key.deinit()
     self.value.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &FmtEntry, allocator: &Allocator) {
+    self.deinit()
 }
 
 // A parsed manifest. Owns every string; call `deinit()` when done.

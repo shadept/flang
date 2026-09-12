@@ -173,7 +173,7 @@ fn parse_cli(argv: String[]) Cli {
     cli.color = ColorChoice.Auto
     if argv.len < 2 {
         cli.show_help = true
-        return cli
+        return move cli
     }
 
     const head = argv[1]
@@ -182,7 +182,7 @@ fn parse_cli(argv: String[]) Cli {
         // in the same place - the help text.
         if head == "-V" or head == "--version" {
             cli.show_version = true
-            return cli
+            return move cli
         }
         if !(head == "-h" or head == "--help") {
             const msg = $"flang: `{head}` must follow a command"
@@ -190,14 +190,14 @@ fn parse_cli(argv: String[]) Cli {
             println(msg.as_view())
         }
         cli.show_help = true
-        return cli
+        return move cli
     }
 
     cli.subcommand = head
     const spec = $"{SHARED_OPTS}{command_opts(head)}"
     defer spec.deinit()
     apply_opts(&cli, spec.as_view(), argv)
-    return cli
+    return move cli
 }
 
 // Options accepted after any command. Kept apart from the per-command sets so a new command starts
@@ -393,7 +393,7 @@ fn run_build(argv: String[], cli: &Cli) i32 {
     if opts_opt.is_none() {
         return 1
     }
-    const opts = opts_opt.unwrap()
+    const opts = unwrap(move opts_opt)
     defer opts.deinit()
     if cli.args.len > 0 {
         const path = cli.args[0]
@@ -416,7 +416,7 @@ fn run_check(argv: String[], cli: &Cli) i32 {
     if opts_opt.is_none() {
         return 1
     }
-    const opts = opts_opt.unwrap()
+    const opts = unwrap(move opts_opt)
     defer opts.deinit()
     if cli.args.len > 0 {
         const path = cli.args[0]
@@ -443,7 +443,7 @@ fn run_test(argv: String[], cli: &Cli) i32 {
     if opts_opt.is_none() {
         return 1
     }
-    const opts = opts_opt.unwrap()
+    const opts = unwrap(move opts_opt)
     defer opts.deinit()
     return build_project(&opts)
 }
@@ -479,11 +479,11 @@ fn build_opts(argv: String[], cli: &Cli, force_check: bool, testing: bool) Build
         // `test`'s filters: the lone positional narrows by path, `--name` by label.
         test_path = if testing and cli.args.len > 0 { cli.args[0] } else { "" },
         test_name = if testing { cli.name_filter } else { "" },
-        stdlib_path = stdlib,
+        stdlib_path = move stdlib,
         target = target_opt.unwrap(),
         start_ns = monotonic_ns(),
     }
-    return Some(opts)
+    return Some(move opts)
 }
 
 // The compile-time context for this build: host values, overridden by `--target-os` /
@@ -560,10 +560,10 @@ fn build_project(opts: &BuildOpts) i32 {
     }
     const toml_res = read_source("flang.toml")
     if toml_res.is_err() {
-        report_read_error("flang.toml", toml_res.unwrap_err())
+        report_read_error("flang.toml", unwrap_err(move toml_res))
         return 1
     }
-    let toml = toml_res.unwrap()
+    let toml = unwrap(move toml_res)
     defer toml.deinit()
 
     let proj = parse_project(toml.as_view())
@@ -696,7 +696,7 @@ fn expand_all(items: &List(OwnedString), missing: &List(OwnedString)) List(Owned
             sb.deinit()
         }
     }
-    return out
+    return move out
 }
 
 // Shared render -> gate -> lower -> link tail for both build modes.
@@ -762,10 +762,11 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
         opts.profile_all, prof_out, opts.profile_nodes, opts.profile_depth, opts.emit_c_only, tests,
         name_filter)
     if result.is_err() {
-        report_build_error(&result.unwrap_err(), label)
+        const e = unwrap_err(move result)
+        report_build_error(&e, label)
         return 1
     }
-    let artifact = result.unwrap()
+    let artifact = unwrap(move result)
     defer artifact.deinit()
     const built = if opts.emit_c_only {
         (artifact.c_source_path ?? artifact.executable_path).as_view()
@@ -807,7 +808,7 @@ fn run_test_binary(built: String) i32 {
         println(msg.as_view())
         return 1
     }
-    let abs = abs_r.unwrap()
+    let abs = unwrap(move abs_r)
     defer abs.deinit()
     const path = abs.as_view()
 
@@ -1015,14 +1016,15 @@ fn run_fmt(cli: &Cli) i32 {
     if have_manifest {
         const toml_res = read_source("flang.toml")
         if toml_res.is_err() {
-            report_read_error("flang.toml", toml_res.unwrap_err())
+            report_read_error("flang.toml", unwrap_err(move toml_res))
             return 1
         }
-        let toml = toml_res.unwrap()
+        let toml = unwrap(move toml_res)
         defer toml.deinit()
         let proj = parse_project(toml.as_view())
         defer proj.deinit()
-        project_name.deinit()
+        const unnamed = move project_name
+        unnamed.deinit()
         project_name = from_view(proj.name.as_view())
         set_project(&cfg, project_name.as_view())
         for &e in proj.fmt {
@@ -1033,6 +1035,8 @@ fn run_fmt(cli: &Cli) i32 {
             }
         }
         if files.len == 0 {
+            const none = move sources
+            none.deinit()
             sources = glob_sources(proj.source.as_view())
         }
     }
@@ -1079,18 +1083,18 @@ fn run_fmt(cli: &Cli) i32 {
 fn fmt_file(path: String, cfg: &FmtConfig, check: bool) FmtStatus {
     const read_res = read_source(path)
     if read_res.is_err() {
-        report_read_error(path, read_res.unwrap_err())
+        report_read_error(path, unwrap_err(move read_res))
         return FmtStatus.Failed
     }
-    let source = read_res.unwrap()
+    let source = unwrap(move read_res)
     defer source.deinit()
 
     const fmt_res = format_source(source.as_view(), cfg)
     if fmt_res.is_err() {
-        report_fmt_error(path, fmt_res.unwrap_err())
+        report_fmt_error(path, unwrap_err(move fmt_res))
         return FmtStatus.Failed
     }
-    let formatted = fmt_res.unwrap()
+    let formatted = unwrap(move fmt_res)
     defer formatted.deinit()
 
     if formatted.as_view() == source.as_view() {

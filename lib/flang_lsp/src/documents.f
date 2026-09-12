@@ -28,6 +28,11 @@ pub fn deinit(self: &Document) {
     self.index.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Document, allocator: &Allocator) {
+    self.deinit()
+}
+
 pub type DocumentStore = struct {
     docs: Dict(OwnedString, Document)
 }
@@ -54,7 +59,7 @@ pub fn open(self: &DocumentStore, uri: String, version: i64, text: String) {
         version = version,
         index = line_index(text),
     }
-    self.docs.set(uri, doc)
+    self.docs.set(uri, move doc)
 }
 
 // didChange, full sync: replace the text wholesale. A change for a URI that is not open is dropped
@@ -76,7 +81,7 @@ pub fn change(self: &DocumentStore, uri: String, version: i64, text: String) {
 pub fn close(self: &DocumentStore, uri: String) {
     const removed = self.docs.remove(uri)
     if removed.is_some() {
-        let doc = removed.unwrap()
+        let doc = unwrap(move removed)
         doc.deinit()
     }
 }

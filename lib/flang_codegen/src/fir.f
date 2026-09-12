@@ -364,7 +364,7 @@ pub type Block = struct {
 // Used by the const-init wiring in lower.f, which prepends calls to `main`'s entry block after it
 // is built.
 pub fn set_instrs(self: &Block, instrs: List(Instr)) {
-    self.instrs = instrs
+    self.instrs = move instrs
 }
 
 // FIR function. `params` carries the SSA-named function parameters; they're in scope across every
@@ -431,6 +431,16 @@ pub type TestCase = struct {
     symbol: OwnedString
 }
 
+pub fn deinit(self: &TestCase) {
+    self.label.deinit()
+    self.symbol.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &TestCase, allocator: &Allocator) {
+    self.deinit()
+}
+
 // Unit of compilation.
 pub type IrModule = struct {
     globals: List(Global)
@@ -484,24 +494,20 @@ pub fn module(allocator: &Allocator? = null) IrModule {
     let displays: Dict(String, OwnedString) = dict(allocator)
     let tests: List(TestCase) = list(0, allocator)
     return IrModule {
-        globals = globals,
-        foreigns = foreigns,
-        functions = functions,
-        skipped = skipped,
-        skip_notes = skip_notes,
-        aggs = aggs,
-        displays = displays,
+        globals = move globals,
+        foreigns = move foreigns,
+        functions = move functions,
+        skipped = move skipped,
+        skip_notes = move skip_notes,
+        aggs = move aggs,
+        displays = move displays,
         testing = false,
-        tests = tests,
+        tests = move tests,
         install_tests = null,
     }
 }
 
 pub fn deinit(self: &IrModule) {
-    for &t in self.tests {
-        t.label.deinit()
-        t.symbol.deinit()
-    }
     self.tests.deinit()
     self.install_tests match {
         Some(s) => s.deinit()
@@ -519,9 +525,9 @@ pub fn deinit(self: &IrModule) {
 // Returns the previous map so the caller can free it.
 pub fn set_displays(self: &IrModule, displays: Dict(String, OwnedString)) Dict(String,
     OwnedString) {
-    let old = self.displays
-    self.displays = displays
-    return old
+    let old = move self.displays
+    self.displays = move displays
+    return move old
 }
 
 // Scoped mutability: lowering declares the module a test binary before recording any block.
@@ -531,28 +537,30 @@ pub fn set_testing(self: &IrModule, on: bool) {
 
 // Record a lowered `test {}` block. Order is run order.
 pub fn add_test(self: &IrModule, label: OwnedString, symbol: OwnedString) {
-    self.tests.push(TestCase { label = label, symbol = symbol })
+    self.tests.push(TestCase { label = move label, symbol = move symbol })
 }
 
 // Keep only the tests whose symbol is still defined. Lowering calls this once, after the refusal
 // fixpoint: a block whose function was dropped must leave the runner's table with it.
 pub fn retain_defined_tests(self: &IrModule, dropped: &Set(String)) {
     let kept: List(TestCase) = list(self.tests.len, self.tests.allocator)
-    for &t in self.tests {
+    const taken = self.tests.to_owned_slice()
+    for i in 0..taken.0.len {
+        let t = move taken.0[i]
         if dropped.contains(t.symbol.as_view()) {
-            t.label.deinit()
-            t.symbol.deinit()
+            t.deinit()
             continue
         }
-        kept.push(t.*)
+        kept.push(move t)
     }
+    taken.1.free(taken.0)
     self.tests.deinit()
-    self.tests = kept
+    self.tests = move kept
 }
 
 // Scoped mutability: named once by lowering, when the symbol is known to have been emitted.
 pub fn set_install_tests(self: &IrModule, symbol: OwnedString) {
-    self.install_tests = Some(symbol)
+    self.install_tests = Some(move symbol)
 }
 
 pub fn deinit(self: &Function) {
@@ -561,10 +569,20 @@ pub fn deinit(self: &Function) {
     self.label_storage.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Function, allocator: &Allocator) {
+    self.deinit()
+}
+
 pub fn deinit(self: &Block) {
     self.instrs.deinit()
     self.params.deinit()
     self.terminator.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Block, allocator: &Allocator) {
+    self.deinit()
 }
 
 pub fn deinit(self: &Instr) {
@@ -582,6 +600,11 @@ pub fn deinit(self: &Instr) {
     }
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Instr, allocator: &Allocator) {
+    self.deinit()
+}
+
 pub fn deinit(self: &Terminator) {
     self.* match {
         Br(t) => t.args.deinit()
@@ -595,6 +618,20 @@ pub fn deinit(self: &Terminator) {
 
 pub fn deinit(self: &ForeignDecl) {
     self.param_types.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &ForeignDecl, allocator: &Allocator) {
+    self.deinit()
+}
+
+pub fn deinit(self: &AggDef) {
+    self.fields.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &AggDef, allocator: &Allocator) {
+    self.deinit()
 }
 
 pub fn deinit(self: &Global) {
@@ -617,7 +654,7 @@ pub fn release_buffers(self: &Function, allocator: &Allocator?) {
 // branch targets.
 pub fn add_label(self: &Function, owned: OwnedString) String {
     let view = owned.as_view()
-    self.label_storage.push(owned)
+    self.label_storage.push(move owned)
     return view
 }
 
@@ -633,7 +670,7 @@ pub fn fresh_value_id(self: &Function) u32 {
 // with `replace_terminator` (below) when the previous terminator may own `BlockTarget` args that
 // need freeing.
 pub fn set_terminator(self: &Block, t: Terminator) {
-    self.terminator = t
+    self.terminator = move t
 }
 
 // Replace the block's instruction list, returning the prior list so the caller can free its
@@ -641,18 +678,18 @@ pub fn set_terminator(self: &Block, t: Terminator) {
 // instruction-by- instruction; using direct field assignment is blocked by scoped mutability
 // outside this module.
 pub fn replace_instrs(self: &Block, instrs: List(Instr)) List(Instr) {
-    let old = self.instrs
-    self.instrs = instrs
-    return old
+    let old = move self.instrs
+    self.instrs = move instrs
+    return move old
 }
 
 // Replace the block's terminator, returning the previous one. Mirrors `replace_instrs`: lets
 // external transforms swap terminators while keeping ownership of the discarded value so they can
 // deinit its `BlockTarget` args.
 pub fn replace_terminator(self: &Block, t: Terminator) Terminator {
-    let old = self.terminator
-    self.terminator = t
-    return old
+    let old = move self.terminator
+    self.terminator = move t
+    return move old
 }
 
 // Append a function parameter.
@@ -662,16 +699,16 @@ pub fn add_param(self: &Function, p: BlockParam) {
 
 // Append a block and return its index.
 pub fn add_block(self: &Function, b: Block) usize {
-    self.blocks.push(b)
+    self.blocks.push(move b)
     return self.blocks.len - 1
 }
 
 pub fn add_function(self: &IrModule, f: Function) {
-    self.functions.push(f)
+    self.functions.push(move f)
 }
 
 pub fn add_foreign(self: &IrModule, f: ForeignDecl) {
-    self.foreigns.push(f)
+    self.foreigns.push(move f)
 }
 
 // Record an aggregate definition the backend must emit, once per name.
@@ -681,7 +718,7 @@ pub fn add_agg(self: &IrModule, a: AggDef) {
             return
         }
     }
-    self.aggs.push(a)
+    self.aggs.push(move a)
 }
 
 pub fn add_global(self: &IrModule, g: Global) {
@@ -717,13 +754,13 @@ pub fn clone_operand_list(args: &List(Operand), subst: &Dict(u32, Operand),
     for i in 0..args.len {
         out.push(remap_operand(args[i], subst))
     }
-    return out
+    return move out
 }
 
 pub fn clone_ir_type_list(tys: &List(IrType), alloc: &Allocator?) List(IrType) {
     let out: List(IrType) = list(tys.len, alloc)
     out.push_all(tys.as_slice())
-    return out
+    return move out
 }
 
 pub fn clone_block_target(t: &BlockTarget, subst: &Dict(u32, Operand),

@@ -70,7 +70,7 @@ pub fn folding_ranges(text: String, allocator: &Allocator? = null) List(FoldRang
             out.push(FoldRange { start_line = start, end_line = line - 1 })
         }
     }
-    return out
+    return move out
 }
 
 // Tests

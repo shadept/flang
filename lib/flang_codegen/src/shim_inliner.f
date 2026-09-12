@@ -166,7 +166,7 @@ fn collect_foreign_names(m: &IrModule, alloc: &Allocator?) Set(OwnedString) {
     for i in 0..m.foreigns.len {
         s.add(m.foreigns[i].name)
     }
-    return s
+    return move s
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -210,7 +210,7 @@ fn find_recursive(m: &IrModule, foreigns: &Set(OwnedString), alloc: &Allocator?)
                 }
             }
         }
-        adj.push(edges)
+        adj.push(move edges)
     }
 
     let recursive: Set(OwnedString) = set(alloc)
@@ -219,7 +219,7 @@ fn find_recursive(m: &IrModule, foreigns: &Set(OwnedString), alloc: &Allocator?)
             recursive.add(m.functions[i].name)
         }
     }
-    return recursive
+    return move recursive
 }
 
 fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator?) bool {
@@ -339,9 +339,9 @@ fn inline_calls_in(m: &IrModule, caller_idx: usize, inlinable: &Dict(OwnedString
         // Swap in the freshly-built lists; deinit the previous storage. Direct field assignment is
         // blocked by scoped mutability (Block is defined in fir), so we route through `replace_*`
         // helpers.
-        let old_instrs = block_ref.replace_instrs(new_instrs)
+        let old_instrs = block_ref.replace_instrs(move new_instrs)
         old_instrs.deinit()
-        let old_term = block_ref.replace_terminator(new_term)
+        let old_term = block_ref.replace_terminator(move new_term)
         old_term.deinit()
     }
     return inlined_count
@@ -370,7 +370,7 @@ fn splice_callee(m: &IrModule, callee_idx: usize, caller: &Function, args: &List
     for i in 0..instr_count {
         const src_ref = &cb.instrs[i]
         const cloned = clone_callee_instr(src_ref, &local_subst, caller, alloc)
-        out.push(cloned)
+        out.push(move cloned)
     }
 
     let result: Operand? = null
@@ -511,8 +511,8 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
                 result = new_result,
                 result_ty = new_result_ty,
                 callee = c.callee,
-                args = args,
-                variadic_arg_types = var_types,
+                args = move args,
+                variadic_arg_types = move var_types,
             })
         }
         CallIndirect(c) => {
@@ -538,9 +538,9 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
                 result = new_result,
                 result_ty = new_result_ty,
                 fn_ptr = fn_ptr,
-                param_types = param_types,
-                args = args,
-                variadic_arg_types = var_types,
+                param_types = move param_types,
+                args = move args,
+                variadic_arg_types = move var_types,
                 cc = c.cc,
             })
         }

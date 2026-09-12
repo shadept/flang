@@ -30,6 +30,15 @@ pub type VariantDef = struct {
     decl_span: SourceSpan
 }
 
+pub fn deinit(self: &VariantDef) {
+    self.payloads.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &VariantDef, allocator: &Allocator) {
+    self.deinit()
+}
+
 pub type StructDef = struct {
     fqn: String
     module: String
@@ -256,9 +265,6 @@ pub fn free_body(def: &NominalDef) {
         }
         NomEnum(e) => {
             e.type_params.deinit()
-            for i in 0..e.variants.len {
-                e.variants[i].payloads.deinit()
-            }
             e.variants.deinit()
             e.tag_values match {
                 Some(t) => t.deinit()
