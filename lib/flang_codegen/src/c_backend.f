@@ -1710,7 +1710,7 @@ pub fn discover_compiler(allocator: &Allocator? = null) Result(CompilerInfo, Bui
         //    outside a developer prompt).
         const msvc_r = discover_msvc(allocator)
         if msvc_r.is_some() {
-            return Ok(msvc_r.unwrap())
+            return Ok(unwrap(move msvc_r))
         }
         // 2. cl.exe already on PATH (e.g. running inside a VS dev prompt).
         if can_spawn("cl.exe", allocator) {
@@ -1720,8 +1720,8 @@ pub fn discover_compiler(allocator: &Allocator? = null) Result(CompilerInfo, Bui
                 kind = CompilerKind.Msvc,
                 name = from_view("cl.exe", allocator),
                 path = from_view("cl.exe", allocator),
-                extra_env_keys = env_keys,
-                extra_env_vals = env_vals,
+                extra_env_keys = move env_keys,
+                extra_env_vals = move env_vals,
                 allocator = allocator,
             })
         }
