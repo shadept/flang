@@ -90,6 +90,8 @@ pub type CtValue = enum {
     OptStr(String?)
     List(List(CtValue))
     TypeInfo(CtTypeInfo)
+    // A run-time value named in a `#if` condition, carrying only its type: `type_of(v)` reads it.
+    Value(CtTypeInfo)
     Field(CtField)
     Variant(CtVariant)
     Param(CtParam)
@@ -100,18 +102,24 @@ pub type CtValue = enum {
     NsTypeKind
 }
 
-// Template-time `core.rtti.TypeInfo`: `kind` is the `TypeKind` discriminant or -1 when the spelled
+// Compile-time `core.rtti.TypeInfo`: `kind` is the `TypeKind` discriminant or -1 when the spelled
 // type has none (`&T`, `T?`, an unknown name). Members are derived on access from `source`, so
-// recursive types terminate. Layout (`size`/`align`/`offset`) is never available here.
+// recursive types terminate. Layout (`size`/`align`/`offset`) is never available here. `copyable`
+// is the derived bit of RFC-028: null at template time, where nothing is resolved yet, and filled
+// by the typer for a `FromTy` value (a type or value named in a `#if` condition).
 pub type CtTypeInfo = struct {
     name: String
     kind: i32
     source: CtTypeSource
+    copyable: bool?
 }
 
+// `FromTy` is a resolved type handed in by the typer: name, kind and `copyable` are known, the
+// syntax-derived members (`fields`, `variants`, `params`, `return_type`) are not.
 pub type CtTypeSource = enum {
     FromDecl(&TypeDecl)
     FromSyntax(&TypeExpr)
+    FromTy
     NoSource
 }
 
@@ -146,15 +154,27 @@ pub type CtOutcome = enum {
     Invalid(CtError)
 }
 
-// Resolves a type name (as visible from the invoking module) to its declaration. The vtable shape:
-// a context pointer plus a plain fn.
+// Resolves a type name (as visible from the invoking module) to its declaration, and a name in a
+// `#if` condition to what it denotes: `TypeInfo` for a type (a generic body's `T` at the
+// specialization being checked or lowered, or a non-generic nominal), `Value` for a binding in
+// scope. The vtable shape: a context pointer plus plain fns.
 pub type CtLookup = struct {
     ctx: &u8
     resolve: fn(ctx: &u8, name: String) &TypeDecl?
+    name: fn(ctx: &u8, name: String, span: SourceSpan) CtValue?
 }
 
-fn no_lookup(ctx: &u8, name: String) &TypeDecl? {
+pub fn no_lookup(ctx: &u8, name: String) &TypeDecl? {
     return null
+}
+
+pub fn no_name(ctx: &u8, name: String, span: SourceSpan) CtValue? {
+    return null
+}
+
+// The lookup of the closed context: no declarations, no names.
+pub fn closed_lookup() CtLookup {
+    return .{ ctx = 0usize as &u8, resolve = no_lookup, name = no_name }
 }
 
 // The evaluation environment: closed context + template bindings + nominal lookup + an arena for
@@ -175,15 +195,19 @@ pub fn ct_env(ctx: &ComptimeCtx, alloc: &Allocator, lookup: CtLookup) CtEnv {
     }
 }
 
-fn directive_env(ctx: &ComptimeCtx) CtEnv {
-    const lookup: CtLookup = .{ ctx = 0usize as &u8, resolve = no_lookup }
-    return ct_env(ctx, or_global(null), lookup)
+// Evaluates a #if condition to its branch decision, or the diagnostic to report. Never guesses: any
+// invalid condition is `Invalid`. The closed context only; a condition naming a type parameter
+// needs `eval_condition_with`.
+pub fn eval_condition(ctx: &ComptimeCtx, cond: &Expr) CtOutcome {
+    return eval_condition_with(ctx, closed_lookup(), cond)
 }
 
-// Evaluates a #if condition to its branch decision, or the diagnostic to report. Never guesses: any
-// invalid condition is `Invalid`.
-pub fn eval_condition(ctx: &ComptimeCtx, cond: &Expr) CtOutcome {
-    let env = directive_env(ctx)
+// `eval_condition` over the closed context plus `lookup`: the checker and lowering pass the names
+// in scope of the specialization they are walking, so `type_info(T).copyable` decides per
+// instantiation.
+pub fn eval_condition_with(ctx: &ComptimeCtx, lookup: CtLookup, cond: &Expr) CtOutcome {
+    let env = ct_env(ctx, or_global(null), lookup)
+    defer env.bindings.deinit()
     return ct_eval_condition(&env, cond) match {
         Ok(b) => CtOutcome.Active(b)
         Err(e) => CtOutcome.Invalid(e)
@@ -240,6 +264,10 @@ pub fn ct_eval(env: &CtEnv, e: &Expr) Result(CtValue, CtError) {
             }
             if id.name == "TypeKind" {
                 return Ok(CtValue.NsTypeKind)
+            }
+            env.lookup.name(env.lookup.ctx, id.name, id.span) match {
+                Some(v) => return Ok(v)
+                None => {}
             }
             ct_err("E2116", $"unknown compile-time name `{id.name}`", id.span)
         }
@@ -447,7 +475,8 @@ fn ct_expect_int(env: &CtEnv, e: &Expr) Result(i64, CtError) {
     }
 }
 
-// Builtin functions: `type_of(T)` (identity), `type_named("Name")`, `lower`, `snake_case`,
+// Builtin functions: `type_info(T)` (a type's info; identity on a template's `Type` parameter),
+// `type_of(v)` (a value's type, in `#if` only), `type_named("Name")`, `lower`, `snake_case`,
 // `pascal_case`.
 fn ct_call(env: &CtEnv, c: &CallExpr) Result(CtValue, CtError) {
     const name: String = c.callee.* match {
@@ -463,10 +492,22 @@ fn ct_call(env: &CtEnv, c: &CallExpr) Result(CtValue, CtError) {
     }
     const arg = ct_eval(env, arg_expr)?
     const arg_span = expr_span(arg_expr)
-    if name == "type_of" {
+    if name == "type_info" {
         return arg match {
             TypeInfo(_) => Ok(arg)
-            _ => ct_err("E2118", $"`type_of` expects a type, got {describe(&arg)}", arg_span)
+            Value(_) => ct_err("E2118",
+                $"`type_info` expects a type, got a value (`type_of` reads a value's type)",
+                arg_span)
+            _ => ct_err("E2118", $"`type_info` expects a type, got {describe(&arg)}", arg_span)
+        }
+    }
+    if name == "type_of" {
+        return arg match {
+            Value(t) => Ok(CtValue.TypeInfo(t))
+            TypeInfo(_) => ct_err("E2118",
+                $"`type_of` expects a value, got a type (`type_info` reads a type's info)",
+                arg_span)
+            _ => ct_err("E2118", $"`type_of` expects a value, got {describe(&arg)}", arg_span)
         }
     }
     if name == "type_named" {
@@ -541,6 +582,8 @@ fn ct_member(env: &CtEnv, recv: &CtValue, member: String, span: SourceSpan) Resu
             ct_err("E2116", $"unknown compile-time member `{member}`", span)
         }
         TypeInfo(t) => ct_type_member(env, &t, member, span)
+        Value(_) => ct_err("E2116",
+            $"cannot access member `{member}` on a value (`type_of(value)` is its type)", span)
         Field(f) => {
             if member == "name" {
                 return Ok(CtValue.S(f.name))
@@ -609,6 +652,23 @@ fn ct_type_member(env: &CtEnv, t: &CtTypeInfo, member: String, span: SourceSpan)
             $"`{member}` is not available at template time (layout is computed after expansion)",
             span)
     }
+    if member == "copyable" {
+        return t.copyable match {
+            Some(b) => Ok(CtValue.B(b))
+            None => ct_err("E2120",
+                $"`copyable` is not available at template time (it is derived after type resolution)",
+                span)
+        }
+    }
+    const from_ty = t.source match {
+        FromTy => true
+        _ => false
+    }
+    if from_ty {
+        return ct_err("E2120",
+            $"`{member}` is not available on a type parameter in `#if` (only `name`, `kind` and `copyable` are)",
+            span)
+    }
     if member == "type_params" or member == "type_args" {
         let empty: List(CtValue) = list(0, Some(env.alloc))
         return Ok(CtValue.List(empty))
@@ -645,11 +705,13 @@ pub fn type_info_of_decl(env: &CtEnv, td: &TypeDecl) CtTypeInfo {
             name = td.name,
             kind = KIND_STRUCT,
             source = CtTypeSource.FromDecl(td),
+            copyable = null,
         }
         AnonEnum(_) => CtTypeInfo {
             name = td.name,
             kind = KIND_ENUM,
             source = CtTypeSource.FromDecl(td),
+            copyable = null,
         }
         // `type X = Y` alias: the alias resolves to its target's shape.
         _ => type_info_of(env, td.body)
@@ -665,47 +727,47 @@ pub fn type_info_of(env: &CtEnv, te: &TypeExpr) CtTypeInfo {
                     None => {}
                 }
                 if is_primitive_name(n.name) {
-                    return CtTypeInfo {
-                        name = n.name,
-                        kind = KIND_PRIMITIVE,
-                        source = CtTypeSource.NoSource,
-                    }
+                    return unsourced_type_info(n.name, KIND_PRIMITIVE)
                 }
             }
-            CtTypeInfo { name = spell_type(env, te), kind = -1, source = CtTypeSource.NoSource }
+            unsourced_type_info(spell_type(env, te), -1)
         }
         Function(_) => CtTypeInfo {
             name = spell_type(env, te),
             kind = KIND_FUNCTION,
             source = CtTypeSource.FromSyntax(te),
+            copyable = null,
         }
-        Array(_) => CtTypeInfo {
-            name = spell_type(env, te),
-            kind = KIND_ARRAY,
-            source = CtTypeSource.NoSource,
-        }
+        Array(_) => unsourced_type_info(spell_type(env, te), KIND_ARRAY)
         AnonStruct(_) => CtTypeInfo {
             name = spell_type(env, te),
             kind = KIND_STRUCT,
             source = CtTypeSource.FromSyntax(te),
+            copyable = null,
         }
         AnonEnum(_) => CtTypeInfo {
             name = spell_type(env, te),
             kind = KIND_ENUM,
             source = CtTypeSource.FromSyntax(te),
+            copyable = null,
         }
-        _ => CtTypeInfo { name = spell_type(env, te), kind = -1, source = CtTypeSource.NoSource }
+        _ => unsourced_type_info(spell_type(env, te), -1)
     }
 }
 
+fn unsourced_type_info(name: String, kind: i32) CtTypeInfo {
+    return CtTypeInfo { name = name, kind = kind, source = CtTypeSource.NoSource, copyable = null }
+}
+
 fn void_type_info() CtTypeInfo {
-    return CtTypeInfo { name = "void", kind = KIND_PRIMITIVE, source = CtTypeSource.NoSource }
+    return unsourced_type_info("void", KIND_PRIMITIVE)
 }
 
 fn type_syntax(t: &CtTypeInfo) &TypeExpr? {
     return t.source match {
         FromDecl(td) => Some(td.body)
         FromSyntax(te) => Some(te)
+        FromTy => null
         NoSource => null
     }
 }
@@ -957,6 +1019,7 @@ fn describe(v: &CtValue) String {
         OptStr(_) => "an optional"
         List(_) => "a list"
         TypeInfo(_) => "a type"
+        Value(_) => "a value"
         Field(_) => "a field"
         Variant(_) => "a variant"
         Param(_) => "a parameter"

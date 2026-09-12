@@ -261,11 +261,11 @@ let s = size_of(i32)        // from core.rtti
 let a = align_of(Point)
 ```
 
-`Type(T)` is a built-in generic struct carrying runtime metadata. Type names used as values become `Type(T)` instances. The compiler generates a global type metadata table for all instantiated types.
+`Type(T)` is a built-in generic struct carrying runtime metadata. Type names used as values become `Type(T)` instances. The compiler emits one static `TypeInfo` descriptor per type into the data segment, minted on first use and cited by every later one: a `Type(T)` value, a `type_info` / `type_of` result, a field's `type_info`, a `type_args` entry all point into that table. Introspection is a pointer read, and a descriptor cites itself where the type does (`Tree { kids: List(Tree) }`).
 
 > `Type(T)` is the generic (phantom-`T`) view of the raw `TypeInfo`, à la Java `Class<T>` / `Class`; `Type(T)` -> `TypeInfo` is implicit phantom erasure. Descriptors are interned, so `&TypeInfo` pointer identity is type identity. See [ADR-0001](adr/0001-type-t-is-the-generic-view-of-typeinfo.md).
 
-`TypeInfo` (`core.rtti`) carries `name`, `size`, `align`, `kind: TypeKind`, `fields: FieldInfo[]` (structs), `variants: VariantInfo[]` (enums), `params: ParamInfo[]` and `return_type` (function types). It is also the introspection surface of source generators (§7.8): the same struct, the same members, so compile-time generation and runtime reflection never diverge. `TypeInfo` grows only for a demonstrated need — no convenience flags (`is_struct` is `kind == TypeKind.Struct`).
+`TypeInfo` (`core.rtti`) carries `name`, `size`, `align`, `kind: TypeKind`, `copyable` (the derived bit of RFC-028: false when the type or anything it holds by value declares an `owned` field), `fields: FieldInfo[]` (structs), `variants: VariantInfo[]` (enums), `params: ParamInfo[]` and `return_type` (function types). `type_info(T) &TypeInfo` is the descriptor of a type (`type_info(Point)`, `type_info(T)` in a generic body) and `type_of(v) &TypeInfo` the descriptor of a value's type. Both return the table entry, so `type_of(x) == type_info(u32)` is type identity; `type_info` is folded to the entry's address at the call site, as `size_of` is to a constant. It is also the introspection surface of source generators (§7.8): the same struct, the same members, so compile-time generation and runtime reflection never diverge. `TypeInfo` grows only for a demonstrated need — no convenience flags (`is_struct` is `kind == TypeKind.Struct`).
 
 **Project metadata**: `core.rtti` also exposes `ProjectInfo { name: String, version: String }` and `project_info() ProjectInfo`. The compiler substitutes each call with the metadata of the project that *lexically owns* the call site — sourced from that project's `flang.toml`. A library calling `project_info()` inside its own module sees its own name and version; the same call inside a consumer returns the consumer's. Call sites in stdlib modules fall back to `("stdlib", "")`. See `docs/architecture.md` for implementation details.
 
@@ -913,6 +913,39 @@ unwrap with `??` before comparing:
 #if (runtime.env["MODE"] ?? "") == "release" { ... }
 ```
 
+**Type parameters.** Inside a generic function body the type parameters
+in scope are compile-time names as well: `type_info(T)` is the `TypeInfo`
+(§2.9) of the concrete type bound to `T`, and the condition is decided
+per specialization. Because a generic body is checked and lowered only
+per instantiation, this is the same evaluation point as the closed
+context, and the contract is unchanged: both branches parse, only the
+active branch of *that instantiation* is type-checked and lowered. That
+is what makes the inactive branch free to name something the active
+type lacks:
+
+```
+fn clone_elem(x: &$T, allocator: &Allocator) T {
+    #if type_info(T).copyable {
+        return x.*
+    } else {
+        return x.clone(allocator)
+    }
+}
+```
+
+A non-generic nominal visible from the module is a compile-time name
+too (`#if type_info(FileHandle).copyable`), anywhere a statement-level
+`#if` can stand; a bare generic nominal carries no arguments and is
+E2116. A value binding in scope is a name as well, and `type_of(v)` is
+the descriptor of its type (`#if type_of(x).copyable` on a parameter);
+the two functions keep their run-time meanings, so `type_of(Point)` and
+`type_info(x)` are refused (E2118) rather than guessed. `name`, `kind`
+and `copyable` are the members available on a type named either way;
+they read exactly what the runtime descriptor carries. `fields`, `variants`, `params` and `return_type` are
+refused (E2120) rather than read as empty, and `size` / `align` are
+refused as they are in templates. Declaration-level `#if` sees no type
+names.
+
 **Strictness.** Invalid conditions are hard errors, never silently
 false: an unknown context name or member (`platform.oss`) is E2116, a
 non-bool condition is E2117, and operand misuse (an optional compared
@@ -935,7 +968,7 @@ Compile-time code generation prefixed with `#`. Runs between type collection and
 
 Parameter kinds: `Ident` (bare identifier), `Type` (type expression). Last param can be variadic: `..Param: Kind`.
 
-**Template values.** An `Ident` parameter is an identifier (`Name.text` is its spelling; `#(Name)` pastes it). A `Type` parameter is the argument's `TypeInfo` (§2.9) — `T.name`, `T.kind` (compare with `TypeKind.Struct` etc.), `T.fields`, `T.variants`, `T.params`, `T.return_type`, with `field.name` / `field.type_info` and `variant.name` exactly as at run time. `size`, `align` and `offset` are not available at expansion time (layout is computed after expansion) — reading them is E2120. Any nominal, primitive or anonymous `struct { … }` may be passed as a `Type` argument. Builtin functions: `type_of(T)` (identity), `type_named("Name")` (look a type up by name, e.g. one generated earlier — E2003 if absent), `lower`, `snake_case`, `pascal_case`.
+**Template values.** An `Ident` parameter is an identifier (`Name.text` is its spelling; `#(Name)` pastes it). A `Type` parameter is the argument's `TypeInfo` (§2.9) — `T.name`, `T.kind` (compare with `TypeKind.Struct` etc.), `T.fields`, `T.variants`, `T.params`, `T.return_type`, with `field.name` / `field.type_info` and `variant.name` exactly as at run time. `size`, `align` and `offset` are not available at expansion time (layout is computed after expansion), and neither is `copyable` (derived after type resolution) — reading them is E2120; a generator that needs the bit emits `#if type_info(T).copyable` into its expansion and lets the specialization decide (§7.7). Any nominal, primitive or anonymous `struct { … }` may be passed as a `Type` argument. Builtin functions: `type_info(T)` (identity), `type_named("Name")` (look a type up by name, e.g. one generated earlier — E2003 if absent), `lower`, `snake_case`, `pascal_case`.
 
 **Template directives.** `#(expr)` pastes the value's text; inside a string literal (`"#(expr)"`) it pastes it escaped, so the literal stays valid. `#for x in list { … }`, `#if cond { … } #elif cond { … } #else { … }`. `##` escapes a literal `#`.
 
@@ -1035,6 +1068,8 @@ through the managed API, and owns nothing - there is no `deinit` on it. The mana
 one set of unmanaged functions plus a generator (`#managed_list`, `#managed_dict`) that emits the
 forwarding overloads for each carrier; a transformation on either carrier returns a `List`/`Dict`,
 since a new collection needs storage of its own. Only the building blocks come in two flavours.
+
+**Ownership vocabulary (RFC-028).** Three names, used the same way on every type. `clone(self: &T, allocator: &Allocator? = null) T` is the explicit, allocating, deep duplicate: the only way to duplicate a non-copyable value, and the unmanaged flavour requires the allocator. Elements go through `#if type_info(T).copyable` (§7.7): copyable ones are copied, the rest cloned; there is no blanket `clone($T)`. There is no `copy` function anywhere: "copy" is the language's word for the bitwise duplicate that `move` replaces. `deinit(self: T)` takes its value by value and consumes it (`deinit(move x)`); the unmanaged flavour is `deinit(self: T, allocator: &Allocator)`, and no other shape exists in the standard library - anything else a value needs to release itself, it carries. `retain(self: &Rc(T)) Rc(T)` is the reference-count bump on `Rc` / `Arc`, so that `rc.clone()` peels through `op_deref` to `T`'s own `clone` and yields a `T`.
 A composite built on them is managed only, storing its allocator once: `Journal(T)` (std.journal),
 an undo log with nested checkpoints whose two buffers are reused across regions; `MultiMap(K, V)`
 (std.multimap), a key-to-many-values table whose values share one pool, chained per key, so the

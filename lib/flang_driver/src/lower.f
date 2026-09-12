@@ -67,12 +67,14 @@ import flang_core.span
 import flang_parser.ast
 import flang_parser.comptime
 import flang_parser.lexer
+import flang_typer.copyable
 import flang_typer.function_registry
 import flang_typer.inference_results
 import flang_typer.interner
 import flang_typer.node_id
 import flang_typer.nominal_registry
 import flang_typer.result
+import flang_typer.rtti
 import flang_typer.scheme
 import flang_typer.specialization
 import flang_typer.type
@@ -168,6 +170,9 @@ type LowerCtx = struct {
     // far, which is what names them.
     testing: bool
     next_test: usize
+    // `core.rtti.TypeInfo` descriptors minted so far, keyed by type (`static_typeinfo`): one global
+    // per type for the whole program, so `&TypeInfo` identity is type identity.
+    rtti_syms: Dict(Ty, String)
 }
 
 // One lowered module-level constant: its global's symbol, its init function's symbol, and its
@@ -410,6 +415,7 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult,
         lay_cache = layout_cache(allocator),
         testing = false,
         next_test = 0,
+        rtti_syms = dict(allocator),
     }
     lower_consts(&m, &ctx, ast_module)
     lower_into(&m, &ctx, ast_module, "")
@@ -480,6 +486,7 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
         lay_cache = layout_cache(allocator),
         testing = tests.is_some(),
         next_test = 0,
+        rtti_syms = dict(allocator),
     }
     // A module outside the demand set (RFC-022 §6) was never body-checked: it has no node types to
     // lower, and nothing demanded can reach its functions or constants - identifier, operator and
@@ -1161,6 +1168,13 @@ fn const_string(ctx: &LowerCtx, ty: &Ty, sl: &StringLiteral, buf: &List(u8), rel
     if !is_string_ty(ctx, ty) {
         return false
     }
+    return blob_string(ctx, ty, sl.text, buf, rel, at)
+}
+
+// A `String` of type `ty` over the interned `text`, written at `at`: the address of the bytes and
+// the length.
+fn blob_string(ctx: &LowerCtx, ty: &Ty, text: String, buf: &List(u8), rel: &List(Reloc),
+    at: usize) bool {
     let st_opt = resolve_struct(ctx, ty, &ctx.result.nominals, ctx.allocator)
     if st_opt.is_none() {
         return false
@@ -1171,7 +1185,7 @@ fn const_string(ctx: &LowerCtx, ty: &Ty, sl: &StringLiteral, buf: &List(u8), rel
     if pi < 0 or li < 0 {
         return false
     }
-    let interned = intern_string(ctx, sl.text)
+    let interned = intern_string(ctx, text)
     if interned.is_none() {
         return false
     }
@@ -1928,7 +1942,8 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
         // condition; re-evaluate against the same host context and splice the active branch's
         // statements in place.
         IfDirective(ifd) => {
-            eval_condition(&ctx.comptime, ifd.condition) match {
+            const lookup: CtLookup = .{ ctx = ctx as &u8, resolve = no_lookup, name = lower_name }
+            eval_condition_with(&ctx.comptime, lookup, ifd.condition) match {
                 Active(active) => {
                     const stmts: &List(Stmt) = if active { &ifd.then_stmts } else { &ifd.else_stmts }
                     for i in 0..stmts.len {
@@ -2609,7 +2624,7 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
         // `Type(T)` instantiation syntax is a reified-type VALUE, not a call (minimal RTTI, M11).
         let cty = node_ty(ctx, call.span)
         if nominal_fqn_is(ctx, &cty, FQN_TYPE) {
-            return build_typeinfo_value(ctx, bb, &cty)
+            return build_typeinfo_value(ctx, &cty)
         }
         // No resolved symbol: the callee may be a VALUE - a closure or a bare fn pointer (RFC-014).
         return lower_callee_value_call(ctx, bb, env, call)
@@ -2617,10 +2632,10 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
     const sym = callable.unwrap().0
     const sig = callable.unwrap().1
 
-    // `size_of(T)` / `align_of(T)` fold to layout constants (M11). Their stdlib bodies read a
-    // `Type(T)` RTTI value this lowering cannot build yet; the answer is a compile-time constant
-    // anyway. Same pattern as the reference's `project_info()` intercept.
-    let folded = intercept_rtti_layout(ctx, sym, &sig)
+    // `size_of(T)` / `align_of(T)` fold to layout constants and `type_info(T)` to its descriptor's
+    // address (M11, ADR-0001): the answers are compile-time constants, and the stdlib bodies are
+    // placeholders. Same pattern as the reference's `project_info()` intercept.
+    let folded = intercept_rtti(ctx, sym, &sig)
     if folded.is_some() {
         return folded.unwrap()
     }
@@ -3229,10 +3244,9 @@ fn receiver_place_mem(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr)
     }
 }
 
-// A `Type(T)` handle in value position (minimal RTTI, M11): a TypeInfo slot with size, align, and
-// kind filled from T's layout; every other field zeroed (name is the empty string - populate when a
-// consumer needs it). `ty` is the node's `core.rtti.Type(T)` nominal.
-fn build_typeinfo_value(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty) Operand {
+// A `Type(T)` handle in value position: the address of `T`'s static descriptor (ADR-0001). `ty` is
+// the node's `core.rtti.Type(T)` nominal.
+fn build_typeinfo_value(ctx: &LowerCtx, ty: &Ty) Operand {
     let nr = tn(ctx, ty.*) match {
         NNominal(n) => n
         _ => return unlowerable(ctx)
@@ -3244,284 +3258,289 @@ fn build_typeinfo_value(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty) Operand {
     if !ty_concrete(tyit(ctx), t) {
         return unlowerable_why(ctx, "Type(T) of a non-concrete T")
     }
-    return build_typeinfo(ctx, bb, &t, 0usize)
+    return static_typeinfo(ctx, t) match {
+        Some(sym) => Operand.GlobalRef(sym)
+        None => unlowerable_why(ctx, "core.rtti.TypeInfo is not in scope")
+    }
 }
 
-// How deep the TypeInfo tree is materialised. Each level costs a stack slot per member type; a
-// recursive type (`JsonValue` holds a `List(JsonValue)`) would otherwise never bottom out. Past the
-// cap the nested `type_info` pointers are null - readers see the shape they came for and nothing
-// beyond it.
-const RTTI_MAX_DEPTH: usize = 3
+// The symbol of `t`'s `core.rtti.TypeInfo` descriptor in the data segment: one per type, minted on
+// first use and cited by every later reference, so `&TypeInfo` identity is type identity
+// (ADR-0001). Every member the record declares is populated: the type's name, layout, kind, the
+// copyable bit, type parameters and arguments, fields (structs), variants (enums), and parameters
+// plus return type (function types).
+//
+// The symbol is memoized BEFORE the members are built, so a type that reaches itself through its
+// arguments (`Tree { kids: List(Tree) }` cites `Tree` from `List(Tree)`'s `type_args`) cites the
+// descriptor under construction instead of recursing; the C backend declares every relocated global
+// ahead of the definitions for that reason.
+fn static_typeinfo(ctx: &LowerCtx, t: Ty) String? {
+    let hit = ctx.rtti_syms.get(t)
+    if hit.is_some() {
+        return hit
+    }
+    let st = well_known_struct(ctx, FQN_TYPE_INFO) match {
+        Some(s) => s
+        None => return null
+    }
+    let sym = park_sym(ctx, $"rtti_{ctx.rtti_syms.len()}")
+    ctx.rtti_syms.set(t, sym)
 
-// Build a `TypeInfo` for `t` in a fresh stack slot and return its address. Every member the record
-// declares is populated: the type's name, layout, kind, type parameters and arguments, fields
-// (structs), variants (enums), and parameters plus return type (function types). The reference
-// emits static tables for this; here the tree is built at the use site, which is what the `Type(T)`
-// VALUE model already implies (a TypeInfo is an ordinary aggregate, addressed by pointer).
-fn build_typeinfo(ctx: &LowerCtx, bb: &BlockBuilder, t: &Ty, depth: usize) Operand {
     let reg = &ctx.result.nominals
-    let ti_ty = well_known_ty(ctx, FQN_TYPE_INFO)
-    if ti_ty.is_none() {
-        return unlowerable_why(ctx, "core.rtti.TypeInfo is not in scope")
-    }
-    let ti = ti_ty.unwrap()
-    let st_opt = resolve_struct(ctx, &ti, reg, ctx.allocator)
-    if st_opt.is_none() {
-        return unlowerable(ctx)
-    }
-    let st = st_opt.unwrap()
-
-    let lay = lay_of(ctx, t.*)
-    let slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
-    bb.memset(slot, Operand.IntConst(0), Operand.IntConst(st.layout.size as i64))
-
-    store_ti_field(ctx, bb, &st, slot, "name", build_string_value(ctx, bb, rtti_type_name(ctx, t)))
-    store_ti_field(ctx, bb, &st, slot, "size", Operand.IntConst(lay.size as i64))
-    store_ti_field(ctx, bb, &st, slot, "align", Operand.IntConst(lay.align as i64))
-    // `kind` is a payload-less ENUM field, so it is an aggregate by the by-ref rule and
-    // `store_ti_field` would memcpy from the constant. Its discriminant is an i32; store that width
-    // directly.
-    let ki = field_index(&st.def, "kind")
-    if ki >= 0 {
-        bb.store(IrType.I32, Operand.IntConst(rtti_kind_tag(ctx, t)), bb.gep(slot,
-                Operand.IntConst(st.layout.offsets[ki as usize] as i64)))
-    }
-
-    build_ti_type_params(ctx, bb, &st, slot, t, depth)
-    build_ti_fields(ctx, bb, &st, slot, t, depth)
-    build_ti_variants(ctx, bb, &st, slot, t)
-    build_ti_function(ctx, bb, &st, slot, t, depth)
-    return slot
+    let blob: List(u8) = filled_list(st.layout.size, 0u8, ctx.allocator)
+    let rel: List(Reloc) = list(0, ctx.allocator)
+    let lay = lay_of(ctx, t)
+    blob_string_field(ctx, &st, &blob, &rel, "name", rtti_name(tyit(ctx), reg, t))
+    blob_int_field(ctx, &st, &blob, "size", lay.size as i64)
+    blob_int_field(ctx, &st, &blob, "align", lay.align as i64)
+    blob_int_field(ctx, &st, &blob, "kind", rtti_kind(tyit(ctx), reg, t) as i64)
+    const copyable: i64 = if is_copyable_ty(tyit(ctx), reg, t, ctx.allocator) { 1 } else { 0 }
+    blob_int_field(ctx, &st, &blob, "copyable", copyable)
+    static_ti_type_params(ctx, &st, &blob, &rel, t)
+    static_ti_fields(ctx, &st, &blob, &rel, t)
+    static_ti_variants(ctx, &st, &blob, &rel, t)
+    static_ti_function(ctx, &st, &blob, &rel, t)
+    push_blob_global(ctx, sym, st.layout.size, st.layout.align, blob, rel)
+    return Some(sym)
 }
 
-// Store one member: an aggregate (a slice view, a String) copies its bytes in, a scalar stores at
-// the FIELD's own declared width.
-fn store_ti_field(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: Operand, name: String,
-    value: Operand) {
+fn well_known_struct(ctx: &LowerCtx, fqn: String) StructTarget? {
+    let ty = well_known_ty(ctx, fqn) match {
+        Some(t) => t
+        None => return null
+    }
+    return resolve_struct(ctx, &ty, &ctx.result.nominals, ctx.allocator)
+}
+
+// A data-segment global over `blob`, its address slots in `rel`. The buffers move into the ctx so
+// the `Global` can borrow them as slices for the rest of the walk.
+fn push_blob_global(ctx: &LowerCtx, sym: String, size: usize, align: usize, blob: List(u8),
+    rel: List(Reloc)) {
+    let bytes = blob.as_slice()
+    let rs = rel.as_slice()
+    ctx.const_blobs.push(blob)
+    ctx.const_relocs.push(rel)
+    ctx.globals.push(Global {
+        name = sym,
+        size = size as u64,
+        align = align as u64,
+        init_bytes = Some(bytes),
+        relocs = Some(rs),
+    })
+}
+
+// Member `name` of `st` in a record written at `at`: its byte offset and its type. Null when the
+// record does not declare it, which leaves the blob's zeros in place.
+fn field_at(ctx: &LowerCtx, st: &StructTarget, name: String, at: usize) (usize, Ty)? {
     let fi = field_index(&st.def, name)
     if fi < 0 {
-        return
+        return null
     }
     let idx = fi as usize
-    let fty = field_ty(tyit(ctx), &st.def, idx, &st.args)
-    let dst = bb.gep(slot, Operand.IntConst(st.layout.offsets[idx] as i64))
-    if is_by_ref(ctx, &fty) {
-        let flay = lay_of(ctx, fty)
-        bb.memcpy(dst, value, Operand.IntConst(flay.size as i64))
-    } else {
-        bb.store(ir_of(ctx, fty), value, dst)
+    return Some((at + st.layout.offsets[idx], field_ty(tyit(ctx), &st.def, idx, &st.args)))
+}
+
+// A scalar member, written at the member's own declared width.
+fn blob_int_field(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), name: String, v: i64,
+    at: usize = 0) {
+    field_at(ctx, st, name, at) match {
+        Some(f) => write_le(blob, f.0, v, lay_of(ctx, f.1).size)
+        None => {}
+    }
+}
+
+// A `String` member: the interned text's address and its length.
+fn blob_string_field(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel: &List(Reloc),
+    name: String, text: String, at: usize = 0) {
+    field_at(ctx, st, name, at) match {
+        Some(f) => { let _ok = blob_string(ctx, &f.1, text, blob, rel, f.0) }
+        None => {}
+    }
+}
+
+// A slice member: the address of the element array global `elems` (null for an empty slice) and the
+// count.
+fn blob_slice_field(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel: &List(Reloc),
+    name: String, elems: String?, len: usize, at: usize = 0) {
+    field_at(ctx, st, name, at) match {
+        Some(f) => blob_slice(ctx, &f.1, blob, rel, f.0, elems, len)
+        None => {}
+    }
+}
+
+// A `{ptr, len}` view of slice type `sty` written at `at`.
+fn blob_slice(ctx: &LowerCtx, sty: &Ty, blob: &List(u8), rel: &List(Reloc), at: usize,
+    elems: String?, len: usize) {
+    let ss = resolve_struct(ctx, sty, &ctx.result.nominals, ctx.allocator) match {
+        Some(s) => s
+        None => return
+    }
+    let pi = field_index(&ss.def, "ptr")
+    let li = field_index(&ss.def, "len")
+    if pi < 0 or li < 0 {
+        return
+    }
+    elems match {
+        Some(sym) => {
+            let _ok = add_reloc(rel, at + ss.layout.offsets[pi as usize], Operand.GlobalRef(sym))
+        }
+        None => {}
+    }
+    write_le(blob, at + ss.layout.offsets[li as usize], len as i64, 8)
+}
+
+// A pointer member citing `target`.
+fn blob_ptr_field(ctx: &LowerCtx, st: &StructTarget, rel: &List(Reloc), name: String,
+    target: String, at: usize = 0) {
+    field_at(ctx, st, name, at) match {
+        Some(f) => { let _ok = add_reloc(rel, f.0, Operand.GlobalRef(target)) }
+        None => {}
     }
 }
 
 // `type_params` is one (empty) name per declared parameter - the registry keeps parameters as var
-// ids, not names, so only the COUNT is truthful here - and `type_args` is one TypeInfo pointer per
-// argument of the instantiation.
-fn build_ti_type_params(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: Operand, t: &Ty,
-    depth: usize) {
-    let reg = &ctx.result.nominals
-    let nr = tn(ctx, t.*) match {
-        NNominal(n) => Some(n)
-        _ => null
+// ids, not names, so only the COUNT is truthful here - and `type_args` is one descriptor pointer
+// per argument of the instantiation.
+fn static_ti_type_params(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel: &List(Reloc),
+    t: Ty) {
+    let n = tn(ctx, t) match {
+        NNominal(n) => n
+        _ => return
     }
-    if nr.is_none() {
-        let none_ptrs: List(Operand) = list(0, ctx.allocator)
-        store_ti_field(ctx, bb, st, slot, "type_args", pack_ptr_slice(ctx, bb, &none_ptrs))
-        none_ptrs.deinit()
-        return
-    }
-    let n = nr.unwrap()
-    let n_params = reg.get(n.id).* match {
+    let n_params = ctx.result.nominals.get(n.id).* match {
         NomStruct(sd) => sd.type_params.len
         NomEnum(ed) => ed.type_params.len
     }
     if n_params > 0 {
-        let str_ty = well_known_ty(ctx, FQN_STRING)
-        if str_ty.is_some() {
-            let names: List(Operand) = list(n_params, ctx.allocator)
-            for i in 0..n_params {
-                names.push(build_string_value(ctx, bb, ""))
-            }
-            store_ti_field(ctx, bb, st, slot, "type_params", pack_slice(ctx, bb, &str_ty.unwrap(),
-                    &names))
-            names.deinit()
-        }
+        blob_slice_field(ctx, st, blob, rel, "type_params", static_empty_names(ctx, n_params),
+            n_params)
     }
-    // `type_args` is declared `&TypeInfo[]` - a REFERENCE to a slice, so the field holds a pointer.
-    // It is always written, even for zero arguments: a null pointer there makes `t.type_args.len`
-    // read through address 0.
-    let ptrs: List(Operand) = list(n.args.len, ctx.allocator)
-    if depth < RTTI_MAX_DEPTH {
-        for i in 0..n.args.len {
-            let arg_ti = tyit(ctx).child_at(n.args, i)
-            ptrs.push(build_typeinfo(ctx, bb, &arg_ti, depth + 1))
-        }
-    }
-    store_ti_field(ctx, bb, st, slot, "type_args", pack_ptr_slice(ctx, bb, &ptrs))
-    ptrs.deinit()
-}
-
-fn build_ti_fields(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: Operand, t: &Ty,
-    depth: usize) {
-    let reg = &ctx.result.nominals
-    let target = resolve_struct(ctx, t, reg, ctx.allocator)
-    if target.is_none() {
+    if n.args.len == 0 {
         return
     }
-    let ts = target.unwrap()
+    let pblob: List(u8) = filled_list(8 * n.args.len, 0u8, ctx.allocator)
+    let prel: List(Reloc) = list(n.args.len, ctx.allocator)
+    for i in 0..n.args.len {
+        static_typeinfo(ctx, tyit(ctx).child_at(n.args, i)) match {
+            Some(s) => { let _ok = add_reloc(&prel, 8 * i, Operand.GlobalRef(s)) }
+            None => {}
+        }
+    }
+    let psym = park_sym(ctx, $"rtti_args_{ctx.globals.len}")
+    push_blob_global(ctx, psym, 8 * n.args.len, 8, pblob, prel)
+    blob_slice_field(ctx, st, blob, rel, "type_args", Some(psym), n.args.len)
+}
+
+// An array of `count` empty `String` records, as the element global of a `String[]`.
+fn static_empty_names(ctx: &LowerCtx, count: usize) String? {
+    let ss = well_known_struct(ctx, FQN_STRING) match {
+        Some(s) => s
+        None => return null
+    }
+    let sty = well_known_ty(ctx, FQN_STRING).unwrap()
+    let blob: List(u8) = filled_list(ss.layout.size * count, 0u8, ctx.allocator)
+    let rel: List(Reloc) = list(count, ctx.allocator)
+    for i in 0..count {
+        let _ok = blob_string(ctx, &sty, "", &blob, &rel, ss.layout.size * i)
+    }
+    let sym = park_sym(ctx, $"rtti_names_{ctx.globals.len}")
+    push_blob_global(ctx, sym, ss.layout.size * count, ss.layout.align, blob, rel)
+    return Some(sym)
+}
+
+fn static_ti_fields(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel: &List(Reloc), t: Ty) {
+    let reg = &ctx.result.nominals
+    let ts = resolve_struct(ctx, &t, reg, ctx.allocator) match {
+        Some(s) => s
+        None => return
+    }
     if ts.def.fields.len == 0 {
         return
     }
-    let fi_ty = well_known_ty(ctx, FQN_FIELD_INFO)
-    if fi_ty.is_none() {
-        return
+    let fs = well_known_struct(ctx, FQN_FIELD_INFO) match {
+        Some(s) => s
+        None => return
     }
-    let fst = resolve_struct(ctx, &fi_ty.unwrap(), reg, ctx.allocator)
-    if fst.is_none() {
-        return
-    }
-    let fs = fst.unwrap()
-
-    let items: List(Operand) = list(ts.def.fields.len, ctx.allocator)
-    for i in 0..ts.def.fields.len {
-        let rec = bb.stack_slot(fs.layout.size as u64, fs.layout.align as u64)
-        bb.memset(rec, Operand.IntConst(0), Operand.IntConst(fs.layout.size as i64))
-        store_ti_field(ctx, bb, &fs, rec, "name", build_string_value(ctx, bb,
-                ts.def.fields[i].name))
-        store_ti_field(ctx, bb, &fs, rec, "offset", Operand.IntConst(ts.layout.offsets[i] as i64))
-        if depth < RTTI_MAX_DEPTH {
-            let fty = field_ty(tyit(ctx), &ts.def, i, &ts.args)
-            store_ti_field(ctx, bb, &fs, rec, "type_info", build_typeinfo(ctx, bb, &fty, depth + 1))
+    let n = ts.def.fields.len
+    let ablob: List(u8) = filled_list(fs.layout.size * n, 0u8, ctx.allocator)
+    let arel: List(Reloc) = list(2 * n, ctx.allocator)
+    for i in 0..n {
+        let at = fs.layout.size * i
+        blob_string_field(ctx, &fs, &ablob, &arel, "name", ts.def.fields[i].name, at)
+        blob_int_field(ctx, &fs, &ablob, "offset", ts.layout.offsets[i] as i64, at)
+        let fty = field_ty(tyit(ctx), &ts.def, i, &ts.args)
+        static_typeinfo(ctx, fty) match {
+            Some(s) => blob_ptr_field(ctx, &fs, &arel, "type_info", s, at)
+            None => {}
         }
-        items.push(rec)
     }
-    store_ti_field(ctx, bb, st, slot, "fields", pack_slice(ctx, bb, &fi_ty.unwrap(), &items))
-    items.deinit()
+    let sym = park_sym(ctx, $"rtti_fields_{ctx.globals.len}")
+    push_blob_global(ctx, sym, fs.layout.size * n, fs.layout.align, ablob, arel)
+    blob_slice_field(ctx, st, blob, rel, "fields", Some(sym), n)
 }
 
-fn build_ti_variants(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: Operand, t: &Ty) {
+fn static_ti_variants(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel: &List(Reloc),
+    t: Ty) {
     let reg = &ctx.result.nominals
-    let target = resolve_enum(ctx, t, reg)
-    if target.is_none() {
-        return
+    let te = resolve_enum(ctx, &t, reg) match {
+        Some(e) => e
+        None => return
     }
-    let te = target.unwrap()
     if te.def.variants.len == 0 {
         return
     }
-    let vi_ty = well_known_ty(ctx, FQN_VARIANT_INFO)
-    if vi_ty.is_none() {
-        return
+    let vs = well_known_struct(ctx, FQN_VARIANT_INFO) match {
+        Some(s) => s
+        None => return
     }
-    let vst = resolve_struct(ctx, &vi_ty.unwrap(), reg, ctx.allocator)
-    if vst.is_none() {
-        return
+    let n = te.def.variants.len
+    let ablob: List(u8) = filled_list(vs.layout.size * n, 0u8, ctx.allocator)
+    let arel: List(Reloc) = list(n, ctx.allocator)
+    for i in 0..n {
+        blob_string_field(ctx, &vs, &ablob, &arel, "name", te.def.variants[i].name,
+            vs.layout.size * i)
     }
-    let vs = vst.unwrap()
-
-    let items: List(Operand) = list(te.def.variants.len, ctx.allocator)
-    for i in 0..te.def.variants.len {
-        let rec = bb.stack_slot(vs.layout.size as u64, vs.layout.align as u64)
-        bb.memset(rec, Operand.IntConst(0), Operand.IntConst(vs.layout.size as i64))
-        store_ti_field(ctx, bb, &vs, rec, "name", build_string_value(ctx, bb,
-                te.def.variants[i].name))
-        items.push(rec)
-    }
-    store_ti_field(ctx, bb, st, slot, "variants", pack_slice(ctx, bb, &vi_ty.unwrap(), &items))
-    items.deinit()
+    let sym = park_sym(ctx, $"rtti_variants_{ctx.globals.len}")
+    push_blob_global(ctx, sym, vs.layout.size * n, vs.layout.align, ablob, arel)
+    blob_slice_field(ctx, st, blob, rel, "variants", Some(sym), n)
 }
 
 // Function types carry their parameters and return type; every other kind leaves both members at
 // their zeroed default (an empty slice and a null pointer), which is what `rtti_params_empty` /
 // `rtti_return_type_null` read.
-fn build_ti_function(ctx: &LowerCtx, bb: &BlockBuilder, st: &StructTarget, slot: Operand, t: &Ty,
-    depth: usize) {
-    let ft = tn(ctx, t.*) match {
-        NFunc(f) => Some(f)
-        _ => null
+fn static_ti_function(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel: &List(Reloc),
+    t: Ty) {
+    let f = tn(ctx, t) match {
+        NFunc(f) => f
+        _ => return
     }
-    if ft.is_none() {
-        return
-    }
-    let f = ft.unwrap()
-    if depth >= RTTI_MAX_DEPTH {
-        return
-    }
-    let reg = &ctx.result.nominals
-
     if f.params.len > 0 {
-        let pi_ty = well_known_ty(ctx, FQN_PARAM_INFO)
-        if pi_ty.is_some() {
-            let pst = resolve_struct(ctx, &pi_ty.unwrap(), reg, ctx.allocator)
-            if pst.is_some() {
-                let ps = pst.unwrap()
-                let items: List(Operand) = list(f.params.len, ctx.allocator)
-                for i in 0..f.params.len {
-                    let rec = bb.stack_slot(ps.layout.size as u64, ps.layout.align as u64)
-                    bb.memset(rec, Operand.IntConst(0), Operand.IntConst(ps.layout.size as i64))
-                    // A function TYPE has no parameter names.
-                    store_ti_field(ctx, bb, &ps, rec, "name", build_string_value(ctx, bb, ""))
-                    let pti = tyit(ctx).child_at(f.params, i)
-                    store_ti_field(ctx, bb, &ps, rec, "type_info", build_typeinfo(ctx, bb, &pti,
-                            depth + 1))
-                    items.push(rec)
-                }
-                store_ti_field(ctx, bb, st, slot, "params", pack_slice(ctx, bb, &pi_ty.unwrap(),
-                        &items))
-                items.deinit()
+        let ps = well_known_struct(ctx, FQN_PARAM_INFO) match {
+            Some(s) => s
+            None => return
+        }
+        let n = f.params.len
+        let ablob: List(u8) = filled_list(ps.layout.size * n, 0u8, ctx.allocator)
+        let arel: List(Reloc) = list(2 * n, ctx.allocator)
+        for i in 0..n {
+            let at = ps.layout.size * i
+            // A function TYPE has no parameter names.
+            blob_string_field(ctx, &ps, &ablob, &arel, "name", "", at)
+            static_typeinfo(ctx, tyit(ctx).child_at(f.params, i)) match {
+                Some(s) => blob_ptr_field(ctx, &ps, &arel, "type_info", s, at)
+                None => {}
             }
         }
+        let sym = park_sym(ctx, $"rtti_params_{ctx.globals.len}")
+        push_blob_global(ctx, sym, ps.layout.size * n, ps.layout.align, ablob, arel)
+        blob_slice_field(ctx, st, blob, rel, "params", Some(sym), n)
     }
     if f.ret != TY_VOID {
-        store_ti_field(ctx, bb, st, slot, "return_type", build_typeinfo(ctx, bb, &f.ret, depth + 1))
+        static_typeinfo(ctx, f.ret) match {
+            Some(s) => blob_ptr_field(ctx, st, rel, "return_type", s)
+            None => {}
+        }
     }
-}
-
-// Copy `items` (each an aggregate ADDRESS) into one contiguous array and return a `Slice(elem)`
-// view over it.
-fn pack_slice(ctx: &LowerCtx, bb: &BlockBuilder, elem: &Ty, items: &List(Operand)) Operand {
-    let lay = lay_of(ctx, elem.*)
-    let buf = bb.stack_slot((lay.size * items.len) as u64, lay.align as u64)
-    for i in 0..items.len {
-        bb.memcpy(bb.gep(buf, Operand.IntConst((lay.size * i) as i64)), items[i],
-            Operand.IntConst(lay.size as i64))
-    }
-    let sty = slice_ty_of(ctx, elem.*)
-    if sty.is_none() {
-        return unlowerable_why(ctx, "core.slice.Slice is not in scope")
-    }
-    return build_slice_view(ctx, bb, &sty.unwrap(), buf, items.len)
-}
-
-// The `&TypeInfo[]` counterpart: an array of POINTERS, not records.
-fn pack_ptr_slice(ctx: &LowerCtx, bb: &BlockBuilder, ptrs: &List(Operand)) Operand {
-    let buf = bb.stack_slot((8 * ptrs.len) as u64, 8u64)
-    for i in 0..ptrs.len {
-        bb.store(IrType.Ptr, ptrs[i], bb.gep(buf, Operand.IntConst((8 * i) as i64)))
-    }
-    let ti = well_known_ty(ctx, FQN_TYPE_INFO)
-    if ti.is_none() {
-        return unlowerable(ctx)
-    }
-    let sty = slice_ty_of(ctx, mk_ref_ty(ctx, ti.unwrap()))
-    if sty.is_none() {
-        return unlowerable(ctx)
-    }
-    return build_slice_view(ctx, bb, &sty.unwrap(), buf, ptrs.len)
-}
-
-// `String` over an interned literal - the same `{ptr, len}` shape string literals lower to.
-fn build_string_value(ctx: &LowerCtx, bb: &BlockBuilder, text: String) Operand {
-    let sty = well_known_ty(ctx, FQN_STRING)
-    if sty.is_none() {
-        return unlowerable(ctx)
-    }
-    let s = sty.unwrap()
-    let interned = intern_string(ctx, text)
-    if interned.is_none() {
-        return unlowerable(ctx)
-    }
-    let e = interned.unwrap()
-    return build_slice_view(ctx, bb, &s, Operand.GlobalRef(e.name), e.len)
 }
 
 fn well_known_ty(ctx: &LowerCtx, fqn: String) Ty? {
@@ -3549,57 +3568,14 @@ fn mk_ref_ty(ctx: &LowerCtx, inner: Ty) Ty {
     return ctx.it.ref_of(inner)
 }
 
-// The name `TypeInfo.name` reports: a primitive's spelling, a nominal's SHORT name, and a
-// structural rendering for the rest. Leaked with the rest of the lowering's synthesized strings.
-fn rtti_type_name(ctx: &LowerCtx, t: &Ty) String {
-    return tn(ctx, t.*) match {
-        NPrim(p) => prim_name(p)
-        NVoid => "void"
-        NNever => "never"
-        NNominal(nn) => rtti_nominal_name(ctx, nn.id)
-        NRef(_) => "reference"
-        NArray(_) => "array"
-        NFunc(_) => "function"
-        NTuple(_) => "tuple"
-        _ => ""
-    }
-}
-
-fn rtti_nominal_name(ctx: &LowerCtx, id: NominalId) String {
-    let fqn = ctx.result.nominals.get(id).* match {
-        NomStruct(sd) => sd.fqn
-        NomEnum(ed) => ed.fqn
-    }
-    let cut = 0usize
-    for i in 0..fqn.len {
-        if fqn[i] == '.' {
-            cut = i + 1
-        }
-    }
-    return fqn[cut..fqn.len]
-}
-
-// TypeKind's declaration indices (Primitive, Array, Struct, Enum, Function - the declared values
-// coincide with the indices).
-fn rtti_kind_tag(ctx: &LowerCtx, t: &Ty) i64 {
-    return tn(ctx, t.*) match {
-        NArray(_) => 1
-        NFunc(_) => 4
-        NNominal(nn) => ctx.result.nominals.get(nn.id).* match {
-            NomStruct(_) => 2
-            NomEnum(_) => 3
-        }
-        _ => 0
-    }
-}
-
-// The constant for a `core.rtti.size_of`/`align_of` specialization call: the instantiated `Type(T)`
-// parameter names a concrete T whose layout is known here. Null for every other callee - the call
-// emits normally.
-fn intercept_rtti_layout(ctx: &LowerCtx, sym: String, sig: &FnSig) Operand? {
+// The constant for a `core.rtti.size_of`/`align_of`/`type_info` specialization call: the
+// instantiated `Type(T)` parameter names a concrete T whose layout and descriptor are known here.
+// Null for every other callee - the call emits normally.
+fn intercept_rtti(ctx: &LowerCtx, sym: String, sig: &FnSig) Operand? {
     let is_size = starts_with(sym, "core__rtti__size_0of__")
     let is_align = starts_with(sym, "core__rtti__align_0of__")
-    if !is_size and !is_align {
+    let is_info = starts_with(sym, "core__rtti__type_0info__")
+    if !is_size and !is_align and !is_info {
         return null
     }
     if sig.params.len != 1 {
@@ -3622,6 +3598,12 @@ fn intercept_rtti_layout(ctx: &LowerCtx, sym: String, sig: &FnSig) Operand? {
     let t = tyit(ctx).child_at(nr.args, 0)
     if !ty_concrete(tyit(ctx), t) {
         return null
+    }
+    if is_info {
+        return static_typeinfo(ctx, t) match {
+            Some(s) => Some(Operand.GlobalRef(s))
+            None => null
+        }
     }
     let lay = lay_of(ctx, t)
     if is_size {
@@ -6300,7 +6282,7 @@ fn lower_identifier(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, id: &Identifie
         // A bare type name in value position (`size_of(St)`-shape args that no intercept folded) is
         // a reified-type handle.
         if nominal_fqn_is(ctx, &want, FQN_TYPE) {
-            return build_typeinfo_value(ctx, bb, &want)
+            return build_typeinfo_value(ctx, &want)
         }
     }
     return read_binding(ctx, bb, env, id.name, &want)
@@ -6637,6 +6619,33 @@ fn neg_op(bb: &BlockBuilder, ir: IrType, fl: bool, v: Operand) Operand {
         return bb.fneg(ir, v)
     }
     return bb.ineg(ir, v)
+}
+
+// A name in a `#if` condition: the checker recorded what it denotes on the identifier's node
+// (`checker_name`) - in this specialization's overlay for a type parameter, in the program tables
+// otherwise - so the same condition decides the same way here. A reified `Type(T)` is a type name,
+// anything else a value. Null for an unrecorded name, which the evaluator reports as E2116 - the
+// checker already did.
+fn lower_name(raw: &u8, name: String, span: SourceSpan) CtValue? {
+    const ctx = raw as &LowerCtx
+    const ty = ctx_type(ctx, node_id_of(span)) match {
+        Some(t) => t
+        None => return null
+    }
+    if nominal_fqn_is(ctx, &ty, FQN_TYPE) {
+        const args = tn(ctx, ty) match {
+            NNominal(nn) => nn.args
+            _ => return null
+        }
+        if args.len != 1 {
+            return null
+        }
+        const inner = tyit(ctx).child_at(args, 0)
+        return Some(CtValue.TypeInfo(ct_type_info_of_ty(tyit(ctx), &ctx.result.nominals, inner,
+                    ctx.allocator)))
+    }
+    return Some(CtValue.Value(ct_type_info_of_ty(tyit(ctx), &ctx.result.nominals, ty,
+                ctx.allocator)))
 }
 
 // Result-table reads (M10: overlay-aware)

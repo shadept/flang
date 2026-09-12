@@ -1,6 +1,6 @@
 # ADR-0001: `Type(T)` is the generic view of `TypeInfo`; erasure is implicit
 
-**Status:** Proposed — 2026-06-21 (awaiting confirmation of the model below)
+**Status:** Accepted — 2026-06-21; implemented 2026-09-12 (static interned descriptors, `type_info(t) &TypeInfo`)
 **Affects:** `docs/spec.md` Sec 2.9; `stdlib/core/rtti.f`; the self-host typer port
 
 ## Context
@@ -62,12 +62,16 @@ it.
   name-check plus a coercion rule — fewer seams, and a far easier thing to port
   to the self-host compiler (erasure of a known phantom vs a hard-coded branch).
 - `&TypeInfo` pointer identity gives O(1) type comparison and a stable map key.
-- No new user-facing surface is required: implicit erasure plus field access
-  already cover `type_of` / `size_of` / `align_of`. An explicit
-  `type_info(t) &TypeInfo` accessor would be optional sugar for "give me the raw
-  view," not a replacement for the coercion — deferred unless wanted.
-- `docs/spec.md` Sec 2.9 and `stdlib/core/rtti.f` are updated when this lands;
-  until then this ADR is the decision of record.
+- Implicit erasure plus field access cover `Type(T)` parameters, `size_of` /
+  `align_of`. `type_info(t: Type($T)) &TypeInfo` and `type_of(v: $T) &TypeInfo`
+  exist beside them (2026-09-12): the address of the interned descriptor, so
+  `type_of(x) == type_info(u32)` is type identity. `type_info` is intercepted at
+  lowering like `size_of`; its stdlib body is a placeholder.
+- Descriptors are `static_typeinfo` in `flang_driver/lower.f`: one data-segment
+  global per type, memoized before its members are built so a self-citing type
+  resolves to the entry under construction; the C backend declares every
+  relocated global ahead of the definitions for that reason.
+- `docs/spec.md` Sec 2.9 and `stdlib/core/rtti.f` reflect this.
 
 ## Alternatives considered
 

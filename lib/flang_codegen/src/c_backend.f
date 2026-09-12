@@ -75,6 +75,14 @@ pub fn translate(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = null) 
     if m.functions.len > 0 and m.globals.len > 0 {
         sb.append("\n")
     }
+    // Relocated globals are declared ahead of every definition, so one may name another that is
+    // defined later - a type descriptor citing itself through its type arguments.
+    for i in 0..m.globals.len {
+        if is_relocated(&m.globals[i]) {
+            emit_relocated_decl(&m.globals[i], sb)
+            sb.append("\n")
+        }
+    }
     for i in 0..m.globals.len {
         emit_global(&m.globals[i], sb)
         sb.append("\n")
@@ -600,13 +608,16 @@ fn emit_foreign(f: &ForeignDecl, sb: &StringBuilder) {
     sb.append(");")
 }
 
-fn emit_global(g: &Global, sb: &StringBuilder) {
-    let relocated = g.relocs match {
+fn is_relocated(g: &Global) bool {
+    return g.relocs match {
         Some(rs) => rs.len > 0
         None => false
     }
-    if relocated {
-        emit_relocated_global(g, sb)
+}
+
+fn emit_global(g: &Global, sb: &StringBuilder) {
+    if is_relocated(g) {
+        emit_relocated_def(g, sb)
         return
     }
 
@@ -638,25 +649,23 @@ fn emit_global(g: &Global, sb: &StringBuilder) {
 // `void*` fields, and a macro gives the rest of the file the plain `g_<name>` it addresses
 // everywhere else:
 //
-//     static _Alignas(8) struct { void* f0; unsigned char f1[8]; } g_x_r =
-//         { (void*)g_str_0, {0x02, ...} };
+//     struct g_x_t { void* f0; unsigned char f1[8]; };
+//     static _Alignas(8) struct g_x_t g_x_r;
 //     #define g_x (&g_x_r)
+//     ...
+//     static _Alignas(8) struct g_x_t g_x_r = { (void*)g_str_0, {0x02, ...} };
 //
 // Every reloc offset is 8-aligned (`fir.Reloc`), so each byte run ends exactly where its following
 // pointer belongs and C inserts no padding of its own - the struct's bytes are the blob's bytes.
 //
-// The initializer names other globals, so a relocated global must be emitted after them; lowering
-// mints globals in creation order to guarantee that.
-fn emit_relocated_global(g: &Global, sb: &StringBuilder) {
+// The declaration (type, tentative definition, macro) comes ahead of every global and the
+// initialised definition in creation order, so an initializer may name a relocated global defined
+// later. A plain global it names must still precede it, which creation order guarantees.
+fn emit_relocated_decl(g: &Global, sb: &StringBuilder) {
     let rs = g.relocs.unwrap()
-    let bytes = g.init_bytes match {
-        Some(b) => b
-        None => return
-    }
-
-    sb.append("static _Alignas(")
-    sb.append(g.align)
-    sb.append(") struct { ")
+    sb.append("struct g_")
+    sb.append(g.name)
+    sb.append("_t { ")
     let field = 0
     let at: usize = 0
     for i in 0..rs.len {
@@ -674,12 +683,36 @@ fn emit_relocated_global(g: &Global, sb: &StringBuilder) {
     if g.size as usize > at {
         emit_run_field(field, (g.size as usize) - at, sb)
     }
-    sb.append("} g_")
+    sb.append("};\n")
+    emit_relocated_head(g, sb)
+    sb.append(";\n#define g_")
     sb.append(g.name)
-    sb.append("_r = { ")
+    sb.append(" (&g_")
+    sb.append(g.name)
+    sb.append("_r)")
+}
 
-    field = 0
-    at = 0
+fn emit_relocated_head(g: &Global, sb: &StringBuilder) {
+    sb.append("static _Alignas(")
+    sb.append(g.align)
+    sb.append(") struct g_")
+    sb.append(g.name)
+    sb.append("_t g_")
+    sb.append(g.name)
+    sb.append("_r")
+}
+
+fn emit_relocated_def(g: &Global, sb: &StringBuilder) {
+    let rs = g.relocs.unwrap()
+    let bytes = g.init_bytes match {
+        Some(b) => b
+        None => return
+    }
+    emit_relocated_head(g, sb)
+    sb.append(" = { ")
+
+    let field: usize = 0
+    let at: usize = 0
     for i in 0..rs.len {
         let off = rs[i].offset as usize
         if off > at {
@@ -703,11 +736,7 @@ fn emit_relocated_global(g: &Global, sb: &StringBuilder) {
         }
         emit_byte_block(bytes, at, g.size as usize, sb)
     }
-    sb.append(" };\n#define g_")
-    sb.append(g.name)
-    sb.append(" (&g_")
-    sb.append(g.name)
-    sb.append("_r)")
+    sb.append(" };")
 }
 
 fn emit_run_field(index: usize, len: usize, sb: &StringBuilder) {

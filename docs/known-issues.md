@@ -1182,14 +1182,13 @@ this needs a const whose initializer holds a call before it can bite.
 
 ---
 
-### Self-Host: Minimal RTTI — TypeInfo Name/Fields Are Zeroed; `project_info` Unintercepted
+### Self-Host: `project_info` Unintercepted
 
-**Status:** Open — widened 2026-08-28 to every binary the project produces
-
-`size_of(T)` / `align_of(T)` fold to layout constants at call sites;
-`Type(T)` values materialize a TypeInfo with size, align, and kind
-filled and everything else zeroed (name is an empty/null String —
-printing it would crash).
+**Status:** Open — widened 2026-08-28 to every binary the project produces.
+The RTTI half of this entry is resolved: M12 filled the whole `TypeInfo`
+record, and 2026-09-12 made descriptors a static interned table
+(ADR-0001), so `type_info(T)` is a folded address the way `size_of(T)` is a
+folded constant.
 
 `project_info()` is not intercepted. Its stdlib body returns
 `.{ name = "", version = "" }` and the compiler that *lowers* a call is
@@ -1208,10 +1207,9 @@ build. Nothing depends on the string yet, but it is the compiler unable to
 state its own version, and `flang lsp`'s `flang/serverStatus` sends the
 same empty value to the editor.
 
-Fix: intercept `project_info` at lowering the way `intercept_rtti_layout`
-already handles `size_of`/`align_of` — the manifest values are on the
-`AnalyzedProject` the lowering already holds. Fill TypeInfo's name (an
-interned string) when a consumer needs it.
+Fix: intercept `project_info` at lowering the way `intercept_rtti`
+already handles `size_of`/`align_of`/`type_info` — the manifest values are
+on the `AnalyzedProject` the lowering already holds.
 
 ---
 
@@ -3658,3 +3656,25 @@ own C function, so a program pays one body per payload type for a function with 
 A dedup keyed on layout class (pointer vs value at minimum, the full `Layout` at best) would emit
 one body per class and alias the rest. Optimization only: the checker still has to settle `T`
 before layout, since the class is derived from it.
+
+## Template-time `TypeInfo` is a syntax-derived stand-in
+
+**Open (2026-09-12).** Spec §2.9 promises that source generators see "the
+same struct, the same members" as the runtime. The self-host's template-time
+value is `CtTypeInfo` (`flang_parser/comptime.f`): a parallel struct whose
+members are derived on access from the declaration's *syntax*
+(`FromDecl` / `FromSyntax`), in the parser library, before any type
+resolution. Members the syntax cannot answer are refused with E2120 rather
+than guessed: `size`, `align`, `offset`, and now `copyable`. The `#if`
+evaluator's other source, `FromTy` (a resolved type handed in by the
+typer for a type or value named in a `#if` condition), has the opposite gap: `name`, `kind` and `copyable` are known, the
+syntax-derived members (`fields`, `variants`, `params`, `return_type`) are
+refused. So no compile-time value has the whole record.
+
+Closing it means a `CtTypeInfo` built from the resolved `Ty` for both
+routes - fields, variants and parameters from the nominal registry instead
+of the declaration syntax - which needs template expansion to run after
+collection has resolved the argument types, or a second expansion pass.
+Until then a generator that needs the copyable bit emits
+`#if type_info(T).copyable` into its expansion and lets the specialization
+decide.

@@ -64,8 +64,10 @@ itself copyable reads as copyable through field access: given
 `type Buffer = struct { owned ptr: &u8 }`, `b.ptr` is a `&u8` and copying it is
 unchecked. `Buffer { ptr = other.ptr }` is likewise unchecked.
 
-Exposed as `T.copyable` on `TypeInfo` alongside `T.fields`, plus the first field
-that cleared it, for diagnostics.
+Exposed as `copyable` on `core.rtti.TypeInfo` alongside `fields`: at run time
+through the descriptor, and at compile time through `type_info(T).copyable` in a
+generic body's `#if` (spec §7.7). Landed 2026-09-12. The first field that
+cleared it is reported in diagnostics, not on the record.
 
 ## What counts as a copy
 
@@ -621,13 +623,19 @@ the stdlib frame as a note.
    Also removed: `filled_list`, the `list(source)` memcpy constructor, the Dict
    fake-key.
 
-Exposing `copyable` on `core.rtti.TypeInfo` is independent of all of the above
-and can land whenever `derive` needs it: the check reads the bit off the
-compiler's `Ty`, never off a materialised record. It changes `TypeInfo`'s layout,
-so it is a runtime/ABI change and carries its own promote commit. `TypeInfo` is materialised at lowering with a depth cap that
-nulls nested `type_info` pointers, so the bit is computed from the compiler's
-`Ty` and filled at every level, never derived by walking the materialised
-record.
+`copyable` on `core.rtti.TypeInfo` turned out not to be independent: it is the
+substrate of step 6's element loops. A container's `clone` and `deinit` select
+per element type with `#if type_info(T).copyable` (spec §7.7), which is what
+retires the blanket `deinit(&$T)` and keeps `clone` free of a blanket
+`clone($T)`. Landed 2026-09-12 (`flang_typer/copyable.f` is the walk, shared
+by the checker, the `#if` evaluator and the descriptor builder), ahead of the
+promote that lets stdlib source use the `#if` form. The check still reads the
+bit off the compiler's `Ty`, never off a materialised record; the runtime
+descriptor is a static, interned table entry (ADR-0001) whose `copyable` is
+filled from the same walk.
+
+The stdlib vocabulary the annotation lands with - `clone`, by-value `deinit`,
+`retain` on `Rc`/`Arc` - is fixed in spec §9.4.
 
 ## Tests
 

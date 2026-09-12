@@ -488,6 +488,29 @@ it explicitly). Lowering evaluating statement-level `#if` against the
 host while the checker used the target was a real cross-target
 miscompile — the checked branch and the emitted branch differed.
 
+Statement-level `#if` also sees the names in scope: the type parameters
+of the specialization being walked, the non-generic nominals visible
+from the module, and value bindings (spec §7.7). The evaluator asks for
+them through `CtLookup.name`: the checker (`checker_name`) answers from
+its `env`, where `instantiate` bound each parameter to its concrete
+type, or from the nominal registry, and records on the identifier's node
+what the name means in expression position - the reified `Type(T)` for a
+type, the value's type for a value (in the specialization's overlay for
+a parameter); lowering (`lower_name`) reads the node back through
+`ctx_type` and tells the two apart by that shape, so it never resolves a
+name of its own and cannot disagree with the checker. `type_info` reads
+a type, `type_of` a value; each refuses the other's operand. The value both hand the evaluator is a `CtTypeInfo`
+with the `FromTy` source, built by `flang_typer/rtti.f` from the same
+functions `static_typeinfo` uses for the runtime descriptor (name, kind,
+and the copyable bit from `flang_typer/copyable.f`). Adding a member to
+`TypeInfo` means adding it to `CtTypeInfo` (template time, syntax-derived
+or refused with E2120), to `rtti.f` (resolved types) and to
+`static_typeinfo` (the descriptor) — templates, `#if` and the runtime see
+it together. The descriptor is a data-segment global, one per type per
+program (`LowerCtx.rtti_syms`), memoized before its members are built so
+a type citing itself through a type argument resolves to the entry under
+construction; `type_info(T)` calls fold to its address (`intercept_rtti`).
+
 ## Formatter (`lib/flang_fmt`)
 
 `flang fmt` formats the project's `flang.toml` source glob (or explicit file

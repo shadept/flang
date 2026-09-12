@@ -33,6 +33,7 @@ import std.test
 import flang_core.span
 
 import flang_typer.coercion
+import flang_typer.copyable
 import flang_typer.interner
 import flang_typer.nominal_registry
 import flang_typer.scheme
@@ -393,148 +394,22 @@ fn zonk_record(self: &Engine, rec: &NRecordNode) Ty {
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn substitute_shared(self: &Engine, ty: Ty, subst: &Dict(VarId, Ty)) Ty {
-    return self.ty_node(ty) match {
-        NVar(v) => subst.get(v.id) match {
-            Some(rep) => rep
-            None => ty
-        }
-        NRef(inner) => self.interner.ref_of(self.substitute_shared(inner, subst))
-        NArray(arr) => self.interner.array_of(self.substitute_shared(arr.elem, subst), arr.length)
-        NFunc(f) => substitute_func(self, &f, subst)
-        NTuple(span) => substitute_tuple(self, span, subst)
-        NRecord(rec) => substitute_record(self, &rec, subst)
-        NNominal(nn) => substitute_nominal(self, &nn, subst)
-        _ => ty
-    }
-}
-
-fn substitute_span(self: &Engine, span: ChildSpan, subst: &Dict(VarId, Ty)) List(Ty) {
-    let out: List(Ty) = list(span.len, self.allocator)
-    for i in 0..span.len {
-        out.push(self.substitute_shared(self.interner.child_at(span, i), subst))
-    }
-    return out
-}
-
-fn substitute_func(self: &Engine, f: &NFuncNode, subst: &Dict(VarId, Ty)) Ty {
-    let ps = substitute_span(self, f.params, subst)
-    defer ps.deinit()
-    return self.interner.func_of(&ps, self.substitute_shared(f.ret, subst))
-}
-
-fn substitute_tuple(self: &Engine, span: ChildSpan, subst: &Dict(VarId, Ty)) Ty {
-    let es = substitute_span(self, span, subst)
-    defer es.deinit()
-    return self.interner.tuple_of(&es)
-}
-
-fn substitute_record(self: &Engine, rec: &NRecordNode, subst: &Dict(VarId, Ty)) Ty {
-    let fs: List(Field) = list(rec.tys.len, self.allocator)
-    defer fs.deinit()
-    for i in 0..rec.tys.len {
-        fs.push(Field {
-            name = self.interner.rec_name(rec, i),
-            ty = self.substitute_shared(self.interner.rec_ty(rec, i), subst),
-            decl_span = self.interner.rec_span(rec, i),
-            owned = false,
-        })
-    }
-    return self.interner.record_of(&fs)
-}
-
-fn substitute_nominal(self: &Engine, nn: &NNominalNode, subst: &Dict(VarId, Ty)) Ty {
-    let as_ = substitute_span(self, nn.args, subst)
-    defer as_.deinit()
-    return self.interner.nominal_of(nn.id, &as_)
+    return self.interner.substitute(ty, subst, self.allocator)
 }
 
 // ─────────────────────────────────────────────────────────────────────
 // Copyability - the derived bit behind `owned` (RFC-028)
 // ─────────────────────────────────────────────────────────────────────
 
-// A type is non-copyable when releasing a resource rides in it: a field declared `owned`, or a
-// field whose own type is non-copyable. Enum variant payloads count as fields; the payload
-// propagates the bit but cannot declare it.
-//
-// References and function types are the leaves. A reference is how FLang shares a value rather than
-// holds it, so it carries no release responsibility - which also makes the walk a post-order with
-// no fixpoint: `check_recursive_nominal` poisons a by-value field cycle at E2035, so none survives
-// into a walk, and every other cycle passes through a reference. `Slice` and `String` need no rule
-// of their own: their only field of interest is a `&T`, so they come out copyable by the same
-// reason a slice is a view.
-//
-// ponytail: recomputed per call, and every nominal hop builds a substitution dict. Nothing calls
-// this on a hot path yet - memoize on a `List(u8)` parallel to the interner's nodes when
-// enforcement (RFC-028 step 4) starts asking at every consuming site.
+// `flang_typer.copyable` over the zonked type: a bound variable anywhere inside is followed, an
+// unbound one is a leaf. True without a registry: nominal-aware answers need one, and until
+// `set_nominal_registry` every nominal reads as copyable.
 pub fn is_copyable(self: &Engine, ty: Ty) bool {
-    return copyable_walk(self, ty)
-}
-
-fn copyable_walk(self: &Engine, ty: Ty) bool {
-    const t = self.resolve(ty)
-    return self.ty_node(t) match {
-        NRef(_) => true
-        NFunc(_) => true
-        // A type variable is diagnosed at the instantiation that pins it, never in the generic
-        // body.
-        NVar(_) => true
-        NArray(arr) => copyable_walk(self, arr.elem)
-        NTuple(span) => copyable_span(self, span)
-        NRecord(rec) => copyable_span(self, rec.tys)
-        NNominal(nn) => copyable_nominal(self, &nn)
-        _ => true
-    }
-}
-
-fn copyable_span(self: &Engine, span: ChildSpan) bool {
-    for i in 0..span.len {
-        if !copyable_walk(self, self.interner.child_at(span, i)) {
-            return false
-        }
-    }
-    return true
-}
-
-fn copyable_nominal(self: &Engine, nn: &NNominalNode) bool {
     const reg = self.nominals match {
         Some(r) => r
         None => return true
     }
-    return reg.get(nn.id).* match {
-        NomStruct(sd) => copyable_struct(self, &sd, nn)
-        NomEnum(ed) => copyable_enum(self, &ed, nn)
-    }
-}
-
-fn copyable_struct(self: &Engine, sd: &StructDef, nn: &NNominalNode) bool {
-    for i in 0..sd.fields.len {
-        if sd.fields[i].owned {
-            return false
-        }
-    }
-    let subst = param_subst(self, &sd.type_params, nn.args)
-    defer subst.deinit()
-    for i in 0..sd.fields.len {
-        const ft = self.substitute_shared(sd.fields[i].ty, &subst)
-        if !copyable_walk(self, ft) {
-            return false
-        }
-    }
-    return true
-}
-
-fn copyable_enum(self: &Engine, ed: &EnumDef, nn: &NNominalNode) bool {
-    let subst = param_subst(self, &ed.type_params, nn.args)
-    defer subst.deinit()
-    for vi in 0..ed.variants.len {
-        for pi in 0..ed.variants[vi].payloads.len {
-            const pt = self.substitute_shared(ed.variants[vi].payloads[pi], &subst)
-            if !copyable_walk(self, pt) {
-                return false
-            }
-        }
-    }
-    return true
+    return is_copyable_ty(&self.interner, reg, self.zonk(ty), self.allocator)
 }
 
 // One hop of the derivation that cleared a type's copyable bit: the aggregate, the field that
@@ -553,7 +428,7 @@ pub type CopyBlame = struct {
 // Virality is unreadable without them: a type three hops from any `owned` still refuses to be
 // copied, and the chain is the only thing that says why.
 //
-// The probe at each field is `copyable_walk`, so the two answers cannot disagree.
+// The probe at each field is `is_copyable`, so the two answers cannot disagree.
 pub fn copy_blame(self: &Engine, ty: Ty, out: &List(CopyBlame)) {
     const t = self.resolve(ty)
     self.ty_node(t) match {
@@ -568,7 +443,7 @@ pub fn copy_blame(self: &Engine, ty: Ty, out: &List(CopyBlame)) {
 fn blame_span(self: &Engine, span: ChildSpan, out: &List(CopyBlame)) {
     for i in 0..span.len {
         const el = self.interner.child_at(span, i)
-        if !copyable_walk(self, el) {
+        if !self.is_copyable(el) {
             self.copy_blame(el, out)
             return
         }
@@ -587,7 +462,7 @@ fn blame_nominal(self: &Engine, ty: Ty, nn: &NNominalNode, out: &List(CopyBlame)
 }
 
 fn blame_struct(self: &Engine, ty: Ty, sd: &StructDef, nn: &NNominalNode, out: &List(CopyBlame)) {
-    let subst = param_subst(self, &sd.type_params, nn.args)
+    let subst = param_subst(&self.interner, &sd.type_params, nn.args, self.allocator)
     defer subst.deinit()
     for i in 0..sd.fields.len {
         if sd.fields[i].owned {
@@ -602,7 +477,7 @@ fn blame_struct(self: &Engine, ty: Ty, sd: &StructDef, nn: &NNominalNode, out: &
     }
     for i in 0..sd.fields.len {
         const ft = self.substitute_shared(sd.fields[i].ty, &subst)
-        if !copyable_walk(self, ft) {
+        if !self.is_copyable(ft) {
             out.push(CopyBlame {
                 owner = ty,
                 field = sd.fields[i].name,
@@ -616,12 +491,12 @@ fn blame_struct(self: &Engine, ty: Ty, sd: &StructDef, nn: &NNominalNode, out: &
 }
 
 fn blame_enum(self: &Engine, ty: Ty, ed: &EnumDef, nn: &NNominalNode, out: &List(CopyBlame)) {
-    let subst = param_subst(self, &ed.type_params, nn.args)
+    let subst = param_subst(&self.interner, &ed.type_params, nn.args, self.allocator)
     defer subst.deinit()
     for vi in 0..ed.variants.len {
         for pi in 0..ed.variants[vi].payloads.len {
             const pt = self.substitute_shared(ed.variants[vi].payloads[pi], &subst)
-            if !copyable_walk(self, pt) {
+            if !self.is_copyable(pt) {
                 out.push(CopyBlame {
                     owner = ty,
                     field = ed.variants[vi].name,
@@ -633,21 +508,6 @@ fn blame_enum(self: &Engine, ty: Ty, ed: &EnumDef, nn: &NNominalNode, out: &List
             }
         }
     }
-}
-
-// A declaration's field types are written against its own type parameters, so the instantiation's
-// arguments have to go in before the walk sees `&FileHandle` where the source says `&$T`. A
-// partially-applied nominal (fewer arguments than parameters) maps only what it has; the rest stay
-// variables, which the walk treats as leaves.
-fn param_subst(self: &Engine, params: &List(VarId), args: ChildSpan) Dict(VarId, Ty) {
-    let subst: Dict(VarId, Ty) = dict(params.len, self.allocator)
-    for i in 0..params.len {
-        if i >= args.len {
-            break
-        }
-        subst.set(params[i], self.interner.child_at(args, i))
-    }
-    return subst
 }
 
 // ─────────────────────────────────────────────────────────────────────

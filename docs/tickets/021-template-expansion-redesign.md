@@ -185,7 +185,7 @@ rule below.
 Rules:
 - A `T: Type` parameter binds the `TypeInfo` of the argument directly;
   `T.fields`, `T.variants`, `T.kind`, `T.params` work with no
-  `type_of(T.name)` round-trip. `type_of(T)` remains valid (identity), as at
+  `type_of(T.name)` round-trip. `type_info(T)` (identity; `type_of` was renamed 2026-09-12, it now reads a value's type) remains valid, as at
   run time.
 - Enum variants move from `fields` to `variants`. `#enum_utils` and the
   `FieldsOrVariants` fallback in the reference change accordingly; runtime

@@ -286,7 +286,8 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
         alloc = &a,
     }
     defer ectx.vis.visible.deinit()
-    const lookup: CtLookup = .{ ctx = &ectx as &u8, resolve = resolve_type_decl }
+    const lookup: CtLookup = .{ ctx = &ectx as &u8, resolve = resolve_type_decl,
+        name = no_name }
     let env = ct_env(&chk.comptime, &a, lookup)
 
     // Bind parameters. A `Type` argument whose nominal is not collected yet parks the invocation

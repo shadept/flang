@@ -55,6 +55,7 @@ import flang_typer.node_id
 import flang_typer.nominal_registry
 import flang_typer.reporter
 import flang_typer.result
+import flang_typer.rtti
 import flang_typer.scheme
 import flang_typer.specialization
 import flang_typer.template_expand
@@ -2334,8 +2335,72 @@ fn match_returns(self: &Checker, m: &MatchExpr) bool {
 
 // A `#if` diverges exactly when its ACTIVE branch does (the inactive one is not part of the
 // program).
+// The branch a statement-level `#if` takes here. A generic body is checked per specialization
+// (`instantiate`), with its type parameters bound in `env`, so a condition over `type_info(T)`
+// decides per instantiation; `checker_name` is what lets the evaluator see those bindings.
+fn directive_outcome(self: &Checker, ifd: &IfDirectiveStmt) CtOutcome {
+    const lookup: CtLookup = .{ ctx = self as &u8, resolve = no_lookup, name = checker_name }
+    return eval_condition_with(&self.comptime, lookup, ifd.condition)
+}
+
+// A name in a `#if` condition: a type parameter in scope is the type bound to it, a non-generic
+// nominal visible from the module is itself, and any other binding in scope is a value of its type.
+// What is recorded on the identifier's node is what the name means in expression position - the
+// reified `Type(T)` for a type, the value's type for a value - so lowering, which evaluates the
+// same condition, reads it back from the result tables without resolving names of its own.
+fn checker_name(raw: &u8, name: String, span: SourceSpan) CtValue? {
+    const chk = raw as &Checker
+    chk.env.lookup(name) match {
+        Some(b) => {
+            const ty = chk.engine.zonk(chk.engine.specialize(&b.scheme))
+            if chk.engine.is_var(ty) {
+                return null
+            }
+            if b.is_type_param {
+                return Some(directive_type(chk, ty, span))
+            }
+            chk.results.record_type(node_of(chk, span), ty)
+            return Some(CtValue.Value(directive_info(chk, ty)))
+        }
+        None => {}
+    }
+    return directive_nominal(chk, name) match {
+        Some(ty) => Some(directive_type(chk, ty, span))
+        None => null
+    }
+}
+
+fn directive_type(self: &Checker, ty: Ty, span: SourceSpan) CtValue {
+    self.results.record_type(node_of(self, span), reified_type_of(self, ty))
+    return CtValue.TypeInfo(directive_info(self, ty))
+}
+
+fn directive_info(self: &Checker, ty: Ty) CtTypeInfo {
+    return ct_type_info_of_ty(&self.engine.interner, &self.nominals, ty, self.allocator)
+}
+
+// A generic nominal has no type to offer without its arguments, and a bare name carries none.
+fn directive_nominal(self: &Checker, name: String) Ty? {
+    let vis = current_visibility(self)
+    defer vis.visible.deinit()
+    const id = self.nominals.lookup(name, &vis) match {
+        NomLookFound(i) => i
+        _ => return null
+    }
+    const generic = self.nominals.get(id).* match {
+        NomStruct(s) => s.type_params.len > 0
+        NomEnum(e) => e.type_params.len > 0
+    }
+    if generic {
+        return null
+    }
+    let none: List(Ty) = list(0, self.allocator)
+    defer none.deinit()
+    return Some(self.engine.interner.nominal_of(id, &none))
+}
+
 fn directive_branch_returns(self: &Checker, ifd: &IfDirectiveStmt) bool {
-    eval_condition(&self.comptime, ifd.condition) match {
+    directive_outcome(self, ifd) match {
         Active(active) => {
             const stmts: &List(Stmt) = if active { &ifd.then_stmts } else { &ifd.else_stmts }
             for i in 0..stmts.len {
@@ -5214,7 +5279,7 @@ fn check_stmt(self: &Checker, stmt: &Stmt) bool {
 // never validated). Diverges exactly when the active branch diverges - the branch is a statement
 // splice, not a runtime conditional.
 fn check_if_directive_stmt(self: &Checker, ifd: &IfDirectiveStmt) bool {
-    eval_condition(&self.comptime, ifd.condition) match {
+    directive_outcome(self, ifd) match {
         Active(active) => {
             const stmts: &List(Stmt) = if active { &ifd.then_stmts } else { &ifd.else_stmts }
             let diverges = false
@@ -8958,7 +9023,7 @@ fn own_match(self: &Checker, p: &OwnPass, m: &MatchExpr, slot: OwnSlot) {
 
 // Only the active branch is checked, so only the active branch has types to check against.
 fn own_if_directive(self: &Checker, p: &OwnPass, ifd: &IfDirectiveStmt) {
-    eval_condition(&self.comptime, ifd.condition) match {
+    directive_outcome(self, ifd) match {
         Active(active) => {
             const stmts: &List(Stmt) = if active { &ifd.then_stmts } else { &ifd.else_stmts }
             for i in 0..stmts.len {

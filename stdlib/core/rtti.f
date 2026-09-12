@@ -26,8 +26,11 @@ pub type TypeInfo = struct {
     size: usize
     align: usize
     kind: TypeKind
+    // The derived bit of RFC-028: false when the type, or anything it holds by value, declares an
+    // `owned` field. `#if type_info(T).copyable` reads the same bit at compile time.
+    copyable: bool
     type_params: String[]
-    type_args: &TypeInfo[]
+    type_args: Slice(&TypeInfo)
     fields: FieldInfo[]
     variants: VariantInfo[]
     params: ParamInfo[]
@@ -46,8 +49,16 @@ pub type FieldInfo = struct {
     type_info: &TypeInfo
 }
 
-pub fn type_of(t: Type($T)) TypeInfo {
-    return t // auto coersed to TypeInfo
+// The descriptor of a type: `type_info(Point)`, `type_info(T)` in a generic body. Descriptors are
+// static and one per type, so two `&TypeInfo` are the same type exactly when they are equal. The
+// compiler substitutes the descriptor's address for every call; the body below never runs.
+pub fn type_info(t: Type($T)) &TypeInfo {
+    return 0usize as &TypeInfo
+}
+
+// The descriptor of a value's type: `type_of(x)`. For a type, use `type_info`.
+pub fn type_of(value: $T) &TypeInfo {
+    return type_info(T)
 }
 
 pub fn size_of(t: Type($T)) usize {

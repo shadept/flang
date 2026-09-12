@@ -3006,7 +3006,7 @@ Report the issue with sample code that reproduces the error.
 | **E2072** | Source Generators | Source generator argument kind mismatch      |
 | **E2073** | Source Generators | Template expansion error                     |
 | **E2119** | Source Generators | Template expansion depth exceeded            |
-| **E2120** | Source Generators | Layout not available at template time        |
+| **E2120** | Source Generators | TypeInfo member not available at this point  |
 | **E2076** | Type Checking     | Duplicate struct field name                   |
 | **E2074** | Type Checking     | If/else branches disagree                    |
 | **E2075** | Type Checking     | Match arms disagree                          |
@@ -3664,20 +3664,27 @@ Generated code may itself contain generator invocations, which expand in turn. E
 #again(x)            // error[E2119]: Template expansion depth exceeded (8) at `#again`
 ```
 
-### E2120: Layout Not Available at Template Time
+### E2120: TypeInfo Member Not Available at This Point
 
 **Category**: Source Generators
 **Severity**: Error
 
 #### Description
 
-Templates read the same `TypeInfo` the runtime exposes, but they expand before types are resolved, so `size`, `align` and field `offset` are not known yet. Reading them inside a template is an error rather than a silent zero.
+Compile-time code reads the same `TypeInfo` the runtime exposes, but not every member is known at every point, and reading one that is not is an error rather than a silent zero or an empty list. Templates expand before types are resolved, so `size`, `align`, field `offset` and `copyable` are not known there. A type named in a `#if` condition (`type_info(T)` on a type parameter, `type_info(Point)` on a nominal, `type_of(v)` on a value, spec §7.7) is a resolved type with no syntax behind it, so `name`, `kind` and `copyable` are available and `fields`, `variants`, `params` and `return_type` are not.
 
 #### Example
 
 ```flang
 #define(show_size, T: Type) {
     const SIZE = #(T.size)   // error[E2120]: `size` is not available at template time
+}
+
+fn probe(x: &$T) i32 {
+    #if type_info(T).fields.len == 0 {   // error[E2120]: `fields` is not available on a type parameter in `#if`
+        return 1
+    }
+    return 0
 }
 ```
 

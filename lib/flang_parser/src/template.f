@@ -393,7 +393,8 @@ fn append_string_escaped(sb: &StringBuilder, text: String) {
 fn test_env(arena: &Allocator) CtEnv {
     const ctx: ComptimeCtx = .{ os = "testos", arch = "testarch", testing = false, release = false }
     const boxed = box(arena, ctx)
-    const lookup: CtLookup = .{ ctx = 0usize as &u8, resolve = test_no_lookup }
+    const lookup: CtLookup = .{ ctx = 0usize as &u8, resolve = test_no_lookup,
+        name = no_name }
     return ct_env(boxed, arena, lookup)
 }
 

@@ -422,6 +422,69 @@ pub fn nominal_of(self: &TypeInterner, id: NominalId, args: &List(Ty)) Ty {
     return add(self, key, node, g)
 }
 
+// `ty` with every variable in `subst` replaced by its mapping, re-interned. Variables not in the
+// map stay; a type citing none is returned as is.
+pub fn substitute(self: &TypeInterner, ty: Ty, subst: &Dict(VarId, Ty), alloc: &Allocator?) Ty {
+    return self.node(ty) match {
+        NVar(v) => subst.get(v.id) match {
+            Some(rep) => rep
+            None => ty
+        }
+        NRef(inner) => self.ref_of(self.substitute(inner, subst, alloc))
+        NArray(arr) => self.array_of(self.substitute(arr.elem, subst, alloc), arr.length)
+        NFunc(f) => substitute_func(self, &f, subst, alloc)
+        NTuple(span) => substitute_tuple(self, span, subst, alloc)
+        NRecord(rec) => substitute_record(self, &rec, subst, alloc)
+        NNominal(nn) => substitute_nominal(self, &nn, subst, alloc)
+        _ => ty
+    }
+}
+
+fn substitute_span(self: &TypeInterner, span: ChildSpan, subst: &Dict(VarId, Ty),
+    alloc: &Allocator?) List(Ty) {
+    let out: List(Ty) = list(span.len, alloc)
+    for i in 0..span.len {
+        out.push(self.substitute(self.child_at(span, i), subst, alloc))
+    }
+    return out
+}
+
+fn substitute_func(self: &TypeInterner, f: &NFuncNode, subst: &Dict(VarId, Ty),
+    alloc: &Allocator?) Ty {
+    let ps = substitute_span(self, f.params, subst, alloc)
+    defer ps.deinit()
+    return self.func_of(&ps, self.substitute(f.ret, subst, alloc))
+}
+
+fn substitute_tuple(self: &TypeInterner, span: ChildSpan, subst: &Dict(VarId, Ty),
+    alloc: &Allocator?) Ty {
+    let es = substitute_span(self, span, subst, alloc)
+    defer es.deinit()
+    return self.tuple_of(&es)
+}
+
+fn substitute_record(self: &TypeInterner, rec: &NRecordNode, subst: &Dict(VarId, Ty),
+    alloc: &Allocator?) Ty {
+    let fs: List(Field) = list(rec.tys.len, alloc)
+    defer fs.deinit()
+    for i in 0..rec.tys.len {
+        fs.push(Field {
+            name = self.rec_name(rec, i),
+            ty = self.substitute(self.rec_ty(rec, i), subst, alloc),
+            decl_span = self.rec_span(rec, i),
+            owned = false,
+        })
+    }
+    return self.record_of(&fs)
+}
+
+fn substitute_nominal(self: &TypeInterner, nn: &NNominalNode, subst: &Dict(VarId, Ty),
+    alloc: &Allocator?) Ty {
+    let as_ = substitute_span(self, nn.args, subst, alloc)
+    defer as_.deinit()
+    return self.nominal_of(nn.id, &as_)
+}
+
 fn all_ground(self: &TypeInterner, ids: &List(Ty)) bool {
     for id in ids {
         if !self.is_ground(id) {
