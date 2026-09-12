@@ -21,7 +21,7 @@ pub fn main() i32 {
     inner.append("cd")
 
     out.append("][")
-    out.append(inner, "<4")
+    out.append(&inner, "<4")
     out.append("]")
 
     println(out.as_view())

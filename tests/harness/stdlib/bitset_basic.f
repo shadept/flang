@@ -76,7 +76,7 @@ pub fn main() i32 {
     defer u.deinit()
     u.add(3)
     u.add(200)
-    u.union(other)
+    u.union(&other)
     if !u.contains(3) {
         return 16
     }
@@ -94,7 +94,7 @@ pub fn main() i32 {
     defer inter.deinit()
     inter.add(3)
     inter.add(200)
-    inter.intersect(other)
+    inter.intersect(&other)
     if !inter.contains(3) {
         return 20
     }
@@ -110,7 +110,7 @@ pub fn main() i32 {
     diff.add(3)
     diff.add(7)
     diff.add(200)
-    diff.difference(other)
+    diff.difference(&other)
     if diff.contains(3) {
         return 23
     }

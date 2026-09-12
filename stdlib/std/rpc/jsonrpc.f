@@ -51,10 +51,10 @@ pub type RpcError = enum {
 // Framing
 // =============================================================================
 
-fn read_one(r: Reader) u8? {
+fn read_one(self: Reader) u8? {
     let b: u8 = 0
     const dst = slice_from_raw_parts(&b as &u8, 1)
-    if r.read(dst) == 0 {
+    if self.read(dst) == 0 {
         return null
     }
     return Some(b)
@@ -63,7 +63,7 @@ fn read_one(r: Reader) u8? {
 // Read one framed payload: headers, blank line, then exactly Content-Length bytes of body. Unknown
 // headers (Content-Type) are skipped. Returns the raw body bytes; Eof only when the stream ends
 // cleanly before the first byte.
-pub fn read_frame(r: Reader, allocator: &Allocator? = null) Result(OwnedString, RpcError) {
+pub fn read_frame(self: Reader, allocator: &Allocator? = null) Result(OwnedString, RpcError) {
     let content_len: usize? = null
     let line = string_builder(64, allocator)
     defer line.deinit()
@@ -72,7 +72,7 @@ pub fn read_frame(r: Reader, allocator: &Allocator? = null) Result(OwnedString, 
     loop {
         line.clear()
         loop {
-            const b = read_one(r)
+            const b = read_one(self)
             if b.is_none() {
                 if first_byte {
                     return Err(RpcError.Eof)
@@ -120,7 +120,7 @@ pub fn read_frame(r: Reader, allocator: &Allocator? = null) Result(OwnedString, 
         if chunk > 4096 {
             chunk = 4096
         }
-        const n = r.read(buf[0..chunk])
+        const n = self.read(buf[0..chunk])
         if n == 0 {
             sb.deinit()
             return Err(RpcError.BodyTruncated)
@@ -132,11 +132,11 @@ pub fn read_frame(r: Reader, allocator: &Allocator? = null) Result(OwnedString, 
 }
 
 // Write one framed payload.
-pub fn write_frame(w: Writer, payload: String) {
-    write_str(w, "Content-Length: ")
-    write_uint(w, payload.len)
-    write_str(w, "\r\n\r\n")
-    write_str(w, payload)
+pub fn write_frame(self: Writer, payload: String) {
+    write_str(self, "Content-Length: ")
+    write_uint(self, payload.len)
+    write_str(self, "\r\n\r\n")
+    write_str(self, payload)
 }
 
 // =============================================================================
@@ -210,7 +210,7 @@ pub fn parse_message(payload: String, allocator: &Allocator? = null) Result(RpcM
     if parsed.is_err() {
         return Err(RpcError.BadJson)
     }
-    let doc = parsed.unwrap()
+    let doc = unwrap(move parsed)
 
     const versioned = doc.as_object() match {
         Some(o) => o.json_get_ref("jsonrpc") match {
@@ -227,16 +227,16 @@ pub fn parse_message(payload: String, allocator: &Allocator? = null) Result(RpcM
         return Err(RpcError.BadEnvelope)
     }
 
-    return Ok(RpcMessage { doc = doc })
+    return Ok(RpcMessage { doc = move doc })
 }
 
 // Read one frame and parse it: the receive path of a message loop.
-pub fn read_message(r: Reader, allocator: &Allocator? = null) Result(RpcMessage, RpcError) {
-    const framed = read_frame(r, allocator)
+pub fn read_message(self: Reader, allocator: &Allocator? = null) Result(RpcMessage, RpcError) {
+    const framed = read_frame(self, allocator)
     if framed.is_err() {
-        return Err(framed.unwrap_err())
+        return Err(unwrap_err(move framed))
     }
-    let payload = framed.unwrap()
+    let payload = unwrap(move framed)
     defer payload.deinit()
     return parse_message(payload.as_view(), allocator)
 }
@@ -245,7 +245,7 @@ pub fn read_message(r: Reader, allocator: &Allocator? = null) Result(RpcMessage,
 // Envelope - serialize side
 // =============================================================================
 
-pub fn write_request(w: Writer, id: i64, method: String, params: &JsonValue? = null) {
+pub fn write_request(self: Writer, id: i64, method: String, params: &JsonValue? = null) {
     let sb = string_builder(128)
     defer sb.deinit()
     let jenc = json_encoder(sb.writer())
@@ -262,10 +262,10 @@ pub fn write_request(w: Writer, id: i64, method: String, params: &JsonValue? = n
         params.unwrap().serialize(&e)
     }
     e.end_map()
-    write_frame(w, sb.as_view())
+    write_frame(self, sb.as_view())
 }
 
-pub fn write_notification(w: Writer, method: String, params: &JsonValue? = null) {
+pub fn write_notification(self: Writer, method: String, params: &JsonValue? = null) {
     let sb = string_builder(128)
     defer sb.deinit()
     let jenc = json_encoder(sb.writer())
@@ -280,10 +280,10 @@ pub fn write_notification(w: Writer, method: String, params: &JsonValue? = null)
         params.unwrap().serialize(&e)
     }
     e.end_map()
-    write_frame(w, sb.as_view())
+    write_frame(self, sb.as_view())
 }
 
-pub fn write_response(w: Writer, id: &JsonValue, result: &JsonValue) {
+pub fn write_response(self: Writer, id: &JsonValue, result: &JsonValue) {
     let sb = string_builder(128)
     defer sb.deinit()
     let jenc = json_encoder(sb.writer())
@@ -296,10 +296,10 @@ pub fn write_response(w: Writer, id: &JsonValue, result: &JsonValue) {
     e.key("result")
     result.serialize(&e)
     e.end_map()
-    write_frame(w, sb.as_view())
+    write_frame(self, sb.as_view())
 }
 
-pub fn write_error(w: Writer, id: &JsonValue, code: i64, message: String) {
+pub fn write_error(self: Writer, id: &JsonValue, code: i64, message: String) {
     let sb = string_builder(128)
     defer sb.deinit()
     let jenc = json_encoder(sb.writer())
@@ -317,7 +317,7 @@ pub fn write_error(w: Writer, id: &JsonValue, code: i64, message: String) {
     e.encode_str(message)
     e.end_map()
     e.end_map()
-    write_frame(w, sb.as_view())
+    write_frame(self, sb.as_view())
 }
 
 // =============================================================================
@@ -333,7 +333,7 @@ test "frame round-trip" {
     let mr = mem_reader(sb.as_view())
     const got = read_frame(mr.reader())
     assert_true(got.is_ok(), "frame reads back")
-    let payload = got.unwrap()
+    let payload = unwrap(move got)
     defer payload.deinit()
     assert_eq(payload.as_view(), "{\"x\":1}", "payload survives the round trip")
 }
@@ -342,7 +342,7 @@ test "read_frame skips unknown headers" {
     let mr = mem_reader("Content-Type: application/vscode-jsonrpc; charset=utf-8\r\nContent-Length: 2\r\n\r\n{}")
     const got = read_frame(mr.reader())
     assert_true(got.is_ok(), "extra headers are skipped")
-    let payload = got.unwrap()
+    let payload = unwrap(move got)
     defer payload.deinit()
     assert_eq(payload.as_view(), "{}", "body follows the blank line")
 }
@@ -350,11 +350,11 @@ test "read_frame skips unknown headers" {
 test "read_frame reads consecutive frames" {
     let mr = mem_reader("Content-Length: 2\r\n\r\n{}Content-Length: 4\r\n\r\nnull")
     const first = read_frame(mr.reader())
-    let a = first.unwrap()
+    let a = unwrap(move first)
     defer a.deinit()
     assert_eq(a.as_view(), "{}", "first frame")
     const second = read_frame(mr.reader())
-    let b = second.unwrap()
+    let b = unwrap(move second)
     defer b.deinit()
     assert_eq(b.as_view(), "null", "second frame starts at the next byte")
 }
@@ -363,27 +363,27 @@ test "clean end of stream is Eof" {
     let mr = mem_reader("")
     const got = read_frame(mr.reader())
     assert_true(got.is_err(), "no frame in an empty stream")
-    assert_eq(got.unwrap_err().to_string(), "Eof", "clean EOF is distinguishable")
+    assert_eq(unwrap_err(move got).to_string(), "Eof", "clean EOF is distinguishable")
 }
 
 test "truncated body is BodyTruncated" {
     let mr = mem_reader("Content-Length: 10\r\n\r\n{}")
     const got = read_frame(mr.reader())
     assert_true(got.is_err(), "short body fails")
-    assert_eq(got.unwrap_err().to_string(), "BodyTruncated", "mid-body EOF is BodyTruncated")
+    assert_eq(unwrap_err(move got).to_string(), "BodyTruncated", "mid-body EOF is BodyTruncated")
 }
 
 test "missing Content-Length is MissingLength" {
     let mr = mem_reader("Content-Type: text\r\n\r\n{}")
     const got = read_frame(mr.reader())
     assert_true(got.is_err(), "headers without a length fail")
-    assert_eq(got.unwrap_err().to_string(), "MissingLength", "reported as MissingLength")
+    assert_eq(unwrap_err(move got).to_string(), "MissingLength", "reported as MissingLength")
 }
 
 test "parse request" {
     const got = parse_message("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}")
     assert_true(got.is_ok(), "request parses")
-    let msg = got.unwrap()
+    let msg = unwrap(move got)
     defer msg.deinit()
     assert_true(msg.is_request(), "id + method is a request")
     assert_true(!msg.is_notification(), "not a notification")
@@ -394,7 +394,7 @@ test "parse request" {
 
 test "parse notification" {
     const got = parse_message("{\"jsonrpc\":\"2.0\",\"method\":\"initialized\"}")
-    let msg = got.unwrap()
+    let msg = unwrap(move got)
     defer msg.deinit()
     assert_true(msg.is_notification(), "method without id is a notification")
     assert_true(!msg.is_request(), "not a request")
@@ -403,7 +403,7 @@ test "parse notification" {
 
 test "parse response" {
     const got = parse_message("{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":null}")
-    let msg = got.unwrap()
+    let msg = unwrap(move got)
     defer msg.deinit()
     assert_true(msg.is_response(), "no method is a response")
     assert_true(msg.result().is_some(), "result present, even when null")
@@ -412,14 +412,14 @@ test "parse response" {
 test "bad json is BadJson" {
     const got = parse_message("{oops")
     assert_true(got.is_err(), "garbage fails")
-    assert_eq(got.unwrap_err().to_string(), "BadJson", "reported as BadJson")
+    assert_eq(unwrap_err(move got).to_string(), "BadJson", "reported as BadJson")
 }
 
 test "non-object and missing version are BadEnvelope" {
     const arr = parse_message("[1,2]")
-    assert_eq(arr.unwrap_err().to_string(), "BadEnvelope", "array is not an envelope")
+    assert_eq(unwrap_err(move arr).to_string(), "BadEnvelope", "array is not an envelope")
     const missing = parse_message("{\"id\":1,\"method\":\"x\"}")
-    assert_eq(missing.unwrap_err().to_string(), "BadEnvelope", "jsonrpc field is required")
+    assert_eq(unwrap_err(move missing).to_string(), "BadEnvelope", "jsonrpc field is required")
 }
 
 test "write_notification exact bytes" {
@@ -433,7 +433,7 @@ test "write_notification exact bytes" {
 
 test "write_response echoes integer id without fraction" {
     const got = parse_message("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"shutdown\"}")
-    let msg = got.unwrap()
+    let msg = unwrap(move got)
     defer msg.deinit()
 
     let sb = string_builder(64)
@@ -446,7 +446,7 @@ test "write_response echoes integer id without fraction" {
 
 test "write_response echoes string id verbatim" {
     const got = parse_message("{\"jsonrpc\":\"2.0\",\"id\":\"a-1\",\"method\":\"shutdown\"}")
-    let msg = got.unwrap()
+    let msg = unwrap(move got)
     defer msg.deinit()
 
     let sb = string_builder(64)
@@ -486,7 +486,7 @@ test "read_message end to end" {
     let mr = mem_reader(sb.as_view())
     const got = read_message(mr.reader())
     assert_true(got.is_ok(), "framed message parses")
-    let msg = got.unwrap()
+    let msg = unwrap(move got)
     defer msg.deinit()
     assert_eq(msg.method().unwrap(), "exit", "method survives framing")
 }

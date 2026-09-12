@@ -43,7 +43,7 @@ pub type StringPool = struct {
 pub fn string_pool(allocator: &Allocator? = null) StringPool {
     let out: StringPool
     out.allocator = allocator.or_global()
-    return out
+    return move out
 }
 
 // Creates an empty pool that allocates through `allocator` for its whole life.
@@ -56,7 +56,7 @@ pub fn string_pool(allocator: &Allocator) StringPool {
 pub fn string_pool(capacity_bytes: usize, allocator: &Allocator? = null) StringPool {
     let out: StringPool = string_pool(allocator)
     out.bytes.reserve(capacity_bytes, out.allocator)
-    return out
+    return move out
 }
 
 // Returns the id of `s`, storing a copy of its bytes when the pool has no equal string yet. Equal
@@ -164,7 +164,7 @@ fn ensure_index_room(self: &StringPool) {
         fresh[slot] = id as StrId
     }
     self.index.deinit(self.allocator)
-    self.index = fresh
+    self.index = move fresh
 }
 
 // =============================================================================
@@ -190,18 +190,18 @@ pub fn iter(self: &StringPool) StringPoolIter {
 }
 
 // An iterator is its own iterable, so adapter chains can consume it.
-pub fn iter(it: &StringPoolIter) StringPoolIter {
-    return it.*
+pub fn iter(self: &StringPoolIter) StringPoolIter {
+    return self.*
 }
 
 // Advances and returns the next string with its id, or null after the last.
-pub fn next(it: &StringPoolIter) PooledString? {
-    if it.next_id as usize >= it.pool.len() {
+pub fn next(self: &StringPoolIter) PooledString? {
+    if self.next_id as usize >= self.pool.len() {
         return null
     }
-    const id = it.next_id
-    it.next_id = it.next_id + 1
-    return Some(.{ id = id, text = it.pool.get(id) })
+    const id = self.next_id
+    self.next_id = self.next_id + 1
+    return Some(.{ id = id, text = self.pool.get(id) })
 }
 
 // =============================================================================

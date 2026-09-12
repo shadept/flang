@@ -14,8 +14,8 @@ fn eval(expr: &Expr) i32 {
         Num(n) => n
         Add(children) => {
             let sum = 0
-            for child in children {
-                sum = sum + eval(&child)
+            for &child in children {
+                sum = sum + eval(child)
             }
             sum
         }
@@ -27,6 +27,6 @@ pub fn main() i32 {
     args.push(Expr.Num(1))
     args.push(Expr.Num(2))
     args.push(Expr.Num(3))
-    let add_expr = Expr.Add(args)
+    let add_expr = Expr.Add(move args)
     return eval(&add_expr)
 }

@@ -55,8 +55,8 @@ pub fn err(self: Result($T, $E)) E? {
 // `and_then` so the result does not nest.
 pub fn map(self: Result($T, $E), f: $F) Result($U, E) {
     return self match {
-        Ok(v) => Ok(f(v))
-        Err(e) => Err(e)
+        Ok(v) => Ok(f(move v))
+        Err(e) => Err(move e)
     }
 }
 
@@ -69,8 +69,8 @@ pub fn map(self: Result($T, $E), f: $F) Result($U, E) {
 // call site has to spell out an is_err / unwrap_err / re-wrap dance instead.
 pub fn map_err(self: Result($T, $E), f: $F) Result(T, $U) {
     return self match {
-        Ok(v) => Ok(v)
-        Err(e) => Err(f(e))
+        Ok(v) => Ok(move v)
+        Err(e) => Err(f(move e))
     }
 }
 
@@ -79,8 +79,8 @@ pub fn map_err(self: Result($T, $E), f: $F) Result(T, $U) {
 // short-circuits and `f` never runs.
 pub fn and_then(self: Result($T, $E), f: $F) Result($U, E) {
     return self match {
-        Ok(v) => f(v)
-        Err(e) => Err(e)
+        Ok(v) => f(move v)
+        Err(e) => Err(move e)
     }
 }
 
@@ -109,8 +109,8 @@ pub fn unwrap(self: Result($T, $E)) T {
 // Unwrap the Ok value, or return a default if Err
 pub fn unwrap_or(self: Result($T, $E), default: T) T {
     return self match {
-        Ok(value) => value
-        Err(_) => default
+        Ok(value) => move value
+        Err(_) => move default
     }
 }
 
@@ -127,15 +127,15 @@ pub fn unwrap_err(self: Result($T, $E)) E {
 // =============================================================================
 
 // Assert that a Result is Ok, panic with message if Err
-pub fn assert_ok(r: Result($T, $E), msg: String) {
-    if (r.is_err()) {
+pub fn assert_ok(self: Result($T, $E), msg: String) {
+    if (self.is_err()) {
         panic(msg)
     }
 }
 
 // Assert that a Result is Err, panic with message if Ok
-pub fn assert_err(r: Result($T, $E), msg: String) {
-    if (r.is_ok()) {
+pub fn assert_err(self: Result($T, $E), msg: String) {
+    if (self.is_ok()) {
         panic(msg)
     }
 }

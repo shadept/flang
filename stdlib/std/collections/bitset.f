@@ -32,7 +32,7 @@ pub fn deinit(self: &Bitset) {
 }
 
 // Number of bits currently set. O(words).
-pub fn len(self: Bitset) usize {
+pub fn len(self: &Bitset) usize {
     let total: usize = 0
     for w in self.words {
         total = total + count_ones_u64(w) as usize
@@ -41,7 +41,7 @@ pub fn len(self: Bitset) usize {
 }
 
 // True when no bits are set. O(words) in the worst case (must walk the whole list to confirm).
-pub fn is_empty(self: Bitset) bool {
+pub fn is_empty(self: &Bitset) bool {
     for w in self.words {
         if w != 0u64 {
             return false
@@ -67,7 +67,7 @@ pub fn add(self: &Bitset, i: usize) {
 }
 
 // Test bit `i`. Indices past the current storage are treated as unset.
-pub fn contains(self: Bitset, i: usize) bool {
+pub fn contains(self: &Bitset, i: usize) bool {
     const word_idx = i / BITS_PER_WORD
     if word_idx >= self.words.len {
         return false
@@ -98,7 +98,7 @@ pub fn clear(self: &Bitset) {
 }
 
 // In-place union: self |= other. Grows self when `other` is longer.
-pub fn union(self: &Bitset, other: Bitset) {
+pub fn union(self: &Bitset, other: &Bitset) {
     self.ensure_words(other.words.len)
     for i in 0..other.words.len {
         self.words[i] = self.words[i] | other.words[i]
@@ -107,7 +107,7 @@ pub fn union(self: &Bitset, other: Bitset) {
 
 // In-place intersection: self &= other. Words beyond `other`'s length become zero (since `other`
 // has no bits there). Storage is retained.
-pub fn intersect(self: &Bitset, other: Bitset) {
+pub fn intersect(self: &Bitset, other: &Bitset) {
     const common = if self.words.len < other.words.len { self.words.len } else { other.words.len }
     for i in 0..common {
         self.words[i] = self.words[i] & other.words[i]
@@ -118,7 +118,7 @@ pub fn intersect(self: &Bitset, other: Bitset) {
 }
 
 // In-place difference: self &= ~other. Bits set in `other` are cleared from `self`. Never grows.
-pub fn difference(self: &Bitset, other: Bitset) {
+pub fn difference(self: &Bitset, other: &Bitset) {
     const common = if self.words.len < other.words.len { self.words.len } else { other.words.len }
     for i in 0..common {
         self.words[i] = self.words[i] & ~other.words[i]
@@ -140,22 +140,22 @@ pub fn iter(self: &Bitset) BitsetIterator {
     return .{ bitset = self, word_idx = 0, word_residual = 0u64 }
 }
 
-pub fn next(it: &BitsetIterator) usize? {
-    while it.word_residual == 0u64 {
-        if it.word_idx >= it.bitset.words.len {
+pub fn next(self: &BitsetIterator) usize? {
+    while self.word_residual == 0u64 {
+        if self.word_idx >= self.bitset.words.len {
             return null
         }
-        it.word_residual = it.bitset.words[it.word_idx]
-        if it.word_residual == 0u64 {
-            it.word_idx = it.word_idx + 1
+        self.word_residual = self.bitset.words[self.word_idx]
+        if self.word_residual == 0u64 {
+            self.word_idx = self.word_idx + 1
         }
     }
-    const bit = trailing_zeros_u64(it.word_residual) as usize
-    const result = it.word_idx * BITS_PER_WORD + bit
+    const bit = trailing_zeros_u64(self.word_residual) as usize
+    const result = self.word_idx * BITS_PER_WORD + bit
     // Clear the bit we just yielded.
-    it.word_residual = it.word_residual & (it.word_residual - 1u64)
-    if it.word_residual == 0u64 {
-        it.word_idx = it.word_idx + 1
+    self.word_residual = self.word_residual & (self.word_residual - 1u64)
+    if self.word_residual == 0u64 {
+        self.word_idx = self.word_idx + 1
     }
     return Some(result)
 }

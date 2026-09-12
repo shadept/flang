@@ -16,100 +16,100 @@ pub fn random(seed: u64) Random {
 }
 
 // Generate the next random u64.
-pub fn next_u64(r: &Random) u64 {
-    r.state = r.state ^ (r.state << 13)
-    r.state = r.state ^ (r.state >> 7)
-    r.state = r.state ^ (r.state << 17)
-    return r.state
+pub fn next_u64(self: &Random) u64 {
+    self.state = self.state ^ (self.state << 13)
+    self.state = self.state ^ (self.state >> 7)
+    self.state = self.state ^ (self.state << 17)
+    return self.state
 }
 
 // Generate a random u32.
-pub fn next_u32(r: &Random) u32 {
-    return r.next_u64() as u32
+pub fn next_u32(self: &Random) u32 {
+    return self.next_u64() as u32
 }
 
 // Generate a random u16.
-pub fn next_u16(r: &Random) u16 {
-    return r.next_u64() as u16
+pub fn next_u16(self: &Random) u16 {
+    return self.next_u64() as u16
 }
 
 // Generate a random u8.
-pub fn next_u8(r: &Random) u8 {
-    return r.next_u64() as u8
+pub fn next_u8(self: &Random) u8 {
+    return self.next_u64() as u8
 }
 
 // Generate a random i64.
-pub fn next_i64(r: &Random) i64 {
-    return r.next_u64() as i64
+pub fn next_i64(self: &Random) i64 {
+    return self.next_u64() as i64
 }
 
 // Generate a random i32.
-pub fn next_i32(r: &Random) i32 {
-    return r.next_u64() as i32
+pub fn next_i32(self: &Random) i32 {
+    return self.next_u64() as i32
 }
 
 // Generate a random i16.
-pub fn next_i16(r: &Random) i16 {
-    return r.next_u64() as i16
+pub fn next_i16(self: &Random) i16 {
+    return self.next_u64() as i16
 }
 
 // Generate a random i8.
-pub fn next_i8(r: &Random) i8 {
-    return r.next_u64() as i8
+pub fn next_i8(self: &Random) i8 {
+    return self.next_u64() as i8
 }
 
 // Generate a random bool.
-pub fn next_bool(r: &Random) bool {
-    return (r.next_u64() & 1) == 1
+pub fn next_bool(self: &Random) bool {
+    return (self.next_u64() & 1) == 1
 }
 
 // Generate a random i64 in [min, max).
-pub fn next_range(r: &Random, min: i64, max: i64) i64 {
+pub fn next_range(self: &Random, min: i64, max: i64) i64 {
     if min >= max {
         return min
     }
     const range = (max - min) as u64
-    return min + (r.next_u64() % range) as i64
+    return min + (self.next_u64() % range) as i64
 }
 
 // Generate a random u64 in [min, max).
-pub fn next_urange(r: &Random, min: u64, max: u64) u64 {
+pub fn next_urange(self: &Random, min: u64, max: u64) u64 {
     if min >= max {
         return min
     }
     const range = max - min
-    return min + (r.next_u64() % range)
+    return min + (self.next_u64() % range)
 }
 
 // Generate a random f64 in [0.0, 1.0).
 // Uses the upper 53 bits of a u64 for full mantissa precision.
-pub fn next_f64(r: &Random) f64 {
-    return (r.next_u64() >> 11) as f64 / 9007199254740992.0
+pub fn next_f64(self: &Random) f64 {
+    return (self.next_u64() >> 11) as f64 / 9007199254740992.0
 }
 
 // Generate a random f32 in [0.0, 1.0).
 // Uses the upper 24 bits of a u64 for full mantissa precision.
-pub fn next_f32(r: &Random) f32 {
-    return (r.next_u64() >> 40) as f32 / 16777216.0f32
+pub fn next_f32(self: &Random) f32 {
+    return (self.next_u64() >> 40) as f32 / 16777216.0f32
 }
 
 // Generate a random f64 in [min, max).
-pub fn next_f64_range(r: &Random, min: f64, max: f64) f64 {
-    return min + r.next_f64() * (max - min)
+pub fn next_f64_range(self: &Random, min: f64, max: f64) f64 {
+    return min + self.next_f64() * (max - min)
 }
 
 // Generate a random f32 in [min, max).
-pub fn next_f32_range(r: &Random, min: f32, max: f32) f32 {
-    return min + r.next_f32() * (max - min)
+pub fn next_f32_range(self: &Random, min: f32, max: f32) f32 {
+    return min + self.next_f32() * (max - min)
 }
 
 // Fill a byte slice with random bytes.
-pub fn fill_bytes(r: &Random, buf: u8[]) {
+pub fn fill_bytes(self: &Random, buf: u8[]) {
     let i = 0usize
 
     // Fill 8 bytes at a time from a single u64
     while i + 8 <= buf.len {
-        let val = r.next_u64()
+        let val = self.next_u64()
         buf[i] = val as u8
         buf[i + 1] = (val >> 8) as u8
         buf[i + 2] = (val >> 16) as u8
@@ -123,7 +123,7 @@ pub fn fill_bytes(r: &Random, buf: u8[]) {
 
     // Fill remaining bytes
     while i < buf.len {
-        buf[i] = r.next_u8()
+        buf[i] = self.next_u8()
         i = i + 1
     }
 }

@@ -180,9 +180,9 @@ bindings when the arm is entered. The back edge's state therefore reaches
 only bindings that outlive the loop. `defer`
 bodies are held per open scope and walked where
 they fire, on every path that exits: falling off the block, `return`,
-`break` and `continue`. Nothing in it unifies, and it reports at the
-outermost open instantiation, so a copy rejected inside a generic body
-names the caller's line.
+`break` and `continue`. Nothing in it unifies. A copy rejected inside a
+generic body is reported at the body line, and the message names the type
+argument that made it non-copyable.
 
 **Self-host side tables.** The self-hosted checker has no mutable AST
 fields, so every semantic decision lands in `InferenceResults`, keyed by

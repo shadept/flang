@@ -108,19 +108,19 @@ fn history() History {
     return h
 }
 
-fn history_add(h: &History, line: String) {
+fn history_add(self: &History, line: String) {
     if line.len == 0 {
         return
     }
 
     // Don't add duplicates of the most recent entry
-    if h.count > 0 {
-        const last_off = h.offsets[h.count - 1]
-        const last_len = h.entries[last_off] as usize
+    if self.count > 0 {
+        const last_off = self.offsets[self.count - 1]
+        const last_len = self.entries[last_off] as usize
         if last_len == line.len {
             let same = true
             for i in 0..last_len {
-                if h.entries[last_off + 1 + i] != line[i] {
+                if self.entries[last_off + 1 + i] != line[i] {
                     same = false
                     break
                 }
@@ -133,40 +133,40 @@ fn history_add(h: &History, line: String) {
 
     // Need 1 byte for length + line.len bytes
     const needed = 1 + line.len
-    if h.buf_used + needed > 16384 {
+    if self.buf_used + needed > 16384 {
         return
     } // buffer full, skip
 
-    if h.count >= MAX_HISTORY {
+    if self.count >= MAX_HISTORY {
         // Shift everything down by removing the oldest entry
-        const first_len = h.entries[0] as usize
+        const first_len = self.entries[0] as usize
         const remove = 1 + first_len
-        memcpy(&h.entries[0], &h.entries[remove], h.buf_used - remove)
-        h.buf_used = h.buf_used - remove
+        memcpy(&self.entries[0], &self.entries[remove], self.buf_used - remove)
+        self.buf_used = self.buf_used - remove
         // Shift offsets
-        for i in 0..(h.count - 1) {
-            h.offsets[i] = h.offsets[i + 1] - remove
+        for i in 0..(self.count - 1) {
+            self.offsets[i] = self.offsets[i + 1] - remove
         }
-        h.count = h.count - 1
+        self.count = self.count - 1
     }
 
-    const off = h.buf_used
-    h.offsets[h.count] = off
-    h.entries[off] = line.len as u8
+    const off = self.buf_used
+    self.offsets[self.count] = off
+    self.entries[off] = line.len as u8
     for i in 0..line.len {
-        h.entries[off + 1 + i] = line[i]
+        self.entries[off + 1 + i] = line[i]
     }
-    h.buf_used = h.buf_used + needed
-    h.count = h.count + 1
+    self.buf_used = self.buf_used + needed
+    self.count = self.count + 1
 }
 
-fn history_get(h: &History, index: usize) String {
-    if index >= h.count {
+fn history_get(self: &History, index: usize) String {
+    if index >= self.count {
         return ""
     }
-    const off = h.offsets[index]
-    const len = h.entries[off] as usize
-    return slice_from_raw_parts(&h.entries[off + 1], len) as String
+    const off = self.offsets[index]
+    const len = self.entries[off] as usize
+    return slice_from_raw_parts(&self.entries[off + 1], len) as String
 }
 
 // =============================================================================
@@ -202,8 +202,8 @@ pub fn deinit(self: &Readline) {
 // Raw mode
 // =============================================================================
 
-fn enable_raw(rl: &Readline) {
-    if rl.is_raw {
+fn enable_raw(self: &Readline) {
+    if self.is_raw {
         return
     }
     if !is_tty(STDIN_FD) {
@@ -215,13 +215,13 @@ fn enable_raw(rl: &Readline) {
         const hIn = GetStdHandle(WIN_STD_INPUT_HANDLE)
         let in_mode: u32 = 0
         GetConsoleMode(hIn, &in_mode)
-        const p_in = &rl.raw_buf[0] as &u32
+        const p_in = &self.raw_buf[0] as &u32
         p_in.* = in_mode
 
         const hOut = GetStdHandle(WIN_STD_OUTPUT_HANDLE)
         let out_mode: u32 = 0
         GetConsoleMode(hOut, &out_mode)
-        const p_out = &rl.raw_buf[4] as &u32
+        const p_out = &self.raw_buf[4] as &u32
         p_out.* = out_mode
 
         // Disable echo and line input, enable VT input for escape sequences
@@ -232,11 +232,11 @@ fn enable_raw(rl: &Readline) {
         SetConsoleMode(hOut, out_mode | WIN_ENABLE_VIRTUAL_TERMINAL_PROCESSING)
     } else {
         // Save original termios
-        tcgetattr(0, &rl.raw_buf[0])
+        tcgetattr(0, &self.raw_buf[0])
 
         // Copy and modify
         let raw = [0u8; 72]
-        memcpy(&raw[0], &rl.raw_buf[0], TERMIOS_SIZE)
+        memcpy(&raw[0], &self.raw_buf[0], TERMIOS_SIZE)
 
         // Clear ECHO, ICANON, ISIG from c_lflag
         let lflag = read_u64(&raw[LFLAG_OFFSET])
@@ -250,27 +250,27 @@ fn enable_raw(rl: &Readline) {
         tcsetattr(0, TCSAFLUSH, &raw[0])
     }
 
-    rl.is_raw = true
+    self.is_raw = true
 }
 
-fn disable_raw(rl: &Readline) {
-    if !rl.is_raw {
+fn disable_raw(self: &Readline) {
+    if !self.is_raw {
         return
     }
 
     #if platform.os == "windows" {
         const hIn = GetStdHandle(WIN_STD_INPUT_HANDLE)
-        const p_in = &rl.raw_buf[0] as &u32
+        const p_in = &self.raw_buf[0] as &u32
         SetConsoleMode(hIn, p_in.*)
 
         const hOut = GetStdHandle(WIN_STD_OUTPUT_HANDLE)
-        const p_out = &rl.raw_buf[4] as &u32
+        const p_out = &self.raw_buf[4] as &u32
         SetConsoleMode(hOut, p_out.*)
     } else {
-        tcsetattr(0, TCSAFLUSH, &rl.raw_buf[0])
+        tcsetattr(0, TCSAFLUSH, &self.raw_buf[0])
     }
 
-    rl.is_raw = false
+    self.is_raw = false
 }
 
 fn read_u64(ptr: &u8) u64 {
@@ -383,15 +383,15 @@ fn read_key() Key {
 // Line editing
 // =============================================================================
 
-pub fn read_line(rl: &Readline) String? {
+pub fn read_line(self: &Readline) String? {
     if !is_tty(STDIN_FD) {
-        return read_line_simple(rl)
+        return read_line_simple(self)
     }
 
-    enable_raw(rl)
+    enable_raw(self)
 
     // Print prompt
-    write(1, rl.prompt.ptr, rl.prompt.len)
+    write(1, self.prompt.ptr, self.prompt.len)
 
     let buf = [0u8; 1024]
     let len: usize = 0
@@ -404,12 +404,12 @@ pub fn read_line(rl: &Readline) String? {
         read_key() match {
             Enter => {
                 write_str("\r\n")
-                disable_raw(rl)
+                disable_raw(self)
                 // Copy into persistent buffer so the returned String outlives this call
-                memcpy(&rl.line_buf[0], &buf[0], len)
-                const line = slice_from_raw_parts(&rl.line_buf[0], len) as String
+                memcpy(&self.line_buf[0], &buf[0], len)
+                const line = slice_from_raw_parts(&self.line_buf[0], len) as String
                 if len > 0 {
-                    history_add(&rl.hist, line)
+                    history_add(&self.hist, line)
                 }
                 return Some(line)
             }
@@ -417,7 +417,7 @@ pub fn read_line(rl: &Readline) String? {
             Eof => {
                 if len == 0 {
                     write_str("\r\n")
-                    disable_raw(rl)
+                    disable_raw(self)
                     return null
                 }
             }
@@ -436,7 +436,7 @@ pub fn read_line(rl: &Readline) String? {
                     buf[cursor] = c
                     len = len + 1
                     cursor = cursor + 1
-                    refresh_line(rl, buf, len, cursor)
+                    refresh_line(self, buf, len, cursor)
                 }
             }
 
@@ -448,7 +448,7 @@ pub fn read_line(rl: &Readline) String? {
                     }
                     len = len - 1
                     cursor = cursor - 1
-                    refresh_line(rl, buf, len, cursor)
+                    refresh_line(self, buf, len, cursor)
                 }
             }
 
@@ -458,70 +458,70 @@ pub fn read_line(rl: &Readline) String? {
                         buf[i] = buf[i + 1]
                     }
                     len = len - 1
-                    refresh_line(rl, buf, len, cursor)
+                    refresh_line(self, buf, len, cursor)
                 }
             }
 
             Left => {
                 if cursor > 0 {
                     cursor = cursor - 1
-                    refresh_line(rl, buf, len, cursor)
+                    refresh_line(self, buf, len, cursor)
                 }
             }
 
             Right => {
                 if cursor < len {
                     cursor = cursor + 1
-                    refresh_line(rl, buf, len, cursor)
+                    refresh_line(self, buf, len, cursor)
                 }
             }
 
             Home => {
                 cursor = 0
-                refresh_line(rl, buf, len, cursor)
+                refresh_line(self, buf, len, cursor)
             }
 
             End => {
                 cursor = len
-                refresh_line(rl, buf, len, cursor)
+                refresh_line(self, buf, len, cursor)
             }
 
             Up => {
-                if rl.hist.count > 0 {
+                if self.hist.count > 0 {
                     if hist_index == -1 {
                         // Save current input
                         memcpy(&saved_buf[0], &buf[0], len)
                         saved_len = len
-                        hist_index = rl.hist.count as isize - 1
+                        hist_index = self.hist.count as isize - 1
                     } else if hist_index > 0 {
                         hist_index = hist_index - 1
                     } else {
                         continue
                     }
-                    const entry = history_get(&rl.hist, hist_index as usize)
+                    const entry = history_get(&self.hist, hist_index as usize)
                     memcpy(&buf[0], entry.ptr, entry.len)
                     len = entry.len
                     cursor = len
-                    refresh_line(rl, buf, len, cursor)
+                    refresh_line(self, buf, len, cursor)
                 }
             }
 
             Down => {
                 if hist_index >= 0 {
                     hist_index = hist_index + 1
-                    if hist_index as usize >= rl.hist.count {
+                    if hist_index as usize >= self.hist.count {
                         // Restore saved input
                         hist_index = -1
                         memcpy(&buf[0], &saved_buf[0], saved_len)
                         len = saved_len
                         cursor = len
                     } else {
-                        const entry = history_get(&rl.hist, hist_index as usize)
+                        const entry = history_get(&self.hist, hist_index as usize)
                         memcpy(&buf[0], entry.ptr, entry.len)
                         len = entry.len
                         cursor = len
                     }
-                    refresh_line(rl, buf, len, cursor)
+                    refresh_line(self, buf, len, cursor)
                 }
             }
 
@@ -529,11 +529,11 @@ pub fn read_line(rl: &Readline) String? {
         }
     }
 
-    disable_raw(rl)
+    disable_raw(self)
     return null
 }
 
-fn refresh_line(rl: &Readline, buf: [u8; 1024], len: usize, cursor: usize) {
+fn refresh_line(self: &Readline, buf: [u8; 1024], len: usize, cursor: usize) {
     // Move to start of line, clear it, rewrite prompt + buffer, reposition cursor
     let out = [0u8; 2048]
     let pos: usize = 0
@@ -543,8 +543,8 @@ fn refresh_line(rl: &Readline, buf: [u8; 1024], len: usize, cursor: usize) {
     pos = pos + 1
 
     // Write prompt
-    for i in 0..rl.prompt.len {
-        out[pos] = rl.prompt[i]
+    for i in 0..self.prompt.len {
+        out[pos] = self.prompt[i]
         pos = pos + 1
     }
 
@@ -565,7 +565,7 @@ fn refresh_line(rl: &Readline, buf: [u8; 1024], len: usize, cursor: usize) {
     // Move cursor to correct position: \r then ESC [ {n} C
     out[pos] = 13
     pos = pos + 1
-    const target = rl.prompt.len + cursor
+    const target = self.prompt.len + cursor
     if target > 0 {
         out[pos] = 27
         pos = pos + 1
@@ -608,7 +608,7 @@ fn write_str(s: String) {
 }
 
 // Simple non-interactive fallback for piped input
-fn read_line_simple(rl: &Readline) String? {
+fn read_line_simple(self: &Readline) String? {
     let len: usize = 0
 
     loop {
@@ -624,10 +624,10 @@ fn read_line_simple(rl: &Readline) String? {
             break
         }
         if len < 1023 {
-            rl.line_buf[len] = c
+            self.line_buf[len] = c
             len = len + 1
         }
     }
 
-    return Some(slice_from_raw_parts(&rl.line_buf[0], len) as String)
+    return Some(slice_from_raw_parts(&self.line_buf[0], len) as String)
 }

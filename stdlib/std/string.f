@@ -217,7 +217,7 @@ pub fn split(s: String, delimiter: u8, max: i32 = -1) List(String) {
         }
     }
     result.push(s[start..s.len])
-    return result
+    return move result
 }
 
 // Split a string by a String delimiter. Returns a List of non-owning views. An empty delimiter is
@@ -228,7 +228,7 @@ pub fn split(s: String, sep: String, max: i32 = -1) List(String) {
     let result: List(String) = list(0)
     if sep.len == 0 {
         result.push(s)
-        return result
+        return move result
     }
     let start: usize = 0
     let i: usize = 0
@@ -257,7 +257,7 @@ pub fn split(s: String, sep: String, max: i32 = -1) List(String) {
         i = i + 1
     }
     result.push(s[start..s.len])
-    return result
+    return move result
 }
 
 // =============================================================================
@@ -337,8 +337,8 @@ pub fn split_at(s: String, i: usize) (String, String) {
 }
 
 pub fn is_ascii(s: String) bool {
-    for i in 0..s.len {
-        if s[i] >= 0x80 {
+    for b in s.bytes() {
+        if b >= 0x80u8 {
             return false
         }
     }
@@ -438,7 +438,7 @@ pub fn next(self: &Lines) String? {
 //
 // The owning counterpart to [core.string.String], which `as_view` borrows one as.
 pub type OwnedString = struct {
-    ptr: &u8
+    owned ptr: &u8
     len: usize
     allocator: &Allocator?
 }
@@ -465,6 +465,13 @@ pub fn from_view(s: String, allocator: &Allocator? = null) OwnedString {
     return .{ ptr = buf.ptr, len = s.len, allocator = allocator }
 }
 
+// Returns an owned copy of `self`'s bytes, in one fresh allocation.
+//
+// - `allocator`: remembered on the copy for its `deinit`. Null is the receiver's allocator.
+pub fn clone(self: &OwnedString, allocator: &Allocator? = null) OwnedString {
+    return from_view(self.as_view(), allocator ?? self.allocator)
+}
+
 pub fn deinit(self: &OwnedString) {
     // Idempotent: a second call sees the nulled pointer and no-ops.
     if self.ptr == (0usize as &u8) {
@@ -476,7 +483,7 @@ pub fn deinit(self: &OwnedString) {
 }
 
 // Reads `self`. Consuming an owned temporary is `append`'s behaviour, not this one's.
-pub fn format(self: OwnedString, w: Writer, spec: String) {
+pub fn format(self: &OwnedString, w: Writer, spec: String) {
     self.as_view().format(w, spec)
 }
 
@@ -488,8 +495,8 @@ pub fn op_eq(a: OwnedString, b: OwnedString) bool {
     return op_eq(a.as_view(), b.as_view())
 }
 
-pub fn hash(s: &OwnedString) usize {
-    return hash(s.as_view())
+pub fn hash(self: &OwnedString) usize {
+    return hash(self.as_view())
 }
 
 #string_reader(OwnedString)
@@ -509,9 +516,9 @@ pub fn bytes(s: String) Bytes {
     return .{ buf = slice, idx = 0 }
 }
 
-pub fn bytes(s: &OwnedString) Bytes {
+pub fn bytes(self: &OwnedString) Bytes {
     // TODO fix String to Slice(u8) coersion
-    const slice = slice_from_raw_parts(s.ptr, s.len)
+    const slice = slice_from_raw_parts(self.ptr, self.len)
     return .{ buf = slice, idx = 0 }
 }
 
@@ -520,13 +527,13 @@ pub fn iter(b: &Bytes) Bytes {
     return b.*
 }
 
-pub fn next(it: &Bytes) u8? {
-    if (it.idx >= it.buf.len) {
+pub fn next(self: &Bytes) u8? {
+    if (self.idx >= self.buf.len) {
         return null
     }
 
-    const elem = it.buf[it.idx]
-    it.idx = it.idx + 1
+    const elem = self.buf[self.idx]
+    self.idx = self.idx + 1
     return Some(elem)
 }
 
@@ -545,23 +552,23 @@ pub fn chars(s: String) Chars {
     return .{ buf = slice, idx = 0 }
 }
 
-pub fn chars(s: &OwnedString) Chars {
+pub fn chars(self: &OwnedString) Chars {
     // TODO fix String to Slice(u8) coersion
-    const slice = slice_from_raw_parts(s.ptr, s.len)
+    const slice = slice_from_raw_parts(self.ptr, self.len)
     return .{ buf = slice, idx = 0 }
 }
 
-pub fn iter(c: &Chars) Chars {
-    return c.*
+pub fn iter(self: &Chars) Chars {
+    return self.*
 }
 
-pub fn next(it: &Chars) char? {
-    if (it.idx >= it.buf.len) {
+pub fn next(self: &Chars) char? {
+    if (self.idx >= self.buf.len) {
         return null
     }
 
-    const res = decode_char(it.buf[it.idx..])
-    it.idx = it.idx + res.1
+    const res = decode_char(self.buf[self.idx..])
+    self.idx = self.idx + res.1
     return Some(res.0)
 }
 

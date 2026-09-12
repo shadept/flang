@@ -30,7 +30,7 @@ fn push_seven(h: &Holder) {
 pub fn main() i32 {
     let xs: List(i32) = list(4)
     xs.push(1i32)
-    let h: Holder = Holder.Items(xs)
+    let h: Holder = Holder.Items(move xs)
 
     const got: &List(i32)? = items_of(&h)
     if got.is_none() {

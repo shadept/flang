@@ -16,7 +16,7 @@ pub type Option = enum(T) {
 // `?` on Option(T) works inside any fn returning Option(U): None is shape-only.
 pub fn op_try(self: Option($T)) TryResult(T, Option($U)) {
     return self match {
-        Some(v) => TryResult.Continue(v)
+        Some(v) => TryResult.Continue(move v)
         None => TryResult.Return(None)
     }
 }

@@ -186,13 +186,13 @@ fn parse_int_spec(spec: String) FormatSpec {
 }
 
 // A writer reports how many bytes it took; formatting has nowhere to put that number.
-fn put(w: Writer, content: u8[]) {
-    let _n = w.write(content)
+fn put(self: Writer, content: u8[]) {
+    let _n = self.write(content)
 }
 
 // Write `pad_count` copies of `fill_char`. Batched: a sink call per byte would dominate the cost of
 // formatting a padded value.
-fn write_fill(w: Writer, fill_char: u8, pad_count: usize) {
+fn write_fill(self: Writer, fill_char: u8, pad_count: usize) {
     let chunk = [0u8; 32]
     for i in 0..32usize {
         chunk[i] = fill_char
@@ -200,44 +200,44 @@ fn write_fill(w: Writer, fill_char: u8, pad_count: usize) {
     let left = pad_count
     while left > 0 {
         const n = if left < 32 { left } else { 32usize }
-        put(w, chunk[0..n])
+        put(self, chunk[0..n])
         left = left - n
     }
 }
 
 // Emit `content` widened to `width` with `fill`, placed per `align`: '<' left, '^' centered,
 // anything else right. Content at least as wide as `width` is emitted unchanged.
-fn write_padded(w: Writer, content: u8[], width: usize, fill: u8, align: u8) {
+fn write_padded(self: Writer, content: u8[], width: usize, fill: u8, align: u8) {
     if width <= content.len {
-        put(w, content)
+        put(self, content)
         return
     }
     const pad_count = width - content.len
 
     if align == '<' {
-        put(w, content)
-        write_fill(w, fill, pad_count)
+        put(self, content)
+        write_fill(self, fill, pad_count)
     } else if align == '^' {
         const left = pad_count / 2
-        write_fill(w, fill, left)
-        put(w, content)
-        write_fill(w, fill, pad_count - left)
+        write_fill(self, fill, left)
+        put(self, content)
+        write_fill(self, fill, pad_count - left)
     } else {
-        write_fill(w, fill, pad_count)
-        put(w, content)
+        write_fill(self, fill, pad_count)
+        put(self, content)
     }
 }
 
 // Emit content (in tmp[0..len]) with alignment/padding per fmt. Zero-padding a right-aligned number
 // keeps the sign in front of the zeros: "-007".
-fn write_int_padded(w: Writer, tmp: u8[], len: usize, fmt: &FormatSpec) {
+fn write_int_padded(self: Writer, tmp: u8[], len: usize, fmt: &FormatSpec) {
     if fmt.pad_zero and fmt.align == '>' and fmt.width > len and len > 0 and tmp[0] == '-' {
-        put(w, ['-'])
-        write_fill(w, '0', fmt.width - len)
-        put(w, tmp[1..len])
+        put(self, ['-'])
+        write_fill(self, '0', fmt.width - len)
+        put(self, tmp[1..len])
         return
     }
-    write_padded(w, tmp[0..len], fmt.width, fmt.fill, fmt.align)
+    write_padded(self, tmp[0..len], fmt.width, fmt.fill, fmt.align)
 }
 
 fn format_unsigned_into(tmp: u8[], value: u64, base: u64, uppercase: bool) usize {
@@ -252,11 +252,11 @@ fn format_unsigned_into(tmp: u8[], value: u64, base: u64, uppercase: bool) usize
     return len
 }
 
-fn write_unsigned(w: Writer, value: u64, spec: String) {
+fn write_unsigned(self: Writer, value: u64, spec: String) {
     const fmt = parse_int_spec(spec)
     let tmp = [0u8; 64]
     const len = format_unsigned_into(tmp, value, fmt.base, fmt.uppercase)
-    write_int_padded(w, tmp, len, &fmt)
+    write_int_padded(self, tmp, len, &fmt)
 }
 
 fn mask_for_bits(bits: u64) u64 {
@@ -275,7 +275,7 @@ fn mask_for_bits(bits: u64) u64 {
     return 0xFFFF_FFFF_FFFF_FFFF
 }
 
-fn write_signed(w: Writer, value: i64, spec: String, bits: u64) {
+fn write_signed(self: Writer, value: i64, spec: String, bits: u64) {
     const fmt = parse_int_spec(spec)
 
     // For non-decimal formats, mask to original type width and show as unsigned
@@ -283,14 +283,14 @@ fn write_signed(w: Writer, value: i64, spec: String, bits: u64) {
         let tmp = [0u8; 64]
         const masked = (value as u64) & mask_for_bits(bits)
         const len = format_unsigned_into(tmp, masked, fmt.base, fmt.uppercase)
-        write_int_padded(w, tmp, len, &fmt)
+        write_int_padded(self, tmp, len, &fmt)
         return
     }
 
     // Decimal format
     let tmp = [0u8; 21]
     const len = format_i64(value, tmp).unwrap()
-    write_int_padded(w, tmp, len, &fmt)
+    write_int_padded(self, tmp, len, &fmt)
 }
 
 type FloatFormatSpec = struct {
@@ -360,21 +360,21 @@ fn parse_float_spec(spec: String) FloatFormatSpec {
 
 // Emit content (in tmp[0..len]) with alignment/padding per fmt. Mirrors `write_int_padded` - the
 // sign-aware zero-pad branch handles "-003.14".
-fn write_float_padded(w: Writer, tmp: u8[], len: usize, fmt: &FloatFormatSpec) {
+fn write_float_padded(self: Writer, tmp: u8[], len: usize, fmt: &FloatFormatSpec) {
     if fmt.pad_zero and fmt.align == '>' and fmt.width > len and len > 0 and tmp[0] == '-' {
-        put(w, ['-'])
-        write_fill(w, '0', fmt.width - len)
-        put(w, tmp[1..len])
+        put(self, ['-'])
+        write_fill(self, '0', fmt.width - len)
+        put(self, tmp[1..len])
         return
     }
-    write_padded(w, tmp[0..len], fmt.width, fmt.fill, fmt.align)
+    write_padded(self, tmp[0..len], fmt.width, fmt.fill, fmt.align)
 }
 
 // Float spec grammar: [fill][align][0][width][.precision][type], where `type` is `e` / `E`
 // (scientific, `format_f64_exp`) or `a` (exact C99 hex-float, `format_f64_hex` - the round-trip
 // representation; width and alignment apply, precision is inherent to the bits). No type char is
 // plain fixed-point (`format_f64`).
-fn write_float(w: Writer, val: f64, spec: String) {
+fn write_float(self: Writer, val: f64, spec: String) {
     let kind: u8 = 'f'
     let body = spec
     if spec.len > 0 {
@@ -394,23 +394,23 @@ fn write_float(w: Writer, val: f64, spec: String) {
     } else {
         len = format_f64_exp(val, tmp, fmt.precision, kind == 'E').unwrap()
     }
-    write_float_padded(w, tmp, len, &fmt)
+    write_float_padded(self, tmp, len, &fmt)
 }
 
 // Text spec grammar: [fill][align][0][width]. Width is a minimum measured in bytes; text at least
 // that wide is written whole. The trailing base char of the integer grammar has no meaning here and
 // is ignored.
-fn write_text(w: Writer, content: u8[], spec: String) {
+fn write_text(self: Writer, content: u8[], spec: String) {
     const fmt = parse_int_spec(spec)
-    write_padded(w, content, fmt.width, fmt.fill, fmt.align)
+    write_padded(self, content, fmt.width, fmt.fill, fmt.align)
 }
 
 // =============================================================================
 // Tests
 // =============================================================================
 
-fn expect_view(sb: &StringBuilder, expected: String, msg: String) {
-    const view = sb.as_view()
+fn expect_view(self: &StringBuilder, expected: String, msg: String) {
+    const view = self.as_view()
     assert_true(view.len == expected.len, msg)
     for i in 0..view.len {
         assert_true(view[i] == expected[i], msg)
@@ -1146,13 +1146,13 @@ fn missing_argument() never {
     panic("format_to: the template names an argument the call does not pass")
 }
 
-pub fn format_to(w: Writer, template: String, a: $A) {
+pub fn format_to(self: Writer, template: String, a: $A) {
     let scan = TemplateScan { text = template, pos = 0, next_index = 0 }
     loop {
-        scan.next_hole(w) match {
+        scan.next_hole(self) match {
             Some(h) => {
                 if h.0 == 0 {
-                    a.format(w, h.1)
+                    a.format(self, h.1)
                 } else {
                     missing_argument()
                 }
@@ -1162,15 +1162,15 @@ pub fn format_to(w: Writer, template: String, a: $A) {
     }
 }
 
-pub fn format_to(w: Writer, template: String, a: $A, b: $B) {
+pub fn format_to(self: Writer, template: String, a: $A, b: $B) {
     let scan = TemplateScan { text = template, pos = 0, next_index = 0 }
     loop {
-        scan.next_hole(w) match {
+        scan.next_hole(self) match {
             Some(h) => {
                 if h.0 == 0 {
-                    a.format(w, h.1)
+                    a.format(self, h.1)
                 } else if h.0 == 1 {
-                    b.format(w, h.1)
+                    b.format(self, h.1)
                 } else {
                     missing_argument()
                 }
@@ -1180,17 +1180,17 @@ pub fn format_to(w: Writer, template: String, a: $A, b: $B) {
     }
 }
 
-pub fn format_to(w: Writer, template: String, a: $A, b: $B, c: $C) {
+pub fn format_to(self: Writer, template: String, a: $A, b: $B, c: $C) {
     let scan = TemplateScan { text = template, pos = 0, next_index = 0 }
     loop {
-        scan.next_hole(w) match {
+        scan.next_hole(self) match {
             Some(h) => {
                 if h.0 == 0 {
-                    a.format(w, h.1)
+                    a.format(self, h.1)
                 } else if h.0 == 1 {
-                    b.format(w, h.1)
+                    b.format(self, h.1)
                 } else if h.0 == 2 {
-                    c.format(w, h.1)
+                    c.format(self, h.1)
                 } else {
                     missing_argument()
                 }

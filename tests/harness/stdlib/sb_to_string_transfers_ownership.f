@@ -42,7 +42,7 @@ pub fn main() i32 {
     if term.* != 0u8 { return 40 }
 
     // Clean up.
-    let m = owned
+    let m = move owned
     m.deinit()
 
     // SB had its buffer transferred, so deinit must be a no-op (no double free).

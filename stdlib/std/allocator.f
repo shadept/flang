@@ -222,11 +222,11 @@ pub fn counting_allocator(backing: &Allocator) CountingAllocator {
     }
 }
 
-fn counting_note_growth(state: &CountingAllocator, bytes: usize) {
-    state.live_bytes = state.live_bytes + bytes
-    state.total_bytes = state.total_bytes + bytes
-    if state.live_bytes > state.peak_bytes {
-        state.peak_bytes = state.live_bytes
+fn counting_note_growth(self: &CountingAllocator, bytes: usize) {
+    self.live_bytes = self.live_bytes + bytes
+    self.total_bytes = self.total_bytes + bytes
+    if self.live_bytes > self.peak_bytes {
+        self.peak_bytes = self.live_bytes
     }
 }
 
@@ -276,21 +276,21 @@ const counting_allocator_vtable = AllocatorVTable {
     dealloc = counting_dealloc,
 }
 
-pub fn allocator(state: &CountingAllocator) Allocator {
+pub fn allocator(self: &CountingAllocator) Allocator {
     return Allocator {
-        impl = state as &u8,
+        impl = self as &u8,
         vtable = &counting_allocator_vtable,
     }
 }
 
 // Start counting again from here, with whatever is currently live as the new baseline. Measures one
 // phase of a long-running program.
-pub fn reset_counts(state: &CountingAllocator) {
-    state.peak_bytes = state.live_bytes
-    state.total_bytes = 0
-    state.allocs = 0
-    state.reallocs = 0
-    state.deallocs = 0
+pub fn reset_counts(self: &CountingAllocator) {
+    self.peak_bytes = self.live_bytes
+    self.total_bytes = 0
+    self.allocs = 0
+    self.reallocs = 0
+    self.deallocs = 0
 }
 
 test "an installed global allocator is what or_global resolves to" {
@@ -432,16 +432,16 @@ pub fn fixed_buffer_allocator(buffer: u8[]) FixedBufferAllocatorState {
     }
 }
 
-pub fn allocator(state: &FixedBufferAllocatorState) Allocator {
+pub fn allocator(self: &FixedBufferAllocatorState) Allocator {
     return Allocator {
-        impl = state as &u8,
+        impl = self as &u8,
         vtable = &fixed_buffer_allocator_vtable,
     }
 }
 
 // Reset a FixedBufferAllocator to reuse its buffer from the beginning.
-pub fn reset(state: &FixedBufferAllocatorState) {
-    state.offset = 0
+pub fn reset(self: &FixedBufferAllocatorState) {
+    self.offset = 0
 }
 
 // =============================================================================
@@ -479,29 +479,29 @@ pub const ARENA_PAGE_ALIGN: usize = 8
 
 pub const DEFAULT_ARENA_PAGE_SIZE: usize = 4096
 
-fn arena_new_page(state: &ArenaAllocator, min_size: usize) &ArenaPage? {
+fn arena_new_page(self: &ArenaAllocator, min_size: usize) &ArenaPage? {
     const header_size = size_of(ArenaPage)
     const needed = min_size + header_size
-    const total = align_up(needed, state.next_size)
-    if state.next_size < ARENA_MAX_PAGE_SIZE {
-        state.next_size = state.next_size * 2
+    const total = align_up(needed, self.next_size)
+    if self.next_size < ARENA_MAX_PAGE_SIZE {
+        self.next_size = self.next_size * 2
     }
 
-    const raw = state.backing.alloc(total, ARENA_PAGE_ALIGN)?
+    const raw = self.backing.alloc(total, ARENA_PAGE_ALIGN)?
     const page = raw.ptr as &ArenaPage
     page.next = null
     page.size = total - header_size
     page.offset = 0
 
     // Link into chain
-    state.current_page match {
+    self.current_page match {
         Some(cp) => { cp.next = Some(page) }
         None => {}
     }
-    if state.first_page.is_none() {
-        state.first_page = Some(page)
+    if self.first_page.is_none() {
+        self.first_page = Some(page)
     }
-    state.current_page = Some(page)
+    self.current_page = Some(page)
 
     return Some(page)
 }
@@ -590,27 +590,27 @@ pub fn arena_allocator(backing: &Allocator, page_size: usize = 4096) ArenaAlloca
 }
 
 // Free all pages through the backing allocator.
-pub fn deinit(state: &ArenaAllocator) {
+pub fn deinit(self: &ArenaAllocator) {
     const header_size = size_of(ArenaPage)
-    let page = state.first_page
+    let page = self.first_page
     while page.is_some() {
         let p = page.unwrap()
         let next = p.next
         let total = p.size + header_size
         let raw = slice_from_raw_parts(p as &u8, total)
-        state.backing.dealloc(raw, ARENA_PAGE_ALIGN)
+        self.backing.dealloc(raw, ARENA_PAGE_ALIGN)
         page = next
     }
-    state.first_page = null
-    state.current_page = null
+    self.first_page = null
+    self.current_page = null
 }
 
 // Bytes held across every page, headers included: what the arena took from its backing allocator,
 // not what callers asked for.
-pub fn capacity_bytes(state: &ArenaAllocator) usize {
+pub fn capacity_bytes(self: &ArenaAllocator) usize {
     const header_size = size_of(ArenaPage)
     let total: usize = 0
-    let page = state.first_page
+    let page = self.first_page
     while page.is_some() {
         const p = page.unwrap()
         total = total + p.size + header_size
@@ -620,9 +620,9 @@ pub fn capacity_bytes(state: &ArenaAllocator) usize {
 }
 
 // Bytes handed out, headers and end-of-page slack excluded.
-pub fn used_bytes(state: &ArenaAllocator) usize {
+pub fn used_bytes(self: &ArenaAllocator) usize {
     let total: usize = 0
-    let page = state.first_page
+    let page = self.first_page
     while page.is_some() {
         const p = page.unwrap()
         total = total + p.offset
@@ -631,9 +631,9 @@ pub fn used_bytes(state: &ArenaAllocator) usize {
     return total
 }
 
-pub fn page_count(state: &ArenaAllocator) usize {
+pub fn page_count(self: &ArenaAllocator) usize {
     let n: usize = 0
-    let page = state.first_page
+    let page = self.first_page
     while page.is_some() {
         n = n + 1
         page = page.unwrap().next
@@ -642,28 +642,28 @@ pub fn page_count(state: &ArenaAllocator) usize {
 }
 
 // Reset all pages to offset 0 - keeps pages allocated for reuse.
-pub fn reset(state: &ArenaAllocator) {
-    let page = state.first_page
+pub fn reset(self: &ArenaAllocator) {
+    let page = self.first_page
     while page.is_some() {
         let p = page.unwrap()
         p.offset = 0
         page = p.next
     }
-    state.current_page = state.first_page
-    state.next_size = state.page_size
-    let p2 = state.first_page
+    self.current_page = self.first_page
+    self.next_size = self.page_size
+    let p2 = self.first_page
     while p2.is_some() {
         const pp = p2.unwrap()
-        if state.next_size < ARENA_MAX_PAGE_SIZE {
-            state.next_size = state.next_size * 2
+        if self.next_size < ARENA_MAX_PAGE_SIZE {
+            self.next_size = self.next_size * 2
         }
         p2 = pp.next
     }
 }
 
-pub fn allocator(state: &ArenaAllocator) Allocator {
+pub fn allocator(self: &ArenaAllocator) Allocator {
     return Allocator {
-        impl = state as &u8,
+        impl = self as &u8,
         vtable = &arena_allocator_vtable,
     }
 }

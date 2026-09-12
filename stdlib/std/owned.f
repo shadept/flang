@@ -18,22 +18,18 @@ pub type Owned = struct(T) {
 
 // Cleanup defaults to T.deinit. Works for any T with deinit(&T) in scope.
 pub fn owned(value: $T) Owned(T) {
-    return owned(value, deinit)
+    return owned(move value, deinit)
 }
 
 pub fn owned(value: $T, cleanup: fn(&T) void) Owned(T) {
-    let some: T? = Some(value)
-    return .{ __value = some, __cleanup = cleanup }
+    return .{ __value = Some(move value), __cleanup = cleanup }
 }
 
 // Take the value out. Subsequent deinit is a no-op. Panics if already transferred.
 pub fn transfer(self: &Owned($T)) T {
-    let v = self.__value match {
-        Some(v) => v
-        None => panic("Owned.transfer: value already transferred")
-    }
+    const v = expect(move self.__value, "Owned.transfer: value already transferred")
     self.__value = None
-    return v
+    return move v
 }
 
 // Run cleanup if still owned. Idempotent.
@@ -76,8 +72,8 @@ type OwnedTestCounter = struct {
     count: i32
 }
 
-fn owned_test_bump(p: &OwnedTestCounter) {
-    p.count = p.count + 1
+fn owned_test_bump(self: &OwnedTestCounter) {
+    self.count = self.count + 1
 }
 
 test "owned deinit fires cleanup once" {

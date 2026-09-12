@@ -28,8 +28,11 @@ import std.test
 // takes one as its last argument, and the same allocator must be passed every time. A
 // zero-initialised value is a valid empty list. Elements are owned: `deinit` deinits each before
 // freeing the buffer.
+//
+// `ptr` is `owned` in the RFC-028 sense: the list is responsible for releasing the buffer, so a
+// copy would be two releasers. The memory itself belongs to the allocator that handed it out.
 pub type UnmanagedList = struct(T) {
-    ptr: &T
+    owned ptr: &T
     len: usize
     cap: usize
 }
@@ -59,8 +62,8 @@ pub type ListRef = struct(T) {
 
 // Returns the `List` API over `s`, growing it through `allocator`. `s` must outlive the handle and
 // keep allocating through the same allocator.
-pub fn managed(s: &UnmanagedList($T), allocator: &Allocator) ListRef(T) {
-    return .{ __storage = s, allocator = allocator }
+pub fn managed(self: &UnmanagedList($T), allocator: &Allocator) ListRef(T) {
+    return .{ __storage = self, allocator = allocator }
 }
 
 // Reaches the wrapped storage: every `UnmanagedList` read, indexing and `for` resolve through this.
@@ -103,7 +106,7 @@ pub fn unmanaged_list(capacity: usize, allocator: &Allocator) UnmanagedList($T) 
         out.ptr = buf.ptr as &T
         out.cap = capacity
     }
-    return out
+    return move out
 }
 
 // Creates an unmanaged list holding a copy of `source`, in fresh storage sized to its length.
@@ -115,7 +118,7 @@ pub fn unmanaged_list(capacity: usize, allocator: &Allocator) UnmanagedList($T) 
 pub fn unmanaged_list(source: $T[], allocator: &Allocator) UnmanagedList(T) {
     if source.len == 0 {
         let empty: UnmanagedList(T)
-        return empty
+        return move empty
     }
     const bytes = source.len * size_of(T)
     const buf = allocator.alloc(bytes, align_of(T)).expect("list(copy): allocation failed")
@@ -133,7 +136,7 @@ pub fn list(capacity: usize, allocator: &Allocator) List($T) {
             align_of(T)).expect("list: allocation failed")
         out.__storage = .{ ptr = buf.ptr as &T, len = 0usize, cap = capacity }
     }
-    return out
+    return move out
 }
 
 // Creates a list with room for `capacity` elements. Zero allocates nothing; a zero-initialised
@@ -150,16 +153,7 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
             align_of(T)).expect("list: allocation failed")
         out.__storage = .{ ptr = buf.ptr as &T, len = 0usize, cap = capacity }
     }
-    return out
-}
-
-// Creates a list holding a copy of `source`'s elements, in fresh storage sized to fit. Elements are
-// copied bitwise: an element that owns something is now owned twice, and only one list may deinit
-// it.
-//
-// - `allocator`: kept for the new list's whole life. Null is the global allocator.
-pub fn list(source: List($T), allocator: &Allocator? = null) List(T) {
-    return list(source.as_slice(), allocator)
+    return move out
 }
 
 // Creates a list holding a copy of `source`, in fresh storage sized to fit. Elements are copied
@@ -169,7 +163,7 @@ pub fn list(source: List($T), allocator: &Allocator? = null) List(T) {
 pub fn list(source: $T[], allocator: &Allocator? = null) List(T) {
     const alloc = allocator.or_global()
     let st: UnmanagedList(T) = unmanaged_list(source, alloc)
-    return .{ __storage = st, allocator = alloc }
+    return .{ __storage = move st, allocator = alloc }
 }
 
 // Creates an unmanaged list of `count` bitwise copies of `value`, in storage sized to fit. Zero
@@ -181,7 +175,7 @@ pub fn filled_unmanaged_list(count: usize, value: $T, allocator: &Allocator) Unm
     for _i in 0..count {
         out.push(value, allocator)
     }
-    return out
+    return move out
 }
 
 // Creates a list of `count` bitwise copies of `value`, in storage sized to fit. Zero allocates
@@ -194,213 +188,70 @@ pub fn filled_list(count: usize, value: $T, allocator: &Allocator? = null) List(
 }
 
 // =============================================================================
-// UnmanagedList: growth and release, allocator explicit
+// UnmanagedList: release and copies
 // =============================================================================
 
-// Ensures room for at least `capacity` elements, growing geometrically. A grown buffer moves, so
-// views from `as_slice()` are invalid afterwards. Panics when the allocation fails.
-pub fn reserve(s: &UnmanagedList($T), capacity: usize, allocator: &Allocator) {
-    if s.cap >= capacity {
-        return
-    }
-
-    const elem_size: usize = size_of(T)
-    const elem_align: usize = align_of(T)
-
-    let new_cap = if s.cap == 0 { default_capacity(elem_size) } else { s.cap * 2 }
-    if new_cap < capacity {
-        new_cap = capacity
-    }
-    const new_bytes: usize = new_cap * elem_size
-
-    // Grow through `realloc`, so an allocator that can extend the block in place does no copy. The
-    // alloc-copy-free path below is the fallback for a `realloc` that declines.
-    if s.cap > 0 {
-        const old_bytes = slice_from_raw_parts(s.ptr as &u8, s.cap * elem_size)
-        const grown = allocator.realloc(old_bytes, elem_align, new_bytes)
-        if grown.is_some() {
-            s.ptr = grown.unwrap().ptr as &T
-            s.cap = new_cap
-            return
-        }
-    }
-
-    const new_buf = allocator.alloc(new_bytes, elem_align)
-        .expect("reserve(List(T), capacity): allocation failed")
-    const new_ptr: &T = new_buf.ptr as &T
-
-    if s.len > 0 {
-        memcpy(new_ptr as &u8, s.ptr as &u8, s.len * elem_size)
-    }
-
-    if s.cap > 0 {
-        allocator.free(slice_from_raw_parts(s.ptr, s.cap))
-    }
-
-    s.ptr = new_ptr
-    s.cap = new_cap
-}
-
-// Appends `value`, growing when full. Panics when the allocation fails.
-pub fn push(s: &UnmanagedList($T), value: T, allocator: &Allocator) {
-    s.reserve(s.len + 1, allocator)
-    s.len = s.len + 1
-    let data = s.as_slice()
-    data[s.len - 1] = move value
-}
-
-// Appends every element of `xs`, in order, growing when needed. Panics when the allocation fails.
-//
-// - `xs`: must not alias the list's own storage. Growth may move and free that storage before the
-//   copy, so no copy primitive makes self-append safe.
-pub fn push_all(s: &UnmanagedList($T), xs: T[], allocator: &Allocator) {
-    if xs.len == 0 {
-        return
-    }
-    s.reserve(s.len + xs.len, allocator)
-    memcpy((s.ptr + s.len) as &u8, xs.ptr as &u8, xs.len * size_of(T))
-    s.len = s.len + xs.len
-}
-
-// Inserts `value` at `index`, shifting everything at and after it one slot toward the end. `index
-// == len` appends. O(len - index). Panics past the end or when the allocation fails.
-pub fn insert(s: &UnmanagedList($T), index: usize, value: T, allocator: &Allocator) {
-    if index > s.len {
-        panic("insert(List(T), index): index out of bounds")
-    }
-    s.reserve(s.len + 1, allocator)
-    s.len = s.len + 1
-    let data = s.as_slice()
-    let i = s.len - 1
-    while i > index {
-        data[i] = move data[i - 1]
-        i = i - 1
-    }
-    data[index] = move value
-}
-
 // Deinits every live element, frees the buffer and resets to empty, so a second call is a no-op.
-pub fn deinit(s: &UnmanagedList($T), allocator: &Allocator) {
-    if s.cap > 0 {
-        // TODO use #if to check if T supports deinit(&T)
-        for i in 0..s.len {
-            const elem = s.get_ref(i)
-            const elem2 = elem.unwrap()
-            elem2.deinit()
-        }
-        allocator.free(slice_from_raw_parts(s.ptr, s.cap))
+pub fn deinit(self: &UnmanagedList($T), allocator: &Allocator) {
+    if self.cap > 0 {
+        self.clear()
+        allocator.free(slice_from_raw_parts(self.ptr, self.cap))
     }
 
-    s.ptr = 0usize as &T
-    s.len = 0
-    s.cap = 0
+    self.ptr = 0usize as &T
+    self.len = 0
+    self.cap = 0
+}
+
+// Returns a deep copy in fresh storage sized to fit: copyable elements are copied bitwise, the
+// others through their own `clone`. Panics when the allocation fails.
+//
+// - `allocator`: grows and frees the copy's storage. Pass the same one to every allocating call.
+pub fn clone(self: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
+    let out: UnmanagedList(T) = unmanaged_list(self.len, allocator)
+    for &elem in self {
+        #if type_info(T).copyable {
+            out.push(elem.*, allocator)
+        } else {
+            out.push(elem.clone(allocator), allocator)
+        }
+    }
+    return move out
 }
 
 // Hands over the buffer, shrunk to `len`, and resets the list to empty. Elements are not deinited:
 // the caller owns them now, and frees the slice through the same allocator.
-pub fn to_owned_slice(s: &UnmanagedList($T), allocator: &Allocator) T[] {
+pub fn to_owned_slice(self: &UnmanagedList($T), allocator: &Allocator) T[] {
     const elem_size: usize = size_of(T)
 
-    if s.len == 0 {
-        if s.cap > 0 {
-            allocator.free(slice_from_raw_parts(s.ptr, s.cap))
+    if self.len == 0 {
+        if self.cap > 0 {
+            allocator.free(slice_from_raw_parts(self.ptr, self.cap))
         }
-        s.ptr = 0usize as &T
-        s.cap = 0
+        self.ptr = 0usize as &T
+        self.cap = 0
         const empty: T[] = slice_from_raw_parts(0usize as &T, 0)
-        return empty
+        return move empty
     }
 
-    if s.cap > s.len {
-        const old_slice = slice_from_raw_parts(s.ptr as &u8, s.cap * elem_size)
-        const resized = allocator.realloc(old_slice, align_of(T), s.len * elem_size)
+    if self.cap > self.len {
+        const old_slice = slice_from_raw_parts(self.ptr as &u8, self.cap * elem_size)
+        const resized = allocator.realloc(old_slice, align_of(T), self.len * elem_size)
         if resized.is_some() {
-            s.ptr = resized.unwrap().ptr as &T
-            s.cap = s.len
+            self.ptr = resized.unwrap().ptr as &T
+            self.cap = self.len
         }
     }
 
-    const result_slice = slice_from_raw_parts(s.ptr, s.len)
-    s.ptr = 0usize as &T
-    s.len = 0
-    s.cap = 0
+    const result_slice = slice_from_raw_parts(self.ptr, self.len)
+    self.ptr = 0usize as &T
+    self.len = 0
+    self.cap = 0
     return result_slice
 }
 
 // =============================================================================
-// UnmanagedList: in-place mutation
-// =============================================================================
-
-// Removes and returns the last element, or null when empty.
-pub fn pop(list: &UnmanagedList($T)) T? {
-    if list.len == 0 {
-        return null
-    }
-
-    list.len = list.len - 1
-    let last: &T = list.ptr + list.len
-    return Some(last.*)
-}
-
-// Set the element at the given index.
-// Panics if index is out of bounds.
-#deprecated("Prefer index syntax: list[idx] = value")
-pub fn set(list: &UnmanagedList($T), index: usize, value: T) {
-    if index >= list.len {
-        panic("List: index out of bounds")
-    }
-
-    // Write value using memcpy
-    let dest: &u8 = (list.ptr + index) as &u8
-    memcpy(dest, &value as &u8, size_of(T))
-}
-
-// Drops every element, deiniting each. The backing storage is kept for reuse.
-pub fn clear(list: &UnmanagedList($T)) {
-    for i in 0..list.len {
-        const elem: &T = list.ptr + i
-        elem.deinit()
-    }
-    list.len = 0
-}
-
-// Drops every element past the first `n`, deiniting each. The backing storage is kept; a length at
-// or below `n` is left alone.
-pub fn truncate(list: &UnmanagedList($T), n: usize) {
-    while list.len > n {
-        list.len = list.len - 1
-        const elem: &T = list.ptr + list.len
-        elem.deinit()
-    }
-}
-
-// Sorts in place, ascending by `<`.
-pub fn sort(list: &UnmanagedList($T)) {
-    sort(list.as_slice())
-}
-
-// Sorts in place by `cmp`, an `fn(T, T) Ord`.
-pub fn sort(list: &UnmanagedList($T), cmp: $F) {
-    sort(list.as_slice(), cmp)
-}
-
-// Sorts in place by `key(x)` ascending, keeping the order of equal keys.
-pub fn sort_by(self: &UnmanagedList($T), key: $F) {
-    self.as_slice().sort_by(key)
-}
-
-// Reverses the elements in place.
-pub fn reverse(self: &UnmanagedList($T)) {
-    self.as_slice().reverse()
-}
-
-// Sets every live element to `value`. The length is unchanged.
-pub fn fill(self: &UnmanagedList($T), value: T) {
-    self.as_slice().fill(value)
-}
-
-// =============================================================================
-// UnmanagedList: reads
+// UnmanagedList: queries
 //
 // Forwarders to `core.slice` over `as_slice()`; the slice functions carry the full contracts. A
 // slice function forwards when it is container vocabulary, what a caller reaches for on the list
@@ -420,40 +271,13 @@ pub fn as_slice(self: &UnmanagedList($T)) T[] {
 }
 
 // Returns the element at `index`, or null past the end.
-pub fn get(list: &UnmanagedList($T), index: usize) T? {
-    return list.as_slice().get(index)
+pub fn get(self: &UnmanagedList($T), index: usize) T? {
+    return self.as_slice().get(index)
 }
 
 // Returns a reference to the element at `index`, or null past the end. Invalidated by growth.
-pub fn get_ref(list: &UnmanagedList($T), index: usize) &T? {
-    return list.as_slice().get_ref(index)
-}
-
-// Scalar indexing - ref-form. One function covers reads, writes, and address-of; the compiler
-// desugars `list[i]`, `list[i] = v`, and `&list[i]` all through this. Panics on out-of-bounds.
-pub fn op_index_ref(list: &UnmanagedList($T), index: usize) &T {
-    if index >= list.len {
-        panic("List: index out of bounds")
-    }
-    return list.ptr + index
-}
-
-// Range indexing: returns a sub-slice of the list's live elements. Out-of-bounds indices are
-// clamped; an invalid range yields an empty slice. Value-form overload (returns a new slice);
-// distinct idx type from the scalar ref-form above, so the two coexist without ambiguity.
-pub fn op_index(list: &UnmanagedList($T), range: Range(usize)) T[] {
-    let start = range.start
-    let end = range.end
-    if start > list.len {
-        start = list.len
-    }
-    if end > list.len {
-        end = list.len
-    }
-    if start > end {
-        end = start
-    }
-    return slice_from_raw_parts(list.ptr + start, end - start)
+pub fn get_ref(self: &UnmanagedList($T), index: usize) &T? {
+    return self.as_slice().get_ref(index)
 }
 
 // Returns the first element, or null when empty.
@@ -570,25 +394,160 @@ pub fn join(self: &UnmanagedList(String), sep: String, allocator: &Allocator? = 
 }
 
 // =============================================================================
-// UnmanagedList: iteration
+// UnmanagedList: mutations, allocator explicit where the buffer may grow
 // =============================================================================
 
-// Iterates the elements by value, first to last: `for x in xs`. The iterator is a snapshot of the
-// storage; the list is not modified while it is being iterated.
-pub fn iter(l: &UnmanagedList($T)) SliceIterator(T) {
-    return l.as_slice().iter()
+// Ensures room for at least `capacity` elements, growing geometrically. A grown buffer moves, so
+// views from `as_slice()` are invalid afterwards. Panics when the allocation fails.
+pub fn reserve(self: &UnmanagedList($T), capacity: usize, allocator: &Allocator) {
+    if self.cap >= capacity {
+        return
+    }
+
+    const elem_size: usize = size_of(T)
+    const elem_align: usize = align_of(T)
+
+    let new_cap = if self.cap == 0 { default_capacity(elem_size) } else { self.cap * 2 }
+    if new_cap < capacity {
+        new_cap = capacity
+    }
+    const new_bytes: usize = new_cap * elem_size
+
+    // Grow through `realloc`, so an allocator that can extend the block in place does no copy. The
+    // alloc-copy-free path below is the fallback for a `realloc` that declines.
+    if self.cap > 0 {
+        const old_bytes = slice_from_raw_parts(self.ptr as &u8, self.cap * elem_size)
+        const grown = allocator.realloc(old_bytes, elem_align, new_bytes)
+        if grown.is_some() {
+            self.ptr = grown.unwrap().ptr as &T
+            self.cap = new_cap
+            return
+        }
+    }
+
+    const new_buf = allocator.alloc(new_bytes, elem_align)
+        .expect("reserve(List(T), capacity): allocation failed")
+    const new_ptr: &T = new_buf.ptr as &T
+
+    if self.len > 0 {
+        memcpy(new_ptr as &u8, self.ptr as &u8, self.len * elem_size)
+    }
+
+    if self.cap > 0 {
+        allocator.free(slice_from_raw_parts(self.ptr, self.cap))
+    }
+
+    self.ptr = new_ptr
+    self.cap = new_cap
 }
 
-// Iterates the elements by reference, first to last: `for &x in xs`, for loops that write elements
-// in place. The list is not grown while it is being iterated.
-pub fn iter_ref(l: &UnmanagedList($T)) SliceRefIterator(T) {
-    return l.as_slice().iter_ref()
+// Appends `value`, growing when full. Panics when the allocation fails.
+pub fn push(self: &UnmanagedList($T), value: T, allocator: &Allocator) {
+    self.reserve(self.len + 1, allocator)
+    self.len = self.len + 1
+    let data = self.as_slice()
+    data[self.len - 1] = move value
 }
 
-// Iterates the elements by value, last to first, without copying the list. The iterator is a
-// snapshot of the storage; the list is not modified while it is being iterated.
-pub fn iter_rev(l: &UnmanagedList($T)) SliceRevIterator(T) {
-    return l.as_slice().iter_rev()
+// Appends every element of `xs`, in order, growing when needed. Panics when the allocation fails.
+//
+// - `xs`: must not alias the list's own storage. Growth may move and free that storage before the
+//   copy, so no copy primitive makes self-append safe.
+pub fn push_all(self: &UnmanagedList($T), xs: T[], allocator: &Allocator) {
+    if xs.len == 0 {
+        return
+    }
+    self.reserve(self.len + xs.len, allocator)
+    memcpy((self.ptr + self.len) as &u8, xs.ptr as &u8, xs.len * size_of(T))
+    self.len = self.len + xs.len
+}
+
+// Inserts `value` at `index`, shifting everything at and after it one slot toward the end. `index
+// == len` appends. O(len - index). Panics past the end or when the allocation fails.
+pub fn insert(self: &UnmanagedList($T), index: usize, value: T, allocator: &Allocator) {
+    if index > self.len {
+        panic("insert(List(T), index): index out of bounds")
+    }
+    self.reserve(self.len + 1, allocator)
+    self.len = self.len + 1
+    let data = self.as_slice()
+    let i = self.len - 1
+    while i > index {
+        data[i] = move data[i - 1]
+        i = i - 1
+    }
+    data[index] = move value
+}
+
+// Removes and returns the last element, or null when empty.
+pub fn pop(self: &UnmanagedList($T)) T? {
+    if self.len == 0 {
+        return null
+    }
+
+    self.len = self.len - 1
+    let last: &T = self.ptr + self.len
+    return Some(move last.*)
+}
+
+// Set the element at the given index.
+// Panics if index is out of bounds.
+#deprecated("Prefer index syntax: list[idx] = value")
+pub fn set(self: &UnmanagedList($T), index: usize, value: T) {
+    if index >= self.len {
+        panic("List: index out of bounds")
+    }
+
+    // Write value using memcpy
+    let dest: &u8 = (self.ptr + index) as &u8
+    memcpy(dest, &value as &u8, size_of(T))
+}
+
+// Drops every element, deiniting each. The backing storage is kept for reuse.
+pub fn clear(self: &UnmanagedList($T)) {
+    #if !type_info(T).copyable {
+        for &elem in self {
+            elem.deinit()
+        }
+    }
+    self.len = 0
+}
+
+// Drops every element past the first `n`, deiniting each. The backing storage is kept; a length at
+// or below `n` is left alone.
+pub fn truncate(self: &UnmanagedList($T), n: usize) {
+    while self.len > n {
+        self.len = self.len - 1
+        #if !type_info(T).copyable {
+            const elem: &T = self.ptr + self.len
+            elem.deinit()
+        }
+    }
+}
+
+// Sorts in place, ascending by `<`.
+pub fn sort(self: &UnmanagedList($T)) {
+    sort(self.as_slice())
+}
+
+// Sorts in place by `cmp`, an `fn(T, T) Ord`.
+pub fn sort(self: &UnmanagedList($T), cmp: $F) {
+    sort(self.as_slice(), cmp)
+}
+
+// Sorts in place by `key(x)` ascending, keeping the order of equal keys.
+pub fn sort_by(self: &UnmanagedList($T), key: $F) {
+    self.as_slice().sort_by(key)
+}
+
+// Reverses the elements in place.
+pub fn reverse(self: &UnmanagedList($T)) {
+    self.as_slice().reverse()
+}
+
+// Sets every live element to `value`. The length is unchanged.
+pub fn fill(self: &UnmanagedList($T), value: T) {
+    self.as_slice().fill(value)
 }
 
 // =============================================================================
@@ -598,123 +557,176 @@ pub fn iter_rev(l: &UnmanagedList($T)) SliceRevIterator(T) {
 // =============================================================================
 
 // Returns a new list of `f(x)` for every element, in order, allocated through `allocator`.
-pub fn map(s: &UnmanagedList($T), f: $F, allocator: &Allocator) UnmanagedList($U) {
-    let out: UnmanagedList(U) = unmanaged_list(s.len, allocator)
-    for i in 0..s.len {
-        out.push(f(s[i]), allocator)
+pub fn map(self: &UnmanagedList($T), f: $F, allocator: &Allocator) UnmanagedList($U) {
+    let out: UnmanagedList(U) = unmanaged_list(self.len, allocator)
+    for x in self {
+        out.push(f(x), allocator)
     }
-    return out
+    return move out
 }
 
 // Returns a new list of the elements `keep` accepts, in order.
-pub fn filter(s: &UnmanagedList($T), keep: $F, allocator: &Allocator) UnmanagedList(T) {
-    let out: UnmanagedList(T) = unmanaged_list(s.len, allocator)
-    for i in 0..s.len {
-        if keep(s[i]) {
-            out.push(s[i], allocator)
+pub fn filter(self: &UnmanagedList($T), keep: $F, allocator: &Allocator) UnmanagedList(T) {
+    let out: UnmanagedList(T) = unmanaged_list(self.len, allocator)
+    for x in self {
+        if keep(x) {
+            out.push(x, allocator)
         }
     }
-    return out
+    return move out
 }
 
 // Returns a new list of the elements `drop` rejects, in order: `filter` with the predicate negated.
-pub fn remove(s: &UnmanagedList($T), drop: $F, allocator: &Allocator) UnmanagedList(T) {
-    let out: UnmanagedList(T) = unmanaged_list(s.len, allocator)
-    for i in 0..s.len {
-        let dropped: bool = drop(s[i])
+pub fn remove(self: &UnmanagedList($T), drop: $F, allocator: &Allocator) UnmanagedList(T) {
+    let out: UnmanagedList(T) = unmanaged_list(self.len, allocator)
+    for x in self {
+        let dropped: bool = drop(x)
         if !dropped {
-            out.push(s[i], allocator)
+            out.push(x, allocator)
         }
     }
-    return out
+    return move out
 }
 
 // Returns a new list of everything after the first `n` elements; empty when `n` exceeds the length.
-pub fn drop_first(s: &UnmanagedList($T), n: usize, allocator: &Allocator) UnmanagedList(T) {
-    let out: UnmanagedList(T) = unmanaged_list(s.len, allocator)
-    let start = if n > s.len { s.len } else { n }
-    for i in start..s.len {
-        out.push(s[i], allocator)
+pub fn drop_first(self: &UnmanagedList($T), n: usize, allocator: &Allocator) UnmanagedList(T) {
+    let out: UnmanagedList(T) = unmanaged_list(self.len, allocator)
+    let start = if n > self.len { self.len } else { n }
+    for i in start..self.len {
+        out.push(self[i], allocator)
     }
-    return out
+    return move out
 }
 
 // Returns a reversed copy.
-pub fn reversed(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
-    let out: UnmanagedList(T) = unmanaged_list(s.len, allocator)
-    let i = s.len
+pub fn reversed(self: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
+    let out: UnmanagedList(T) = unmanaged_list(self.len, allocator)
+    let i = self.len
     while i > 0 {
         i = i - 1
-        out.push(s[i], allocator)
+        out.push(self[i], allocator)
     }
-    return out
+    return move out
 }
 
 // Returns a new list of the last `n` elements, or all of them when `n` exceeds the length.
-pub fn take_last(s: &UnmanagedList($T), n: usize, allocator: &Allocator) UnmanagedList(T) {
+pub fn take_last(self: &UnmanagedList($T), n: usize, allocator: &Allocator) UnmanagedList(T) {
     let out: UnmanagedList(T) = unmanaged_list(n, allocator)
-    let start = if n > s.len { 0 as usize } else { s.len - n }
-    for i in start..s.len {
-        out.push(s[i], allocator)
+    let start = if n > self.len { 0 as usize } else { self.len - n }
+    for i in start..self.len {
+        out.push(self[i], allocator)
     }
-    return out
+    return move out
 }
 
 // Returns a new list pairing elements positionally with `other`, stopping at the shorter.
-pub fn zip(s: &UnmanagedList($T), other: &UnmanagedList($B),
+pub fn zip(self: &UnmanagedList($T), other: &UnmanagedList($B),
     allocator: &Allocator) UnmanagedList((T, B)) {
-    let n = if s.len < other.len { s.len } else { other.len }
+    let n = if self.len < other.len { self.len } else { other.len }
     let out: UnmanagedList((T, B)) = unmanaged_list(n, allocator)
     for i in 0..n {
-        out.push((s[i], other[i]), allocator)
+        out.push((self[i], other[i]), allocator)
     }
-    return out
+    return move out
 }
 
 // Splits into two new lists, (accepted, rejected) by `pred`, each in order.
-pub fn partition(s: &UnmanagedList($T), pred: $F, allocator: &Allocator) (UnmanagedList(T),
+pub fn partition(self: &UnmanagedList($T), pred: $F, allocator: &Allocator) (UnmanagedList(T),
     UnmanagedList(T)) {
     let yes: UnmanagedList(T) = unmanaged_list(0, allocator)
     let no: UnmanagedList(T) = unmanaged_list(0, allocator)
-    for i in 0..s.len {
-        if pred(s[i]) {
-            yes.push(s[i], allocator)
+    for x in self {
+        if pred(x) {
+            yes.push(x, allocator)
         } else {
-            no.push(s[i], allocator)
+            no.push(x, allocator)
         }
     }
-    return (yes, no)
+    return (move yes, move no)
 }
 
 // Returns a new list of every inner list's elements, in order, in one allocation sized from the
 // inner lengths. The inner lists are left untouched; their elements are copied bitwise.
-pub fn flatten(s: &UnmanagedList(List($T)), allocator: &Allocator) UnmanagedList(T) {
+pub fn flatten(self: &UnmanagedList(List($T)), allocator: &Allocator) UnmanagedList(T) {
     let total: usize = 0
-    for i in 0..s.len {
-        total = total + s[i].len
+    for &inner in self {
+        total = total + inner.len
     }
     let out: UnmanagedList(T) = unmanaged_list(total, allocator)
-    for i in 0..s.len {
-        out.push_all(s[i].as_slice(), allocator)
+    for &inner in self {
+        out.push_all(inner.as_slice(), allocator)
     }
-    return out
+    return move out
 }
 
 // Returns a copy with runs of consecutive `==` duplicates collapsed to one element, `sort | uniq`
 // style: sort first for whole-list uniqueness.
-pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
+pub fn uniq(self: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
     let out: UnmanagedList(T) = unmanaged_list(0, allocator)
-    for i in 0..s.len {
+    for i in 0..self.len {
         if i == 0 {
-            out.push(s[i], allocator)
+            out.push(self[i], allocator)
         } else {
-            let same: bool = s[i] == s[i - 1]
+            let same: bool = self[i] == self[i - 1]
             if !same {
-                out.push(s[i], allocator)
+                out.push(self[i], allocator)
             }
         }
     }
-    return out
+    return move out
+}
+
+// =============================================================================
+// UnmanagedList: operators
+// =============================================================================
+
+// Scalar indexing - ref-form. One function covers reads, writes, and address-of; the compiler
+// desugars `list[i]`, `list[i] = v`, and `&list[i]` all through this. Panics on out-of-bounds.
+pub fn op_index_ref(self: &UnmanagedList($T), index: usize) &T {
+    if index >= self.len {
+        panic("List: index out of bounds")
+    }
+    return self.ptr + index
+}
+
+// Range indexing: returns a sub-slice of the list's live elements. Out-of-bounds indices are
+// clamped; an invalid range yields an empty slice. Value-form overload (returns a new slice);
+// distinct idx type from the scalar ref-form above, so the two coexist without ambiguity.
+pub fn op_index(self: &UnmanagedList($T), range: Range(usize)) T[] {
+    let start = range.start
+    let end = range.end
+    if start > self.len {
+        start = self.len
+    }
+    if end > self.len {
+        end = self.len
+    }
+    if start > end {
+        end = start
+    }
+    return slice_from_raw_parts(self.ptr + start, end - start)
+}
+
+// =============================================================================
+// UnmanagedList: iteration
+// =============================================================================
+
+// Iterates the elements by value, first to last: `for x in xs`. The iterator is a snapshot of the
+// storage; the list is not modified while it is being iterated.
+pub fn iter(self: &UnmanagedList($T)) SliceIterator(T) {
+    return self.as_slice().iter()
+}
+
+// Iterates the elements by reference, first to last: `for &x in xs`, for loops that write elements
+// in place. The list is not grown while it is being iterated.
+pub fn iter_ref(self: &UnmanagedList($T)) SliceRefIterator(T) {
+    return self.as_slice().iter_ref()
+}
+
+// Iterates the elements by value, last to first, without copying the list. The iterator is a
+// snapshot of the storage; the list is not modified while it is being iterated.
+pub fn iter_rev(self: &UnmanagedList($T)) SliceRevIterator(T) {
+    return self.as_slice().iter_rev()
 }
 
 // =============================================================================
@@ -800,7 +812,7 @@ pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
         allocator: &Allocator? = null) (List(T), List(T)) {
         const alloc = allocator ?? self.allocator
         const parts = self.__storage.partition(pred, alloc)
-        return (.{ __storage = parts.0, allocator = alloc }, .{ __storage = parts.1,
+        return (.{ __storage = move parts.0, allocator = alloc }, .{ __storage = move parts.1,
             allocator = alloc })
     }
 
@@ -821,6 +833,14 @@ pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
 
 #managed_list(List)
 #managed_list(ListRef)
+
+// Returns a deep copy: copyable elements are copied bitwise, the others through their own `clone`.
+//
+// - `allocator`: kept for the copy's whole life. Null is the receiver's allocator.
+pub fn clone(self: &List($T), allocator: &Allocator? = null) List(T) {
+    const alloc = allocator ?? self.allocator
+    return .{ __storage = self.__storage.clone(alloc), allocator = alloc }
+}
 
 // Deinits every live element and frees the backing storage. Idempotent: a second call is a no-op.
 pub fn deinit(self: &List($T)) {
@@ -845,12 +865,12 @@ pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
 // the callback's shape, not just an implementation change - see docs/known-issues.md.
 pub fn flat_map(self: &List($T), f: $F, allocator: &Allocator? = null) List($U) {
     let out: List(U) = list(self.len, allocator ?? self.allocator)
-    for i in 0..self.len {
-        let part = f(self[i])
+    for x in self {
+        let part = f(x)
         out.push_all(part.as_slice())
         part.deinit()
     }
-    return out
+    return move out
 }
 
 // =============================================================================
@@ -1023,8 +1043,8 @@ test "flatten concatenates inner lists in one allocation" {
     b.push(3)
     let nested: List(List(i32)) = list(0)
     defer nested.deinit()
-    nested.push(a)
-    nested.push(b)
+    nested.push(move a)
+    nested.push(move b)
     let flat = nested.flatten()
     defer flat.deinit()
     assert_eq(flat.len, 3 as usize, "all elements")
@@ -1296,9 +1316,9 @@ test "partition splits by predicate preserving order" {
     for i in 0..4usize { xs.push(i as i32) }
 
     let parts = xs.partition(test_is_even)
-    let evens = parts.0
+    let evens = move parts.0
     defer evens.deinit()
-    let odds = parts.1
+    let odds = move parts.1
     defer odds.deinit()
     assert_eq(evens.len, 2 as usize, "two evens")
     assert_eq(evens[0], 0i32, "in order")

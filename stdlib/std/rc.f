@@ -10,7 +10,7 @@ import std.test
 
 // Reference-counted pointer to a heap-allocated value of type T.
 pub type Rc = struct(T) {
-    __inner: &RcInner(T)?
+    owned __inner: &RcInner(T)?
     __allocator: &Allocator?
 }
 
@@ -39,10 +39,10 @@ pub fn rc_alloc(allocator: &Allocator? = null) Rc($T) {
 }
 
 // Increment the reference count and return a new handle to the same value.
-pub fn clone(self: &Rc($T)) Rc(T) {
+pub fn retain(self: &Rc($T)) Rc(T) {
     const inner = self.__inner match {
         Some(p) => p
-        None => panic("Rc.clone: use after deinit")
+        None => panic("Rc.retain: use after deinit")
     }
     inner.ref_count = inner.ref_count + 1
     return .{ __inner = self.__inner, __allocator = self.__allocator }
@@ -58,8 +58,9 @@ pub fn deinit(self: &Rc($T)) {
     inner.ref_count = inner.ref_count - 1
 
     if inner.ref_count == 0 {
-        let val_ptr: &T = (inner as &u8 + size_of(usize)) as &T
-        val_ptr.deinit()
+        #if !type_info(T).copyable {
+            inner.value.deinit()
+        }
         self.__allocator.or_global().free(inner)
     }
 
@@ -104,7 +105,7 @@ test "rc clone increments ref_count" {
     let r = rc(10i32)
     defer r.deinit()
 
-    let r2 = r.clone()
+    let r2 = r.retain()
     defer r2.deinit()
 
     assert_eq(r.ref_count(), 2usize, "ref_count should be 2 after clone")
@@ -114,7 +115,7 @@ test "rc clone increments ref_count" {
 
 test "rc deinit decrements ref_count" {
     let r = rc(99i32)
-    let r2 = r.clone()
+    let r2 = r.retain()
 
     assert_eq(r.ref_count(), 2usize, "ref_count should be 2")
     r2.deinit()
@@ -127,8 +128,8 @@ test "rc deinit decrements ref_count" {
 
 test "rc deinit frees when last ref dropped" {
     let r = rc(123i32)
-    let r2 = r.clone()
-    let r3 = r.clone()
+    let r2 = r.retain()
+    let r3 = r.retain()
 
     assert_eq(r.ref_count(), 3usize, "ref_count should be 3")
     r3.deinit()
@@ -150,7 +151,7 @@ test "rc with struct value via op_deref" {
     assert_eq(r.x, 3i32, "x should be 3")
     assert_eq(r.y, 4i32, "y should be 4")
 
-    let r2 = r.clone()
+    let r2 = r.retain()
     defer r2.deinit()
 
     assert_eq(r2.x, 3i32, "cloned x should be 3")
@@ -192,7 +193,7 @@ test "rc_alloc zero-initialized" {
 // Atomically reference-counted pointer to a heap-allocated value of type T. Same control block as
 // Rc, but clone/deinit use atomic operations on ref_count.
 pub type Arc = struct(T) {
-    __inner: &RcInner(T)?
+    owned __inner: &RcInner(T)?
     __allocator: &Allocator?
 }
 
@@ -215,10 +216,10 @@ pub fn arc_alloc(allocator: &Allocator? = null) Arc($T) {
 }
 
 // Atomically increment the reference count and return a new handle.
-pub fn clone(self: &Arc($T)) Arc(T) {
+pub fn retain(self: &Arc($T)) Arc(T) {
     const inner = self.__inner match {
         Some(p) => p
-        None => panic("Arc.clone: use after deinit")
+        None => panic("Arc.retain: use after deinit")
     }
     __flang_atomic_add(&inner.ref_count, 1usize)
     return .{ __inner = self.__inner, __allocator = self.__allocator }
@@ -233,8 +234,9 @@ pub fn deinit(self: &Arc($T)) {
     let old = __flang_atomic_sub(&inner.ref_count, 1usize)
 
     if old == 1 {
-        let val_ptr: &T = (inner as &u8 + size_of(usize)) as &T
-        val_ptr.deinit()
+        #if !type_info(T).copyable {
+            inner.value.deinit()
+        }
         self.__allocator.or_global().free(inner)
     }
 
@@ -279,7 +281,7 @@ test "arc clone increments ref_count" {
     let a = arc(10i32)
     defer a.deinit()
 
-    let a2 = a.clone()
+    let a2 = a.retain()
     defer a2.deinit()
 
     assert_eq(a.ref_count(), 2usize, "arc ref_count should be 2 after clone")
@@ -289,7 +291,7 @@ test "arc clone increments ref_count" {
 
 test "arc deinit decrements ref_count" {
     let a = arc(99i32)
-    let a2 = a.clone()
+    let a2 = a.retain()
 
     assert_eq(a.ref_count(), 2usize, "arc ref_count should be 2")
     a2.deinit()

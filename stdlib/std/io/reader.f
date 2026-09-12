@@ -47,76 +47,76 @@ pub fn buffered_reader(r: Reader, storage: u8[]) BufferedReader {
 }
 
 // Read a single byte. Returns the byte in an Option; null on EOF.
-pub fn read_byte(r: &BufferedReader) u8? {
+pub fn read_byte(self: &BufferedReader) u8? {
     // Unbuffered: read 1 byte directly
-    if r.buf.len == 0 {
+    if self.buf.len == 0 {
         let b: u8 = 0
         const dst = slice_from_raw_parts(&b as &u8, 1)
-        const n = r.inner.read(dst)
+        const n = self.inner.read(dst)
         if n == 0 {
             return null
         }
         return Some(b)
     }
 
-    if r.pos == r.end {
-        r.fill()
-        if r.pos == r.end {
+    if self.pos == self.end {
+        self.fill()
+        if self.pos == self.end {
             return null
         }
     }
-    const src = r.buf.ptr + r.pos
+    const src = self.buf.ptr + self.pos
     let b: u8 = src.*
-    r.pos = r.pos + 1
+    self.pos = self.pos + 1
     return Some(b)
 }
 
 // Read up to dst.len bytes into dst.
 // Returns the number of bytes read. 0 means EOF.
-pub fn read(r: &BufferedReader, dst: u8[]) usize {
+pub fn read(self: &BufferedReader, dst: u8[]) usize {
     if dst.len == 0 {
         return 0
     }
 
     // Unbuffered: passthrough to underlying reader
-    if r.buf.len == 0 {
-        return r.inner.read(dst)
+    if self.buf.len == 0 {
+        return self.inner.read(dst)
     }
 
     // If buffer has data, serve from it
-    if r.pos < r.end {
-        let avail = r.end - r.pos
+    if self.pos < self.end {
+        let avail = self.end - self.pos
         let n = if dst.len < avail { dst.len } else { avail }
-        memcpy(dst.ptr, r.buf.ptr + r.pos, n)
-        r.pos = r.pos + n
+        memcpy(dst.ptr, self.buf.ptr + self.pos, n)
+        self.pos = self.pos + n
         return n
     }
 
     // Buffer is empty. If dst is larger than internal storage, bypass the buffer and read directly
     // into dst.
-    if dst.len >= r.buf.len {
-        return r.inner.read(dst)
+    if dst.len >= self.buf.len {
+        return self.inner.read(dst)
     }
 
     // Otherwise refill internal buffer, then copy
-    r.fill()
-    if r.pos == r.end {
+    self.fill()
+    if self.pos == self.end {
         return 0
     }
 
-    let avail = r.end - r.pos
+    let avail = self.end - self.pos
     let n = if dst.len < avail { dst.len } else { avail }
-    memcpy(dst.ptr, r.buf.ptr + r.pos, n)
-    r.pos = r.pos + n
+    memcpy(dst.ptr, self.buf.ptr + self.pos, n)
+    self.pos = self.pos + n
     return n
 }
 
 // Read `r` to EOF into a fresh OwnedString. Bytes are taken as-is - no encoding checks.
-pub fn read_all(r: Reader, allocator: &Allocator? = null) OwnedString {
+pub fn read_all(self: Reader, allocator: &Allocator? = null) OwnedString {
     let sb = string_builder(4096, allocator)
     let buf = [0u8; 4096]
     loop {
-        const n = r.read(buf as u8[])
+        const n = self.read(buf as u8[])
         if n == 0 {
             break
         }
@@ -127,28 +127,28 @@ pub fn read_all(r: Reader, allocator: &Allocator? = null) OwnedString {
 
 // Internal: refill the buffer from the underlying reader. Compacts unconsumed data to the front,
 // then fills the rest.
-fn fill(r: &BufferedReader) {
+fn fill(self: &BufferedReader) {
     // Compact: move unconsumed data to the front
-    if r.pos > 0 {
-        if r.end > r.pos {
-            let leftover = r.end - r.pos
-            memmove(r.buf.ptr, r.buf.ptr + r.pos, leftover)
-            r.pos = 0
-            r.end = leftover
+    if self.pos > 0 {
+        if self.end > self.pos {
+            let leftover = self.end - self.pos
+            memmove(self.buf.ptr, self.buf.ptr + self.pos, leftover)
+            self.pos = 0
+            self.end = leftover
         } else {
-            r.pos = 0
-            r.end = 0
+            self.pos = 0
+            self.end = 0
         }
     }
 
     // Fill remaining space
-    let space = r.buf.len - r.end
+    let space = self.buf.len - self.end
     if space == 0 {
         return
     }
-    const dst = r.buf[r.end..]
-    const n = r.inner.read(dst)
-    r.end = r.end + n
+    const dst = self.buf[self.end..]
+    const n = self.inner.read(dst)
+    self.end = self.end + n
 }
 
 // Tests

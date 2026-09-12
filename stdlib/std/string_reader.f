@@ -35,12 +35,12 @@ fn read(self: &MemReader, buf: u8[]) usize {
 #implement(MemReader, Reader)
 
 #define(string_reader, T: Type) {
-    pub fn find(s: #(T.name), needle: String) usize? { return find(s.as_view(), needle) }
-    pub fn rfind(s: #(T.name), needle: String) usize? { return rfind(s.as_view(), needle) }
-    pub fn contains(s: #(T.name), needle: String) bool { return contains(s.as_view(), needle) }
-    pub fn starts_with(s: #(T.name), prefix: String) bool { return starts_with(s.as_view(), prefix) }
-    pub fn ends_with(s: #(T.name), suffix: String) bool { return ends_with(s.as_view(), suffix) }
-    pub fn trim(s: #(T.name)) String { return trim(s.as_view()) }
-    pub fn trim_start(s: #(T.name)) String { return trim_start(s.as_view()) }
-    pub fn trim_end(s: #(T.name)) String { return trim_end(s.as_view()) }
+    pub fn find(self: &#(T.name), needle: String) usize? { return find(self.as_view(), needle) }
+    pub fn rfind(self: &#(T.name), needle: String) usize? { return rfind(self.as_view(), needle) }
+    pub fn contains(self: &#(T.name), needle: String) bool { return contains(self.as_view(), needle) }
+    pub fn starts_with(self: &#(T.name), prefix: String) bool { return starts_with(self.as_view(), prefix) }
+    pub fn ends_with(self: &#(T.name), suffix: String) bool { return ends_with(self.as_view(), suffix) }
+    pub fn trim(self: &#(T.name)) String { return trim(self.as_view()) }
+    pub fn trim_start(self: &#(T.name)) String { return trim_start(self.as_view()) }
+    pub fn trim_end(self: &#(T.name)) String { return trim_end(self.as_view()) }
 }

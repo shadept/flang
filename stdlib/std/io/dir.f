@@ -185,11 +185,8 @@ type Doomed = struct {
     is_dir: bool
 }
 
-fn free_doomed(items: &List(Doomed)) {
-    for item in items.iter_ref() {
-        item.path.deinit()
-    }
-    items.deinit()
+pub fn deinit(self: &Doomed) {
+    self.path.deinit()
 }
 
 // Deletes `path` and everything under it. Symlinks are removed as links - never followed - so a
@@ -199,11 +196,11 @@ fn free_doomed(items: &List(Doomed)) {
 // being modified is implementation-defined. That costs one owned path per entry, which is the right
 // trade for a build directory and the wrong one for a filesystem root.
 pub fn remove_dir_all(path: String, allocator: &Allocator? = null) Result((), DirError) {
-    let walk = walk_dir(path, allocator).map_err(to_dir_error)?
+    let walk = map_err(walk_dir(path, allocator), to_dir_error)?
     defer walk.deinit()
 
     let doomed: List(Doomed) = list(64, allocator)
-    defer free_doomed(&doomed)
+    defer doomed.deinit()
 
     for entry in walk {
         doomed.push(Doomed {
@@ -360,7 +357,7 @@ test "Dir.walk and Dir.glob are rooted at the directory" {
     let d = open_dir(TEST_ROOT).unwrap()
     defer d.deinit()
 
-    let w = d.walk().unwrap()
+    let w = unwrap(d.walk())
     defer w.deinit()
     let seen: usize = 0
     for entry in w {
@@ -369,7 +366,7 @@ test "Dir.walk and Dir.glob are rooted at the directory" {
     }
     assert_eq(seen, 2, "a and a/b")
 
-    let g = d.glob("**/b").unwrap()
+    let g = unwrap(d.glob("**/b"))
     defer g.deinit()
     let matched: usize = 0
     for hit in g {

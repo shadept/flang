@@ -50,15 +50,15 @@ pub fn unwrap(self: Option($T)) T {
 // `unwrap_or_else` defers it to the empty case.
 pub fn unwrap_or(self: Option($T), fallback: T) T {
     return self match {
-        Some(v) => v
-        None => fallback
+        Some(v) => move v
+        None => move fallback
     }
 }
 
 // The payload, or the result of calling `make`. `make` runs only when the option is empty.
 pub fn unwrap_or_else(self: Option($T), make: $F) T {
     return self match {
-        Some(v) => v
+        Some(v) => move v
         None => make()
     }
 }
@@ -68,7 +68,7 @@ pub fn unwrap_or_else(self: Option($T), make: $F) T {
 // `Option`, use `flat_map` so the result does not nest.
 pub fn map(self: Option($T), f: $F) Option($U) {
     return self match {
-        Some(v) => Some(f(v))
+        Some(v) => Some(f(move v))
         None => None
     }
 }
@@ -78,7 +78,7 @@ pub fn map(self: Option($T), f: $F) Option($U) {
 // whereas this stays one level deep. `None` short-circuits and `f` never runs.
 pub fn flat_map(self: Option($T), f: $F) Option($U) {
     return self match {
-        Some(v) => f(v)
+        Some(v) => f(move v)
         None => None
     }
 }
@@ -100,8 +100,8 @@ pub fn filter(self: Option($T), pred: $F) Option(T) {
 // Returns the inner value if present, otherwise returns the fallback value.
 pub fn op_coalesce(opt: Option($T), fallback: T) T {
     return opt match {
-        Some(v) => v
-        None => fallback
+        Some(v) => move v
+        None => move fallback
     }
 }
 

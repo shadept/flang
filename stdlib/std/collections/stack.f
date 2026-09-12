@@ -49,7 +49,7 @@ pub fn stack(capacity: usize, allocator: &Allocator? = null) Stack($T) {
     let out: Stack(T)
     out.allocator = allocator.or_global()
     out.__storage = unmanaged_stack(capacity, out.allocator)
-    return out
+    return move out
 }
 
 // =============================================================================

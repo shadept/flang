@@ -264,10 +264,6 @@ pub type Checker = struct {
     // Caller-module chain of the instantiations in progress - unioned into `current_visibility` so
     // a template body resolves overloads its call sites can see.
     spec_callers: List(String)
-    // Call-site spans of the same chain, outermost first. A diagnostic raised inside a template
-    // body names the caller's line, because the template is written once and the instantiation is
-    // what its argument types made of it.
-    spec_call_spans: List(SourceSpan)
     // Guard against runaway instantiation chains (infinitely recursive polymorphism).
     spec_depth: usize
     // Unsuffixed numeric literals awaiting the post-inference sweep.
@@ -633,7 +629,6 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         sig_tps = list(0, allocator),
         pending_specs = list(0, allocator),
         spec_callers = list(0, allocator),
-        spec_call_spans = list(0, allocator),
         spec_depth = 0usize,
         pending_literals = list(0, allocator),
         pending_anons = list(0, allocator),
@@ -844,7 +839,6 @@ pub fn deinit(self: &Checker) {
     self.tp_names.deinit()
     self.pending_specs.deinit()
     self.spec_callers.deinit()
-    self.spec_call_spans.deinit()
     self.pending_literals.deinit()
     self.pending_anons.deinit()
     self.pending_members.deinit()
@@ -3009,7 +3003,6 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     self.pending_fn_names = list(0, self.allocator)
     self.current_module = Some(template.module)
     self.spec_callers.push(p.caller_module)
-    self.spec_call_spans.push(p.span)
     self.spec_depth = self.spec_depth + 1
 
     // Bind each signature type param to its concrete argument; the body's `$T` / `T` occurrences
@@ -3046,7 +3039,6 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     self.env.pop_scope()
     self.spec_depth = self.spec_depth - 1
     let _c = self.spec_callers.pop()
-    let _cs = self.spec_call_spans.pop()
 
     // Frame bookkeeping for a later reuse: the stream anchors, the frame's OWN burns (nested work
     // subtracted - it burns its own), the deps its drain resolved, and whether it stayed replayable
@@ -8484,8 +8476,7 @@ fn own_claim(p: &OwnPass, node: NodeId) bool {
 // this instantiation is what made the type non-copyable. Reporting at the outermost open
 // instantiation names a line in the file the author is editing rather than one in the stdlib.
 fn own_report(self: &Checker, span: SourceSpan, code: String, msg: OwnedString) {
-    const at = if self.spec_call_spans.len > 0 { self.spec_call_spans[0] } else { span }
-    push_diag_e(self, at, code, msg)
+    push_diag_e(self, span, code, msg)
 }
 
 fn own_type(self: &Checker, span: SourceSpan) Ty? {

@@ -424,7 +424,7 @@ pub type AllocatorVTable = struct {
 4. Types that allocate provide `deinit()` for deterministic cleanup.
 5. Callers use `defer x.deinit()` for scope-based cleanup, registered right after the value is created.
 6. **Every `deinit()` is idempotent**: the first call nulls the value's owning state (pointer/cap/payload), so a second call is a no-op — never a double free. A type either only calls deinits that are themselves safe, or resets its own state so later calls no-op.
-7. **Containers cascade**: `List.deinit`, `Dict.deinit`, `Option.deinit`, etc. call `deinit()` on their live elements (keys and values for dicts) before freeing their storage; the universal no-op fallback (`core.deinit`) makes this unconditional. Do not hand-loop element deinits before a container deinit — and never deinit values obtained from container *iteration* or by-value indexing, which yield copies whose cleanup leaves the stored element pointing at freed memory. Mutate stored values in place through `get_ref`/`op_index_ref`.
+7. **Containers cascade**: `List.deinit`, `Dict.deinit`, `Option.deinit`, etc. call `deinit()` on their live elements (keys and values for dicts) before freeing their storage, under `#if !type_info(T).copyable` (§7.7): a copyable element type has nothing to release and is never asked for a `deinit`; a non-copyable one must have one, or the container's `deinit` fails to instantiate. There is no blanket `deinit(&$T)`. Do not hand-loop element deinits before a container deinit — and never deinit values obtained from container *iteration* or by-value indexing, which yield copies whose cleanup leaves the stored element pointing at freed memory. Mutate stored values in place through `get_ref`/`op_index_ref`.
 8. **`Dict.set` on an existing key deinits the overwritten value** (and the unused new key for owned-key dicts). The read-copy-modify-`set` pattern is therefore unsound for owned values; update through `get_ref` instead.
 
 ```
@@ -457,7 +457,7 @@ Zero initialization covers the whole allocation, not just the named fields: aggr
 - `.deinit()` — decrements refcount. At zero, calls `T.deinit()` (statically dispatched via monomorphization — no function pointer in the control block) then frees the allocation.
 - `.op_deref()` — returns `&T`, enabling transparent field access: `rc.field` instead of `rc.borrow().field`.
 
-**Arc atomics**: `Arc.clone()` uses `atomic_fetch_add`, `Arc.deinit()` uses `atomic_fetch_sub`. Backed by C11 `<stdatomic.h>` via `std.atomic`.
+**Arc atomics**: `Arc.retain()` uses `atomic_fetch_add`, `Arc.deinit()` uses `atomic_fetch_sub`. Backed by C11 `<stdatomic.h>` via `std.atomic`.
 
 **Conventions**: Internal fields use `__` prefix (`__inner`, `__allocator`). No `Weak` references yet — `RcInner` stays opaque for future addition.
 
@@ -687,7 +687,9 @@ Any function with first parameter `T` or `&T` can be called as `value.func(args)
 
 **That rewrite is the only implicit reference in the language.** A free call passing `x` where the parameter is `&x` is an error, not an auto-reference; a reference is never implicitly dereferenced to a value; and the coercion ladder (§9.2) is closed to user types. The one user-defined adaptation, `op_deref` (§7.1), turns a reference into another reference and nothing else. Keeping both directions out is what keeps this from becoming C++'s implicit conversions.
 
-**Exception: the receiver never consumes.** A function whose first parameter is a `T` that is *not copyable* (RFC-028) has no receiver form at all — `h.close()` is E2128, whatever the receiver is. A consuming call spells its transfer one way everywhere, `move` in an argument of a plain call, so the free-function form `close(move h)` is the only spelling, and `(move h).close()` is refused for the position rather than for the `move`. Nothing changes for a copyable type: `s.trim()`, `opt.map(f)` and `c.is_digit()` keep their by-value receivers, because a copy of a copyable value is unchecked and the receiver is therefore not a consuming site. A read-only function on a non-copyable type must take `&T` to stay reachable as a method.
+**Transitional: the receiver never consumes.** In the current, explicit form of move semantics a function whose first parameter is a `T` that is *not copyable* (RFC-028) has no receiver form: `h.close()` is E2128, and the call is written `close(move h)`. Nothing changes for a copyable type: `s.trim()`, `opt.map(f)` and `c.is_digit()` keep their by-value receivers, because a copy of a copyable value is unchecked and the receiver is therefore not a consuming site. A read-only function on a non-copyable type takes `&T` to stay reachable as a method.
+
+This is a stage, not the design. The target is inferred `move`: where a signature already states the transfer, the keyword is implied, so `h.close()` on a local `h` moves it exactly as `close(move h)` does, `return value` moves a local, and a by-value argument to a by-value parameter moves. The strict form comes first because relaxing a requirement never invalidates existing source. Until the inference lands, `unwrap(move r)` and, once `deinit` takes its value, `deinit(move x)` are the spellings.
 
 ### 7.3 Lambdas
 

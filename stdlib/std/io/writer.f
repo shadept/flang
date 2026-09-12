@@ -82,32 +82,32 @@ pub fn buffered_writer(w: Writer, storage: u8[]) BufferedWriter {
 }
 
 // Write a single byte through the buffer.
-pub fn write(w: &BufferedWriter, b: u8) {
-    if w.buf.len == 0 {
+pub fn write(self: &BufferedWriter, b: u8) {
+    if self.buf.len == 0 {
         let byte = b
-        w.inner.write(slice_from_raw_parts(&byte as &u8, 1))
+        self.inner.write(slice_from_raw_parts(&byte as &u8, 1))
         return
     }
 
-    if w.pos == w.buf.len {
-        w.flush_all()
+    if self.pos == self.buf.len {
+        self.flush_all()
     }
 
-    w.buf[w.pos] = b
-    w.pos = w.pos + 1
+    self.buf[self.pos] = b
+    self.pos = self.pos + 1
 }
 
 // Write data through the buffer.
 // Small writes accumulate; the buffer auto-flushes when full. Returns the number of bytes written
 // (always data.len on success).
-pub fn write(w: &BufferedWriter, data: u8[]) usize {
+pub fn write(self: &BufferedWriter, data: u8[]) usize {
     if data.len == 0 {
         return 0
     }
 
     // Unbuffered: write directly
-    if w.buf.len == 0 {
-        return w.inner.write(data)
+    if self.buf.len == 0 {
+        return self.inner.write(data)
     }
 
     let written: usize = 0
@@ -118,20 +118,20 @@ pub fn write(w: &BufferedWriter, data: u8[]) usize {
             break
         }
 
-        let space = w.buf.len - w.pos
+        let space = self.buf.len - self.pos
 
         if remaining <= space {
             // Fits in buffer without flushing
-            memcpy(w.buf.ptr + w.pos, data.ptr + written, remaining)
-            w.pos = w.pos + remaining
+            memcpy(self.buf.ptr + self.pos, data.ptr + written, remaining)
+            self.pos = self.pos + remaining
             written = written + remaining
             break
         }
 
         // Fill the rest of the buffer and flush
-        memcpy(w.buf.ptr + w.pos, data.ptr + written, space)
-        w.pos = w.buf.len
-        w.flush_all()
+        memcpy(self.buf.ptr + self.pos, data.ptr + written, space)
+        self.pos = self.buf.len
+        self.flush_all()
         written = written + space
         remaining = remaining - space
     }
@@ -140,23 +140,23 @@ pub fn write(w: &BufferedWriter, data: u8[]) usize {
 }
 
 // Flush all buffered data to the underlying writer. Resets the buffer position to 0.
-pub fn flush(w: &BufferedWriter) {
-    if w.pos > 0 {
-        w.flush_all()
+pub fn flush(self: &BufferedWriter) {
+    if self.pos > 0 {
+        self.flush_all()
     }
 }
 
 // Internal: flush the entire buffer contents to the underlying writer. Handles partial writes by
 // looping until all bytes are written.
-fn flush_all(w: &BufferedWriter) {
+fn flush_all(self: &BufferedWriter) {
     let flushed: usize = 0
-    while flushed < w.pos {
-        const chunk = slice_from_raw_parts(w.buf.ptr + flushed, w.pos - flushed)
-        const n = w.inner.write(chunk)
+    while flushed < self.pos {
+        const chunk = slice_from_raw_parts(self.buf.ptr + flushed, self.pos - flushed)
+        const n = self.inner.write(chunk)
         if n == 0 {
             panic("writer: write returned 0")
         }
         flushed = flushed + n
     }
-    w.pos = 0
+    self.pos = 0
 }

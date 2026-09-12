@@ -70,25 +70,25 @@ pub type CsvRecord = struct {
     headers: &List(String)?
 }
 
-pub fn get(record: &CsvRecord, index: usize) String? {
-    if index >= record.fields.len {
+pub fn get(self: &CsvRecord, index: usize) String? {
+    if index >= self.fields.len {
         return null
     }
-    return Some(record.fields[index])
+    return Some(self.fields[index])
 }
 
-pub fn get(record: &CsvRecord, name: String) String? {
-    const hdrs = record.headers?
+pub fn get(self: &CsvRecord, name: String) String? {
+    const hdrs = self.headers?
     for i in 0..hdrs.len {
         if hdrs[i] == name {
-            return record.get(i)
+            return self.get(i)
         }
     }
     return null
 }
 
-pub fn field_count(record: &CsvRecord) usize {
-    return record.fields.len
+pub fn field_count(self: &CsvRecord) usize {
+    return self.fields.len
 }
 
 // =============================================================================
@@ -135,12 +135,12 @@ fn compute_quote_parity(quote_mask: u32, carry: u64) (u32, u64) {
     return (result & 0xFFFF, new_carry)
 }
 
-fn filter_by_quotes(masks: ChunkMasks, inside_quotes: u32) ChunkMasks {
+fn filter_by_quotes(self: ChunkMasks, inside_quotes: u32) ChunkMasks {
     const outside = ~inside_quotes & 0xFFFF
     return .{
-        delimiters = masks.delimiters & outside,
-        quotes = masks.quotes,
-        newlines = masks.newlines & outside,
+        delimiters = self.delimiters & outside,
+        quotes = self.quotes,
+        newlines = self.newlines & outside,
     }
 }
 
@@ -536,16 +536,13 @@ pub fn csv_encoder(w: Writer, options: CsvOptions = csv_options()) CsvEncoder {
     let enc: CsvEncoder
     enc.w = w
     enc.options = options
-    let keys = list(16)
-    enc.current_keys = keys
-    let vals = list(16)
-    enc.first_row_values = vals
-    return enc
+    enc.current_keys = list(16)
+    enc.first_row_values = list(16)
+    return move enc
 }
 
 fn needs_quoting(self: &CsvEncoder, s: String) bool {
-    for i in 0..s.len {
-        const c = s[i]
+    for c in s.bytes() {
         if c == self.options.delimiter {
             return true
         }
@@ -568,8 +565,7 @@ fn write_csv_field(self: &CsvEncoder, s: String) {
     }
     if self.needs_quoting(s) {
         self.w.write_byte(self.options.quote)
-        for i in 0..s.len {
-            const c = s[i]
+        for c in s.bytes() {
             if c == self.options.quote {
                 self.w.write_byte(self.options.quote)
             }
@@ -635,7 +631,7 @@ pub fn encode_bytes(self: &CsvEncoder, v: u8[]) usize {
 fn write_enc_value(self: &CsvEncoder, v: String) {
     if self.header_written == false {
         let owned = from_view(v, null)
-        self.first_row_values.push(owned)
+        self.first_row_values.push(move owned)
     } else {
         self.write_csv_field(v)
     }
@@ -668,8 +664,7 @@ pub fn end_map(self: &CsvEncoder) usize {
             self.write_csv_field(val)
         }
         self.first_row_values.deinit()
-        let empty_vals = list(0)
-        self.first_row_values = empty_vals
+        self.first_row_values = list(0)
     }
     self.w.write_byte(0x0A)
     self.row_count = self.row_count + 1
@@ -680,7 +675,7 @@ pub fn end_map(self: &CsvEncoder) usize {
 pub fn key(self: &CsvEncoder, name: String) usize {
     if self.header_written == false {
         let owned = from_view(name, null)
-        self.current_keys.push(owned)
+        self.current_keys.push(move owned)
     }
     return 0
 }
@@ -815,8 +810,8 @@ fn parse_all(self: &CsvReader) {
                 current_fields.push(self.extract_field(data, field_start, data_len))
                 let rec: CsvRecord
                 rec.headers = Some(&self.headers)
-                rec.fields = current_fields
-                rows.push(rec)
+                rec.fields = move current_fields
+                rows.push(move rec)
             }
             break
         }
@@ -865,8 +860,8 @@ fn parse_all(self: &CsvReader) {
                 current_fields.push(self.extract_field(data, field_start, abs_pos))
                 let rec: CsvRecord
                 rec.headers = Some(&self.headers)
-                rec.fields = current_fields
-                rows.push(rec)
+                rec.fields = move current_fields
+                rows.push(move rec)
 
                 current_fields = list(16)
 
@@ -888,7 +883,7 @@ fn parse_all(self: &CsvReader) {
         pos = pos + chunk_size
     }
 
-    self.rows = rows
+    self.rows = move rows
 }
 
 // Extract a field value from the buffer between start and end. Strips surrounding quotes and
@@ -953,64 +948,63 @@ pub fn csv_table(r: Reader, options: CsvOptions = csv_options(),
     reader.parse_all()
 
     let table: CsvTable
-    table.headers = reader.headers
-    table.rows = reader.rows
-    table.buffer = reader.buffer
-    // Don't deinit reader - table took ownership of buffer
-    return Result.Ok(table)
+    table.headers = move reader.headers
+    table.rows = move reader.rows
+    table.buffer = move reader.buffer
+    return Result.Ok(move table)
 }
 
-pub fn deinit(table: &CsvTable) {
-    table.buffer.deinit()
+pub fn deinit(self: &CsvTable) {
+    self.buffer.deinit()
 }
 
-pub fn row_count(table: &CsvTable) usize {
-    return table.rows.len
+pub fn row_count(self: &CsvTable) usize {
+    return self.rows.len
 }
 
-pub fn column_count(table: &CsvTable) usize {
-    return table.headers.len
+pub fn column_count(self: &CsvTable) usize {
+    return self.headers.len
 }
 
-pub fn select_rows(table: &CsvTable, start: usize, end: usize) CsvTable {
+pub fn select_rows(self: &CsvTable, start: usize, end: usize) CsvTable {
     let result: CsvTable
     result.buffer = string_builder(0)
 
-    // Share headers (String views - still valid as long as original table lives)
-    let sel_headers = list(table.headers.len)
-    for i in 0..table.headers.len {
-        sel_headers.push(table.headers[i])
+    // Share headers (String views - still valid as long as original self lives)
+    let sel_headers = list(self.headers.len)
+    for h in self.headers {
+        sel_headers.push(h)
     }
-    result.headers = sel_headers
+    result.headers = move sel_headers
 
-    const actual_end = if end > table.rows.len { table.rows.len } else { end }
+    const actual_end = if end > self.rows.len { self.rows.len } else { end }
     const actual_start = if start > actual_end { actual_end } else { start }
     let sel_rows = list(actual_end - actual_start)
     for i in actual_start..actual_end {
-        const src = table.rows[i]
+        const src = &self.rows[i]
         let rec: CsvRecord
         let copied_fields = list(src.fields.len)
-        for fi in 0..src.fields.len {
-            copied_fields.push(src.fields[fi])
+        for f in src.fields {
+            copied_fields.push(f)
         }
-        rec.fields = copied_fields
+        rec.fields = move copied_fields
         rec.headers = Some(&result.headers)
-        sel_rows.push(rec)
+        sel_rows.push(move rec)
     }
-    result.rows = sel_rows
+    result.rows = move sel_rows
 
-    return result
+    return move result
 }
 
-pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
+pub fn select_columns(self: &CsvTable, names: String[]) CsvTable {
     let result: CsvTable
     result.buffer = string_builder(0)
 
     // Find column indices
     let indices = list(names.len)
     for n in 0..names.len {
-        for i in 0..table.headers.len {
-            if table.headers[i] == names[n] {
+        for i in 0..self.headers.len {
+            if self.headers[i] == names[n] {
                 indices.push(i)
                 break
             }
@@ -1020,13 +1014,13 @@ pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
     // Copy selected headers
     let col_headers = list(indices.len)
     for idx in indices {
-        col_headers.push(table.headers[idx])
+        col_headers.push(self.headers[idx])
     }
-    result.headers = col_headers
+    result.headers = move col_headers
 
     // Copy rows with selected columns
-    let col_rows = list(table.rows.len)
-    for src in table.rows {
+    let col_rows = list(self.rows.len)
+    for &src in self.rows {
         let rec: CsvRecord
         rec.headers = Some(&result.headers)
         let rec_fields = list(indices.len)
@@ -1037,13 +1031,13 @@ pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
                 rec_fields.push("")
             }
         }
-        rec.fields = rec_fields
-        col_rows.push(rec)
+        rec.fields = move rec_fields
+        col_rows.push(move rec)
     }
-    result.rows = col_rows
+    result.rows = move col_rows
 
     indices.deinit()
-    return result
+    return move result
 }
 
 // =============================================================================

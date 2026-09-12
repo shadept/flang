@@ -223,14 +223,21 @@ by-value argument, struct literal field, element store, by-value return of a
 local. A copy of a non-copyable value without it is `E2124`.
 
 A later phase makes the keyword omittable where a signature already states the
-transfer - a by-value parameter and a `return` type. Relaxing a requirement
-never invalidates existing source; the strict form comes first for that reason.
+transfer - a by-value parameter, a `return` type, and the receiver of a UFCS
+call, which lifts the receiver rule below. Relaxing a requirement never
+invalidates existing source; the strict form comes first for that reason. That
+phase is parser and typer work on top of a working ownership check, so it is
+sequenced after the stdlib and compiler have moved to the strict form.
 
 **Always accepted where a move happens.** The set of positions the LSP renders
 a ghost `move` on and the set the parser accepts an explicit `move` in are the
 same set. The receiver is not in either set; see below.
 
 ### The receiver never consumes
+
+Transitional: this rule holds for the explicit form of `move` and goes away with
+the inference phase above, where `h.close()` on a local `h` is the inferred
+`close(move h)`. Spec §7.2 carries the same note.
 
 **A by-value receiver of a non-copyable type is not reachable through UFCS.**
 Write the call in free-function form and move the argument:
@@ -441,8 +448,10 @@ for i in 0..self.len {
 dereference. This is the value leg of RFC-020 into a consuming parameter, and it
 is unchecked for the reason above — there is no binding to kill.
 
-The element loop is gated on whether the element type has a `deinit`, resolved
-per specialization, not on the non-copyable bit. This is the fix recorded in
+The element loop is gated on the non-copyable bit, resolved per specialization:
+`#if !type_info(T).copyable { ... }`. A copyable element has nothing to release
+and is never asked for a `deinit`; a non-copyable one without a `deinit` fails
+the container's instantiation. This is the fix recorded in
 `docs/known-issues.md` under "The Blanket `deinit(&$T)` Silently Wins Over an
 Element's Own", and it retires the blanket `deinit(&$T)`.
 
@@ -610,7 +619,21 @@ the stdlib frame as a note.
    ownership pass was carrying the back edge's move into it. `own_match`
    unmarks an arm's bindings on entry now, pinned by
    `move_match_binding_in_loop`.
+   `UnmanagedList.ptr`, `UnmanagedDict.entries`, `UnmanagedDeque.ptr`,
+   `OwnedString.ptr`, `StringBuilder.ptr` and `Rc`/`Arc.__inner` are `owned`
+   (2026-09-12); everything else in the stdlib derives the bit from them. The
+   stdlib is clean under the check; the compiler sweep (~1500 sites, `lib/*`
+   and `compiler/`) is the remaining work of this step. Landed with it:
+   `clone` on `UnmanagedList`/`List`/`OwnedString`, `retain` replacing
+   `Rc.clone`/`Arc.clone`, `Dict` entries iterate by reference (`keys()` and
+   `values()` still copy), `Dict` lookups borrow the key internally, the
+   `list(source: List)` constructor and `json_get` are gone. `deinit` still
+   takes `&T`: the by-value form is sequenced after the compiler sweep, since
+   it rewrites every `defer x.deinit()` in tree.
 7. **Per-specialization element `deinit` resolution**; retire the blanket.
+   Done 2026-09-12: `core/deinit.f` deleted, element loops gated on
+   `#if !type_info(T).copyable`. An ownership error inside a generic body now
+   reports at the body line, not the outermost instantiation site.
 8. **Remove what the check rejects for non-copyable `T`:** `get`, `first`,
    `last`, `peek`, `peek_front`, `peek_back`, `get_or`, `get_or_else` — the
    element stays in the container, so the return is a second owner.

@@ -99,22 +99,22 @@ pub fn temp_dir(allocator: &Allocator? = null) Result(Path, FsError) {
 // An absolute, lexically-normalized form of `p`, joined against cwd() when relative. Does NOT
 // resolve symlinks and does not require the path to exist - use `canonicalize` when you need
 // either.
-pub fn to_absolute(p: &Path, allocator: &Allocator? = null) Result(Path, FsError) {
-    if p.is_absolute() {
-        return Ok(p.normalize())
+pub fn to_absolute(self: &Path, allocator: &Allocator? = null) Result(Path, FsError) {
+    if self.is_absolute() {
+        return Ok(self.normalize())
     }
     let base = cwd(allocator)?
     defer base.deinit()
 
-    let joined = base.join(p.as_view())
+    let joined = base.join(self.as_view())
     defer joined.deinit()
     return Ok(joined.normalize())
 }
 
 // Resolves symlinks and `..` against the real filesystem. The target must exist; NotFound if it
 // does not.
-pub fn canonicalize(p: &Path, allocator: &Allocator? = null) Result(Path, FsError) {
-    const s = raw_realpath(p.as_view(), allocator)?
+pub fn canonicalize(self: &Path, allocator: &Allocator? = null) Result(Path, FsError) {
+    const s = raw_realpath(self.as_view(), allocator)?
     defer s.deinit()
     return Ok(path(s.as_view(), allocator))
 }
@@ -176,11 +176,11 @@ pub fn walk_dir(root: String, allocator: &Allocator? = null) Result(WalkIter, Fs
     })
 
     let w: WalkIter
-    w.stack = stack
-    w.path_buf = sb
+    w.stack = move stack
+    w.path_buf = move sb
     w.last_error = null
     w.done = false
-    return Ok(w)
+    return Ok(move w)
 }
 
 pub fn iter(self: &WalkIter) &WalkIter {
@@ -304,7 +304,7 @@ pub fn glob(pattern: String, allocator: &Allocator? = null) Result(GlobIter, FsE
     let walk = walk_dir(root_str, allocator)?
 
     return Ok(GlobIter {
-        walk = walk,
+        walk = move walk,
         pattern = pat_buf.transfer(),
         done = false,
     })
@@ -478,7 +478,7 @@ test "stat on a missing path is NotFound" {
 test "cwd is absolute and exists" {
     const c = cwd()
     assert_true(c.is_ok(), "cwd succeeds")
-    let p = c.unwrap()
+    let p = unwrap(move c)
     defer p.deinit()
     assert_true(p.is_absolute(), "absolute")
     assert_true(is_dir(p.as_view()), "names a real directory")
@@ -487,7 +487,7 @@ test "cwd is absolute and exists" {
 test "temp_dir exists and has no trailing separator" {
     const t = temp_dir()
     assert_true(t.is_ok(), "temp_dir succeeds")
-    let p = t.unwrap()
+    let p = unwrap(move t)
     defer p.deinit()
     assert_true(is_dir(p.as_view()), "names a real directory")
     const v = p.as_view()
@@ -499,14 +499,14 @@ test "to_absolute leaves an absolute path alone and roots a relative one" {
     defer rel.deinit()
     const abs_r = to_absolute(&rel)
     assert_true(abs_r.is_ok(), "to_absolute succeeds")
-    let abs = abs_r.unwrap()
+    let abs = unwrap(move abs_r)
     defer abs.deinit()
     assert_true(abs.is_absolute(), "result is absolute")
     assert_true(is_file(abs.as_view()), "still names the same file")
 
     const again = to_absolute(&abs)
     assert_true(again.is_ok(), "idempotent")
-    let abs2 = again.unwrap()
+    let abs2 = unwrap(move again)
     defer abs2.deinit()
     assert_true(abs2.as_view() == abs.as_view(), "unchanged when already absolute")
 }
@@ -520,7 +520,7 @@ test "canonicalize requires the target to exist" {
     defer real.deinit()
     const c = canonicalize(&real)
     assert_true(c.is_ok(), "existing path succeeds")
-    let resolved = c.unwrap()
+    let resolved = unwrap(move c)
     defer resolved.deinit()
     assert_true(resolved.is_absolute(), "absolute")
 }

@@ -66,19 +66,19 @@ fn is_drive_letter(b: u8) bool {
 pub fn path(s: String, allocator: &Allocator? = null) Path {
     let sb = string_builder(s.len + 1, allocator)
     sb.append(s)
-    return .{ __sb = sb }
+    return .{ __sb = move sb }
 }
 
 // Takes ownership of `s` - the OwnedString is deinitialized on return. OwnedString and
 // StringBuilder have different shapes (no cap field on OwnedString), so the bytes are copied rather
 // than re-attached. Callers that care about avoiding the copy should build into a StringBuilder
 // directly and skip the OwnedString entirely.
-pub fn path_from_owned(s: &OwnedString) Path {
-    const alloc = s.allocator
-    let sb = string_builder(s.len + 1, alloc)
-    sb.append(s.as_view())
-    s.deinit()
-    return .{ __sb = sb }
+pub fn path_from_owned(self: &OwnedString) Path {
+    const alloc = self.allocator
+    let sb = string_builder(self.len + 1, alloc)
+    sb.append(self.as_view())
+    self.deinit()
+    return .{ __sb = move sb }
 }
 
 // =============================================================================
@@ -329,7 +329,7 @@ pub fn join(self: &Path, other: String) Path {
     }
     sb.append(other[other_start..])
 
-    return .{ __sb = sb }
+    return .{ __sb = move sb }
 }
 
 // =============================================================================
@@ -358,7 +358,7 @@ pub fn to_slash(self: &Path, allocator: &Allocator? = null) OwnedString {
         }
         const out = sb.to_string()
         sb.deinit()
-        return out
+        return move out
     } else {
         return from_view(v, allocator)
     }
@@ -374,7 +374,7 @@ pub fn from_slash(s: String, allocator: &Allocator? = null) Path {
             sb.append_byte(if s[i] == '/' { sep() } else { s[i] })
             i = i + 1
         }
-        return .{ __sb = sb }
+        return .{ __sb = move sb }
     } else {
         return path(s, allocator)
     }
@@ -419,7 +419,7 @@ pub fn with_extension(self: &Path, ext: String) Path {
         sb.append_byte('.')
         sb.append(ext)
     }
-    return .{ __sb = sb }
+    return .{ __sb = move sb }
 }
 
 // Pure lexical normalization. Collapses "./" and resolves "../" against the preceding component
@@ -517,7 +517,7 @@ pub fn normalize(self: &Path) Path {
         sb.append_byte('.')
     }
 
-    return .{ __sb = sb }
+    return .{ __sb = move sb }
 }
 
 // Returns true if `s` (without constructing a Path) is an absolute path.
@@ -655,7 +655,7 @@ pub fn to_relative(self: &Path, base: String, allocator: &Allocator? = null) Pat
     if sb.len == 0 {
         sb.append(".")
     }
-    return Some(.{ __sb = sb })
+    return Some(.{ __sb = move sb })
 }
 
 // Platform-aware path equality: case-insensitive and separator-agnostic on Windows, exact on POSIX
@@ -769,7 +769,7 @@ pub fn with_file_name(self: &Path, name: String) Path {
         }
     }
     sb.append(name)
-    return .{ __sb = sb }
+    return .{ __sb = move sb }
 }
 
 // =============================================================================
@@ -984,15 +984,15 @@ test "to_relative walks up and back down" {
     let p = path("src/a/b.f")
     defer p.deinit()
 
-    let same = p.to_relative("src").unwrap()
+    let same = unwrap(p.to_relative("src"))
     defer same.deinit()
     assert_slash_eq(same.as_view(), "a/b.f", "below the base")
 
-    let up = p.to_relative("src/a/c").unwrap()
+    let up = unwrap(p.to_relative("src/a/c"))
     defer up.deinit()
     assert_slash_eq(up.as_view(), "../b.f", "one level up")
 
-    let far = p.to_relative("lib/x").unwrap()
+    let far = unwrap(p.to_relative("lib/x"))
     defer far.deinit()
     assert_slash_eq(far.as_view(), "../../src/a/b.f", "no shared prefix")
 }
@@ -1000,7 +1000,7 @@ test "to_relative walks up and back down" {
 test "to_relative on an identical path is dot" {
     let p = path("src/a")
     defer p.deinit()
-    let r = p.to_relative("src/a").unwrap()
+    let r = unwrap(p.to_relative("src/a"))
     defer r.deinit()
     assert_eq(r.as_view(), ".", "same path")
 }

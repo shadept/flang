@@ -36,7 +36,7 @@ pub fn get_args() List(String) {
             None => {}
         }
     }
-    return result
+    return move result
 }
 
 // Returns the value of the environment variable with the given key, or null if the variable is not

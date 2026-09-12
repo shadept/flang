@@ -14,7 +14,7 @@ import std.option
 import std.result
 
 pub fn main() i32 {
-    let w = walk_dir("stdlib").unwrap()
+    let w = unwrap(walk_dir("stdlib"))
     defer w.deinit()
 
     let count: i32 = 0

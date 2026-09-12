@@ -744,7 +744,7 @@ pub fn to_list(it: $I, allocator: &Allocator? = null) List($T) {
     for item in it {
         out.push(item)
     }
-    return out
+    return move out
 }
 
 // Collect into a fresh Set (duplicates collapse; requires a hashable element type).
@@ -753,7 +753,7 @@ pub fn to_set(it: $I, allocator: &Allocator? = null) Set($T) {
     for item in it {
         out.add(item)
     }
-    return out
+    return move out
 }
 
 // Collect into a fresh Dict keyed by `key(item)`. A later item with the same key overwrites the
@@ -763,7 +763,7 @@ pub fn to_dict(it: $I, key: $F, allocator: &Allocator? = null) Dict($K, $T) {
     for item in it {
         out.set(key(item), item)
     }
-    return out
+    return move out
 }
 
 // =============================================================================
@@ -777,7 +777,7 @@ fn list123() List(i32) {
     xs.push(1i32)
     xs.push(2i32)
     xs.push(3i32)
-    return xs
+    return move xs
 }
 
 test "filter advances past non-matching elements" {

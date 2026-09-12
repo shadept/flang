@@ -60,8 +60,8 @@ pub type File = struct {
 //
 // NotADirectory and NotEmpty cannot describe a file operation - a caller that hit one asked for
 // something structurally impossible, which is IOError's job.
-fn to_file_error(e: FsError) FileError {
-    return e match {
+fn to_file_error(self: FsError) FileError {
+    return self match {
         NotFound => FileError.NotFound
         PermissionDenied => FileError.PermissionDenied
         AlreadyExists => FileError.AlreadyExists
@@ -71,10 +71,10 @@ fn to_file_error(e: FsError) FileError {
     }
 }
 
-fn open_mode(mode: FileMode) i32 {
+fn open_mode(self: FileMode) i32 {
     // The numeric O_* values differ between Linux, macOS and Windows; fs.c resolves them. This is a
     // portable selector, not a flag set.
-    return mode match {
+    return self match {
         Read => FS_OPEN_READ
         Write => FS_OPEN_WRITE
         Append => FS_OPEN_APPEND
@@ -99,8 +99,8 @@ pub fn open_file(path: String, mode: FileMode, encoding: FileEncoding) Result(Fi
     })
 }
 
-pub fn close_file(file: &File) Result((), FileError) {
-    return raw_close(file.handle.fd).map_err(to_file_error)
+pub fn close_file(self: &File) Result((), FileError) {
+    return raw_close(self.handle.fd).map_err(to_file_error)
 }
 
 // Deletes a file, or a symlink itself - never the symlink's target. A directory is rejected by the
@@ -113,7 +113,7 @@ pub fn remove_file(path: String) Result((), FileError) {
 // Bulk read / write
 // =============================================================================
 
-pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, FileError) {
+pub fn read_all(self: &File, allocator: &Allocator? = null) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
     // Owned so a mid-read failure frees the builder on the way out: `?` bails straight past the
     // return, and the defer is what catches it.
@@ -121,27 +121,27 @@ pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, 
     defer sb.deinit()
     loop {
         const tail = sb.unwritten_buf()
-        const n = raw_read(file.handle.fd, tail).map_err(to_file_error)?
+        const n = raw_read(self.handle.fd, tail).map_err(to_file_error)?
         sb.commit(n)
         if n < tail.len {
             break
         }
         // Grow capacity by one page. StringBuilder doubles capacity on each growth, so subsequent
-        // calls over-allocate. This amortizes allocation cost and aligns with typical file size
+        // calls over-allocate. This amortizes allocation cost and aligns with typical self size
         // distributions (many small, few large).
         sb.ensure_capacity(sb.cap + PAGE_SIZE)
     }
     return Ok(sb.transfer().to_string())
 }
 
-pub fn read_all_inplace(file: &File, allocator: &Allocator) Result(OwnedString, FileError) {
+pub fn read_all_inplace(self: &File, allocator: &Allocator) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
     let sb = owned(string_builder(PAGE_SIZE, Some(allocator)))
     defer sb.deinit()
     let buf = [0u8; 4096]
     loop {
         const buf_slice = buf as u8[]
-        const n = raw_read(file.handle.fd, buf_slice).map_err(to_file_error)?
+        const n = raw_read(self.handle.fd, buf_slice).map_err(to_file_error)?
         sb.append_bytes(buf_slice[..n])
         if n < PAGE_SIZE {
             break
@@ -150,7 +150,7 @@ pub fn read_all_inplace(file: &File, allocator: &Allocator) Result(OwnedString, 
     return Ok(sb.transfer().to_string())
 }
 
-pub fn write(file: &File, value: String) Result((), FileError) {
+pub fn write(self: &File, value: String) Result((), FileError) {
     // TODO handle encoding
     let bytes = value.as_raw_bytes()
     let total_written = 0usize
@@ -158,7 +158,7 @@ pub fn write(file: &File, value: String) Result((), FileError) {
         if total_written >= bytes.len {
             break
         }
-        const n = raw_write(file.handle.fd, bytes[total_written..bytes.len])
+        const n = raw_write(self.handle.fd, bytes[total_written..bytes.len])
             .map_err(to_file_error)?
         // A zero-length write with bytes still pending would spin forever.
         if n == 0 {
@@ -184,12 +184,12 @@ fn write(self: &File, data: u8[]) usize {
 #implement(File, Reader)
 #implement(File, Writer)
 
-pub fn buffered_reader(file: &File, storage: u8[]) BufferedReader {
-    return buffered_reader(file.reader(), storage)
+pub fn buffered_reader(self: &File, storage: u8[]) BufferedReader {
+    return buffered_reader(self.reader(), storage)
 }
 
-pub fn buffered_writer(file: &File, storage: u8[]) BufferedWriter {
-    return buffered_writer(file.writer(), storage)
+pub fn buffered_writer(self: &File, storage: u8[]) BufferedWriter {
+    return buffered_writer(self.writer(), storage)
 }
 
 // Put the file's descriptor into binary mode. Files opened by `open_file` already are; the standard
@@ -197,8 +197,8 @@ pub fn buffered_writer(file: &File, storage: u8[]) BufferedWriter {
 // stop at ^Z, writes expand \n to \r\n. A byte-exact protocol over stdin/stdout (the LSP's
 // Content-Length framing) must switch them first. No-op on POSIX. Returns false when the OS
 // refuses.
-pub fn set_binary_mode(file: &File) bool {
-    return raw_set_binary(file.handle.fd)
+pub fn set_binary_mode(self: &File) bool {
+    return raw_set_binary(self.handle.fd)
 }
 
 // =============================================================================
@@ -251,7 +251,7 @@ test "write, read back, and remove a file" {
     let r = unwrap(move reopened)
     const text = read_all(&r)
     assert_true(text.is_ok(), "read_all")
-    let owned_text = text.unwrap()
+    let owned_text = unwrap(move text)
     assert_eq(owned_text.as_view(), "hello flang", "round-trip")
     owned_text.deinit()
     assert_true(close_file(&r).is_ok(), "close after read")
@@ -272,7 +272,7 @@ test "write truncates an existing file" {
     assert_true(close_file(&b).is_ok(), "close")
 
     let c = unwrap(open_file(p, FileMode.Read))
-    const text = read_all(&c).unwrap()
+    const text = unwrap(read_all(&c))
     assert_eq(text.as_view(), "short", "old tail is gone")
     text.deinit()
     assert_true(close_file(&c).is_ok(), "close")
@@ -291,7 +291,7 @@ test "append adds to the end instead of truncating" {
     assert_true(close_file(&b).is_ok(), "close")
 
     let c = unwrap(open_file(p, FileMode.Read))
-    const text = read_all(&c).unwrap()
+    const text = unwrap(read_all(&c))
     assert_eq(text.as_view(), "one-two", "appended")
     text.deinit()
     assert_true(close_file(&c).is_ok(), "close")

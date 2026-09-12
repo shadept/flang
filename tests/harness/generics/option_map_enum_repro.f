@@ -24,7 +24,7 @@ pub fn main() i32 {
     const opt: MyVal? = Some(MyVal.Num(2.0))
     // Pinned: `$U` would otherwise take the type of `println`'s first concrete overload (see
     // docs/known-issues.md, "A `$F` Callback Parameter Is Pinned by Luck").
-    const mapped: Option(i32) = opt.map(extract)
+    const mapped: Option(i32) = map(move opt, extract)
     if mapped.is_some() {
         println(mapped.unwrap())
     }

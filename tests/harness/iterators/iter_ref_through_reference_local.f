@@ -11,7 +11,7 @@ pub fn main() i32 {
     xs.push(1i32)
     xs.push(2i32)
     xs.push(3i32)
-    d.set("k", xs)
+    d.set("k", move xs)
 
     // The local holds a reference to the stored list; iterating it by reference must borrow the
     // pointee, not the local's own address.

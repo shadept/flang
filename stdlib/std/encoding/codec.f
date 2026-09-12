@@ -40,20 +40,20 @@ import std.string_builder
     is_human_readable: fn() bool
 })
 
-pub fn encode_i8(enc: &Encoder, v: i8) usize { return enc.encode_int(v as i64, 1) }
-pub fn encode_i16(enc: &Encoder, v: i16) usize { return enc.encode_int(v as i64, 2) }
-pub fn encode_i32(enc: &Encoder, v: i32) usize { return enc.encode_int(v as i64, 4) }
-pub fn encode_i64(enc: &Encoder, v: i64) usize { return enc.encode_int(v, 8) }
-pub fn encode_isize(enc: &Encoder, v: isize) usize { return enc.encode_int(v as i64, 8) }
+pub fn encode_i8(self: &Encoder, v: i8) usize { return self.encode_int(v as i64, 1) }
+pub fn encode_i16(self: &Encoder, v: i16) usize { return self.encode_int(v as i64, 2) }
+pub fn encode_i32(self: &Encoder, v: i32) usize { return self.encode_int(v as i64, 4) }
+pub fn encode_i64(self: &Encoder, v: i64) usize { return self.encode_int(v, 8) }
+pub fn encode_isize(self: &Encoder, v: isize) usize { return self.encode_int(v as i64, 8) }
 
-pub fn encode_u8(enc: &Encoder, v: u8) usize { return enc.encode_uint(v as u64, 1) }
-pub fn encode_u16(enc: &Encoder, v: u16) usize { return enc.encode_uint(v as u64, 2) }
-pub fn encode_u32(enc: &Encoder, v: u32) usize { return enc.encode_uint(v as u64, 4) }
-pub fn encode_u64(enc: &Encoder, v: u64) usize { return enc.encode_uint(v, 8) }
-pub fn encode_usize(enc: &Encoder, v: usize) usize { return enc.encode_uint(v as u64, 8) }
+pub fn encode_u8(self: &Encoder, v: u8) usize { return self.encode_uint(v as u64, 1) }
+pub fn encode_u16(self: &Encoder, v: u16) usize { return self.encode_uint(v as u64, 2) }
+pub fn encode_u32(self: &Encoder, v: u32) usize { return self.encode_uint(v as u64, 4) }
+pub fn encode_u64(self: &Encoder, v: u64) usize { return self.encode_uint(v, 8) }
+pub fn encode_usize(self: &Encoder, v: usize) usize { return self.encode_uint(v as u64, 8) }
 
-pub fn encode_f32(enc: &Encoder, v: f32) usize { return enc.encode_float(v as f64, 4) }
-pub fn encode_f64(enc: &Encoder, v: f64) usize { return enc.encode_float(v, 8) }
+pub fn encode_f32(self: &Encoder, v: f32) usize { return self.encode_float(v as f64, 4) }
+pub fn encode_f64(self: &Encoder, v: f64) usize { return self.encode_float(v, 8) }
 
 // =============================================================================
 // Decoder

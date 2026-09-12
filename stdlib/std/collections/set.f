@@ -44,7 +44,7 @@ pub fn op_deref(self: &Set($T)) &UnmanagedSet(T) {
 pub fn set(allocator: &Allocator? = null) Set($T) {
     let out: Set(T)
     out.allocator = allocator.or_global()
-    return out
+    return move out
 }
 
 // =============================================================================
@@ -57,7 +57,7 @@ pub fn set(allocator: &Allocator? = null) Set($T) {
 // one is owned by the set. One probe either way, so a visited check is `if seen.add(x, alloc) { ...
 // }`. Panics when the table cannot grow.
 pub fn add(self: &UnmanagedSet($T), value: T, allocator: &Allocator) bool {
-    return self.__inner.add(value, 1u8, allocator)
+    return self.__inner.add(move value, 1u8, allocator)
 }
 
 // String `add` for `UnmanagedSet(OwnedString)`: `value` is a borrowed view, copied into an owned
@@ -80,7 +80,7 @@ pub fn filter(self: &UnmanagedSet($T), pred: $F, allocator: &Allocator) Unmanage
             out.add(x, allocator)
         }
     }
-    return out
+    return move out
 }
 
 // Returns the elements as a new list, in unspecified order, copied bitwise.
@@ -89,7 +89,7 @@ pub fn to_list(self: &UnmanagedSet($T), allocator: &Allocator) UnmanagedList(T) 
     for x in self.iter() {
         out.push(x, allocator)
     }
-    return out
+    return move out
 }
 
 // =============================================================================
@@ -108,7 +108,7 @@ pub fn is_empty(self: &UnmanagedSet($T)) bool {
 
 // Returns whether `value` is present.
 pub fn contains(self: &UnmanagedSet($T), value: T) bool {
-    return self.__inner.contains(value)
+    return self.__inner.contains(move value)
 }
 
 // String `contains` for `UnmanagedSet(OwnedString)`: looks the owned element up by the view.
@@ -118,7 +118,7 @@ pub fn contains(self: &UnmanagedSet(OwnedString), value: String) bool {
 
 // Removes `value`, deiniting the stored element, and returns whether it was present.
 pub fn remove(self: &UnmanagedSet($T), value: T) bool {
-    return self.__inner.remove(value).is_some()
+    return self.__inner.remove(move value).is_some()
 }
 
 // String `remove` for `UnmanagedSet(OwnedString)`: looks the owned element up by the view.
@@ -176,14 +176,38 @@ pub fn iter(self: &UnmanagedSet($T)) SetIterator(T) {
 
 // An iterator is its own iterable, so `for x in s.iter()` and the std.iter combinators can consume
 // it.
-pub fn iter(it: &SetIterator($T)) SetIterator(T) {
-    return it.*
+pub fn iter(self: &SetIterator($T)) SetIterator(T) {
+    return self.*
 }
 
 // Advances and returns the next element, or null after the last.
-pub fn next(it: &SetIterator($T)) T? {
-    return it.__inner.next() match {
+pub fn next(self: &SetIterator($T)) T? {
+    return self.__inner.next() match {
         Some(entry) => Some(entry.key)
+        None => None
+    }
+}
+
+// Iterator over a set's elements by reference, in unspecified order: the form for an element type
+// that cannot be copied.
+pub type SetRefIterator = struct(T) {
+    __inner: DictIterator(T, u8)
+}
+
+// Iterates the elements by reference, in unspecified order.
+pub fn iter_ref(self: &UnmanagedSet($T)) SetRefIterator(T) {
+    return .{ __inner = self.__inner.iter() }
+}
+
+// An iterator is its own iterable.
+pub fn iter(self: &SetRefIterator($T)) SetRefIterator(T) {
+    return self.*
+}
+
+// Advances and returns a reference to the next element, or null after the last.
+pub fn next(self: &SetRefIterator($T)) &T? {
+    return self.__inner.next() match {
+        Some(entry) => Some(&entry.key)
         None => None
     }
 }

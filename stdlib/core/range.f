@@ -14,11 +14,11 @@ pub type Range = struct(T) {
     end: T
 }
 
-pub fn op_index(r: &Range($T), index: usize) T? {
-    if index < 0 or index >= r.end - r.start {
+pub fn op_index(self: &Range($T), index: usize) T? {
+    if index < 0 or index >= self.end - self.start {
         return null
     }
-    return Some(r.start + index)
+    return Some(self.start + index)
 }
 
 // =============================================================================
@@ -32,16 +32,16 @@ pub type RangeIterator = struct(T) {
 }
 
 // Create iterator from range
-pub fn iter(r: &Range($T)) RangeIterator(T) {
-    return .{ current = r.start, end = r.end }
+pub fn iter(self: &Range($T)) RangeIterator(T) {
+    return .{ current = self.start, end = self.end }
 }
 
 // Advance iterator and return next value
-pub fn next(it: &RangeIterator($T)) T? {
-    if it.current >= it.end {
+pub fn next(self: &RangeIterator($T)) T? {
+    if self.current >= self.end {
         return null
     }
-    let val = it.current
-    it.current = it.current + 1
+    let val = self.current
+    self.current = self.current + 1
     return Some(val)
 }

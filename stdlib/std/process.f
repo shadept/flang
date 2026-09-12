@@ -104,8 +104,8 @@ pub fn command(prog: String, allocator: &Allocator? = null) Command {
     argv.push(from_view(prog, allocator))
     let envs: List(OwnedString) = list(0, allocator)
     return .{
-        __args = argv,
-        __env_pairs = envs,
+        __args = move argv,
+        __env_pairs = move envs,
         __cwd = null,
         __has_cwd = false,
         __stdin = Stdio.Inherit as i32,
@@ -128,8 +128,8 @@ pub fn arg(self: &Command, a: String) &Command {
 }
 
 pub fn args(self: &Command, items: String[]) &Command {
-    for i in 0..items.len {
-        self.__args.push(from_view(items[i], self.__allocator))
+    for item in items {
+        self.__args.push(from_view(item, self.__allocator))
     }
     return self
 }
@@ -139,8 +139,7 @@ pub fn cwd(self: &Command, dir: String) &Command {
     if self.__has_cwd {
         self.__cwd match {
             Some(c) => {
-                let cc = c
-                cc.deinit()
+                c.deinit()
             }
             None => {}
         }
@@ -204,13 +203,13 @@ pub fn spawn(self: &Command) Result(Child, ProcessError) {
     // Pack argv pointers as a usize array - matches char** on the C side.
     let argv_ptrs: List(usize) = list(self.__args.len, self.__allocator)
     defer argv_ptrs.deinit()
-    for a in self.__args {
+    for &a in self.__args {
         argv_ptrs.push(a.ptr as usize)
     }
 
     let envp_ptrs: List(usize) = list(self.__env_pairs.len, self.__allocator)
     defer envp_ptrs.deinit()
-    for e in self.__env_pairs {
+    for &e in self.__env_pairs {
         envp_ptrs.push(e.ptr as usize)
     }
 

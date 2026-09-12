@@ -41,7 +41,7 @@ pub type Journal = struct(T) {
 pub fn journal(allocator: &Allocator? = null) Journal($T) {
     let out: Journal(T)
     out.allocator = allocator.or_global()
-    return out
+    return move out
 }
 
 // Creates an empty journal that allocates through `allocator` for its whole life.

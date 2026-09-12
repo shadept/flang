@@ -191,10 +191,16 @@ message.
 
 ---
 
-### The Blanket `deinit(&$T)` Silently Wins Over an Element's Own
+### The Blanket `deinit(&$T)` Silently Wins Over an Element's Own - RESOLVED
 
-**Status:** Open
+**Status:** Resolved (2026-09-12)
 **Affected:** `stdlib/core/deinit.f`, `stdlib/std/collections/list.f`, any element type that owns memory
+
+`core/deinit.f` is gone, blanket and primitive stubs alike. A container's element loop is
+`#if !type_info(T).copyable { elem.deinit() }` (spec §7.7, §9.4): the branch is checked only per
+specialization, so a copyable element type never resolves `deinit` at all, and a non-copyable one
+that lacks a `deinit` is E2011 at the instantiation instead of a silent leak. Two of the seven
+leaking stdlib test blocks stopped leaking with it. The original account follows.
 
 `List(T).deinit` calls `.deinit()` on each element. `core.deinit`'s blanket
 `pub fn deinit(self: &$T) {}` is in scope everywhere through the prelude, so that call always

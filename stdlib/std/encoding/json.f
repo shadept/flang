@@ -66,12 +66,12 @@ pub fn json_string(value: String, allocator: &Allocator? = null) JsonValue {
 
 pub fn json_array(allocator: &Allocator? = null) JsonValue {
     let items: List(JsonValue) = list(0, allocator)
-    return JsonValue.Array(items)
+    return JsonValue.Array(move items)
 }
 
 pub fn json_object(allocator: &Allocator? = null) JsonValue {
     let d: Dict(OwnedString, JsonValue) = dict(allocator)
-    return JsonValue.Object(d)
+    return JsonValue.Object(move d)
 }
 
 // =============================================================================
@@ -130,16 +130,12 @@ pub fn as_object(self: &JsonValue) &Dict(OwnedString, JsonValue)? {
 // JSON Object convenience - String-key access for Dict(OwnedString, JsonValue)
 // =============================================================================
 
-pub fn json_get(self: &Dict(OwnedString, JsonValue), key: String) JsonValue? {
-    return self.get(key)
-}
-
 pub fn json_get_ref(self: &Dict(OwnedString, JsonValue), key: String) &JsonValue? {
     return self.get_ref(key)
 }
 
 pub fn json_set(self: &Dict(OwnedString, JsonValue), key: String, value: JsonValue) {
-    self.set(key, value)
+    self.set(key, move value)
 }
 
 pub fn json_contains(self: &Dict(OwnedString, JsonValue), key: String) bool {
@@ -167,8 +163,7 @@ pub fn deinit(self: &JsonValue) {
 // =============================================================================
 
 fn write_escaped_string(s: String, w: Writer) {
-    for i in 0..s.len {
-        const c = s[i]
+    for c in s.bytes() {
         if c == '"' {
             write_str(w, "\\\"")
         }
@@ -206,13 +201,13 @@ pub fn parse(r: Reader, allocator: &Allocator? = null) Result(JsonValue, JsonErr
     let p = json_decoder(r, allocator)
     let result = p.parse_value()
     if result.is_err() {
-        return result
+        return move result
     }
     p.skip_whitespace()
     if p.peek().is_some() {
         return Result.Err(JsonError.TrailingContent)
     }
-    return result
+    return move result
 }
 
 // Parse a complete JSON document from a string.
@@ -235,8 +230,7 @@ pub fn serialize(self: &JsonValue, enc: &Encoder) {
         Str(s) => { enc.encode_str(s.as_view()) }
         Array(arr) => {
             enc.begin_seq(arr.len)
-            for i in 0..arr.len as isize {
-                let item = &arr[i as usize]
+            for &item in arr {
                 item.serialize(enc)
             }
             enc.end_seq()
@@ -269,7 +263,7 @@ pub fn stringify(value: &JsonValue) OwnedString {
     let enc = json_encoder(sb.writer())
     value.serialize(&enc.encoder())
     let result = sb.to_string()
-    return result
+    return move result
 }
 
 pub fn stringify_pretty(value: &JsonValue, w: Writer, indent: usize = 2) {
@@ -630,7 +624,7 @@ fn scan_string_value(self: &JsonDecoder) Result(JsonValue, JsonError) {
     }
     let result = sb.to_string()
     sb.deinit()
-    return Result.Ok(JsonValue.Str(result))
+    return Result.Ok(JsonValue.Str(move result))
 }
 
 // Parse a JSON string, writing unescaped content to w. Returns false on error.
@@ -805,7 +799,7 @@ fn scan_array(self: &JsonDecoder) Result(JsonValue, JsonError) {
     if c.is_some() {
         if c.unwrap() == ']' {
             self.advance()
-            return Result.Ok(JsonValue.Array(items))
+            return Result.Ok(JsonValue.Array(move items))
         }
     }
 
@@ -813,9 +807,9 @@ fn scan_array(self: &JsonDecoder) Result(JsonValue, JsonError) {
         let elem = self.parse_value()
         if elem.is_err() {
             items.deinit()
-            return Result.Err(elem.unwrap_err())
+            return Result.Err(unwrap_err(move elem))
         }
-        items.push(elem.unwrap())
+        items.push(unwrap(move elem))
 
         self.skip_whitespace()
         c = self.peek()
@@ -825,7 +819,7 @@ fn scan_array(self: &JsonDecoder) Result(JsonValue, JsonError) {
         }
         if c.unwrap() == ']' {
             self.advance()
-            return Result.Ok(JsonValue.Array(items))
+            return Result.Ok(JsonValue.Array(move items))
         }
         if c.unwrap() == ',' {
             self.advance()
@@ -850,7 +844,7 @@ fn scan_object(self: &JsonDecoder) Result(JsonValue, JsonError) {
     if c.is_some() {
         if c.unwrap() == '}' {
             self.advance()
-            return Result.Ok(JsonValue.Object(obj))
+            return Result.Ok(JsonValue.Object(move obj))
         }
     }
 
@@ -877,12 +871,12 @@ fn scan_object(self: &JsonDecoder) Result(JsonValue, JsonError) {
         if val_result.is_err() {
             key_sb.deinit()
             obj.deinit()
-            return Result.Err(val_result.unwrap_err())
+            return Result.Err(unwrap_err(move val_result))
         }
 
         let key = key_sb.to_string()
         key_sb.deinit()
-        obj.set(key, val_result.unwrap())
+        obj.set(move key, unwrap(move val_result))
 
         self.skip_whitespace()
         c = self.peek()
@@ -892,7 +886,7 @@ fn scan_object(self: &JsonDecoder) Result(JsonValue, JsonError) {
         }
         if c.unwrap() == '}' {
             self.advance()
-            return Result.Ok(JsonValue.Object(obj))
+            return Result.Ok(JsonValue.Object(move obj))
         }
         if c.unwrap() == ',' {
             self.advance()
@@ -1348,14 +1342,14 @@ pub fn has_error(self: &JsonDecoder) bool {
 test "parse null" {
     let result = parse("null")
     assert_true(result.is_ok(), "should parse null")
-    let val = result.unwrap()
+    let val = unwrap(move result)
     assert_true(val.is_null(), "should be null")
 }
 
 test "parse true" {
     let result = parse("true")
     assert_true(result.is_ok(), "should parse true")
-    let val = result.unwrap()
+    let val = unwrap(move result)
     assert_true(val.is_bool(), "should be bool")
     assert_eq(val.as_bool().unwrap(), true, "should be true")
 }
@@ -1363,14 +1357,14 @@ test "parse true" {
 test "parse false" {
     let result = parse("false")
     assert_true(result.is_ok(), "should parse false")
-    let val = result.unwrap()
+    let val = unwrap(move result)
     assert_eq(val.as_bool().unwrap(), false, "should be false")
 }
 
 test "parse string" {
     let result = parse("\"hello\"")
     assert_true(result.is_ok(), "should parse string")
-    let val = result.unwrap()
+    let val = unwrap(move result)
     assert_true(val.is_string(), "should be string")
     assert_eq(val.as_string().unwrap(), "hello", "should be hello")
     val.deinit()
@@ -1379,7 +1373,7 @@ test "parse string" {
 test "parse string with escapes" {
     let result = parse("\"hello\\nworld\"")
     assert_true(result.is_ok(), "should parse escaped string")
-    let val = result.unwrap()
+    let val = unwrap(move result)
     assert_eq(val.as_string().unwrap(), "hello\nworld", "should have newline")
     val.deinit()
 }
@@ -1387,7 +1381,7 @@ test "parse string with escapes" {
 test "parse empty array" {
     let result = parse("[]")
     assert_true(result.is_ok(), "should parse empty array")
-    let val = result.unwrap()
+    let val = unwrap(move result)
     assert_true(val.is_array(), "should be array")
     assert_eq(val.as_array().unwrap().len, 0, "should be empty")
     val.deinit()
@@ -1396,7 +1390,7 @@ test "parse empty array" {
 test "parse empty object" {
     let result = parse("{}")
     assert_true(result.is_ok(), "should parse empty object")
-    let val = result.unwrap()
+    let val = unwrap(move result)
     assert_true(val.is_object(), "should be object")
     let obj = val.as_object().unwrap()
     assert_eq(obj.len(), 0, "should be empty")
@@ -1406,7 +1400,7 @@ test "parse empty object" {
 test "parse nested object" {
     let result = parse("{\"name\": \"flang\", \"version\": 2}")
     assert_true(result.is_ok(), "should parse object")
-    let val = result.unwrap()
+    let val = unwrap(move result)
     assert_true(val.is_object(), "should be object")
     let obj = val.as_object().unwrap()
     assert_eq(obj.len(), 2, "should have 2 entries")
@@ -1431,7 +1425,7 @@ test "stringify compact" {
 test "parse number" {
     let result = parse("42")
     assert_true(result.is_ok(), "should parse number")
-    let val = result.unwrap()
+    let val = unwrap(move result)
     assert_true(val.is_number(), "should be number")
     assert_eq(val.as_number().unwrap(), 42.0, "should be 42")
 }
@@ -1439,7 +1433,7 @@ test "parse number" {
 test "parse negative number" {
     let result = parse("-3.14")
     assert_true(result.is_ok(), "should parse negative decimal")
-    let val = result.unwrap()
+    let val = unwrap(move result)
     let n = val.as_number().unwrap()
     assert_true(n > -3.15 and n < -3.13, "should be ~-3.14")
 }

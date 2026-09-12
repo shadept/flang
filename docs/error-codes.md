@@ -3885,6 +3885,10 @@ Ask the declaring module for a function that takes the value apart.
 
 ### E2128: A Consuming Call in Receiver Position
 
+Transitional (spec §7.2): reported while `move` is explicit everywhere. The
+inference phase of RFC-028 makes `h.close()` on a local `h` an inferred move,
+and retires this code.
+
 **Category**: Semantic Analysis
 **Severity**: Error
 

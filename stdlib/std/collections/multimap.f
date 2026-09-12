@@ -32,6 +32,12 @@ pub type Slot = struct(V) {
     next: u32
 }
 
+pub fn deinit(self: &Slot($V)) {
+    #if !type_info(V).copyable {
+        self.value.deinit()
+    }
+}
+
 // A map from each key to the sequence of values added under it.
 //
 // The values of every key share one pool, chained per key in insertion order, so the whole map is
@@ -53,7 +59,7 @@ pub type MultiMap = struct(K, V) {
 pub fn multimap(allocator: &Allocator? = null) MultiMap($K, $V) {
     let out: MultiMap(K, V)
     out.allocator = allocator.or_global()
-    return out
+    return move out
 }
 
 // Creates an empty multimap that allocates through `allocator` for its whole life.
@@ -117,7 +123,9 @@ pub fn remove_key(self: &MultiMap($K, $V), key: K) usize {
     let cur = gone.unwrap().first
     while cur != NONE {
         const slot = &self.pool[cur as usize]
-        slot.value.deinit()
+        #if !type_info(V).copyable {
+            slot.value.deinit()
+        }
         cur = slot.next
     }
     self.dead = self.dead + gone.unwrap().count as usize
@@ -137,29 +145,23 @@ pub fn compact(self: &MultiMap($K, $V)) {
         let cur = chain.first
         chain.first = fresh.len as u32
         while cur != NONE {
-            const slot = self.pool[cur as usize]
+            const slot = &self.pool[cur as usize]
             const link = if slot.next == NONE { NONE } else { (fresh.len + 1) as u32 }
-            fresh.push(Slot(V) { value = slot.value, next = link }, self.allocator)
+            fresh.push(Slot(V) { value = move slot.value, next = link }, self.allocator)
             cur = slot.next
         }
         chain.last = (fresh.len - 1) as u32
     }
-    self.pool.deinit(self.allocator)
-    self.pool = fresh
+    // Every live value moved out and every dead one was deinited at `remove_key`: the old pool is
+    // stale bytes, released without an element pass.
+    self.allocator.free(self.pool.to_owned_slice(self.allocator))
+    self.pool = move fresh
     self.dead = 0
 }
 
 // Deinits every value and key, then frees the pool and the key table. Idempotent: a second call is
 // a no-op.
 pub fn deinit(self: &MultiMap($K, $V)) {
-    for e in self.chains {
-        let cur = e.value.first
-        while cur != NONE {
-            const slot = &self.pool[cur as usize]
-            slot.value.deinit()
-            cur = slot.next
-        }
-    }
     self.pool.deinit(self.allocator)
     self.chains.deinit(self.allocator)
     self.dead = 0
@@ -192,17 +194,17 @@ pub fn values(self: &MultiMap($K, $V), key: K) ValuesIter(V) {
 }
 
 // An iterator is its own iterable, so adapter chains can consume it.
-pub fn iter(it: &ValuesIter($V)) ValuesIter(V) {
-    return it.*
+pub fn iter(self: &ValuesIter($V)) ValuesIter(V) {
+    return self.*
 }
 
 // Advances and returns the next value, or null at the end of the chain.
-pub fn next(it: &ValuesIter($V)) V? {
-    if it.cur == NONE {
+pub fn next(self: &ValuesIter($V)) V? {
+    if self.cur == NONE {
         return null
     }
-    const slot = &it.pool[it.cur as usize]
-    it.cur = slot.next
+    const slot = &self.pool[self.cur as usize]
+    self.cur = slot.next
     return Some(slot.value)
 }
 
@@ -224,17 +226,17 @@ pub fn values_ref(self: &MultiMap($K, $V), key: K) ValuesRefIter(V) {
 }
 
 // An iterator is its own iterable, so adapter chains can consume it.
-pub fn iter(it: &ValuesRefIter($V)) ValuesRefIter(V) {
-    return it.*
+pub fn iter(self: &ValuesRefIter($V)) ValuesRefIter(V) {
+    return self.*
 }
 
 // Advances and returns a reference to the next value, or null at the end of the chain.
-pub fn next(it: &ValuesRefIter($V)) &V? {
-    if it.cur == NONE {
+pub fn next(self: &ValuesRefIter($V)) &V? {
+    if self.cur == NONE {
         return null
     }
-    const slot = &it.pool[it.cur as usize]
-    it.cur = slot.next
+    const slot = &self.pool[self.cur as usize]
+    self.cur = slot.next
     return Some(&slot.value)
 }
 

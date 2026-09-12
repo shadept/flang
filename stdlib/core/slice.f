@@ -86,11 +86,11 @@ pub fn op_index(s: $T[], range: Range(usize)) T[] {
 }
 
 // Sets the element at `index` to `value`. Panics if `index >= s.len`.
-pub fn op_set_index(s: &Slice($T), index: usize, value: T) {
-    if index >= s.len {
+pub fn op_set_index(self: &Slice($T), index: usize, value: T) {
+    if index >= self.len {
         panic("index out of bounds")
     }
-    const slot = s.ptr + index
+    const slot = self.ptr + index
     slot.* = value
 }
 
@@ -118,8 +118,8 @@ pub fn last(s: $T[]) T? {
 
 // Returns true if the slice contains `value`.
 pub fn contains(s: $T[], value: T) bool {
-    for i in 0..s.len {
-        if s[i] == value {
+    for x in s {
+        if x == value {
             return true
         }
     }
@@ -151,8 +151,8 @@ pub fn last_index_of(s: $T[], value: T) usize? {
 // Returns the number of elements equal to `value`.
 pub fn count(s: $T[], value: T) usize {
     let n: usize = 0
-    for i in 0..s.len {
-        if s[i] == value {
+    for x in s {
+        if x == value {
             n = n + 1
         }
     }
@@ -162,8 +162,8 @@ pub fn count(s: $T[], value: T) usize {
 // Returns how many elements satisfy `pred`. `count` counts occurrences of a value.
 pub fn count_if(s: $T[], pred: $F) usize {
     let n: usize = 0
-    for i in 0..s.len {
-        if pred(s[i]) {
+    for x in s {
+        if pred(x) {
             n = n + 1
         }
     }
@@ -172,9 +172,9 @@ pub fn count_if(s: $T[], pred: $F) usize {
 
 // Returns the first element satisfying `pred`, or null.
 pub fn find(s: $T[], pred: $F) T? {
-    for i in 0..s.len {
-        if pred(s[i]) {
-            return Some(s[i])
+    for x in s {
+        if pred(x) {
+            return Some(x)
         }
     }
     return null
@@ -197,8 +197,8 @@ pub fn any(s: $T[], pred: $F) bool {
 
 // Returns whether every element satisfies `pred`. True when empty.
 pub fn all(s: $T[], pred: $F) bool {
-    for i in 0..s.len {
-        let ok: bool = pred(s[i])
+    for x in s {
+        let ok: bool = pred(x)
         if !ok {
             return false
         }
@@ -349,16 +349,16 @@ pub fn max_by(s: $T[], key: $F) T? {
 // Calls `f` on every element, in order. To accumulate, use `fold`; to mutate outer state from a
 // closure, capture a reference and write through it.
 pub fn each(s: $T[], f: $F) {
-    for i in 0..s.len {
-        f(s[i])
+    for x in s {
+        f(x)
     }
 }
 
 // Combines left to right: `f(f(f(init, x0), x1), x2)`.
 pub fn fold(s: $T[], init: $A, f: $F) A {
     let acc = init
-    for i in 0..s.len {
-        acc = f(acc, s[i])
+    for x in s {
+        acc = f(acc, x)
     }
     return acc
 }
@@ -388,8 +388,7 @@ pub fn swap(a: &$T, b: &T) {
 // Fills every element of the slice with `value`.
 pub fn fill(s: $T[], value: T) {
     for i in 0..s.len {
-        const slot = s.ptr + i
-        slot.* = value
+        s[i] = value
     }
 }
 
@@ -398,8 +397,7 @@ pub fn replace(s: $T[], old: T, new: T) usize {
     let n: usize = 0
     for i in 0..s.len {
         if s[i] == old {
-            const slot = s.ptr + i
-            slot.* = new
+            s[i] = new
             n = n + 1
         }
     }
@@ -460,17 +458,17 @@ pub fn iter(slice: &$T[]) SliceIterator(T) {
 }
 
 // An iterator is its own iterable, so adapter chains can consume it.
-pub fn iter(it: &SliceIterator($T)) SliceIterator(T) {
-    return it.*
+pub fn iter(self: &SliceIterator($T)) SliceIterator(T) {
+    return self.*
 }
 
 // Advances the iterator and returns the next element, or null if exhausted.
-pub fn next(iter: &SliceIterator($T)) T? {
-    if iter.index >= iter.slice.len {
+pub fn next(self: &SliceIterator($T)) T? {
+    if self.index >= self.slice.len {
         return null
     }
-    let val: T = iter.slice[iter.index]
-    iter.index = iter.index + 1
+    let val: T = self.slice[self.index]
+    self.index = self.index + 1
     return Some(val)
 }
 
@@ -487,17 +485,17 @@ pub fn iter_ref(slice: &$T[]) SliceRefIterator(T) {
 }
 
 // An iterator is its own iterable, so adapter chains can consume it.
-pub fn iter(it: &SliceRefIterator($T)) SliceRefIterator(T) {
-    return it.*
+pub fn iter(self: &SliceRefIterator($T)) SliceRefIterator(T) {
+    return self.*
 }
 
 // Advances and returns a reference to the next element, or null at the end.
-pub fn next(iter: &SliceRefIterator($T)) &T? {
-    if iter.index >= iter.slice.len {
+pub fn next(self: &SliceRefIterator($T)) &T? {
+    if self.index >= self.slice.len {
         return null
     }
-    const p: &T = iter.slice.ptr + iter.index
-    iter.index = iter.index + 1
+    const p: &T = self.slice.ptr + self.index
+    self.index = self.index + 1
     return Some(p)
 }
 
@@ -514,17 +512,17 @@ pub fn iter_rev(slice: &$T[]) SliceRevIterator(T) {
 }
 
 // An iterator is its own iterable, so adapter chains can consume it.
-pub fn iter(it: &SliceRevIterator($T)) SliceRevIterator(T) {
-    return it.*
+pub fn iter(self: &SliceRevIterator($T)) SliceRevIterator(T) {
+    return self.*
 }
 
 // Advances toward the front and returns the next element, or null after the first.
-pub fn next(iter: &SliceRevIterator($T)) T? {
-    if iter.remaining == 0 {
+pub fn next(self: &SliceRevIterator($T)) T? {
+    if self.remaining == 0 {
         return null
     }
-    iter.remaining = iter.remaining - 1
-    let val: T = iter.slice[iter.remaining]
+    self.remaining = self.remaining - 1
+    let val: T = self.slice[self.remaining]
     return Some(val)
 }
 

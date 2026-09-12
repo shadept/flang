@@ -16,7 +16,7 @@ import std.test
 // and `deinit` take one as their last argument, and the same allocator must be passed every time. A
 // zero-initialised value is a valid empty deque. Elements are owned: `deinit` deinits each.
 pub type UnmanagedDeque = struct(T) {
-    ptr: &T
+    owned ptr: &T
     cap: usize // backing buffer capacity (in elements)
     head: usize // index of the front element when len > 0
     len: usize
@@ -48,7 +48,7 @@ pub fn unmanaged_deque(capacity: usize, allocator: &Allocator) UnmanagedDeque($T
     if capacity > 0 {
         out.reserve(capacity, allocator)
     }
-    return out
+    return move out
 }
 
 // Creates an empty deque with room for `capacity` elements. Zero allocates nothing until the first
@@ -59,7 +59,7 @@ pub fn deque(capacity: usize, allocator: &Allocator? = null) Deque($T) {
     let out: Deque(T)
     out.allocator = allocator.or_global()
     out.__storage = unmanaged_deque(capacity, out.allocator)
-    return out
+    return move out
 }
 
 // =============================================================================
@@ -124,9 +124,11 @@ pub fn push_front(self: &UnmanagedDeque($T), value: T, allocator: &Allocator) {
 // Deinits every element, front to back, and frees the buffer. Idempotent: a second call is a no-op.
 pub fn deinit(self: &UnmanagedDeque($T), allocator: &Allocator) {
     if self.cap > 0 {
-        for i in 0..self.len {
-            const elem: &T = self.ptr + ((self.head + i) % self.cap)
-            elem.deinit()
+        #if !type_info(T).copyable {
+            for i in 0..self.len {
+                const elem: &T = self.ptr + ((self.head + i) % self.cap)
+                elem.deinit()
+            }
         }
         allocator.free(slice_from_raw_parts(self.ptr, self.cap))
     }
@@ -212,18 +214,18 @@ pub fn iter(self: &UnmanagedDeque($T)) DequeIterator(T) {
 
 // An iterator is its own iterable, so `for x in dq.iter()` and the std.iter combinators can consume
 // it.
-pub fn iter(it: &DequeIterator($T)) DequeIterator(T) {
-    return it.*
+pub fn iter(self: &DequeIterator($T)) DequeIterator(T) {
+    return self.*
 }
 
 // Advances and returns the next element, or null after the back.
-pub fn next(it: &DequeIterator($T)) T? {
-    if it.current >= it.deque.len {
+pub fn next(self: &DequeIterator($T)) T? {
+    if self.current >= self.deque.len {
         return null
     }
-    const idx = (it.deque.head + it.current) % it.deque.cap
-    const slot: &T = it.deque.ptr + idx
-    it.current = it.current + 1
+    const idx = (self.deque.head + self.current) % self.deque.cap
+    const slot: &T = self.deque.ptr + idx
+    self.current = self.current + 1
     return Some(slot.*)
 }
 
