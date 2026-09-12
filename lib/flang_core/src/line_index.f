@@ -28,11 +28,16 @@ pub fn line_index(text: String, allocator: &Allocator? = null) LineIndex {
             starts.push(i + 1)
         }
     }
-    return .{ starts = starts, all_ascii = is_ascii(text), text_len = text.len }
+    return .{ starts = move starts, all_ascii = is_ascii(text), text_len = text.len }
 }
 
 pub fn deinit(self: &LineIndex) {
     self.starts.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &LineIndex, allocator: &Allocator) {
+    self.deinit()
 }
 
 pub fn line_count(self: &LineIndex) usize {

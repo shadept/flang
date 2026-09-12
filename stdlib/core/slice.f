@@ -14,6 +14,7 @@
 // Construction:
 //   slice_from_raw_parts(ptr, len)  - create a slice from a raw pointer and length
 
+import core.math
 import core.panic
 import core.range
 import core.rtti
@@ -422,10 +423,15 @@ pub fn reverse(s: $T[]) {
 // Copy and reinterpretation
 // =============================================================================
 
-// Copies elements from `src` into `dest`.
-// Copies min(src.len, dest.len) elements and returns the number copied.
+// Copies min(src.len, dest.len) elements from `src` into `dest` bitwise and returns the number
+// copied. Copyable elements only: a slice carries no allocator to clone owning elements with, so
+// those are cloned by the caller, one `clone(&T, allocator)` per element. Panics on an owning
+// element type.
 pub fn copy_to(src: $T[], dest: T[]) usize {
-    const len = if src.len < dest.len { src.len } else { dest.len }
+    #if !type_info(T).copyable {
+        panic("copy_to: owning elements are cloned by the caller with its allocator")
+    }
+    const len = min(src.len, dest.len)
     memmove(dest.ptr, src.ptr, len * size_of(T))
     return len
 }

@@ -108,6 +108,11 @@ pub fn deinit(self: &Dir) {
     self.raw.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Dir, allocator: &Allocator) {
+    self.deinit()
+}
+
 // =============================================================================
 // Creation
 // =============================================================================
@@ -187,6 +192,11 @@ type Doomed = struct {
 
 pub fn deinit(self: &Doomed) {
     self.path.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Doomed, allocator: &Allocator) {
+    self.deinit()
 }
 
 // Deletes `path` and everything under it. Symlinks are removed as links - never followed - so a

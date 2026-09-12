@@ -178,6 +178,15 @@ pub fn deinit(self: &PendingSpec) {}
 // deps when the frame is an in-place re-instantiation, matched by call site for nested picks whose
 // provisional key cannot hit the registry. The diagnostics and parked-call watermarks decide
 // whether the frame stays replayable.
+// One open instantiation: where it was demanded and, in `Checker.inst_binds` from `binds0`, what
+// its type parameters are bound to. `Checker.inst_sites` holds them outermost first, for
+// diagnostics raised inside a template body.
+type InstSite = struct {
+    span: SourceSpan
+    function_id: u32
+    binds0: usize
+}
+
 type SpecFrame = struct {
     vars0: u32
     synth0: u32
@@ -357,6 +366,8 @@ pub type Checker = struct {
     // a replay). `slot_new_specs` are the entries instantiated during the current slot, marked
     // non-reusable when the slot's literal sweep flags anything they minted.
     spec_frames: List(SpecFrame)
+    inst_sites: List(InstSite)
+    inst_binds: List(Ty)
     slot_hints: List(SpecDep)
     slot_sites: List(SpecDep)
     slot_new_specs: List(SpecId)
@@ -657,6 +668,8 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         slot_uninferable = 0usize,
         defaults_changed = false,
         spec_frames = list(0, allocator),
+        inst_sites = list(0, allocator),
+        inst_binds = list(0, allocator),
         slot_hints = list(0, allocator),
         slot_sites = list(0, allocator),
         slot_new_specs = list(0, allocator),
@@ -859,6 +872,8 @@ pub fn deinit(self: &Checker) {
     self.body_cache_keys.deinit()
     self.slot_picks.deinit()
     self.spec_frames.deinit()
+    self.inst_sites.deinit()
+    self.inst_binds.deinit()
     self.slot_hints.deinit()
     self.slot_sites.deinit()
     self.slot_new_specs.deinit()
@@ -1194,28 +1209,25 @@ pub fn set_project_globals(self: &Checker, names: &List(OwnedString), origin: &L
     }
 }
 
-pub fn push_diag_e(self: &Checker, span: SourceSpan, code: String, message: OwnedString) {
-    let empty_hint: OwnedString
+fn push_diag(self: &Checker, severity: Severity, span: SourceSpan, code: String,
+    message: OwnedString, hint: OwnedString) {
     self.diagnostics.push(Diagnostic {
-        severity = Severity.Error,
+        severity = severity,
         code = code,
-        message = message,
-        hint = empty_hint,
+        message = move message,
+        hint = move hint,
         span = span,
     })
+}
+
+pub fn push_diag_e(self: &Checker, span: SourceSpan, code: String, message: OwnedString) {
+    push_diag(self, Severity.Error, span, code, move message, from_view(""))
 }
 
 // Warning-severity counterpart. Warnings render like errors but do not fail the build
 // (`driver.count_errors` filters on severity).
 pub fn push_diag_w(self: &Checker, span: SourceSpan, code: String, message: OwnedString) {
-    let empty_hint: OwnedString
-    self.diagnostics.push(Diagnostic {
-        severity = Severity.Warning,
-        code = code,
-        message = message,
-        hint = empty_hint,
-        span = span,
-    })
+    push_diag(self, Severity.Warning, span, code, move message, from_view(""))
 }
 
 // Translate a unify outcome into a diagnostic anchored at `span`. A `Unified` outcome produces
@@ -2291,6 +2303,7 @@ fn stmt_returns(self: &Checker, stmt: &Stmt) bool {
         Return(_) => true
         Expression(es) => expr_returns(self, es.expr)
         IfDirective(ifd) => directive_branch_returns(self, &ifd)
+        ErrorDirective(_) => true
         _ => false
     }
 }
@@ -3008,12 +3021,18 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     // Bind each signature type param to its concrete argument; the body's `$T` / `T` occurrences
     // resolve to these instead of minting fresh vars.
     self.env.push_scope()
+    self.inst_sites.push(InstSite {
+        span = p.span,
+        function_id = p.function_id,
+        binds0 = self.inst_binds.len,
+    })
     for i in 0..template.tps.len {
         let bound = p.tp_binds.get(template.tps[i].var_id)
         let conc = bound match {
             Some(b) => self.engine.zonk(b)
             None => TY_ERROR
         }
+        self.inst_binds.push(conc)
         self.env.bind(template.tps[i].name, Binding {
             scheme = mono(conc, self.allocator),
             decl = self.node_of(template.decl.span),
@@ -3037,6 +3056,8 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(T
     drain_pending_specs(self)
 
     self.env.pop_scope()
+    const site = self.inst_sites.pop().unwrap()
+    self.inst_binds.truncate(site.binds0)
     self.spec_depth = self.spec_depth - 1
     let _c = self.spec_callers.pop()
 
@@ -5261,9 +5282,54 @@ fn check_stmt(self: &Checker, stmt: &Stmt) bool {
             self.defer_depth = self.defer_depth - 1
         }
         IfDirective(ifd) => return check_if_directive_stmt(self, &ifd)
+        ErrorDirective(ed) => return check_error_directive(self, &ed)
         _ => {}
     }
     return false
+}
+
+// `#error(message[, hint])`, reached in this body. Inside an instantiation the error lands on the
+// outermost call site, the line the author is editing, and info notes walk inward to the directive;
+// outside one it lands on the directive itself. Diverges: nothing after it lowers.
+fn check_error_directive(self: &Checker, ed: &ErrorDirective) bool {
+    const lookup: CtLookup = .{ ctx = self as &u8, resolve = no_lookup, name = checker_name }
+    const text: ErrorText = eval_error_text(&self.comptime, lookup, ed) match {
+        Ok(t) => move t
+        Err(err) => {
+            self.diagnostics.push(into_diagnostic(move err))
+            return true
+        }
+    }
+    if self.inst_sites.len == 0 {
+        self.diagnostics.push(error_diagnostic(move text, ed.span))
+        return true
+    }
+    self.diagnostics.push(error_diagnostic(move text, self.inst_sites[0].span))
+    for i in 1..self.inst_sites.len {
+        push_diag(self, Severity.Info, self.inst_sites[i].span, E_ERROR_DIRECTIVE,
+            inst_note(self, i, "instantiated from here"), from_view(""))
+    }
+    push_diag(self, Severity.Info, ed.span, E_ERROR_DIRECTIVE,
+        inst_note(self, self.inst_sites.len - 1, "raised by `#error` here"), from_view(""))
+    return true
+}
+
+// `<lead>, with T = i32, U = Foo` for the open instantiation at `index`.
+fn inst_note(self: &Checker, index: usize, lead: String) OwnedString {
+    const site = self.inst_sites[index]
+    const has_next = index + 1 < self.inst_sites.len
+    const end = if has_next { self.inst_sites[index + 1].binds0 } else { self.inst_binds.len }
+    const template = self.templates.get_ref(site.function_id).unwrap()
+    let sb = string_builder(64, self.allocator)
+    sb.append(lead)
+    for i in site.binds0..end {
+        sb.append(if i == site.binds0 { ", with " } else { ", " })
+        sb.append(template.tps[i - site.binds0].name)
+        sb.append(" = ")
+        format_with_names(&self.engine.interner, self.engine.zonk(self.inst_binds[i]), &sb,
+            Some(&self.nominals))
+    }
+    return sb.to_string()
 }
 
 // `#if cond { … } else { … }` - the condition resolves against the
@@ -8859,6 +8925,7 @@ fn own_stmt(self: &Checker, p: &OwnPass, st: &Stmt) {
         }
         Loop(ls) => own_loop(self, p, ls.body)
         IfDirective(ifd) => own_if_directive(self, p, &ifd)
+        ErrorDirective(_) => {}
     }
 }
 

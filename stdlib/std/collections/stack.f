@@ -62,8 +62,10 @@ pub fn push(self: &UnmanagedStack($T), value: T, allocator: &Allocator) {
     self.__inner.push(move value, allocator)
 }
 
-// Deinits every element and frees the storage. Idempotent: a second call is a no-op.
+// Deinits every element, top to bottom, and frees the storage. Idempotent: a second call is a
+// no-op.
 pub fn deinit(self: &UnmanagedStack($T), allocator: &Allocator) {
+    self.__inner.truncate(0, allocator)
     self.__inner.deinit(allocator)
 }
 
@@ -100,9 +102,9 @@ pub fn peek_ref(self: &UnmanagedStack($T)) &T? {
     return self.__inner.get_ref(self.__inner.len - 1)
 }
 
-// Removes every element, deiniting each. The storage is kept for reuse.
-pub fn clear(self: &UnmanagedStack($T)) {
-    self.__inner.clear()
+// Removes every element, deiniting each top to bottom. The storage is kept for reuse.
+pub fn clear(self: &UnmanagedStack($T), allocator: &Allocator) {
+    self.__inner.truncate(0, allocator)
 }
 
 // Returns a view of the elements, bottom to top. Growth moves the storage and invalidates the view.
@@ -132,9 +134,20 @@ pub fn push(self: &Stack($T), value: T) {
     self.__storage.push(move value, self.allocator)
 }
 
-// Deinits every element and frees the storage. Idempotent: a second call is a no-op.
+// Removes every element, deiniting each top to bottom. The storage is kept for reuse.
+pub fn clear(self: &Stack($T)) {
+    self.__storage.clear(self.allocator)
+}
+
+// Deinits every element, top to bottom, and frees the storage. Idempotent: a second call is a
+// no-op.
 pub fn deinit(self: &Stack($T)) {
     self.__storage.deinit(self.allocator)
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Stack($T), allocator: &Allocator) {
+    self.deinit()
 }
 
 // =============================================================================
@@ -215,4 +228,31 @@ test "stack clear empties and the storage is reusable" {
     assert_true(s.is_empty(), "cleared stack is empty")
     s.push(7i32)
     assert_eq(s.pop().unwrap_or(0i32), 7i32, "stack reused after clear")
+}
+
+// Deinit order probe: a non-copyable element that records its id when released.
+type Tracked = struct {
+    owned id: i32
+    log: &List(i32)
+}
+
+pub fn deinit(self: &Tracked, allocator: &Allocator) {
+    self.log.push(self.id)
+}
+
+test "elements are deinited top to bottom" {
+    let log: List(i32) = list(3)
+    defer log.deinit()
+    let s: Stack(Tracked) = stack(3)
+    s.push(Tracked { id = 1i32, log = &log })
+    s.push(Tracked { id = 2i32, log = &log })
+    s.push(Tracked { id = 3i32, log = &log })
+    s.clear()
+    assert_eq(log[0], 3i32, "top first")
+    assert_eq(log[2], 1i32, "bottom last")
+    s.push(Tracked { id = 4i32, log = &log })
+    s.push(Tracked { id = 5i32, log = &log })
+    s.deinit()
+    assert_eq(log[3], 5i32, "deinit releases top first")
+    assert_eq(log[4], 4i32, "then the bottom")
 }

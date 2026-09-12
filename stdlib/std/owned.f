@@ -7,6 +7,7 @@
 // (cleanup is the type's own deinit), or raw heap pointers (cleanup is `mem.free` adapted to
 // `fn(&&u8)`).
 
+import std.allocator
 import std.option
 import std.test
 
@@ -41,6 +42,11 @@ pub fn deinit(self: &Owned($T)) {
         }
         None => {}
     }
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Owned($T), allocator: &Allocator) {
+    self.deinit()
 }
 
 pub fn is_owned(self: &Owned($T)) bool {

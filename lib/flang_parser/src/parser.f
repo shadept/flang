@@ -65,7 +65,7 @@ pub type Parser = struct {
 // (resolved per use at the allocation leaves).
 pub fn parser(tokens: List(Token), source: String, allocator: &Allocator? = null) Parser {
     return .{
-        tree = cst(tokens, source, allocator),
+        tree = cst(move tokens, source, allocator),
         scratch = list(64, allocator),
         position = 0,
         allocator = allocator,
@@ -83,6 +83,11 @@ pub fn deinit(self: &Parser) {
     self.diagnostics.deinit()
     self.scratch.deinit()
     self.tree.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Parser, allocator: &Allocator) {
+    self.deinit()
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -246,17 +251,17 @@ fn expect_into(self: &Parser, b: &NodeBuilder, kind: TokenKind, code: String) bo
 fn record_expected(self: &Parser, kind: TokenKind, code: String) {
     const tok = self.current()
     const msg = $"expected `{kind.to_string()}`, found `{tok.text}`"
-    self.record_error_at(code, msg, tok.offset, tok.text.len)
+    self.record_error_at(code, move msg, tok.offset, tok.text.len)
 }
 
 fn record_error_at(self: &Parser, code: String, message: OwnedString, start: usize, length: usize) {
     const sp: SourceSpan = .{ file_id = self.file_id, start = start, length = length }
-    self.diagnostics.push(error(code, message, sp))
+    self.diagnostics.push(error(code, move message, sp))
 }
 
 fn record_error_here(self: &Parser, code: String, message: OwnedString) {
     const tok = self.current()
-    self.record_error_at(code, message, tok.offset, tok.text.len)
+    self.record_error_at(code, move message, tok.offset, tok.text.len)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -327,6 +332,9 @@ fn parse_top_level(self: &Parser) CstNodeId {
             if ident == "define" {
                 return self.parse_generator_def()
             }
+            if ident == "error" {
+                return self.parse_error_directive()
+            }
             if !is_known_directive(ident) and self.peek_kind(2) == TokenKind.OpenParenthesis {
                 return self.parse_generator_invocation()
             }
@@ -346,16 +354,16 @@ fn parse_top_level(self: &Parser) CstNodeId {
     if k == TokenKind.Pub {
         const next = self.peek_kind(1)
         if next == TokenKind.Fn {
-            return self.parse_function_with_directives(leading)
+            return self.parse_function_with_directives(move leading)
         }
         if next == TokenKind.Type {
-            return self.parse_type_decl_with_directives(leading)
+            return self.parse_type_decl_with_directives(move leading)
         }
         if next == TokenKind.Struct or next == TokenKind.Enum {
-            return self.parse_legacy_type_decl(leading, next == TokenKind.Struct)
+            return self.parse_legacy_type_decl(move leading, next == TokenKind.Struct)
         }
         if next == TokenKind.Const {
-            return self.parse_variable_decl_with_directives(leading)
+            return self.parse_variable_decl_with_directives(move leading)
         }
         if next == TokenKind.Import {
             // `pub import` should have been consumed in parse_module's header. If it reaches us,
@@ -364,26 +372,26 @@ fn parse_top_level(self: &Parser) CstNodeId {
             return self.parse_import()
         }
         // Unknown form after `pub` - recover by wrapping the run in Error.
-        return self.recover_unexpected_top_level(leading)
+        return self.recover_unexpected_top_level(move leading)
     }
 
     if k == TokenKind.Fn {
-        return self.parse_function_with_directives(leading)
+        return self.parse_function_with_directives(move leading)
     }
     if k == TokenKind.Type {
-        return self.parse_type_decl_with_directives(leading)
+        return self.parse_type_decl_with_directives(move leading)
     }
     if k == TokenKind.Struct or k == TokenKind.Enum {
-        return self.parse_legacy_type_decl(leading, k == TokenKind.Struct)
+        return self.parse_legacy_type_decl(move leading, k == TokenKind.Struct)
     }
     if k == TokenKind.Test {
-        return self.parse_test_with_directives(leading)
+        return self.parse_test_with_directives(move leading)
     }
     if k == TokenKind.Const or k == TokenKind.Let {
-        return self.parse_variable_decl_with_directives(leading)
+        return self.parse_variable_decl_with_directives(move leading)
     }
 
-    return self.recover_unexpected_top_level(leading)
+    return self.recover_unexpected_top_level(move leading)
 }
 
 // Names that bind as plain `Directive` rather than `GeneratorInvocation` at top level. Mirrors the
@@ -401,7 +409,7 @@ fn recover_unexpected_top_level(self: &Parser, leading: List(CstNodeId)) CstNode
         self.push_node_into(&b, leading[i])
     }
     const msg = $"unexpected `{self.current().text}` at top level"
-    self.record_error_here("E1001", msg)
+    self.record_error_here("E1001", move msg)
     // Consume until we hit a recognisable top-level starter.
     loop {
         if self.at_eof() {
@@ -953,7 +961,7 @@ fn parse_statement(self: &Parser) CstNodeId {
         // parse_type_decl_with_directives). We bypass directive collection because the spec
         // disallows them on local types.
         let empty: List(CstNodeId) = list(0, self.allocator)
-        return self.parse_type_decl_with_directives(empty)
+        return self.parse_type_decl_with_directives(move empty)
     }
     if k == TokenKind.Return {
         return self.parse_return_stmt()
@@ -987,7 +995,12 @@ fn parse_statement(self: &Parser) CstNodeId {
         if self.peek_kind(1) == TokenKind.If {
             return self.parse_if_directive_stmt()
         }
-        // Free-floating directive - treat as a directive node and continue.
+        const is_error = self.peek_kind(1) == TokenKind.Identifier
+            and self.tree.tokens[self.position + 1].text == "error"
+        if is_error {
+            return self.parse_error_directive()
+        }
+        // Any other directive here is unknown; the projector reports it.
         return self.parse_directive()
     }
     // Default: expression statement.
@@ -1082,6 +1095,24 @@ fn parse_if_directive_stmt(self: &Parser) CstNodeId {
             self.push_node_into(&b, else_block)
         }
     }
+    return self.finish(b)
+}
+
+// `#error(message[, hint])`. The arguments are expressions, evaluated at compile time where the
+// directive is reached; the same node serves statement and declaration position.
+fn parse_error_directive(self: &Parser) CstNodeId {
+    let b = self.open(NodeKind.ErrorDirective)
+    self.eat_into(&b) // `#`
+    self.eat_into(&b) // `error`
+    self.expect_into(&b, TokenKind.OpenParenthesis, "E1002")
+    const message = self.parse_expression()
+    self.push_node_into(&b, message)
+    if self.current_kind() == TokenKind.Comma {
+        self.eat_into(&b)
+        const hint = self.parse_expression()
+        self.push_node_into(&b, hint)
+    }
+    self.expect_into(&b, TokenKind.CloseParenthesis, "E1002")
     return self.finish(b)
 }
 
@@ -1657,7 +1688,7 @@ fn single_token_node(self: &Parser, kind: NodeKind) CstNodeId {
 
 fn error_token_node(self: &Parser, code: String, message: OwnedString) CstNodeId {
     let b = self.open(NodeKind.Error)
-    self.record_error_at(code, message, self.current().offset, self.current().text.len)
+    self.record_error_at(code, move message, self.current().offset, self.current().text.len)
     self.eat_into(&b)
     return self.finish(b)
 }

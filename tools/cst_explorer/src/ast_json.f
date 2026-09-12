@@ -117,6 +117,21 @@ fn emit_kv_usize(sb: &StringBuilder, key: String, value: usize) {
 // Declarations
 // ─────────────────────────────────────────────────────────────────────────
 
+fn emit_error_directive(sb: &StringBuilder, d: &ErrorDirective) {
+    sb.append("{\"kind\":\"ErrorDirective\",")
+    emit_span(sb, d.span)
+    sb.append(",\"message\":")
+    emit_expr(sb, d.message)
+    d.hint match {
+        Some(h) => {
+            sb.append(",\"hint\":")
+            emit_expr(sb, h)
+        }
+        None => {}
+    }
+    sb.append("}")
+}
+
 fn emit_decl(sb: &StringBuilder, decl: &Decl) {
     decl.* match {
         Import(imp) => emit_import_decl(sb, &imp)
@@ -127,6 +142,7 @@ fn emit_decl(sb: &StringBuilder, decl: &Decl) {
         GenDef(g) => emit_gen_def(sb, &g)
         GenInvoke(g) => emit_gen_invoke(sb, &g)
         IfDirective(d) => emit_if_directive_decl(sb, &d)
+        ErrorDirective(d) => emit_error_directive(sb, &d)
         Error(e) => {
             sb.append("{\"kind\":\"Error\",")
             emit_span(sb, e.span)
@@ -377,6 +393,7 @@ fn emit_stmt(sb: &StringBuilder, s: &Stmt) {
         For(fs) => emit_for_stmt(sb, &fs)
         While(ws) => emit_while_stmt(sb, &ws)
         Loop(ls) => emit_loop_stmt(sb, &ls)
+        ErrorDirective(d) => emit_error_directive(sb, &d)
         IfDirective(d) => {
             sb.append("{\"kind\":\"IfDirective\",")
             emit_span(sb, d.span)

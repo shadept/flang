@@ -282,7 +282,7 @@ pub fn doc_markdown(doc: String) OwnedString {
     const out = trim_end(sb.as_view())
     const owned = from_view(out)
     sb.deinit()
-    return owned
+    return move owned
 }
 
 fn close_code(sb: &StringBuilder, in_code: &bool) {
@@ -318,8 +318,9 @@ test "doc_above collects the comment run glued to a declaration" {
     const src = "// Adds one.\n//\n//   Indented.\nfn inc(x: i32) i32 { return x + 1 }\n"
     const d = doc_above(src, 31)
     assert_true(d.is_some(), "a docstring")
-    assert_true(d.unwrap().as_view() == "Adds one.\n\n  Indented.", "prefix stripped, lines kept")
-    d.unwrap().deinit()
+    const text = unwrap(move d)
+    assert_true(text.as_view() == "Adds one.\n\n  Indented.", "prefix stripped, lines kept")
+    text.deinit()
 }
 
 test "doc_above stops at a blank line, a code line and a trailing comment" {
@@ -333,17 +334,22 @@ test "doc_above honours indentation and CRLF" {
     const src = "type S = struct {\r\n    // The x.\r\n    x: i32\r\n}\r\n"
     const d = doc_above(src, 38)
     assert_true(d.is_some(), "an indented field docstring")
-    assert_true(d.unwrap().as_view() == "The x.", "CR trimmed")
-    d.unwrap().deinit()
+    const text = unwrap(move d)
+    assert_true(text.as_view() == "The x.", "CR trimmed")
+    text.deinit()
 }
 
 test "module_doc takes the opening run only when a blank line follows it" {
     const m = module_doc("// Trivia.\n// More.\n\nimport std.option\n")
-    assert_true(m.is_some() and m.unwrap().as_view() == "Trivia.\nMore.", "module docstring")
-    m.unwrap().deinit()
+    assert_true(m.is_some(), "module docstring present")
+    const text = unwrap(move m)
+    assert_true(text.as_view() == "Trivia.\nMore.", "module docstring")
+    text.deinit()
     assert_true(module_doc("// see\nfn f() {}\n").is_none(), "glued to the first decl")
     assert_true(module_doc("import std.option\n").is_none(), "no opening comment")
     const eof = module_doc("// only\n")
-    assert_true(eof.is_some() and eof.unwrap().as_view() == "only", "end of file closes the run")
-    eof.unwrap().deinit()
+    assert_true(eof.is_some(), "end of file closes the run")
+    const last = unwrap(move eof)
+    assert_true(last.as_view() == "only", "end of file closes the run")
+    last.deinit()
 }

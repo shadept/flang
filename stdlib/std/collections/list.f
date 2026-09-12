@@ -111,19 +111,15 @@ pub fn unmanaged_list(capacity: usize, allocator: &Allocator) UnmanagedList($T) 
 
 // Creates an unmanaged list holding a copy of `source`, in fresh storage sized to its length.
 //
-// Elements are copied bitwise: an element that owns something is now owned twice, and only one copy
-// may be deinited. An empty source allocates nothing. Panics when the allocation fails.
+// Copyable elements are copied bitwise; owning elements are cloned through `clone(&T, allocator)`,
+// so the new list owns its own. An empty source allocates nothing. Panics when the allocation
+// fails.
 //
 // - `allocator`: grows and frees the storage. Pass the same one to every allocating call.
 pub fn unmanaged_list(source: $T[], allocator: &Allocator) UnmanagedList(T) {
-    if source.len == 0 {
-        let empty: UnmanagedList(T)
-        return move empty
-    }
-    const bytes = source.len * size_of(T)
-    const buf = allocator.alloc(bytes, align_of(T)).expect("list(copy): allocation failed")
-    memcpy(buf.ptr, source.ptr as &u8, bytes)
-    return .{ ptr = buf.ptr as &T, len = source.len, cap = source.len }
+    let out: UnmanagedList(T) = unmanaged_list(source.len, allocator)
+    out.push_all(source, allocator)
+    return move out
 }
 
 // Creates a list with room for `capacity` elements that allocates through `allocator` for its whole
@@ -156,8 +152,9 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
     return move out
 }
 
-// Creates a list holding a copy of `source`, in fresh storage sized to fit. Elements are copied
-// bitwise; an empty source allocates nothing. Panics when the allocation fails.
+// Creates a list holding a copy of `source`, in fresh storage sized to fit. Copyable elements are
+// copied bitwise; owning elements are cloned through `clone(&T, allocator)`, so the new list owns
+// its own. An empty source allocates nothing. Panics when the allocation fails.
 //
 // - `allocator`: kept for the list's whole life. Null is the global allocator.
 pub fn list(source: $T[], allocator: &Allocator? = null) List(T) {
@@ -194,7 +191,7 @@ pub fn filled_list(count: usize, value: $T, allocator: &Allocator? = null) List(
 // Deinits every live element, frees the buffer and resets to empty, so a second call is a no-op.
 pub fn deinit(self: &UnmanagedList($T), allocator: &Allocator) {
     if self.cap > 0 {
-        self.clear()
+        self.clear(allocator)
         allocator.free(slice_from_raw_parts(self.ptr, self.cap))
     }
 
@@ -449,7 +446,9 @@ pub fn push(self: &UnmanagedList($T), value: T, allocator: &Allocator) {
     data[self.len - 1] = move value
 }
 
-// Appends every element of `xs`, in order, growing when needed. Panics when the allocation fails.
+// Appends every element of `xs`, in order, growing when needed. Copyable elements are copied
+// bitwise; owning elements are cloned through `clone(&T, allocator)`. Panics when the allocation
+// fails.
 //
 // - `xs`: must not alias the list's own storage. Growth may move and free that storage before the
 //   copy, so no copy primitive makes self-append safe.
@@ -458,8 +457,14 @@ pub fn push_all(self: &UnmanagedList($T), xs: T[], allocator: &Allocator) {
         return
     }
     self.reserve(self.len + xs.len, allocator)
-    memcpy((self.ptr + self.len) as &u8, xs.ptr as &u8, xs.len * size_of(T))
-    self.len = self.len + xs.len
+    #if type_info(T).copyable {
+        memcpy((self.ptr + self.len) as &u8, xs.ptr as &u8, xs.len * size_of(T))
+        self.len = self.len + xs.len
+    } else {
+        for i in 0..xs.len {
+            self.push(xs[i].clone(allocator), allocator)
+        }
+    }
 }
 
 // Inserts `value` at `index`, shifting everything at and after it one slot toward the end. `index
@@ -504,10 +509,10 @@ pub fn set(self: &UnmanagedList($T), index: usize, value: T) {
 }
 
 // Drops every element, deiniting each. The backing storage is kept for reuse.
-pub fn clear(self: &UnmanagedList($T)) {
+pub fn clear(self: &UnmanagedList($T), allocator: &Allocator) {
     #if !type_info(T).copyable {
         for &elem in self {
-            elem.deinit()
+            elem.deinit(allocator)
         }
     }
     self.len = 0
@@ -515,13 +520,18 @@ pub fn clear(self: &UnmanagedList($T)) {
 
 // Drops every element past the first `n`, deiniting each. The backing storage is kept; a length at
 // or below `n` is left alone.
-pub fn truncate(self: &UnmanagedList($T), n: usize) {
-    while self.len > n {
-        self.len = self.len - 1
-        #if !type_info(T).copyable {
+pub fn truncate(self: &UnmanagedList($T), n: usize, allocator: &Allocator) {
+    if n >= self.len {
+        return
+    }
+    #if !type_info(T).copyable {
+        while self.len > n {
+            self.len = self.len - 1
             const elem: &T = self.ptr + self.len
-            elem.deinit()
+            elem.deinit(allocator)
         }
+    } else {
+        self.len = n
     }
 }
 
@@ -646,7 +656,8 @@ pub fn partition(self: &UnmanagedList($T), pred: $F, allocator: &Allocator) (Unm
 }
 
 // Returns a new list of every inner list's elements, in order, in one allocation sized from the
-// inner lengths. The inner lists are left untouched; their elements are copied bitwise.
+// inner lengths. The inner lists are left untouched; their elements are copied, owning ones through
+// `clone`.
 pub fn flatten(self: &UnmanagedList(List($T)), allocator: &Allocator) UnmanagedList(T) {
     let total: usize = 0
     for &inner in self {
@@ -751,9 +762,20 @@ pub fn iter_rev(self: &UnmanagedList($T)) SliceRevIterator(T) {
         self.__storage.push(move value, self.allocator)
     }
 
-    // Appends every element of `xs`, in order. `xs` must not alias the list's own storage.
+    // Appends every element of `xs`, in order, cloning owning elements. `xs` must not alias the
+    // list's own storage.
     pub fn push_all(self: &#(Self)($T), xs: T[]) {
         self.__storage.push_all(xs, self.allocator)
+    }
+
+    // Drops every element, deiniting each. The backing storage is kept for reuse.
+    pub fn clear(self: &#(Self)($T)) {
+        self.__storage.clear(self.allocator)
+    }
+
+    // Drops every element past the first `n`, deiniting each. The backing storage is kept.
+    pub fn truncate(self: &#(Self)($T), n: usize) {
+        self.__storage.truncate(n, self.allocator)
     }
 
     // Inserts `value` at `index`, shifting everything at and after it one slot toward the end.
@@ -836,15 +858,24 @@ pub fn iter_rev(self: &UnmanagedList($T)) SliceRevIterator(T) {
 
 // Returns a deep copy: copyable elements are copied bitwise, the others through their own `clone`.
 //
-// - `allocator`: kept for the copy's whole life. Null is the receiver's allocator.
-pub fn clone(self: &List($T), allocator: &Allocator? = null) List(T) {
-    const alloc = allocator ?? self.allocator
-    return .{ __storage = self.__storage.clone(alloc), allocator = alloc }
+// - `allocator`: kept for the copy's whole life.
+pub fn clone(self: &List($T), allocator: &Allocator) List(T) {
+    return .{ __storage = self.__storage.clone(allocator), allocator = allocator }
+}
+
+// A deep copy on the receiver's allocator.
+pub fn clone(self: &List($T)) List(T) {
+    return self.clone(self.allocator)
 }
 
 // Deinits every live element and frees the backing storage. Idempotent: a second call is a no-op.
 pub fn deinit(self: &List($T)) {
     self.__storage.deinit(self.allocator)
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &List($T), allocator: &Allocator) {
+    self.deinit()
 }
 
 // Hands over the buffer as a `(T[], &Allocator)` pair and resets the list to empty, so a later
@@ -1018,6 +1049,26 @@ test "push_all appends a slice in order" {
     defer none.deinit()
     xs.push_all(none.as_slice())
     assert_eq(xs.len, 3 as usize, "empty source is a no-op")
+}
+
+test "push_all and list(source) clone owning elements" {
+    let src: List(OwnedString) = list(1)
+    defer src.deinit()
+    src.push(from_view("alpha"))
+
+    let xs: List(OwnedString) = list(0)
+    defer xs.deinit()
+    xs.push_all(src.as_slice())
+    assert_true(xs[0].as_view() == "alpha", "element cloned by push_all")
+
+    let ys: List(OwnedString) = list(src.as_slice())
+    defer ys.deinit()
+    assert_true(ys[0].as_view() == "alpha", "element cloned by the constructor")
+
+    let zs = src.clone()
+    defer zs.deinit()
+    assert_true(zs[0].as_view() == "alpha", "element cloned by clone")
+    // Four lists each own an "alpha"; the test allocator reports a double free or a leak.
 }
 
 test "binary search trickles through to the list" {

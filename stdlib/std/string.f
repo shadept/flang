@@ -467,9 +467,14 @@ pub fn from_view(s: String, allocator: &Allocator? = null) OwnedString {
 
 // Returns an owned copy of `self`'s bytes, in one fresh allocation.
 //
-// - `allocator`: remembered on the copy for its `deinit`. Null is the receiver's allocator.
-pub fn clone(self: &OwnedString, allocator: &Allocator? = null) OwnedString {
-    return from_view(self.as_view(), allocator ?? self.allocator)
+// - `allocator`: remembered on the copy for its `deinit`.
+pub fn clone(self: &OwnedString, allocator: &Allocator) OwnedString {
+    return from_view(self.as_view(), allocator)
+}
+
+// An owned copy on the receiver's allocator.
+pub fn clone(self: &OwnedString) OwnedString {
+    return from_view(self.as_view(), self.allocator)
 }
 
 pub fn deinit(self: &OwnedString) {
@@ -480,6 +485,11 @@ pub fn deinit(self: &OwnedString) {
     self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.len))
     self.ptr = 0usize as &u8
     self.len = 0
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &OwnedString, allocator: &Allocator) {
+    self.deinit()
 }
 
 // Reads `self`. Consuming an owned temporary is `append`'s behaviour, not this one's.

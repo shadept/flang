@@ -302,7 +302,7 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
                     Err(o) => return o
                 }
             }
-            env.bindings[param.name] = CtValue.List(rest)
+            env.bindings[param.name] = CtValue.List(box(&a, move rest))
             break
         }
         bind_arg(chk, &env, &param, &inv.args[p], inv.name, &a) match {

@@ -158,6 +158,11 @@ pub fn deinit(self: &JsonValue) {
     self.* = JsonValue.Null
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &JsonValue, allocator: &Allocator) {
+    self.deinit()
+}
+
 // =============================================================================
 // Writer helpers
 // =============================================================================

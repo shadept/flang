@@ -118,8 +118,8 @@ pub fn capacity_bytes(self: &StringPool) usize {
 // Drops every string and forgets every id, keeping the storage for reuse. Ids hand out again from
 // zero.
 pub fn clear(self: &StringPool) {
-    self.bytes.clear()
-    self.ends.clear()
+    self.bytes.clear(self.allocator)
+    self.ends.clear(self.allocator)
     for i in 0..self.index.len {
         self.index[i] = NO_STR
     }
@@ -130,6 +130,11 @@ pub fn deinit(self: &StringPool) {
     self.bytes.deinit(self.allocator)
     self.ends.deinit(self.allocator)
     self.index.deinit(self.allocator)
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &StringPool, allocator: &Allocator) {
+    self.deinit()
 }
 
 // The index slot holding `s`'s id, or the empty slot where it would go: linear probing from the

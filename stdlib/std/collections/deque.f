@@ -127,7 +127,7 @@ pub fn deinit(self: &UnmanagedDeque($T), allocator: &Allocator) {
         #if !type_info(T).copyable {
             for i in 0..self.len {
                 const elem: &T = self.ptr + ((self.head + i) % self.cap)
-                elem.deinit()
+                elem.deinit(allocator)
             }
         }
         allocator.free(slice_from_raw_parts(self.ptr, self.cap))
@@ -248,6 +248,11 @@ pub fn push_front(self: &Deque($T), value: T) {
 // Deinits every element, front to back, and frees the buffer. Idempotent: a second call is a no-op.
 pub fn deinit(self: &Deque($T)) {
     self.__storage.deinit(self.allocator)
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Deque($T), allocator: &Allocator) {
+    self.deinit()
 }
 
 // =============================================================================

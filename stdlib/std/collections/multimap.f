@@ -32,9 +32,9 @@ pub type Slot = struct(V) {
     next: u32
 }
 
-pub fn deinit(self: &Slot($V)) {
+pub fn deinit(self: &Slot($V), allocator: &Allocator) {
     #if !type_info(V).copyable {
-        self.value.deinit()
+        self.value.deinit(allocator)
     }
 }
 
@@ -116,7 +116,7 @@ pub fn total(self: &MultiMap($K, $V)) usize {
 // The values' slots stay in the pool, unreachable, until `compact` reclaims them; `total` no longer
 // counts them. Returns how many values were removed, zero for an absent key.
 pub fn remove_key(self: &MultiMap($K, $V), key: K) usize {
-    const gone = self.chains.remove(key)
+    const gone = self.chains.remove(key, self.allocator)
     if gone.is_none() {
         return 0
     }
@@ -124,7 +124,7 @@ pub fn remove_key(self: &MultiMap($K, $V), key: K) usize {
     while cur != NONE {
         const slot = &self.pool[cur as usize]
         #if !type_info(V).copyable {
-            slot.value.deinit()
+            slot.value.deinit(self.allocator)
         }
         cur = slot.next
     }
@@ -165,6 +165,11 @@ pub fn deinit(self: &MultiMap($K, $V)) {
     self.pool.deinit(self.allocator)
     self.chains.deinit(self.allocator)
     self.dead = 0
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &MultiMap($K, $V), allocator: &Allocator) {
+    self.deinit()
 }
 
 // Returns the bytes the pool and the key table occupy: the whole capacity of both, and nothing the

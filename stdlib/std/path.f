@@ -89,8 +89,17 @@ pub fn deinit(self: &Path) {
     self.__sb.deinit()
 }
 
-pub fn clone(self: &Path, allocator: &Allocator? = null) Path {
-    return path(self.as_view(), allocator)
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Path, allocator: &Allocator) {
+    self.deinit()
+}
+
+pub fn clone(self: &Path, allocator: &Allocator) Path {
+    return path(self.as_view(), Some(allocator))
+}
+
+pub fn clone(self: &Path) Path {
+    return path(self.as_view())
 }
 
 // =============================================================================

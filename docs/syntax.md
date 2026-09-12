@@ -357,6 +357,8 @@ Parameter kinds: `Ident`, `Type`. Last param can be variadic: `..Param: Kind`.
 
 **Directives inside generators:** `#(expr)` interpolation, `#for var in collection { }`, `#if condition { } #else { }`.
 
+**Compile-time error:** `#error(message)` or `#error(message, hint)`, in statement or declaration position; the arguments are compile-time expressions, `$"..."` included. Unknown directives are errors (E2130).
+
 **Built-in generators:**
 
 | Generator | Purpose |

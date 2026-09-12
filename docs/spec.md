@@ -952,7 +952,36 @@ names.
 false: an unknown context name or member (`platform.oss`) is E2116, a
 non-bool condition is E2117, and operand misuse (an optional compared
 without `??`, non-bool `and`/`or` operands, a disallowed expression
-form) is E2118.
+form) is E2118. A directive the compiler does not know, in either
+position, is E2130 rather than a silent no-op.
+
+**Compile-time errors.** `#error(message[, hint])` is a diagnostic
+raised where the directive is reached: in the active branch of a `#if`,
+or unconditionally where it stands. It is selection's counterpart for
+the case that has no alternative - an instantiation the template cannot
+serve, a target the file does not support. Both arguments are
+compile-time expressions rendered as text, over the same context as a
+condition, so `$"..."` may name the type parameters in scope:
+
+```
+fn copy_to(src: $T[], dest: T[]) usize {
+    #if !type_info(T).copyable {
+        #error($"copy_to needs copyable elements, {T.name} owns something",
+            $"clone each element with clone(&{T.name}, allocator)")
+    }
+    ...
+}
+```
+
+Reached inside an instantiation, the error (E2999) lands on the
+outermost open call site - the line the author is editing, which is also
+what an editor shows - with the hint on its caret line; info notes then
+walk inward through nested instantiations to the directive, each naming
+that instantiation's type parameters. Reached outside one, or at
+declaration level, it lands on the directive. The statement diverges,
+so a branch that ends in `#error` needs no return. Both positions take
+the directive, statement and declaration; an inactive branch never
+evaluates it.
 
 ### 7.8 Source Generators
 
@@ -1071,7 +1100,7 @@ one set of unmanaged functions plus a generator (`#managed_list`, `#managed_dict
 forwarding overloads for each carrier; a transformation on either carrier returns a `List`/`Dict`,
 since a new collection needs storage of its own. Only the building blocks come in two flavours.
 
-**Ownership vocabulary (RFC-028).** Three names, used the same way on every type. `clone(self: &T, allocator: &Allocator? = null) T` is the explicit, allocating, deep duplicate: the only way to duplicate a non-copyable value, and the unmanaged flavour requires the allocator. Elements go through `#if type_info(T).copyable` (§7.7): copyable ones are copied, the rest cloned; there is no blanket `clone($T)`. There is no `copy` function anywhere: "copy" is the language's word for the bitwise duplicate that `move` replaces. `deinit(self: T)` takes its value by value and consumes it (`deinit(move x)`); the unmanaged flavour is `deinit(self: T, allocator: &Allocator)`, and no other shape exists in the standard library - anything else a value needs to release itself, it carries. `retain(self: &Rc(T)) Rc(T)` is the reference-count bump on `Rc` / `Arc`, so that `rc.clone()` peels through `op_deref` to `T`'s own `clone` and yields a `T`.
+**Ownership vocabulary (RFC-028).** Three names, used the same way on every type, and one shape per name: the allocator is an explicit `&Allocator` parameter, never optional, so a container can call the function on any element with the allocator it holds - the language knows nothing of managed and unmanaged, only signatures. `clone(self: &T, allocator: &Allocator) T` is the explicit, allocating, deep duplicate: the only way to duplicate a non-copyable value. Elements go through `#if type_info(T).copyable` (§7.7): copyable ones are copied, the rest cloned; there is no blanket `clone($T)`. There is no `copy` function anywhere: "copy" is the language's word for the bitwise duplicate that `move` replaces. `deinit(self: T, allocator: &Allocator)` takes its value by value and consumes it, and no other shape exists in the standard library - anything else a value needs to release itself, it carries. A type that carries its own allocator adds the convenience overloads without the parameter, `clone(self: &T) T` and `deinit(self: T)` (`deinit(move x)`), and its parameter forms ignore the argument. `retain(self: &Rc(T)) Rc(T)` is the reference-count bump on `Rc` / `Arc`, so that `rc.clone()` peels through `op_deref` to `T`'s own `clone` and yields a `T`.
 A composite built on them is managed only, storing its allocator once: `Journal(T)` (std.journal),
 an undo log with nested checkpoints whose two buffers are reused across regions; `MultiMap(K, V)`
 (std.multimap), a key-to-many-values table whose values share one pool, chained per key, so the

@@ -96,10 +96,12 @@ pub fn lexer(source: String, allocator: &Allocator? = null, start: usize = 0) Le
 // the returned `List(Token)` to free them.
 pub fn deinit(self: &Lexer) {
     self.interp_stack.deinit()
-    if self.has_pending {
-        self.pending_token.deinit()
-        self.has_pending = false
-    }
+    self.has_pending = false
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Lexer, allocator: &Allocator) {
+    self.deinit()
 }
 
 // Mark the next `"` as the opener of an interpolated string. The flag is consumed by the next
@@ -132,7 +134,7 @@ pub fn tokenize(self: &Lexer) List(Token) {
             break
         }
     }
-    return tokens
+    return move tokens
 }
 
 // Produce the next token from the source, advancing the lexer's position. Always returns a token -

@@ -124,6 +124,8 @@ pub const E_ASSIGN_OVER_LIVE: String = "E2126"
 // `move base.field` outside the module declaring `base`'s type. Moving a field takes the same
 // rights as writing one (E2114).
 pub const E_PARTIAL_MOVE: String = "E2127"
+// `#error(message[, hint])` reached: at the outermost open instantiation, or at the directive.
+pub const E_ERROR_DIRECTIVE: String = "E2999"
 // A consuming call written in receiver position. A by-value receiver of a non-copyable type is not
 // reachable through UFCS; the free-call form spells the transfer.
 pub const E_CONSUMING_RECEIVER: String = "E2128"
@@ -145,7 +147,6 @@ pub const W_UNUSED_IMPORT: String = "W1004"
 
 pub const W_DEPRECATED: String = "W2001"
 pub const W_DEPRECATED_FN: String = "W2002"
-pub const W_UNKNOWN_DIRECTIVE: String = "W2003"
 
 // A reference cast to an integer. Reading an address is legitimate (null checks, containment
 // checks, pointer identity), so the warning is suppressed per site with `#allow(W2004)`.

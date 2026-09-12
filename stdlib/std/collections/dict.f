@@ -281,11 +281,11 @@ pub fn set(self: &UnmanagedDict($K, $V), key: K, value: V, allocator: &Allocator
     if existing.is_some() {
         const slot = &existing.unwrap().value
         #if !type_info(V).copyable {
-            slot.deinit()
+            slot.deinit(allocator)
         }
         slot.* = move value
         #if !type_info(K).copyable {
-            key.deinit()
+            key.deinit(allocator)
         }
         return
     }
@@ -301,7 +301,7 @@ pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: V, allocat
     if existing.is_some() {
         const entry = existing.unwrap()
         #if !type_info(V).copyable {
-            entry.value.deinit()
+            entry.value.deinit(allocator)
         }
         entry.value = move value
         return
@@ -314,7 +314,7 @@ pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: V, allocat
 // no-op.
 pub fn deinit(self: &UnmanagedDict($K, $V), allocator: &Allocator) {
     if self.cap > 0 {
-        self.deinit_entries()
+        self.deinit_entries(allocator)
         allocator.free(slice_from_raw_parts(self.entries, self.cap))
     }
     self.entries = 0usize as &Entry(K, V)
@@ -338,7 +338,7 @@ pub fn merge(self: &UnmanagedDict($K, $V), other: &UnmanagedDict(K, V), allocato
 
 // Removes `key` and returns its value, or null when absent. The stored key is deinited; the value
 // is the caller's to deinit.
-pub fn remove(self: &UnmanagedDict($K, $V), key: K) V? {
+pub fn remove(self: &UnmanagedDict($K, $V), key: K, allocator: &Allocator) V? {
     const found = self.find_entry(&key)
     if found.is_none() {
         return null
@@ -346,23 +346,23 @@ pub fn remove(self: &UnmanagedDict($K, $V), key: K) V? {
     const entry = found.unwrap()
     const val: V = move entry.value
     #if !type_info(K).copyable {
-        entry.key.deinit()
+        entry.key.deinit(allocator)
     }
     entry.hash = HASH_DEAD
     self.length = self.length - 1
     self.dead = self.dead + 1
-    return Some(val)
+    return Some(move val)
 }
 
 // String-key `remove` for `UnmanagedDict(OwnedString, V)`: looks the owned key up by the view.
-pub fn remove(self: &UnmanagedDict(OwnedString, $V), key: String) V? {
-    return remove(self, fake_owned(key))
+pub fn remove(self: &UnmanagedDict(OwnedString, $V), key: String, allocator: &Allocator) V? {
+    return remove(self, fake_owned(key), allocator)
 }
 
 // Removes every entry, deiniting each key and value. The table is kept for reuse.
-pub fn clear(self: &UnmanagedDict($K, $V)) {
+pub fn clear(self: &UnmanagedDict($K, $V), allocator: &Allocator) {
     if self.cap > 0 {
-        self.deinit_entries()
+        self.deinit_entries(allocator)
         memset(self.entries as &u8, 0, self.cap * size_of(Entry(K, V)))
     }
     self.length = 0
@@ -370,15 +370,15 @@ pub fn clear(self: &UnmanagedDict($K, $V)) {
 }
 
 // Deinit every live key and value, leaving the slots as they are.
-fn deinit_entries(self: &UnmanagedDict($K, $V)) {
+fn deinit_entries(self: &UnmanagedDict($K, $V), allocator: &Allocator) {
     for i in 0..self.cap {
         const entry: &Entry(K, V) = self.entries + i
         if entry.hash >= 2 {
             #if !type_info(K).copyable {
-                entry.key.deinit()
+                entry.key.deinit(allocator)
             }
             #if !type_info(V).copyable {
-                entry.value.deinit()
+                entry.value.deinit(allocator)
             }
         }
     }
@@ -690,6 +690,22 @@ pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) Unm
         return self.__storage.add(move key, move value, self.allocator)
     }
 
+    // Removes `key` and returns its value, or null when absent. The stored key is deinited; the
+    // value is the caller's to deinit.
+    pub fn remove(self: &#(Self)($K, $V), key: K) V? {
+        return self.__storage.remove(move key, self.allocator)
+    }
+
+    // String-key `remove` for an `OwnedString`-keyed table.
+    pub fn remove(self: &#(Self)(OwnedString, $V), key: String) V? {
+        return self.__storage.remove(key, self.allocator)
+    }
+
+    // Removes every entry, deiniting each key and value. The table is kept for reuse.
+    pub fn clear(self: &#(Self)($K, $V)) {
+        self.__storage.clear(self.allocator)
+    }
+
     // Returns a reference to the value for `key`, inserting `make()` under it first when the key is
     // absent. `make` runs only on a miss. The reference is valid until the next insert.
     pub fn get_or_insert_with(self: &#(Self)($K, $V), key: K, make: $F) &V {
@@ -726,6 +742,11 @@ pub fn deinit(self: &Dict($K, $V)) {
     self.__storage.deinit(self.allocator)
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Dict($K, $V), allocator: &Allocator) {
+    self.deinit()
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -740,7 +761,7 @@ test "an UnmanagedDict takes its allocator at every allocating call" {
     assert_eq(d.len(), 2 as usize, "an update does not add an entry")
     assert_eq(d.get(1u32).unwrap(), 11i32, "the update took")
     assert_true(d.contains(2u32), "contains")
-    assert_eq(d.remove(2u32).unwrap(), 20i32, "remove hands back the value")
+    assert_eq(d.remove(2u32, &alloc).unwrap(), 20i32, "remove hands back the value")
     let sum = 0i32
     for e in d {
         sum = sum + e.value

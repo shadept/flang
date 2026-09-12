@@ -31,6 +31,11 @@ pub fn deinit(self: &Bitset) {
     self.words.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Bitset, allocator: &Allocator) {
+    self.deinit()
+}
+
 // Number of bits currently set. O(words).
 pub fn len(self: &Bitset) usize {
     let total: usize = 0

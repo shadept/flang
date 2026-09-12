@@ -356,7 +356,7 @@ test "a spanless diagnostic is the header alone" {
         severity = Severity.Error,
         code = "E1000",
         message = from_view("no input files"),
-        hint = hint,
+        hint = move hint,
         span = none_span(),
     }
     defer d.deinit()

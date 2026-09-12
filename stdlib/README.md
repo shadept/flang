@@ -64,11 +64,13 @@ much as the contract needs.
 **Expected functions.** Generic code calls a fixed set of functions by name, so a type that provides
 them under these signatures works everywhere the stdlib does (spec §9.4):
 
-- `deinit(self: &T)` releases what the value owns and leaves it zeroed, so a second call is a no-op.
-  Every type that owns something has one; containers call it on their elements. The unmanaged form
-  is `deinit(self: &T, allocator: &Allocator)`.
-- `clone(self: &T, allocator: &Allocator? = null) T` is the canonical deep copy. Containers call it
-  to duplicate their elements. The unmanaged form requires the allocator.
+- `deinit(self: &T, allocator: &Allocator)` releases what the value owns and leaves it zeroed, so a
+  second call is a no-op. Every type that owns something has one; containers call it on their
+  elements with their own allocator. A type that carries its allocator also provides
+  `deinit(self: &T)`, the form a `defer` calls; the parameter form then ignores the argument.
+- `clone(self: &T, allocator: &Allocator) T` is the canonical deep copy, allocated from `allocator`.
+  Containers call it to duplicate their elements. A type that carries its allocator also provides
+  `clone(self: &T) T`, a copy on that allocator.
 - `hash(self: &T) usize` and `op_eq` make a type usable as a `Dict` key or `Set` element.
 - `format(self: &T, w: Writer, spec: String)` makes a type printable through `$"..."` and `append`.
 - `iter(self: &T)` returning a type with `next(self: &I) E?` makes a type usable in `for`;

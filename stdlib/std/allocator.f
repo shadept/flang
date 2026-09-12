@@ -3,6 +3,7 @@
 import core.panic
 import core.rtti
 
+import std.allocator
 import std.mem
 import std.option
 // For the colocated test blocks' assertions only - no shipped code here depends on std.test.
@@ -119,7 +120,7 @@ pub fn new(allocator: &Allocator, ty: Type($T)) &T {
 // value.
 #inline pub fn box(allocator: &Allocator, value: $T) &T {
     const ptr = allocator.new(Type(T))
-    ptr.* = value
+    ptr.* = move value
     return ptr
 }
 
@@ -603,6 +604,11 @@ pub fn deinit(self: &ArenaAllocator) {
     }
     self.first_page = null
     self.current_page = null
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &ArenaAllocator, allocator: &Allocator) {
+    self.deinit()
 }
 
 // Bytes held across every page, headers included: what the arena took from its backing allocator,

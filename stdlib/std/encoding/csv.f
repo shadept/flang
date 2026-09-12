@@ -516,6 +516,11 @@ pub fn deinit(self: &CsvDecoder) {
     self.header_buf.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &CsvDecoder, allocator: &Allocator) {
+    self.deinit()
+}
+
 #implement(CsvDecoder, Decoder)
 
 // =============================================================================
@@ -686,6 +691,11 @@ pub fn is_human_readable(self: &CsvEncoder) bool { return true }
 
 pub fn deinit(self: &CsvEncoder) {
     self.current_keys.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &CsvEncoder, allocator: &Allocator) {
+    self.deinit()
 }
 
 // =============================================================================
@@ -931,6 +941,11 @@ pub fn deinit(self: &CsvReader) {
     self.buffer.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &CsvReader, allocator: &Allocator) {
+    self.deinit()
+}
+
 // =============================================================================
 // CsvTable - materialized table owning its buffer
 // =============================================================================
@@ -956,6 +971,11 @@ pub fn csv_table(r: Reader, options: CsvOptions = csv_options(),
 
 pub fn deinit(self: &CsvTable) {
     self.buffer.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &CsvTable, allocator: &Allocator) {
+    self.deinit()
 }
 
 pub fn row_count(self: &CsvTable) usize {

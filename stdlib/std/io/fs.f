@@ -263,6 +263,11 @@ pub fn deinit(self: &WalkIter) {
     self.path_buf.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &WalkIter, allocator: &Allocator) {
+    self.deinit()
+}
+
 // =============================================================================
 // Glob - built on top of walk_dir
 // =============================================================================
@@ -340,6 +345,11 @@ pub fn err(self: &GlobIter) FsError? {
 pub fn deinit(self: &GlobIter) {
     self.walk.deinit()
     self.pattern.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &GlobIter, allocator: &Allocator) {
+    self.deinit()
 }
 
 // Returns the index of the first glob metacharacter, backed up to the last preceding '/'. Used to

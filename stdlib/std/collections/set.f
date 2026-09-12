@@ -117,18 +117,18 @@ pub fn contains(self: &UnmanagedSet(OwnedString), value: String) bool {
 }
 
 // Removes `value`, deiniting the stored element, and returns whether it was present.
-pub fn remove(self: &UnmanagedSet($T), value: T) bool {
-    return self.__inner.remove(move value).is_some()
+pub fn remove(self: &UnmanagedSet($T), value: T, allocator: &Allocator) bool {
+    return self.__inner.remove(move value, allocator).is_some()
 }
 
 // String `remove` for `UnmanagedSet(OwnedString)`: looks the owned element up by the view.
-pub fn remove(self: &UnmanagedSet(OwnedString), value: String) bool {
-    return self.__inner.remove(value).is_some()
+pub fn remove(self: &UnmanagedSet(OwnedString), value: String, allocator: &Allocator) bool {
+    return self.__inner.remove(value, allocator).is_some()
 }
 
 // Removes every element, deiniting each. The table is kept for reuse.
-pub fn clear(self: &UnmanagedSet($T)) {
-    self.__inner.clear()
+pub fn clear(self: &UnmanagedSet($T), allocator: &Allocator) {
+    self.__inner.clear(allocator)
 }
 
 // Calls `f` on every element, in unspecified order.
@@ -230,9 +230,29 @@ pub fn add(self: &Set(OwnedString), value: String) bool {
     return self.__storage.add(value, self.allocator)
 }
 
+// Removes `value`, deiniting the stored element, and returns whether it was present.
+pub fn remove(self: &Set($T), value: T) bool {
+    return self.__storage.remove(move value, self.allocator)
+}
+
+// String `remove` for `Set(OwnedString)`: looks the owned element up by the view.
+pub fn remove(self: &Set(OwnedString), value: String) bool {
+    return self.__storage.remove(value, self.allocator)
+}
+
+// Removes every element, deiniting each. The table is kept for reuse.
+pub fn clear(self: &Set($T)) {
+    self.__storage.clear(self.allocator)
+}
+
 // Deinits every element and frees the table. Idempotent: a second call is a no-op.
 pub fn deinit(self: &Set($T)) {
     self.__storage.deinit(self.allocator)
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Set($T), allocator: &Allocator) {
+    self.deinit()
 }
 
 // Returns a new set of the elements `pred` accepts, copied bitwise. The result is on `allocator`,
@@ -262,7 +282,7 @@ test "an UnmanagedSet takes its allocator at every allocating call" {
     assert_true(!s.add(2i32, &alloc), "a duplicate reports false")
     assert_eq(s.len(), 2 as usize, "and does not add")
     assert_true(s.contains(2i32), "contains")
-    assert_true(s.remove(1i32), "remove reports presence")
+    assert_true(s.remove(1i32, &alloc), "remove reports presence")
     let sum = 0i32
     for x in s {
         sum = sum + x

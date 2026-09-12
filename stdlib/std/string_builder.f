@@ -71,6 +71,11 @@ pub fn deinit(self: &StringBuilder) {
     self.cap = 0
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &StringBuilder, allocator: &Allocator) {
+    self.deinit()
+}
+
 // Ensure the builder has room for at least `additional` more bytes.
 fn reserve(self: &StringBuilder, additional: usize) {
     const required = self.len + additional

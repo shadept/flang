@@ -2,6 +2,7 @@
 // consumed by the CLI, the LSP and the formatter. `flang_core.render` draws the terminal form; the
 // LSP encodes the same values into the protocol's own shape.
 
+import std.allocator
 import std.string
 
 import flang_core.span
@@ -41,13 +42,29 @@ pub fn deinit(self: &Diagnostic) {
     self.hint.deinit()
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Diagnostic, allocator: &Allocator) {
+    self.deinit()
+}
+
 pub fn error(code: String, message: OwnedString, span: SourceSpan) Diagnostic {
     let empty_hint: OwnedString
     return .{
         severity = Severity.Error,
         code = code,
-        message = message,
-        hint = empty_hint,
+        message = move message,
+        hint = move empty_hint,
+        span = span,
+    }
+}
+
+// The same diagnostic at another span. Consumes `self`.
+pub fn with_span(self: Diagnostic, span: SourceSpan) Diagnostic {
+    return .{
+        severity = self.severity,
+        code = self.code,
+        message = move self.message,
+        hint = move self.hint,
         span = span,
     }
 }

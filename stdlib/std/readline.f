@@ -9,6 +9,7 @@
 //       process(line.value)
 //   }
 
+import std.allocator
 import std.mem
 import std.option
 import std.terminal
@@ -196,6 +197,11 @@ pub fn deinit(self: &Readline) {
     if self.is_raw {
         disable_raw(self)
     }
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Readline, allocator: &Allocator) {
+    self.deinit()
 }
 
 // =============================================================================

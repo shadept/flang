@@ -667,12 +667,12 @@ fn mode_on(m: SeparatorMode) bool {
 
 fn is_comma_list(kind: NodeKind) bool {
     return kind == NodeKind.CallExpr or kind == NodeKind.FunctionDecl
-        or kind == NodeKind.GeneratorInvocation or kind == NodeKind.NamedType
-        or kind == NodeKind.FunctionType or kind == NodeKind.LambdaExpr
-        or kind == NodeKind.EnumVariant or kind == NodeKind.EnumVariantPattern
-        or kind == NodeKind.TupleType or kind == NodeKind.TuplePattern
-        or kind == NodeKind.ArrayLiteralExpr or kind == NodeKind.StructConstructionExpr
-        or kind == NodeKind.AnonymousStructExpr
+        or kind == NodeKind.GeneratorInvocation or kind == NodeKind.ErrorDirective
+        or kind == NodeKind.NamedType or kind == NodeKind.FunctionType
+        or kind == NodeKind.LambdaExpr or kind == NodeKind.EnumVariant
+        or kind == NodeKind.EnumVariantPattern or kind == NodeKind.TupleType
+        or kind == NodeKind.TuplePattern or kind == NodeKind.ArrayLiteralExpr
+        or kind == NodeKind.StructConstructionExpr or kind == NodeKind.AnonymousStructExpr
 }
 
 fn list_closer(kind: NodeKind) TokenKind {

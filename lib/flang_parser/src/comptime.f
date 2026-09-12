@@ -88,7 +88,7 @@ pub type CtValue = enum {
     S(String)
     Ident(String)
     OptStr(String?)
-    List(List(CtValue))
+    List(&List(CtValue))
     TypeInfo(CtTypeInfo)
     // A run-time value named in a `#if` condition, carrying only its type: `type_of(v)` reads it.
     Value(CtTypeInfo)
@@ -147,6 +147,11 @@ pub type CtError = struct {
     code: String
     message: OwnedString
     span: SourceSpan
+}
+
+// The error as a diagnostic. Consumes `self`.
+pub fn into_diagnostic(self: CtError) Diagnostic {
+    return error(self.code, move self.message, self.span)
 }
 
 pub type CtOutcome = enum {
@@ -210,8 +215,21 @@ pub fn eval_condition_with(ctx: &ComptimeCtx, lookup: CtLookup, cond: &Expr) CtO
     defer env.bindings.deinit()
     return ct_eval_condition(&env, cond) match {
         Ok(b) => CtOutcome.Active(b)
-        Err(e) => CtOutcome.Invalid(e)
+        Err(e) => CtOutcome.Invalid(move e)
     }
+}
+
+// A `#error` argument over `lookup`, rendered as `ct_stringify` prints it. The text is the caller's
+// to deinit.
+pub fn eval_text_with(ctx: &ComptimeCtx, lookup: CtLookup, e: &Expr) Result(OwnedString, CtError) {
+    let backing = arena_allocator(or_global(null))
+    defer backing.deinit()
+    let a = backing.allocator()
+    let env = ct_env(ctx, &a, lookup)
+    const v = ct_eval(&env, e)?
+    let sb = string_builder(32, Some(&a))
+    ct_stringify(&v, &sb)
+    return Ok(from_view(sb.as_view()))
 }
 
 // A condition must be a bool (E2117); an optional must be unwrapped (E2118).
@@ -233,7 +251,7 @@ pub fn ct_eval_condition(env: &CtEnv, cond: &Expr) Result(bool, CtError) {
 }
 
 fn ct_err(code: String, message: OwnedString, span: SourceSpan) Result(CtValue, CtError) {
-    return Err(CtError { code = code, message = message, span = span })
+    return Err(CtError { code = code, message = move message, span = span })
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -304,8 +322,35 @@ pub fn ct_eval(env: &CtEnv, e: &Expr) Result(CtValue, CtError) {
             }
         }
         Binary(b) => ct_eval_binary(env, &b)
+        InterpolatedString(is) => ct_interp(env, &is)
         _ => ct_err("E2118", $"expression form not allowed at compile time", expr_span(e))
     }
+}
+
+// `$"..."` at compile time: each hole is evaluated and rendered as `ct_stringify` prints it. The
+// builder forms (`$(cap)"..."`, `$sb"..."`) have no meaning here.
+fn ct_interp(env: &CtEnv, is: &InterpolatedStringExpr) Result(CtValue, CtError) {
+    is.target match {
+        NewString(args) => {
+            if args.len > 0 {
+                return ct_err("E2118", $"an interpolated string takes no arguments at compile time",
+                    is.span)
+            }
+        }
+        IntoBuilder(_) => return ct_err("E2118",
+            $"an interpolated string writes to no builder at compile time", is.span)
+    }
+    let sb = string_builder(32, Some(env.alloc))
+    for part in is.parts {
+        part match {
+            Text(t) => sb.append(t)
+            Hole(h) => {
+                const v = ct_eval(env, h.expr)?
+                ct_stringify(&v, &sb)
+            }
+        }
+    }
+    return Ok(CtValue.S(sb.as_view()))
 }
 
 fn ct_eval_binary(env: &CtEnv, b: &BinaryExpr) Result(CtValue, CtError) {
@@ -439,7 +484,7 @@ fn ct_index(env: &CtEnv, ix: &IndexExpr) Result(CtValue, CtError) {
 
 fn ct_slice(env: &CtEnv, recv: &CtValue, rg: &RangeExpr, span: SourceSpan) Result(CtValue,
     CtError) {
-    const items: List(CtValue) = recv.* match {
+    const items: &List(CtValue) = recv.* match {
         List(l) => l
         _ => return ct_err("E2118", $"cannot slice {describe(recv)}", span)
     }
@@ -463,7 +508,7 @@ fn ct_slice(env: &CtEnv, recv: &CtValue, rg: &RangeExpr, span: SourceSpan) Resul
     }
     let out: List(CtValue) = list((end - start) as usize, Some(env.alloc))
     for i in (start as usize)..(end as usize) { out.push(items[i]) }
-    return Ok(CtValue.List(out))
+    return Ok(CtValue.List(box(env.alloc, move out)))
 }
 
 fn ct_expect_int(env: &CtEnv, e: &Expr) Result(i64, CtError) {
@@ -671,16 +716,16 @@ fn ct_type_member(env: &CtEnv, t: &CtTypeInfo, member: String, span: SourceSpan)
     }
     if member == "type_params" or member == "type_args" {
         let empty: List(CtValue) = list(0, Some(env.alloc))
-        return Ok(CtValue.List(empty))
+        return Ok(CtValue.List(box(env.alloc, move empty)))
     }
     if member == "fields" {
-        return Ok(CtValue.List(type_fields(env, t)))
+        return Ok(CtValue.List(box(env.alloc, type_fields(env, t))))
     }
     if member == "variants" {
-        return Ok(CtValue.List(type_variants(env, t)))
+        return Ok(CtValue.List(box(env.alloc, type_variants(env, t))))
     }
     if member == "params" {
-        return Ok(CtValue.List(type_params(env, t)))
+        return Ok(CtValue.List(box(env.alloc, type_params(env, t))))
     }
     if member == "return_type" {
         const fn_te = type_function_syntax(t)
@@ -772,17 +817,16 @@ fn type_syntax(t: &CtTypeInfo) &TypeExpr? {
     }
 }
 
-fn type_function_syntax(t: &CtTypeInfo) FunctionType? {
-    let found: FunctionType? = null
+fn type_function_syntax(t: &CtTypeInfo) &FunctionType? {
     const te = type_syntax(t)
     te match {
         Some(x) => x.* match {
-            Function(f) => { found = Some(f) }
+            Function(f) => return Some(&f)
             _ => {}
         }
         None => {}
     }
-    return found
+    return null
 }
 
 fn type_fields(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
@@ -799,7 +843,7 @@ fn type_fields(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
         }
         None => {}
     }
-    return out
+    return move out
 }
 
 fn type_variants(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
@@ -816,7 +860,7 @@ fn type_variants(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
         }
         None => {}
     }
-    return out
+    return move out
 }
 
 fn type_params(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
@@ -840,7 +884,7 @@ fn type_params(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
         }
         None => {}
     }
-    return out
+    return move out
 }
 
 pub fn is_primitive_name(name: String) bool {
@@ -1118,7 +1162,7 @@ pub fn flatten_module_decls(m: &Module, ctx: &ComptimeCtx, diags: &List(Diagnost
     allocator: &Allocator? = null) {
     let flattened: List(Decl) = list(m.decls.len, allocator)
     splice_decls(&m.decls, ctx, diags, &flattened)
-    m.set_decls(flattened)
+    m.set_decls(move flattened)
 }
 
 fn splice_decls(decls: &List(Decl), ctx: &ComptimeCtx, diags: &List(Diagnostic), out: &List(Decl)) {
@@ -1130,19 +1174,47 @@ fn splice_decls(decls: &List(Decl), ctx: &ComptimeCtx, diags: &List(Diagnostic),
                         const branch: &List(Decl) = if active { &ifd.then_decls } else { &ifd.else_decls }
                         splice_decls(branch, ctx, diags, out)
                     }
-                    Invalid(err) => {
-                        let empty_hint: OwnedString
-                        diags.push(Diagnostic {
-                            severity = Severity.Error,
-                            code = err.code,
-                            message = err.message,
-                            hint = empty_hint,
-                            span = err.span,
-                        })
-                    }
+                    Invalid(err) => diags.push(into_diagnostic(move err))
                 }
             }
-            _ => { out.push(decls[i]) }
+            ErrorDirective(ed) => raise_error_directive(ctx, &ed, diags)
+            _ => { out.push(move decls[i]) }
         }
+    }
+}
+
+// A decl-level `#error` reached at top level or in an active branch: reported at the directive over
+// the closed context, and dropped from the module.
+fn raise_error_directive(ctx: &ComptimeCtx, ed: &ErrorDirective, diags: &List(Diagnostic)) {
+    eval_error_text(ctx, closed_lookup(), ed) match {
+        Ok(text) => diags.push(error_diagnostic(move text, ed.span))
+        Err(err) => diags.push(into_diagnostic(move err))
+    }
+}
+
+// The two arguments of an `#error`, rendered. An absent hint is empty.
+pub type ErrorText = struct {
+    message: OwnedString
+    hint: OwnedString
+}
+
+pub fn eval_error_text(ctx: &ComptimeCtx, lookup: CtLookup, ed: &ErrorDirective) Result(ErrorText,
+    CtError) {
+    const message = eval_text_with(ctx, lookup, ed.message)?
+    const hint: OwnedString = ed.hint match {
+        Some(h) => eval_text_with(ctx, lookup, h)?
+        None => from_view("")
+    }
+    return Ok(ErrorText { message = move message, hint = move hint })
+}
+
+// The E2999 diagnostic for `text` at `span`. Consumes `text`.
+pub fn error_diagnostic(text: ErrorText, span: SourceSpan) Diagnostic {
+    return Diagnostic {
+        severity = Severity.Error,
+        code = "E2999",
+        message = move text.message,
+        hint = move text.hint,
+        span = span,
     }
 }

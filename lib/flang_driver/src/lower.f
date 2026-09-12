@@ -1941,6 +1941,8 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
         // `#if cond { … } else { … }` - the checker validated the
         // condition; re-evaluate against the same host context and splice the active branch's
         // statements in place.
+        // Reported by the checker when reached; never lowered.
+        ErrorDirective(_) => {}
         IfDirective(ifd) => {
             const lookup: CtLookup = .{ ctx = ctx as &u8, resolve = no_lookup, name = lower_name }
             eval_condition_with(&ctx.comptime, lookup, ifd.condition) match {

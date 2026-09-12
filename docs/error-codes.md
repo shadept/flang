@@ -3919,6 +3919,72 @@ keeps its receiver form.
 
 ---
 
+### E2130: Unknown Directive
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+A directive the compiler does not recognise, in statement or declaration position. Known
+directives: `#if`, `#error`, `#foreign`, `#inline`, `#intrinsic`, `#simd`, `#deprecated`, `#allow`,
+`#define`, and the generator invocations. Before this code existed such a directive was silently
+dropped, so a misspelt `#error` or a directive from another version compiled to nothing.
+
+#### Example
+
+```flang
+#noexist
+fn foo() i32 { return 42 }      // error[E2130]: unknown directive `#noexist`
+
+fn bar() {
+    #bogus(1, 2)                // error[E2130]: unknown directive `#bogus`
+}
+```
+
+#### Solution
+
+Check the directive name for typos.
+
+---
+
+### E2999: Compile-Time Error Directive
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+An `#error(message[, hint])` directive was reached (spec §7.7). Both arguments are compile-time
+expressions rendered as text, so `$"..."` may name the type parameters of the specialization being
+checked. Inside an instantiation the error lands on the outermost open call site, the line the
+author is editing, with the hint on its caret line; `info` notes walk inward through nested
+instantiations to the directive, each naming that instantiation's type parameters. Outside an
+instantiation, and at declaration level, the error lands on the directive itself. An `#error` in
+an inactive `#if` branch is never evaluated. The statement diverges: nothing after it is checked
+for a missing return or lowered.
+
+#### Example
+
+```flang
+fn copy_to(src: $T[], dest: T[]) usize {
+    #if !type_info(T).copyable {
+        #error($"copy_to needs copyable elements, {T.name} owns something",
+            $"clone each element with clone(&{T.name}, allocator)")
+    }
+    ...
+}
+
+copy_to(handles, spare)         // error[E2999]: copy_to needs copyable elements, Handle owns something
+                                // info: raised by `#error` here, with T = Handle
+```
+
+#### Solution
+
+Do what the message asks: the directive was written for exactly this instantiation.
+
+---
+
 ### W1001: Unused Variable
 
 **Category**: Code Quality
@@ -4092,6 +4158,8 @@ Replace the call with the suggested alternative function.
 ---
 
 ### W2003: Unknown Directive
+
+Retired. Never emitted; an unknown directive is E2130.
 
 **Category**: Semantic Analysis
 **Severity**: Warning

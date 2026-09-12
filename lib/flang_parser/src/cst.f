@@ -53,6 +53,7 @@ pub type NodeKind = enum {
     GeneratorInvocation
     // `#foreign`, `#inline`, `#deprecated`, etc. on a declaration.
     Directive
+    ErrorDirective
 
     // ─────────────────────────────────────────────────────────────────────
     // Statements
@@ -259,7 +260,7 @@ pub fn cst(tokens: List(Token), source: String, allocator: &Allocator? = null) C
     return .{
         source = source,
         nodes = list(64, allocator),
-        tokens = tokens,
+        tokens = move tokens,
         children = list(256, allocator),
         root = 0,
         allocator = allocator,
@@ -276,6 +277,11 @@ pub fn deinit(self: &Cst) {
     self.nodes.deinit()
     self.children.deinit()
     self.tokens.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Cst, allocator: &Allocator) {
+    self.deinit()
 }
 
 // ─────────────────────────────────────────────────────────────────────

@@ -122,6 +122,11 @@ pub fn deinit(self: &Command) {
     self.__has_cwd = false
 }
 
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Command, allocator: &Allocator) {
+    self.deinit()
+}
+
 pub fn arg(self: &Command, a: String) &Command {
     self.__args.push(from_view(a, self.__allocator))
     return self
@@ -305,6 +310,11 @@ pub fn deinit(self: &Child) {
         const _s = __flang_proc_wait(self.__handle, &exit, &err)
     }
     __flang_proc_release(self.__handle)
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Child, allocator: &Allocator) {
+    self.deinit()
 }
 
 // Returns the child's stdout stream if it was configured with Stdio.Pipe, otherwise null. Reading

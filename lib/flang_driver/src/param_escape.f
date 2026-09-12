@@ -114,6 +114,7 @@ fn stmt_escapes(s: &Stmt, al: &List(String), r: &TypeCheckResult, ov: &Inference
         // Bare statement lists, not blocks: `#if` introduces no scope.
         IfDirective(d) => stmts_escape(&d.then_stmts, al, r, ov) or stmts_escape(&d.else_stmts, al,
             r, ov)
+        ErrorDirective(_) => false
     }
 }
 
@@ -404,6 +405,7 @@ fn mentions_stmt(s: &Stmt, al: &List(String)) bool {
         While(w) => mentions(w.condition, al) or mentions_block(w.body, al)
         Loop(l) => mentions_block(l.body, al)
         IfDirective(d) => mentions_stmts(&d.then_stmts, al) or mentions_stmts(&d.else_stmts, al)
+        ErrorDirective(_) => false
     }
 }
 

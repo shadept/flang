@@ -633,7 +633,9 @@ the stdlib frame as a note.
 7. **Per-specialization element `deinit` resolution**; retire the blanket.
    Done 2026-09-12: `core/deinit.f` deleted, element loops gated on
    `#if !type_info(T).copyable`. An ownership error inside a generic body now
-   reports at the body line, not the outermost instantiation site.
+   reports at the body line, not the outermost instantiation site. `#error`
+   (spec §7.7) took the opposite rule, the outermost call site with notes
+   walking inward; whether E2123/E2124/E2126 follow it is open.
 8. **Remove what the check rejects for non-copyable `T`:** `get`, `first`,
    `last`, `peek`, `peek_front`, `peek_back`, `get_or`, `get_or_else` — the
    element stays in the container, so the return is a second owner.

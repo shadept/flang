@@ -64,7 +64,6 @@ type TemplateParser = struct {
     body: String
     base: usize
     file_id: i32
-    tokens: List(Token)
     parser: Parser
     alloc: &Allocator
     diags: &List(Diagnostic)
@@ -77,37 +76,39 @@ type TemplateParser = struct {
 pub fn parse_template_body(body: String, base: usize, file_id: i32, alloc: &Allocator,
     diags: &List(Diagnostic)) List(TemplateNode) {
     let lx = lexer(body, Some(alloc))
-    const tokens = lx.tokenize()
-    let p = parser(tokens, body, Some(alloc))
+    let p = parser(lx.tokenize(), body, Some(alloc))
     p.set_file_id(file_id)
     let tp: TemplateParser = .{
         body = body,
         base = base,
         file_id = file_id,
-        tokens = tokens,
-        parser = p,
+        parser = move p,
         alloc = alloc,
         diags = diags,
         cursor = 0,
     }
     let out: List(TemplateNode) = list(0, Some(alloc))
     const stop = tp.parse_nodes(0, &out)
-    if stop < tp.tokens.len and tp.tokens[stop].kind == TokenKind.CloseBrace {
+    if stop < tp.tokens().len and tp.tokens()[stop].kind == TokenKind.CloseBrace {
         tp.error_at(stop, "E1002", $"unbalanced closing brace in template body")
     }
     tp.flush_verbatim(body.len, &out)
     tp.shift_diags(&tp.parser.diagnostics)
-    return out
+    return move out
+}
+
+fn tokens(self: &TemplateParser) &List(Token) {
+    return &self.parser.tree.tokens
 }
 
 fn error_at(self: &TemplateParser, index: usize, code: String, message: OwnedString) {
     let start: usize = self.body.len
     let length: usize = 0
-    if index < self.tokens.len {
-        start = self.tokens[index].offset
-        length = self.tokens[index].text.len
+    if index < self.tokens().len {
+        start = self.tokens()[index].offset
+        length = self.tokens()[index].text.len
     }
-    self.diags.push(error(code, message, .{
+    self.diags.push(error(code, move message, .{
         file_id = self.file_id,
         start = self.base + start,
         length = length,
@@ -123,7 +124,7 @@ fn shift_diags(self: &TemplateParser, from: &List(Diagnostic)) {
             start = self.base + d.span.start,
             length = d.span.length,
         }
-        self.diags.push(error(d.code, d.message, sp))
+        self.diags.push(with_span(move d.*, sp))
     }
     taken.1.free(taken.0)
 }
@@ -137,14 +138,14 @@ fn flush_verbatim(self: &TemplateParser, end: usize, out: &List(TemplateNode)) {
 }
 
 fn kind_at(self: &TemplateParser, index: usize) TokenKind {
-    if index < self.tokens.len {
-        return self.tokens[index].kind
+    if index < self.tokens().len {
+        return self.tokens()[index].kind
     }
     return TokenKind.Eof
 }
 
 fn is_elif(self: &TemplateParser, index: usize) bool {
-    return self.kind_at(index) == TokenKind.Identifier and self.tokens[index].text == "elif"
+    return self.kind_at(index) == TokenKind.Identifier and self.tokens()[index].text == "elif"
 }
 
 // Walks tokens from `start`, appending nodes; returns the index of the `}` that closes the
@@ -172,9 +173,9 @@ fn parse_nodes(self: &TemplateParser, start: usize, out: &List(TemplateNode)) us
                 continue
             }
         }
-        if k == TokenKind.StringLiteral and self.tokens[i].text.contains("#(") {
-            self.flush_verbatim(self.tokens[i].offset, out)
-            self.parse_string_holes(self.tokens[i], out)
+        if k == TokenKind.StringLiteral and self.tokens()[i].text.contains("#(") {
+            self.flush_verbatim(self.tokens()[i].offset, out)
+            self.parse_string_holes(self.tokens()[i], out)
             i = i + 1
             continue
         }
@@ -194,7 +195,7 @@ fn parse_nodes(self: &TemplateParser, start: usize, out: &List(TemplateNode)) us
 
 // `#(expr)` at token `i`. Returns the index after the closing `)`.
 fn parse_interpolation(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
-    self.flush_verbatim(self.tokens[i].offset, out)
+    self.flush_verbatim(self.tokens()[i].offset, out)
     self.parser.seek(i + 2)
     const cst = self.parser.tree.node_at(self.parser.parse_expression())
     const e = project_expression(cst, self.file_id, self.alloc)
@@ -204,19 +205,19 @@ fn parse_interpolation(self: &TemplateParser, i: usize, out: &List(TemplateNode)
         self.cursor = cst.end
         return j
     }
-    self.cursor = self.tokens[j].offset + 1
-    out.push(TemplateNode.Interp(TemplateInterp { expr = e, in_string = false }))
+    self.cursor = self.tokens()[j].offset + 1
+    out.push(TemplateNode.Interp(TemplateInterp { expr = move e, in_string = false }))
     return j + 1
 }
 
 // `#for name in expr { body }` at token `i`. Returns the index after `}`.
 fn parse_for(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
-    self.flush_verbatim(self.tokens[i].offset, out)
+    self.flush_verbatim(self.tokens()[i].offset, out)
     if self.kind_at(i + 2) != TokenKind.Identifier {
         self.error_at(i + 2, "E1002", $"expected a loop variable after `#for`")
         return i + 2
     }
-    const var_name = self.tokens[i + 2].text
+    const var_name = self.tokens()[i + 2].text
     if self.kind_at(i + 3) != TokenKind.In {
         self.error_at(i + 3, "E1002", $"expected `in` in `#for`")
         return i + 3
@@ -226,14 +227,14 @@ fn parse_for(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
     const iterable = project_expression(cst, self.file_id, self.alloc)
     let body: List(TemplateNode) = list(0, Some(self.alloc))
     const after = self.parse_braced_body(self.parser.token_index(), &body)
-    out.push(TemplateNode.Loop(TemplateFor { var_name = var_name, iterable = iterable,
-        body = body }))
+    out.push(TemplateNode.Loop(TemplateFor { var_name = var_name, iterable = move iterable,
+        body = move body }))
     return after
 }
 
 // `#if expr { body } [#elif expr { body }]* [#else { body }]` at token `i`.
 fn parse_if(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
-    self.flush_verbatim(self.tokens[i].offset, out)
+    self.flush_verbatim(self.tokens()[i].offset, out)
     self.parser.seek(i + 2)
     const cst = self.parser.tree.node_at(self.parser.parse_condition_expression())
     const cond = project_expression(cst, self.file_id, self.alloc)
@@ -242,13 +243,14 @@ fn parse_if(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
     let else_body: List(TemplateNode) = list(0, Some(self.alloc))
     if self.kind_at(after) == TokenKind.Hash and self.is_elif(after + 1) {
         // Parse the `#elif` exactly like `#if`; it nests as the sole else node.
-        self.cursor = self.tokens[after].offset
+        self.cursor = self.tokens()[after].offset
         after = self.parse_if(after, &else_body)
     } else if self.kind_at(after) == TokenKind.Hash and self.kind_at(after + 1) == TokenKind.Else {
-        self.cursor = self.tokens[after].offset
+        self.cursor = self.tokens()[after].offset
         after = self.parse_braced_body(after + 2, &else_body)
     }
-    out.push(TemplateNode.Cond(TemplateIf { cond = cond, body = body, else_body = else_body }))
+    out.push(TemplateNode.Cond(TemplateIf { cond = move cond, body = move body,
+        else_body = move else_body }))
     return after
 }
 
@@ -258,14 +260,14 @@ fn parse_braced_body(self: &TemplateParser, open: usize, body: &List(TemplateNod
         self.error_at(open, "E1002", $"expected an opening brace for the template block")
         return open
     }
-    self.cursor = self.tokens[open].offset + 1
+    self.cursor = self.tokens()[open].offset + 1
     const close = self.parse_nodes(open + 1, body)
     if self.kind_at(close) != TokenKind.CloseBrace {
         self.error_at(close, "E1002", $"expected a closing brace for the template block")
         return close
     }
-    self.flush_verbatim(self.tokens[close].offset, body)
-    self.cursor = self.tokens[close].offset + 1
+    self.flush_verbatim(self.tokens()[close].offset, body)
+    self.cursor = self.tokens()[close].offset + 1
     return close + 1
 }
 
@@ -285,12 +287,12 @@ fn parse_string_holes(self: &TemplateParser, tok: Token, out: &List(TemplateNode
             out.push(TemplateNode.Verbatim(text[local..hole]))
         }
         let lx = lexer(self.body, Some(self.alloc), tok.offset + hole + 2)
-        const toks = lx.tokenize()
-        let p = parser(toks, self.body, Some(self.alloc))
+        let p = parser(lx.tokenize(), self.body, Some(self.alloc))
         p.set_file_id(self.file_id)
         const cst = p.tree.node_at(p.parse_expression())
         const e = project_expression(cst, self.file_id, self.alloc)
         let close_end = cst.end
+        const toks = &p.tree.tokens
         if p.token_index() < toks.len and toks[p.token_index()].kind == TokenKind.CloseParenthesis {
             close_end = (toks[p.token_index()].offset + 1) as u32
         } else {
@@ -301,7 +303,7 @@ fn parse_string_holes(self: &TemplateParser, tok: Token, out: &List(TemplateNode
             }))
         }
         self.shift_diags(&p.diagnostics)
-        out.push(TemplateNode.Interp(TemplateInterp { expr = e, in_string = true }))
+        out.push(TemplateNode.Interp(TemplateInterp { expr = move e, in_string = true }))
         local = close_end - tok.offset
     }
     if local < text.len {
@@ -339,7 +341,7 @@ fn expand_node(env: &CtEnv, node: &TemplateNode, sb: &StringBuilder) Result((), 
         }
         Loop(lp) => {
             const iterable = ct_eval(env, &lp.iterable)?
-            const items: List(CtValue) = iterable match {
+            const items: &List(CtValue) = iterable match {
                 List(l) => l
                 _ => return Err(CtError {
                     code = "E2118",
@@ -422,7 +424,7 @@ test "template: #for over a bound list with #(x) and \"#(x)\"" {
     names.push(CtValue.S("x"))
     names.push(CtValue.S("y"))
     names.push(CtValue.S("z"))
-    env.bindings["names"] = CtValue.List(names)
+    env.bindings["names"] = CtValue.List(box(&a, move names))
     env.bindings["fType"] = CtValue.Ident("f32")
     const out = expand_for_test("type P = struct {\n#for f in names {\n  #(f): #(fType), \"#(f)\"\n}\n}",
         &env, &a)

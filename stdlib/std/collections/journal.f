@@ -89,7 +89,7 @@ pub fn record(self: &Journal($T), entry: T) {
 pub fn commit(self: &Journal($T)) {
     const _mark = self.marks.pop().expect("journal: commit with no open checkpoint")
     if self.marks.len == 0 {
-        self.entries.truncate(0)
+        self.entries.truncate(0, self.allocator)
     }
 }
 
@@ -104,19 +104,26 @@ pub fn rollback(self: &Journal($T), undo: $F) {
     for entry in self.entries[mark..].iter_rev() {
         undo(entry)
     }
-    self.entries.truncate(mark)
+    self.entries.truncate(mark, self.allocator)
 }
 
 // Drops every checkpoint and entry without undoing anything. The storage is kept for reuse.
 pub fn clear(self: &Journal($T)) {
-    self.entries.clear()
-    self.marks.clear()
+    self.entries.clear(self.allocator)
+    self.marks.clear(self.allocator)
 }
 
-// Deinits every entry still logged and frees both buffers. Idempotent: a second call is a no-op.
+// Deinits every entry still logged, newest first, and frees both buffers. Idempotent: a second call
+// is a no-op.
 pub fn deinit(self: &Journal($T)) {
+    self.entries.truncate(0, self.allocator)
     self.entries.deinit(self.allocator)
     self.marks.deinit(self.allocator)
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Journal($T), allocator: &Allocator) {
+    self.deinit()
 }
 
 // Returns the bytes both buffers occupy: the whole capacity, which is the journal's high-water mark

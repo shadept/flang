@@ -3684,3 +3684,33 @@ collection has resolved the argument types, or a second expansion pass.
 Until then a generator that needs the copyable bit emits
 `#if type_info(T).copyable` into its expansion and lets the specialization
 decide.
+
+---
+
+### Containers Skip `deinit` on Copyable Elements That Define One
+
+**Status:** Open
+**Affected:** every element cascade gated on `#if !type_info(T).copyable` - `stdlib/std/collections/list.f` (`clear`, `truncate`, `deinit`), `dict.f`, `deque.f`, `multimap.f`, `std/rc.f`, `std/option.f`
+
+A container releases its elements only when `T` is not copyable. The gate stands in for "T has a
+`deinit`", and that is the wrong question: copyability is about whether a bitwise copy makes a
+second owner, not about whether the type has cleanup to run. A copyable type may define `deinit`
+all the same - a handle whose release is a syscall, a struct that logs, a pool index that has to
+be returned - and the stdlib does not question why it exists; it calls it. Today it does not: a
+`List(Handle)` where `Handle` is copyable with a `deinit` frees the buffer and never calls it, and
+the same holds for `Option(T)`, `Rc(T)`, dict values, and the rest. RFC-028 chose the copyable bit
+as the gate because it was the bit the compiler had; the two notions were never the same.
+
+The fix is a compile-time question the stdlib can ask about a function, not a type. Two shapes:
+
+1. A bit on `TypeInfo`, `has_deinit`, set when a `deinit(&T, &Allocator)` is in scope. Cheap,
+   but one more bit per protocol function, and it answers only for the exact signature the
+   compiler chose to record.
+2. Preferred: a compile-time query for a function by name and parameter types, overloads
+   included - `#if has_fn(deinit, &T, &Allocator)` or a `type_info(T)` member that resolves it -
+   so the cascade reads `#if has_deinit(T)` and the copyable bit goes back to meaning copyable.
+   The checker already resolves such a call when it type-checks the body; the query exposes that
+   resolution to `#if` without instantiating anything.
+
+Until either lands, a copyable type with a `deinit` must be released by hand wherever it is
+stored, and `#if type_info(T).copyable` in the stdlib is to be read as "has no deinit".

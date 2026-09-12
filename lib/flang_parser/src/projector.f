@@ -17,6 +17,7 @@ import std.allocator
 import std.collections.list
 import std.option
 import std.string
+import std.string_builder
 
 import flang_core.diagnostic
 import flang_core.span
@@ -66,7 +67,7 @@ pub fn project_module(cst: CstNode, file_id: i32, allocator: &Allocator? = null,
 
     return Module {
         span = p.span_from(cst),
-        decls = decls,
+        decls = move decls,
         arena = arena,
     }
 }
@@ -79,7 +80,7 @@ fn is_module_child(kind: NodeKind) bool {
         or kind == NodeKind.TypeAliasDecl or kind == NodeKind.VariableDecl
         or kind == NodeKind.TestDecl or kind == NodeKind.GeneratorDef
         or kind == NodeKind.GeneratorInvocation or kind == NodeKind.IfDirectiveStmt
-        or kind == NodeKind.Error
+        or kind == NodeKind.ErrorDirective or kind == NodeKind.Error
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -113,6 +114,21 @@ fn nth_node(cst: CstNode, n: usize) CstNode? {
                     return Some(child)
                 }
                 seen = seen + 1
+            }
+            TokenChild(_) => {}
+        }
+    }
+    return null
+}
+
+// First sub-node child in expression position, or null.
+fn first_expr_node(cst: CstNode) CstNode? {
+    for i in 0..cst.child_count() {
+        cst.child(i) match {
+            NodeChild(child) => {
+                if is_expr_kind(child.kind) {
+                    return Some(child)
+                }
             }
             TokenChild(_) => {}
         }
@@ -181,6 +197,7 @@ fn project_decl(self: &Projector, cst: CstNode) Decl {
         GeneratorDef => Decl.GenDef(self.project_generator_def(cst))
         GeneratorInvocation => Decl.GenInvoke(self.project_generator_invocation(cst))
         IfDirectiveStmt => Decl.IfDirective(self.project_if_directive_decl(cst))
+        ErrorDirective => Decl.ErrorDirective(self.project_error_directive(cst))
         else => Decl.Error(DeclError { span = self.span_from(cst) })
     }
 }
@@ -189,15 +206,64 @@ fn project_decl(self: &Projector, cst: CstNode) Decl {
 // are stored as `&T`, so an enum variant costs a pointer rather than the largest node it can hold.
 // The arena owns every boxed child and `Module.deinit` releases the lot in one free.
 fn boxed(self: &Projector, value: $T) &T {
-    return box(self.alloc, value)
+    return box(self.alloc, move value)
 }
 
 // `boxed` for an optional child: absent stays absent, present is moved into the arena. `&T?` is one
 // pointer, null being the niche.
 fn boxed_opt(self: &Projector, value: $T?) &T? {
     return value match {
-        Some(v) => Some(box(self.alloc, v))
+        Some(v) => Some(box(self.alloc, move v))
         None => null
+    }
+}
+
+// A child in an optional slot: absent stays absent. The child is kept as a `CstNode` while the
+// parent's children are walked and projected once the slot is settled.
+fn opt_expr(self: &Projector, node: CstNode?) Expr? {
+    return node match {
+        Some(n) => Some(self.project_expr(n))
+        None => null
+    }
+}
+
+fn opt_type(self: &Projector, node: CstNode?) TypeExpr? {
+    return node match {
+        Some(n) => Some(self.project_type_expr(n))
+        None => null
+    }
+}
+
+fn opt_block(self: &Projector, node: CstNode?) BlockExpr? {
+    return node match {
+        Some(n) => Some(self.project_block(n))
+        None => null
+    }
+}
+
+// A child in a required slot: a missing one projects to the `Error` node spanning `parent`.
+fn expr_or_error(self: &Projector, node: CstNode?, parent: CstNode) Expr {
+    return node match {
+        Some(n) => self.project_expr(n)
+        None => Expr.Error(ErrorExpr { span = self.span_from(parent) })
+    }
+}
+
+fn type_or_error(self: &Projector, node: CstNode?, parent: CstNode) TypeExpr {
+    return node match {
+        Some(n) => self.project_type_expr(n)
+        None => TypeExpr.Error(ErrorType { span = self.span_from(parent) })
+    }
+}
+
+fn block_or_empty(self: &Projector, node: CstNode?, parent: CstNode) BlockExpr {
+    return node match {
+        Some(n) => self.project_block(n)
+        None => BlockExpr {
+            span = self.span_from(parent),
+            stmts = list(0, Some(self.alloc)),
+            trailing = null,
+        }
     }
 }
 
@@ -224,7 +290,7 @@ fn project_import(self: &Projector, cst: CstNode) ImportDecl {
     return .{
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
-        path = path,
+        path = move path,
     }
 }
 
@@ -240,7 +306,7 @@ fn project_directives(self: &Projector, cst: CstNode) List(DeclAttribute) {
             TokenChild(_) => {}
         }
     }
-    return directives
+    return move directives
 }
 
 // `#foreign`, `#inline`, `#intrinsic`, `#simd`, `#deprecated("…")`, `#allow(CODE, …)`. Other
@@ -288,26 +354,45 @@ fn project_directive(self: &Projector, cst: CstNode) DeclAttribute {
         return DeclAttribute.Deprecated(arg_text)
     }
     if name == "allow" {
-        return DeclAttribute.Allow(arg_idents)
+        return DeclAttribute.Allow(move arg_idents)
     }
-    // Unknown directive - fold to Inline so the AST stays in a known shape. The parser already
-    // filed a warning for unknown directives.
+    // Unknown directive - reported, and folded to Inline so the AST stays in a known shape.
+    self.unknown_directive(cst)
     return DeclAttribute.Inline
+}
+
+// A directive the compiler does not know (E2130). Reported here, while the name is still a token:
+// the AST has no node for it.
+fn unknown_directive(self: &Projector, cst: CstNode) {
+    const name = first_ident_text(cst)
+    const span: SourceSpan = .{ file_id = self.file_id, start = cst.start, length = 1 + name.len }
+    self.diags match {
+        Some(d) => d.push(error("E2130", $"unknown directive `#{name}`", span))
+        None => {}
+    }
+}
+
+fn project_error_directive(self: &Projector, cst: CstNode) ErrorDirective {
+    return .{
+        span = .{ file_id = self.file_id, start = cst.start, length = 6 },
+        message = self.boxed(self.expr_or_error(nth_node(cst, 0), cst)),
+        hint = self.boxed_opt(self.opt_expr(nth_node(cst, 1))),
+    }
 }
 
 fn project_function(self: &Projector, cst: CstNode) FunctionDecl {
     let params: List(FunctionParam) = list(cst.node_child_count(), Some(self.alloc))
-    let return_type: TypeExpr? = null
-    let body: BlockExpr? = null
+    let return_node: CstNode? = null
+    let body_node: CstNode? = null
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
                 if child.kind == NodeKind.FunctionParam {
                     params.push(self.project_function_param(child))
                 } else if child.kind == NodeKind.BlockExpr {
-                    body = self.project_block_node(child)
-                } else if is_type_kind(child.kind) and return_type.is_none() {
-                    return_type = Some(self.project_type_expr(child))
+                    body_node = Some(child)
+                } else if is_type_kind(child.kind) and return_node.is_none() {
+                    return_node = Some(child)
                 }
             }
             TokenChild(_) => {}
@@ -318,9 +403,9 @@ fn project_function(self: &Projector, cst: CstNode) FunctionDecl {
         is_pub = has_token(cst, TokenKind.Pub),
         directives = self.project_directives(cst),
         name = self.function_name(cst),
-        params = params,
-        return_type = self.boxed_opt(return_type),
-        body = self.boxed_opt(body),
+        params = move params,
+        return_type = self.boxed_opt(self.opt_type(return_node)),
+        body = self.boxed_opt(self.opt_block(body_node)),
     }
 }
 
@@ -348,13 +433,12 @@ fn function_name(self: &Projector, cst: CstNode) String {
 
 fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
     let name: String = ""
-    let type_expr: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
-    let default_value: Expr? = null
+    let type_node: CstNode? = null
+    let default_node: CstNode? = null
     let is_variadic = has_token(cst, TokenKind.DotDot)
     let is_move = has_token(cst, TokenKind.Move)
     let saw_colon = false
     let saw_equals = false
-    let type_seen = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -369,11 +453,10 @@ fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
                 }
             }
             NodeChild(child) => {
-                if saw_equals and default_value.is_none() {
-                    default_value = Some(self.project_expr(child))
-                } else if !type_seen and is_type_kind(child.kind) {
-                    type_expr = self.project_type_expr(child)
-                    type_seen = true
+                if saw_equals and default_node.is_none() {
+                    default_node = Some(child)
+                } else if type_node.is_none() and is_type_kind(child.kind) {
+                    type_node = Some(child)
                 }
             }
         }
@@ -381,8 +464,8 @@ fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
     return .{
         span = self.span_from(cst),
         name = name,
-        type_expr = self.boxed(type_expr),
-        default_value = self.boxed_opt(default_value),
+        type_expr = self.boxed(self.type_or_error(type_node, cst)),
+        default_value = self.boxed_opt(self.opt_expr(default_node)),
         is_variadic = is_variadic,
         is_move = is_move,
     }
@@ -404,15 +487,15 @@ fn project_struct_decl(self: &Projector, cst: CstNode) TypeDecl {
     }
     const body: TypeExpr = TypeExpr.AnonStruct(AnonStructType {
         span = self.span_from(cst),
-        generics = generics,
-        fields = fields,
+        generics = move generics,
+        fields = move fields,
     })
     return TypeDecl {
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
         directives = self.project_directives(cst),
         name = self.type_decl_name(cst),
-        body = self.boxed(body),
+        body = self.boxed(move body),
     }
 }
 
@@ -432,20 +515,20 @@ fn project_enum_decl(self: &Projector, cst: CstNode) TypeDecl {
     }
     const body: TypeExpr = TypeExpr.AnonEnum(AnonEnumType {
         span = self.span_from(cst),
-        generics = generics,
-        variants = variants,
+        generics = move generics,
+        variants = move variants,
     })
     return TypeDecl {
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
         directives = self.project_directives(cst),
         name = self.type_decl_name(cst),
-        body = self.boxed(body),
+        body = self.boxed(move body),
     }
 }
 
 fn project_type_alias(self: &Projector, cst: CstNode) TypeDecl {
-    let body: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
+    let body_node: CstNode? = null
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
@@ -453,7 +536,7 @@ fn project_type_alias(self: &Projector, cst: CstNode) TypeDecl {
                     continue
                 }
                 if is_type_kind(child.kind) {
-                    body = self.project_type_expr(child)
+                    body_node = Some(child)
                     break
                 }
             }
@@ -465,7 +548,7 @@ fn project_type_alias(self: &Projector, cst: CstNode) TypeDecl {
         is_pub = has_token(cst, TokenKind.Pub),
         directives = self.project_directives(cst),
         name = self.type_decl_name(cst),
-        body = self.boxed(body),
+        body = self.boxed(self.type_or_error(body_node, cst)),
     }
 }
 
@@ -549,9 +632,8 @@ fn leading_owned(cst: CstNode) bool {
 
 fn project_struct_field(self: &Projector, cst: CstNode) StructField {
     let name: String = ""
-    let type_expr: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
+    let type_node: CstNode? = null
     let saw_colon = false
-    let type_seen = false
     const owned = leading_owned(cst)
     let idents: usize = 0
     for i in 0..cst.child_count() {
@@ -570,9 +652,8 @@ fn project_struct_field(self: &Projector, cst: CstNode) StructField {
                 }
             }
             NodeChild(child) => {
-                if !type_seen and is_type_kind(child.kind) {
-                    type_expr = self.project_type_expr(child)
-                    type_seen = true
+                if type_node.is_none() and is_type_kind(child.kind) {
+                    type_node = Some(child)
                 }
             }
         }
@@ -580,7 +661,7 @@ fn project_struct_field(self: &Projector, cst: CstNode) StructField {
     return .{
         span = self.span_from(cst),
         name = name,
-        type_expr = self.boxed(type_expr),
+        type_expr = self.boxed(self.type_or_error(type_node, cst)),
         owned = owned,
     }
 }
@@ -588,7 +669,7 @@ fn project_struct_field(self: &Projector, cst: CstNode) StructField {
 fn project_enum_variant(self: &Projector, cst: CstNode) EnumVariant {
     let name: String = ""
     let payloads: List(TypeExpr) = list(cst.node_child_count(), Some(self.alloc))
-    let explicit_tag: Expr? = null
+    let tag_tok: Token? = null
     let in_payload = false
     let saw_equals = false
     // `= -1`: the minus arrives as its own token before the integer.
@@ -612,30 +693,12 @@ fn project_enum_variant(self: &Projector, cst: CstNode) EnumVariant {
                     saw_equals = true
                     continue
                 }
-                if saw_equals and explicit_tag.is_none() and tok.kind == TokenKind.Minus {
+                if saw_equals and tag_tok.is_none() and tok.kind == TokenKind.Minus {
                     tag_negated = true
                     continue
                 }
-                // Explicit-tag integer, wrapped in a unary negation when the tag was written `= -1`
-                // (dropping the minus silently made `Less = -1` read as tag 1 - see core.cmp.Ord).
-                if saw_equals and explicit_tag.is_none() and tok.kind == TokenKind.Integer {
-                    const lit: Expr = Expr.Lit(LiteralExpr {
-                        span = self.span_from_token(tok),
-                        value = LiteralValue.Int(IntLiteral {
-                            span = self.span_from_token(tok),
-                            text = tok.text,
-                            suffix = "",
-                        }),
-                    })
-                    if tag_negated {
-                        explicit_tag = Some(Expr.Unary(UnaryExpr {
-                            span = self.span_from_token(tok),
-                            op = UnaryOp.Neg,
-                            operand = box(self.alloc, lit),
-                        }))
-                    } else {
-                        explicit_tag = Some(lit)
-                    }
+                if saw_equals and tag_tok.is_none() and tok.kind == TokenKind.Integer {
+                    tag_tok = Some(tok.*)
                 }
             }
             NodeChild(child) => {
@@ -645,23 +708,37 @@ fn project_enum_variant(self: &Projector, cst: CstNode) EnumVariant {
             }
         }
     }
-    let boxed_tag: &Expr? = null
-    explicit_tag match {
-        Some(e) => { boxed_tag = Some(self.boxed(e)) }
-        None => {}
+    const explicit_tag: &Expr? = tag_tok match {
+        Some(tok) => Some(self.boxed(self.explicit_tag_expr(&tok, tag_negated)))
+        None => null
     }
     return .{
         span = self.span_from(cst),
         name = name,
-        payloads = payloads,
-        explicit_tag = boxed_tag,
+        payloads = move payloads,
+        explicit_tag = explicit_tag,
     }
+}
+
+// Explicit-tag integer, wrapped in a unary negation when the tag was written `= -1` (dropping the
+// minus silently made `Less = -1` read as tag 1 - see core.cmp.Ord).
+fn explicit_tag_expr(self: &Projector, tok: &Token, negated: bool) Expr {
+    const span = self.span_from_token(tok)
+    const lit: Expr = Expr.Lit(LiteralExpr {
+        span = span,
+        value = LiteralValue.Int(IntLiteral { span = span, text = tok.text, suffix = "" }),
+    })
+    if !negated {
+        return move lit
+    }
+    return Expr.Unary(UnaryExpr { span = span, op = UnaryOp.Neg, operand = box(self.alloc,
+            move lit) })
 }
 
 fn project_const_decl(self: &Projector, cst: CstNode) ConstDecl {
     let name: String = ""
-    let type_annotation: TypeExpr? = null
-    let value: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
+    let type_node: CstNode? = null
+    let value_node: CstNode? = null
     let saw_const_or_let = false
     let saw_equals = false
     for i in 0..cst.child_count() {
@@ -680,10 +757,10 @@ fn project_const_decl(self: &Projector, cst: CstNode) ConstDecl {
             }
             NodeChild(child) => {
                 if saw_equals {
-                    value = self.project_expr(child)
+                    value_node = Some(child)
                 }
-                else if is_type_kind(child.kind) and type_annotation.is_none() {
-                    type_annotation = Some(self.project_type_expr(child))
+                else if is_type_kind(child.kind) and type_node.is_none() {
+                    type_node = Some(child)
                 }
             }
         }
@@ -692,18 +769,14 @@ fn project_const_decl(self: &Projector, cst: CstNode) ConstDecl {
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
         name = name,
-        type_annotation = self.boxed_opt(type_annotation),
-        value = self.boxed(value),
+        type_annotation = self.boxed_opt(self.opt_type(type_node)),
+        value = self.boxed(self.expr_or_error(value_node, cst)),
     }
 }
 
 fn project_test_decl(self: &Projector, cst: CstNode) TestDecl {
     let label: String = ""
-    let body: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = list(0, Some(self.alloc)),
-        trailing = null,
-    }
+    let body_node: CstNode? = null
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -713,7 +786,7 @@ fn project_test_decl(self: &Projector, cst: CstNode) TestDecl {
             }
             NodeChild(child) => {
                 if child.kind == NodeKind.BlockExpr {
-                    body = self.project_block_node(child).unwrap_or(body)
+                    body_node = Some(child)
                 }
             }
         }
@@ -722,7 +795,7 @@ fn project_test_decl(self: &Projector, cst: CstNode) TestDecl {
         span = self.span_from(cst),
         directives = self.project_directives(cst),
         label = label,
-        body = self.boxed(body),
+        body = self.boxed(self.block_or_empty(body_node, cst)),
     }
 }
 
@@ -824,7 +897,7 @@ fn project_generator_def(self: &Projector, cst: CstNode) GenDef {
     return .{
         span = self.span_from(cst),
         name = name,
-        params = params,
+        params = move params,
         body_start = body_start,
         body_end = body_end,
     }
@@ -864,7 +937,7 @@ fn project_generator_invocation(self: &Projector, cst: CstNode) GenInvoke {
     return .{
         span = self.span_from(cst),
         name = name,
-        args = args,
+        args = move args,
     }
 }
 
@@ -915,8 +988,8 @@ fn project_if_directive_decl(self: &Projector, cst: CstNode) IfDirectiveDecl {
     return .{
         span = self.span_from(cst),
         condition = self.boxed(self.project_if_directive_condition(cst)),
-        then_decls = then_decls,
-        else_decls = else_decls,
+        then_decls = move then_decls,
+        else_decls = move else_decls,
     }
 }
 
@@ -936,6 +1009,11 @@ fn project_stmt(self: &Projector, cst: CstNode) Stmt? {
         WhileExpr => Some(Stmt.While(self.project_while_stmt(cst)))
         LoopExpr => Some(Stmt.Loop(self.project_loop_stmt(cst)))
         IfDirectiveStmt => Some(Stmt.IfDirective(self.project_if_directive_stmt(cst)))
+        ErrorDirective => Some(Stmt.ErrorDirective(self.project_error_directive(cst)))
+        Directive => {
+            self.unknown_directive(cst)
+            null
+        }
         else => self.project_expr_as_stmt(cst)
     }
 }
@@ -950,7 +1028,7 @@ fn project_expr_as_stmt(self: &Projector, cst: CstNode) Stmt? {
     let expr = self.project_expr(cst)
     return Some(Stmt.Expression(ExpressionStmt {
         span = self.span_from(cst),
-        expr = self.boxed(expr),
+        expr = self.boxed(move expr),
     }))
 }
 
@@ -958,8 +1036,8 @@ fn project_let_stmt(self: &Projector, cst: CstNode) LetStmt {
     let name: String = ""
     let name_span = self.span_from(cst)
     let is_const = false
-    let type_annotation: TypeExpr? = null
-    let init: Expr? = null
+    let type_node: CstNode? = null
+    let init_node: CstNode? = null
     let saw_keyword = false
     let saw_equals = false
     for i in 0..cst.child_count() {
@@ -983,10 +1061,10 @@ fn project_let_stmt(self: &Projector, cst: CstNode) LetStmt {
                 }
             }
             NodeChild(child) => {
-                if saw_equals and init.is_none() and is_expr_kind(child.kind) {
-                    init = Some(self.project_expr(child))
-                } else if !saw_equals and is_type_kind(child.kind) and type_annotation.is_none() {
-                    type_annotation = Some(self.project_type_expr(child))
+                if saw_equals and init_node.is_none() and is_expr_kind(child.kind) {
+                    init_node = Some(child)
+                } else if !saw_equals and is_type_kind(child.kind) and type_node.is_none() {
+                    type_node = Some(child)
                 }
             }
         }
@@ -996,71 +1074,33 @@ fn project_let_stmt(self: &Projector, cst: CstNode) LetStmt {
         is_const = is_const,
         name = name,
         name_span = name_span,
-        type_annotation = self.boxed_opt(type_annotation),
-        init = self.boxed_opt(init),
+        type_annotation = self.boxed_opt(self.opt_type(type_node)),
+        init = self.boxed_opt(self.opt_expr(init_node)),
     }
 }
 
 fn project_expression_stmt(self: &Projector, cst: CstNode) ExpressionStmt {
-    let expr: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    for i in 0..cst.child_count() {
-        cst.child(i) match {
-            NodeChild(child) => {
-                if is_expr_kind(child.kind) {
-                    expr = self.project_expr(child)
-                    break
-                }
-            }
-            TokenChild(_) => {}
-        }
-    }
-    return .{ span = self.span_from(cst), expr = self.boxed(expr) }
+    const expr = self.expr_or_error(first_expr_node(cst), cst)
+    return .{ span = self.span_from(cst), expr = self.boxed(move expr) }
 }
 
 fn project_return_stmt(self: &Projector, cst: CstNode) ReturnStmt {
-    let value: Expr? = null
-    for i in 0..cst.child_count() {
-        cst.child(i) match {
-            NodeChild(child) => {
-                if is_expr_kind(child.kind) and value.is_none() {
-                    value = Some(self.project_expr(child))
-                }
-            }
-            TokenChild(_) => {}
-        }
-    }
-    return .{ span = self.span_from(cst), value = self.boxed_opt(value) }
+    return .{ span = self.span_from(cst),
+        value = self.boxed_opt(self.opt_expr(first_expr_node(cst))) }
 }
 
 fn project_defer_stmt(self: &Projector, cst: CstNode) DeferStmt {
-    let expr: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    for i in 0..cst.child_count() {
-        cst.child(i) match {
-            NodeChild(child) => {
-                if is_expr_kind(child.kind) {
-                    expr = self.project_expr(child)
-                    break
-                }
-            }
-            TokenChild(_) => {}
-        }
-    }
-    return .{ span = self.span_from(cst), expr = self.boxed(expr) }
+    const expr = self.expr_or_error(first_expr_node(cst), cst)
+    return .{ span = self.span_from(cst), expr = self.boxed(move expr) }
 }
 
 fn project_for_stmt(self: &Projector, cst: CstNode) ForStmt {
     let var_name: String = ""
     let var_span = self.span_from(cst)
-    let iterable: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let body: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = list(0, Some(self.alloc)),
-        trailing = null,
-    }
+    let iterable_node: CstNode? = null
+    let body_node: CstNode? = null
     let saw_for = false
     let by_ref = false
-    let body_seen = false
-    let iterable_seen = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -1078,11 +1118,9 @@ fn project_for_stmt(self: &Projector, cst: CstNode) ForStmt {
             }
             NodeChild(child) => {
                 if child.kind == NodeKind.BlockExpr {
-                    body = self.project_block_node(child).unwrap_or(body)
-                    body_seen = true
-                } else if !iterable_seen and is_expr_kind(child.kind) {
-                    iterable = self.project_expr(child)
-                    iterable_seen = true
+                    body_node = Some(child)
+                } else if iterable_node.is_none() and is_expr_kind(child.kind) {
+                    iterable_node = Some(child)
                 }
             }
         }
@@ -1092,27 +1130,21 @@ fn project_for_stmt(self: &Projector, cst: CstNode) ForStmt {
         var_name = var_name,
         var_span = var_span,
         by_ref = by_ref,
-        iterable = self.boxed(iterable),
-        body = self.boxed(body),
+        iterable = self.boxed(self.expr_or_error(iterable_node, cst)),
+        body = self.boxed(self.block_or_empty(body_node, cst)),
     }
 }
 
 fn project_while_stmt(self: &Projector, cst: CstNode) WhileStmt {
-    let condition: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let body: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = list(0, Some(self.alloc)),
-        trailing = null,
-    }
-    let cond_seen = false
+    let condition_node: CstNode? = null
+    let body_node: CstNode? = null
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
                 if child.kind == NodeKind.BlockExpr {
-                    body = self.project_block_node(child).unwrap_or(body)
-                } else if !cond_seen and is_expr_kind(child.kind) {
-                    condition = self.project_expr(child)
-                    cond_seen = true
+                    body_node = Some(child)
+                } else if condition_node.is_none() and is_expr_kind(child.kind) {
+                    condition_node = Some(child)
                 }
             }
             TokenChild(_) => {}
@@ -1120,28 +1152,24 @@ fn project_while_stmt(self: &Projector, cst: CstNode) WhileStmt {
     }
     return .{
         span = self.span_from(cst),
-        condition = self.boxed(condition),
-        body = self.boxed(body),
+        condition = self.boxed(self.expr_or_error(condition_node, cst)),
+        body = self.boxed(self.block_or_empty(body_node, cst)),
     }
 }
 
 fn project_loop_stmt(self: &Projector, cst: CstNode) LoopStmt {
-    let body: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = list(0, Some(self.alloc)),
-        trailing = null,
-    }
+    let body_node: CstNode? = null
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
                 if child.kind == NodeKind.BlockExpr {
-                    body = self.project_block_node(child).unwrap_or(body)
+                    body_node = Some(child)
                 }
             }
             TokenChild(_) => {}
         }
     }
-    return .{ span = self.span_from(cst), body = self.boxed(body) }
+    return .{ span = self.span_from(cst), body = self.boxed(self.block_or_empty(body_node, cst)) }
 }
 
 fn project_if_directive_stmt(self: &Projector, cst: CstNode) IfDirectiveStmt {
@@ -1163,8 +1191,8 @@ fn project_if_directive_stmt(self: &Projector, cst: CstNode) IfDirectiveStmt {
     return .{
         span = self.span_from(cst),
         condition = self.boxed(self.project_if_directive_condition(cst)),
-        then_stmts = then_stmts,
-        else_stmts = else_stmts,
+        then_stmts = move then_stmts,
+        else_stmts = move else_stmts,
     }
 }
 
@@ -1174,7 +1202,7 @@ fn collect_block_stmts(self: &Projector, block: CstNode, out: &List(Stmt)) {
             NodeChild(child) => {
                 const projected = self.project_stmt(child)
                 projected match {
-                    Some(s) => { out.push(s) }
+                    Some(s) => { out.push(move s) }
                     None => {}
                 }
             }
@@ -1282,13 +1310,7 @@ fn project_expr(self: &Projector, cst: CstNode) Expr {
         ArrayLiteralExpr => self.project_array_literal(cst)
         AnonymousStructExpr => self.project_anon_struct_or_tuple(cst)
         StructConstructionExpr => self.project_struct_construction(cst)
-        BlockExpr => {
-            const block = self.project_block_node(cst)
-            block match {
-                Some(b) => Expr.Block(b)
-                None => Expr.Error(ErrorExpr { span = self.span_from(cst) })
-            }
-        }
+        BlockExpr => Expr.Block(self.project_block(cst))
         ParenExpr => self.project_paren(cst)
         IfExpr => Expr.If(self.project_if_expr(cst))
         MatchExpr => Expr.Match(self.project_match_expr(cst))
@@ -1418,19 +1440,16 @@ fn project_bool_literal(self: &Projector, cst: CstNode) LiteralExpr {
 }
 
 fn project_binary_expr(self: &Projector, cst: CstNode) Expr {
-    let lhs: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let rhs: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
+    let lhs_node: CstNode? = null
+    let rhs_node: CstNode? = null
     let op: BinaryOp = BinaryOp.Add
-    let saw_lhs = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
-                if !saw_lhs {
-                    lhs = self.project_expr(child)
-                    saw_lhs = true
-                }
-                else {
-                    rhs = self.project_expr(child)
+                if lhs_node.is_none() {
+                    lhs_node = Some(child)
+                } else {
+                    rhs_node = Some(child)
                 }
             }
             TokenChild(tok) => {
@@ -1445,8 +1464,8 @@ fn project_binary_expr(self: &Projector, cst: CstNode) Expr {
     return Expr.Binary(BinaryExpr {
         span = self.span_from(cst),
         op = op,
-        lhs = self.boxed(lhs),
-        rhs = self.boxed(rhs),
+        lhs = self.boxed(self.expr_or_error(lhs_node, cst)),
+        rhs = self.boxed(self.expr_or_error(rhs_node, cst)),
     })
 }
 
@@ -1477,7 +1496,7 @@ fn map_binary_op(kind: TokenKind) BinaryOp? {
 
 fn project_unary_expr(self: &Projector, cst: CstNode) Expr {
     let op: UnaryOp = UnaryOp.Neg
-    let operand: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
+    let operand_node: CstNode? = null
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -1491,59 +1510,43 @@ fn project_unary_expr(self: &Projector, cst: CstNode) Expr {
                     op = UnaryOp.BitNot
                 }
             }
-            NodeChild(child) => { operand = self.project_expr(child) }
+            NodeChild(child) => { operand_node = Some(child) }
         }
     }
     return Expr.Unary(UnaryExpr {
         span = self.span_from(cst),
         op = op,
-        operand = self.boxed(operand),
+        operand = self.boxed(self.expr_or_error(operand_node, cst)),
     })
 }
 
 fn project_address_of(self: &Projector, cst: CstNode) Expr {
-    let operand: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    nth_node(cst, 0) match {
-        Some(child) => { operand = self.project_expr(child) }
-        None => {}
-    }
+    const operand_node = nth_node(cst, 0)
     return Expr.AddressOf(AddressOfExpr {
         span = self.span_from(cst),
-        operand = self.boxed(operand),
+        operand = self.boxed(self.expr_or_error(operand_node, cst)),
     })
 }
 
 fn project_move(self: &Projector, cst: CstNode) Expr {
-    let operand: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    nth_node(cst, 0) match {
-        Some(child) => { operand = self.project_expr(child) }
-        None => {}
-    }
+    const operand_node = nth_node(cst, 0)
     return Expr.Move(MoveExpr {
         span = self.span_from(cst),
-        operand = self.boxed(operand),
+        operand = self.boxed(self.expr_or_error(operand_node, cst)),
     })
 }
 
 fn project_dereference(self: &Projector, cst: CstNode) Expr {
-    let operand: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    nth_node(cst, 0) match {
-        Some(child) => { operand = self.project_expr(child) }
-        None => {}
-    }
+    const operand_node = nth_node(cst, 0)
     return Expr.Dereference(DereferenceExpr {
         span = self.span_from(cst),
-        operand = self.boxed(operand),
+        operand = self.boxed(self.expr_or_error(operand_node, cst)),
     })
 }
 
 fn project_member_access(self: &Projector, cst: CstNode) Expr {
-    let receiver: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
+    const receiver_node = nth_node(cst, 0)
     let member: String = ""
-    nth_node(cst, 0) match {
-        Some(child) => { receiver = self.project_expr(child) }
-        None => {}
-    }
     let saw_dot = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -1563,18 +1566,14 @@ fn project_member_access(self: &Projector, cst: CstNode) Expr {
     }
     return Expr.MemberAccess(MemberAccessExpr {
         span = self.span_from(cst),
-        receiver = self.boxed(receiver),
+        receiver = self.boxed(self.expr_or_error(receiver_node, cst)),
         member = member,
     })
 }
 
 fn project_null_propagation(self: &Projector, cst: CstNode) Expr {
-    let receiver: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
+    const receiver_node = nth_node(cst, 0)
     let member: String = ""
-    nth_node(cst, 0) match {
-        Some(child) => { receiver = self.project_expr(child) }
-        None => {}
-    }
     let saw_question_dot = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -1592,26 +1591,18 @@ fn project_null_propagation(self: &Projector, cst: CstNode) Expr {
     }
     return Expr.NullPropagation(NullPropagationExpr {
         span = self.span_from(cst),
-        receiver = self.boxed(receiver),
+        receiver = self.boxed(self.expr_or_error(receiver_node, cst)),
         member = member,
     })
 }
 
 fn project_index(self: &Projector, cst: CstNode) Expr {
-    let receiver: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let index: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    nth_node(cst, 0) match {
-        Some(child) => { receiver = self.project_expr(child) }
-        None => {}
-    }
-    nth_node(cst, 1) match {
-        Some(child) => { index = self.project_expr(child) }
-        None => {}
-    }
+    const receiver_node = nth_node(cst, 0)
+    const index_node = nth_node(cst, 1)
     return Expr.Index(IndexExpr {
         span = self.span_from(cst),
-        receiver = self.boxed(receiver),
-        index = self.boxed(index),
+        receiver = self.boxed(self.expr_or_error(receiver_node, cst)),
+        index = self.boxed(self.expr_or_error(index_node, cst)),
     })
 }
 
@@ -1632,19 +1623,19 @@ fn project_call(self: &Projector, cst: CstNode) Expr {
             NodeChild(_) => {}
         }
     }
-    let callee: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let have_callee = false
+    // The callee head is the expression node or the first identifier before the `(`; each `.name`
+    // after it wraps the head in a member access.
+    let head_node: CstNode? = null
+    let head_tok: Token? = null
+    let members: List(Token) = list(0, Some(self.alloc))
     let pending_dot = false
-    let callee_start: usize = cst.start
-    let callee_end: usize = cst.start
     for i in 0..paren_idx {
         cst.child(i) match {
             NodeChild(child) => {
                 if is_expr_kind(child.kind) {
-                    callee = self.project_expr(child)
-                    have_callee = true
-                    callee_start = child.start
-                    callee_end = child.end
+                    head_node = Some(child)
+                    head_tok = null
+                    members.clear()
                 }
             }
             TokenChild(tok) => {
@@ -1653,37 +1644,47 @@ fn project_call(self: &Projector, cst: CstNode) Expr {
                     continue
                 }
                 if tok.kind == TokenKind.Identifier {
-                    const tok_span: SourceSpan = .{
-                        file_id = self.file_id,
-                        start = tok.offset,
-                        length = tok.text.len,
-                    }
-                    if have_callee and pending_dot {
-                        const member_span: SourceSpan = .{
-                            file_id = self.file_id,
-                            start = callee_start,
-                            length = (tok.offset + tok.text.len) - callee_start,
-                        }
-                        const prev = callee
-                        callee = Expr.MemberAccess(MemberAccessExpr {
-                            span = member_span,
-                            receiver = box(self.alloc, prev),
-                            member = tok.text,
-                        })
-                        callee_end = tok.offset + tok.text.len
+                    const have_head = head_node.is_some() or head_tok.is_some()
+                    if have_head and pending_dot {
+                        members.push(tok.*)
                     } else {
-                        callee = Expr.Identifier(IdentifierExpr {
-                            span = tok_span,
-                            name = tok.text,
-                        })
-                        have_callee = true
-                        callee_start = tok.offset
-                        callee_end = tok.offset + tok.text.len
+                        head_tok = Some(tok.*)
+                        head_node = null
+                        members.clear()
                     }
                     pending_dot = false
                 }
             }
         }
+    }
+    const callee_start: usize = head_node match {
+        Some(n) => n.start
+        None => head_tok match {
+            Some(tok) => tok.offset
+            None => cst.start
+        }
+    }
+    let callee: Expr = head_node match {
+        Some(n) => self.project_expr(n)
+        None => head_tok match {
+            Some(tok) => Expr.Identifier(IdentifierExpr {
+                span = self.span_from_token(&tok),
+                name = tok.text,
+            })
+            None => Expr.Error(ErrorExpr { span = self.span_from(cst) })
+        }
+    }
+    for &m in members {
+        const member_span: SourceSpan = .{
+            file_id = self.file_id,
+            start = callee_start,
+            length = (m.offset + m.text.len) - callee_start,
+        }
+        callee = Expr.MemberAccess(MemberAccessExpr {
+            span = member_span,
+            receiver = box(self.alloc, move callee),
+            member = m.text,
+        })
     }
     // Walk args (everything after the `(`).
     for i in (paren_idx + 1)..cst.child_count() {
@@ -1693,7 +1694,7 @@ fn project_call(self: &Projector, cst: CstNode) Expr {
                     args.push(CallArgument.Named(self.project_named_argument(child)))
                 } else if is_expr_kind(child.kind) {
                     const e = self.project_expr(child)
-                    args.push(CallArgument.Positional(box(self.alloc, e)))
+                    args.push(CallArgument.Positional(box(self.alloc, move e)))
                 }
             }
             TokenChild(_) => {}
@@ -1701,14 +1702,14 @@ fn project_call(self: &Projector, cst: CstNode) Expr {
     }
     return Expr.Call(CallExpr {
         span = self.span_from(cst),
-        callee = box(self.alloc, callee),
-        args = args,
+        callee = box(self.alloc, move callee),
+        args = move args,
     })
 }
 
 fn project_named_argument(self: &Projector, cst: CstNode) NamedCallArgument {
     let name: String = ""
-    let value: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
+    let value_node: CstNode? = null
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -1718,7 +1719,7 @@ fn project_named_argument(self: &Projector, cst: CstNode) NamedCallArgument {
             }
             NodeChild(child) => {
                 if is_expr_kind(child.kind) {
-                    value = self.project_expr(child)
+                    value_node = Some(child)
                 }
             }
         }
@@ -1726,22 +1727,20 @@ fn project_named_argument(self: &Projector, cst: CstNode) NamedCallArgument {
     return .{
         span = self.span_from(cst),
         name = name,
-        value = self.boxed(value),
+        value = self.boxed(self.expr_or_error(value_node, cst)),
     }
 }
 
 fn project_cast(self: &Projector, cst: CstNode) Expr {
-    let operand: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let target: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
-    let target_seen = false
+    let operand_node: CstNode? = null
+    let target_node: CstNode? = null
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
-                if is_expr_kind(child.kind) and !target_seen {
-                    operand = self.project_expr(child)
+                if is_expr_kind(child.kind) and target_node.is_none() {
+                    operand_node = Some(child)
                 } else if is_type_kind(child.kind) {
-                    target = self.project_type_expr(child)
-                    target_seen = true
+                    target_node = Some(child)
                 }
             }
             TokenChild(_) => {}
@@ -1749,25 +1748,22 @@ fn project_cast(self: &Projector, cst: CstNode) Expr {
     }
     return Expr.Cast(CastExpr {
         span = self.span_from(cst),
-        operand = self.boxed(operand),
-        target = self.boxed(target),
+        operand = self.boxed(self.expr_or_error(operand_node, cst)),
+        target = self.boxed(self.type_or_error(target_node, cst)),
     })
 }
 
 fn project_assignment(self: &Projector, cst: CstNode) Expr {
-    let lhs: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let rhs: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let saw_lhs = false
+    let lhs_node: CstNode? = null
+    let rhs_node: CstNode? = null
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
                 if is_expr_kind(child.kind) {
-                    if !saw_lhs {
-                        lhs = self.project_expr(child)
-                        saw_lhs = true
-                    }
-                    else {
-                        rhs = self.project_expr(child)
+                    if lhs_node.is_none() {
+                        lhs_node = Some(child)
+                    } else {
+                        rhs_node = Some(child)
                     }
                 }
             }
@@ -1776,25 +1772,22 @@ fn project_assignment(self: &Projector, cst: CstNode) Expr {
     }
     return Expr.Assignment(AssignmentExpr {
         span = self.span_from(cst),
-        lhs = self.boxed(lhs),
-        rhs = self.boxed(rhs),
+        lhs = self.boxed(self.expr_or_error(lhs_node, cst)),
+        rhs = self.boxed(self.expr_or_error(rhs_node, cst)),
     })
 }
 
 fn project_coalesce(self: &Projector, cst: CstNode) Expr {
-    let lhs: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let rhs: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let saw_lhs = false
+    let lhs_node: CstNode? = null
+    let rhs_node: CstNode? = null
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
                 if is_expr_kind(child.kind) {
-                    if !saw_lhs {
-                        lhs = self.project_expr(child)
-                        saw_lhs = true
-                    }
-                    else {
-                        rhs = self.project_expr(child)
+                    if lhs_node.is_none() {
+                        lhs_node = Some(child)
+                    } else {
+                        rhs_node = Some(child)
                     }
                 }
             }
@@ -1803,20 +1796,16 @@ fn project_coalesce(self: &Projector, cst: CstNode) Expr {
     }
     return Expr.Coalesce(CoalesceExpr {
         span = self.span_from(cst),
-        lhs = self.boxed(lhs),
-        rhs = self.boxed(rhs),
+        lhs = self.boxed(self.expr_or_error(lhs_node, cst)),
+        rhs = self.boxed(self.expr_or_error(rhs_node, cst)),
     })
 }
 
 fn project_try(self: &Projector, cst: CstNode) Expr {
-    let operand: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    nth_node(cst, 0) match {
-        Some(child) => { operand = self.project_expr(child) }
-        None => {}
-    }
+    const operand_node = nth_node(cst, 0)
     return Expr.Try(TryExpr {
         span = self.span_from(cst),
-        operand = self.boxed(operand),
+        operand = self.boxed(self.expr_or_error(operand_node, cst)),
     })
 }
 
@@ -1824,8 +1813,8 @@ fn project_try(self: &Projector, cst: CstNode) Expr {
 // (no separate `DotDotEquals` surfaces yet), so inclusivity defaults to false. End-bound presence
 // is detected by whether a second sub-node follows.
 fn project_range(self: &Projector, cst: CstNode) Expr {
-    let start: Expr? = null
-    let end: Expr? = null
+    let start_node: CstNode? = null
+    let end_node: CstNode? = null
     let saw_dotdot = false
     let inclusive = false
     for i in 0..cst.child_count() {
@@ -1841,30 +1830,20 @@ fn project_range(self: &Projector, cst: CstNode) Expr {
             }
             NodeChild(child) => {
                 if is_expr_kind(child.kind) {
-                    if !saw_dotdot and start.is_none() {
-                        start = Some(self.project_expr(child))
+                    if !saw_dotdot and start_node.is_none() {
+                        start_node = Some(child)
                     }
-                    else if end.is_none() {
-                        end = Some(self.project_expr(child))
+                    else if end_node.is_none() {
+                        end_node = Some(child)
                     }
                 }
             }
         }
     }
-    let start_ref: &Expr? = null
-    start match {
-        Some(e) => { start_ref = Some(self.boxed(e)) }
-        None => {}
-    }
-    let end_ref: &Expr? = null
-    end match {
-        Some(e) => { end_ref = Some(self.boxed(e)) }
-        None => {}
-    }
     return Expr.Range(RangeExpr {
         span = self.span_from(cst),
-        start = start_ref,
-        end = end_ref,
+        start = self.boxed_opt(self.opt_expr(start_node)),
+        end = self.boxed_opt(self.opt_expr(end_node)),
         inclusive = inclusive,
     })
 }
@@ -1888,20 +1867,20 @@ fn project_array_literal(self: &Projector, cst: CstNode) Expr {
         }
     }
     if saw_semicolon and exprs.len >= 2 {
-        const value: Expr = exprs[0]
-        const count: Expr = exprs[1]
+        const value: Expr = move exprs[0]
+        const count: Expr = move exprs[1]
         return Expr.ArrayLit(ArrayLiteralExpr {
             span = self.span_from(cst),
             kind = ArrayLiteralKind.Repeat(RepeatLiteral {
                 span = self.span_from(cst),
-                value = self.boxed(value),
-                count = self.boxed(count),
+                value = self.boxed(move value),
+                count = self.boxed(move count),
             }),
         })
     }
     return Expr.ArrayLit(ArrayLiteralExpr {
         span = self.span_from(cst),
-        kind = ArrayLiteralKind.Elements(exprs),
+        kind = ArrayLiteralKind.Elements(move exprs),
     })
 }
 
@@ -1957,7 +1936,7 @@ fn project_anon_struct_or_tuple(self: &Projector, cst: CstNode) Expr {
         }
         return Expr.TupleLit(TupleLiteralExpr {
             span = self.span_from(cst),
-            elements = elements,
+            elements = move elements,
         })
     }
     return self.project_struct_literal(cst, false)
@@ -1971,14 +1950,11 @@ fn project_struct_construction(self: &Projector, cst: CstNode) Expr {
 // for the anonymous `.{ ... }` form.
 fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
     let fields: List(StructFieldInit) = list(cst.node_child_count(), Some(self.alloc))
-    let type_expr_opt: TypeExpr? = null
-    if nominal {
-        type_expr_opt = self.struct_construction_type(cst)
-    }
+    const type_expr_opt: TypeExpr? = if nominal { self.struct_construction_type(cst) } else { null }
     // Field walk: identifier (= expr)?, comma. Names without `=` are shorthand (`Point { x, y }`).
     let pending_name: String = ""
     let pending_span = self.span_from(cst)
-    let pending_value: Expr? = null
+    let pending_node: CstNode? = null
     let pending_active = false
     let saw_equals = false
     let saw_open_brace = false
@@ -1996,11 +1972,11 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
                     // Flush previous pending field as shorthand.
                     if pending_active {
                         fields.push(self.make_struct_field_init(pending_name, pending_span,
-                                pending_value))
+                                pending_node))
                     }
                     pending_name = tok.text
                     pending_span = self.span_from_token(tok)
-                    pending_value = null
+                    pending_node = null
                     pending_active = true
                     saw_equals = false
                     continue
@@ -2012,25 +1988,25 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
                 if tok.kind == TokenKind.Comma {
                     if pending_active {
                         fields.push(self.make_struct_field_init(pending_name, pending_span,
-                                pending_value))
+                                pending_node))
                         pending_active = false
-                        pending_value = null
+                        pending_node = null
                     }
                     continue
                 }
                 if tok.kind == TokenKind.CloseBrace {
                     if pending_active {
                         fields.push(self.make_struct_field_init(pending_name, pending_span,
-                                pending_value))
+                                pending_node))
                         pending_active = false
-                        pending_value = null
+                        pending_node = null
                     }
                     continue
                 }
             }
             NodeChild(child) => {
                 if saw_open_brace and saw_equals and pending_active and is_expr_kind(child.kind) {
-                    pending_value = Some(self.project_expr(child))
+                    pending_node = Some(child)
                     // Field span covers `name = value` so source-click can find the field from
                     // inside the value.
                     pending_span = .{
@@ -2044,31 +2020,21 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
         }
     }
     if pending_active {
-        fields.push(self.make_struct_field_init(pending_name, pending_span, pending_value))
-    }
-    let type_ref: &TypeExpr? = null
-    type_expr_opt match {
-        Some(t) => { type_ref = Some(self.boxed(t)) }
-        None => {}
+        fields.push(self.make_struct_field_init(pending_name, pending_span, pending_node))
     }
     return Expr.StructLit(StructLiteralExpr {
         span = self.span_from(cst),
-        type_expr = type_ref,
-        fields = fields,
+        type_expr = self.boxed_opt(move type_expr_opt),
+        fields = move fields,
     })
 }
 
 fn make_struct_field_init(self: &Projector, name: String, span: SourceSpan,
-    value: Expr?) StructFieldInit {
-    let v_ref: &Expr? = null
-    value match {
-        Some(e) => { v_ref = Some(self.boxed(e)) }
-        None => {}
-    }
+    value: CstNode?) StructFieldInit {
     return .{
         span = span,
         name = name,
-        value = v_ref,
+        value = self.boxed_opt(self.opt_expr(value)),
     }
 }
 
@@ -2112,9 +2078,10 @@ fn struct_construction_type(self: &Projector, cst: CstNode) TypeExpr? {
                     // parser rewrites a call into a construction on seeing the brace), so a type
                     // argument arrives as an IdentifierExpr or CallExpr and must be reinterpreted
                     // as a type.
-                    let t = self.type_expr_from_expr_cst(child)
-                    if t.is_some() {
-                        generic_args.push(t.unwrap())
+                    const t = self.type_expr_from_expr_cst(child)
+                    t match {
+                        Some(te) => generic_args.push(move te)
+                        None => {}
                     }
                 }
             }
@@ -2126,7 +2093,7 @@ fn struct_construction_type(self: &Projector, cst: CstNode) TypeExpr? {
     return Some(TypeExpr.Named(NamedType {
         span = name_span,
         name = name,
-        generic_args = generic_args,
+        generic_args = move generic_args,
     }))
 }
 
@@ -2153,7 +2120,8 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
             return null
         }
         let no_args: List(TypeExpr) = list(0, Some(self.alloc))
-        return Some(TypeExpr.Named(NamedType { span = span, name = name, generic_args = no_args }))
+        return Some(TypeExpr.Named(NamedType { span = span, name = name,
+            generic_args = move no_args }))
     }
     if cst.kind == NodeKind.CallExpr {
         let name: String = ""
@@ -2170,7 +2138,7 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
                 NodeChild(child) => {
                     let t = self.type_expr_from_expr_cst(child)
                     t match {
-                        Some(te) => args.push(te)
+                        Some(te) => args.push(move te)
                         None => return null
                     }
                 }
@@ -2179,7 +2147,8 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
         if name.len == 0 {
             return null
         }
-        return Some(TypeExpr.Named(NamedType { span = span, name = name, generic_args = args }))
+        return Some(TypeExpr.Named(NamedType { span = span, name = name,
+            generic_args = move args }))
     }
     return null
 }
@@ -2187,12 +2156,9 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
 // Block: walks statements; last statement-expr without a terminator becomes `trailing`. The parser
 // doesn't currently tag the trailing expression explicitly - we identify it as a final
 // ExpressionStmt that the parser produced without a trailing semicolon.
-fn project_block_node(self: &Projector, cst: CstNode) BlockExpr? {
-    if cst.kind != NodeKind.BlockExpr {
-        return null
-    }
+fn project_block(self: &Projector, cst: CstNode) BlockExpr {
     let stmts: List(Stmt) = list(cst.node_child_count(), Some(self.alloc))
-    let trailing: Expr? = null
+    let trailing_node: CstNode? = null
     // First pass: identify the last NodeChild - candidate for trailing.
     let last_child_idx: usize = 0
     let have_last = false
@@ -2222,7 +2188,7 @@ fn project_block_node(self: &Projector, cst: CstNode) BlockExpr? {
                             child.child(j) match {
                                 NodeChild(inner) => {
                                     if is_expr_kind(inner.kind) {
-                                        trailing = Some(self.project_expr(inner))
+                                        trailing_node = Some(inner)
                                         last_consumed_as_trailing = true
                                         break
                                     }
@@ -2241,28 +2207,23 @@ fn project_block_node(self: &Projector, cst: CstNode) BlockExpr? {
                 // expression.
                 if have_last and i == last_child_idx and child.kind == NodeKind.IfExpr
                     and has_else_token(child) {
-                    trailing = Some(self.project_expr(child))
+                    trailing_node = Some(child)
                     continue
                 }
                 const projected = self.project_stmt(child)
                 projected match {
-                    Some(s) => { stmts.push(s) }
+                    Some(s) => { stmts.push(move s) }
                     None => {}
                 }
             }
             TokenChild(_) => {}
         }
     }
-    let trailing_ref: &Expr? = null
-    trailing match {
-        Some(e) => { trailing_ref = Some(box(self.alloc, e)) }
-        None => {}
-    }
-    return Some(BlockExpr {
+    return BlockExpr {
         span = self.span_from(cst),
-        stmts = stmts,
-        trailing = trailing_ref,
-    })
+        stmts = move stmts,
+        trailing = self.boxed_opt(self.opt_expr(trailing_node)),
+    }
 }
 
 fn ends_with_semicolon(cst: CstNode) bool {
@@ -2276,15 +2237,9 @@ fn ends_with_semicolon(cst: CstNode) bool {
 }
 
 fn project_if_expr(self: &Projector, cst: CstNode) IfExpr {
-    let condition: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let then_branch: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = list(0, Some(self.alloc)),
-        trailing = null,
-    }
+    let condition_node: CstNode? = null
+    let then_node: CstNode? = null
     let else_branch: ElseBranch = ElseBranch.NoElse
-    let cond_seen = false
-    let then_seen = false
     let saw_else = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -2294,24 +2249,18 @@ fn project_if_expr(self: &Projector, cst: CstNode) IfExpr {
                 }
             }
             NodeChild(child) => {
-                if !cond_seen and is_expr_kind(child.kind) and child.kind != NodeKind.BlockExpr
-                    and child.kind != NodeKind.IfExpr {
-                    condition = self.project_expr(child)
-                    cond_seen = true
+                if condition_node.is_none() and is_expr_kind(child.kind)
+                    and child.kind != NodeKind.BlockExpr and child.kind != NodeKind.IfExpr {
+                    condition_node = Some(child)
                     continue
                 }
-                if !then_seen and child.kind == NodeKind.BlockExpr {
-                    then_branch = self.project_block_node(child).unwrap_or(then_branch)
-                    then_seen = true
+                if then_node.is_none() and child.kind == NodeKind.BlockExpr {
+                    then_node = Some(child)
                     continue
                 }
                 if saw_else {
                     if child.kind == NodeKind.BlockExpr {
-                        const b = self.project_block_node(child)
-                        b match {
-                            Some(blk) => { else_branch = ElseBranch.Block(self.boxed(blk)) }
-                            None => {}
-                        }
+                        else_branch = ElseBranch.Block(self.boxed(self.project_block(child)))
                     } else if child.kind == NodeKind.IfExpr {
                         const inner = self.project_if_expr(child)
                         else_branch = ElseBranch.If(self.boxed(inner))
@@ -2322,22 +2271,20 @@ fn project_if_expr(self: &Projector, cst: CstNode) IfExpr {
     }
     return IfExpr {
         span = self.span_from(cst),
-        condition = self.boxed(condition),
-        then_branch = self.boxed(then_branch),
+        condition = self.boxed(self.expr_or_error(condition_node, cst)),
+        then_branch = self.boxed(self.block_or_empty(then_node, cst)),
         else_branch = else_branch,
     }
 }
 
 fn project_match_expr(self: &Projector, cst: CstNode) MatchExpr {
-    let scrutinee: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
+    let scrutinee_node: CstNode? = null
     let arms: List(MatchArm) = list(cst.node_child_count(), Some(self.alloc))
-    let scrutinee_seen = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
-                if !scrutinee_seen and is_expr_kind(child.kind) {
-                    scrutinee = self.project_expr(child)
-                    scrutinee_seen = true
+                if scrutinee_node.is_none() and is_expr_kind(child.kind) {
+                    scrutinee_node = Some(child)
                     continue
                 }
                 if child.kind == NodeKind.MatchArm {
@@ -2349,8 +2296,8 @@ fn project_match_expr(self: &Projector, cst: CstNode) MatchExpr {
     }
     return .{
         span = self.span_from(cst),
-        scrutinee = self.boxed(scrutinee),
-        arms = arms,
+        scrutinee = self.boxed(self.expr_or_error(scrutinee_node, cst)),
+        arms = move arms,
     }
 }
 
@@ -2360,8 +2307,8 @@ fn project_match_expr(self: &Projector, cst: CstNode) MatchExpr {
 // `=>`, body from the sub-node AFTER `=>`.
 fn project_match_arm(self: &Projector, cst: CstNode) MatchArm {
     let pattern_tokens: List(Token) = list(cst.node_child_count(), Some(self.alloc))
-    let guard: Expr? = null
-    let body: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
+    let guard_node: CstNode? = null
+    let body_node: CstNode? = null
     let saw_arrow = false
     let in_guard = false
     let pattern_start: usize = cst.start
@@ -2386,57 +2333,52 @@ fn project_match_arm(self: &Projector, cst: CstNode) MatchArm {
                 }
             }
             NodeChild(child) => {
-                if !saw_arrow and in_guard and guard.is_none() and is_expr_kind(child.kind) {
-                    guard = Some(self.project_expr(child))
+                if !saw_arrow and in_guard and guard_node.is_none() and is_expr_kind(child.kind) {
+                    guard_node = Some(child)
                     continue
                 }
-                if saw_arrow and is_expr_kind(child.kind) {
-                    body = self.project_expr(child)
-                    continue
-                }
-                // A bare statement arm body (`X => return v`, `X => break`) wraps in a synthesized
-                // single-statement block - leaving it `Error` made the arm silently unlowerable
-                // (the checker types Error as a fresh var).
                 if saw_arrow {
-                    let st = self.project_stmt(child)
-                    st match {
-                        Some(stv) => {
-                            let stmts: List(Stmt) = list(1, Some(self.alloc))
-                            stmts.push(stv)
-                            body = Expr.Block(BlockExpr {
-                                span = self.span_from(child),
-                                stmts = stmts,
-                                trailing = null,
-                            })
-                        }
-                        None => {}
-                    }
+                    body_node = Some(child)
                 }
             }
         }
     }
-    const pattern = self.project_pattern_from_tokens(pattern_tokens, pattern_start, pattern_end)
-    let guard_ref: &Expr? = null
-    guard match {
-        Some(e) => { guard_ref = Some(self.boxed(e)) }
-        None => {}
+    const pattern = self.project_pattern_from_tokens(&pattern_tokens, pattern_start, pattern_end)
+    const body: Expr = body_node match {
+        Some(n) => self.arm_body(n, self.span_from(cst))
+        None => Expr.Error(ErrorExpr { span = self.span_from(cst) })
     }
     return .{
         span = self.span_from(cst),
-        pattern = self.boxed(pattern),
-        guard = guard_ref,
-        body = self.boxed(body),
+        pattern = self.boxed(move pattern),
+        guard = self.boxed_opt(self.opt_expr(guard_node)),
+        body = self.boxed(move body),
+    }
+}
+
+// An arm body is an expression, or a bare statement (`X => return v`, `X => break`) wrapped in a
+// synthesized single-statement block - leaving it `Error` made the arm silently unlowerable (the
+// checker types Error as a fresh var).
+fn arm_body(self: &Projector, cst: CstNode, span: SourceSpan) Expr {
+    if is_expr_kind(cst.kind) {
+        return self.project_expr(cst)
+    }
+    const st = self.project_stmt(cst)
+    return st match {
+        Some(stv) => {
+            let stmts: List(Stmt) = list(1, Some(self.alloc))
+            stmts.push(move stv)
+            Expr.Block(BlockExpr { span = self.span_from(cst), stmts = move stmts,
+                trailing = null })
+        }
+        None => Expr.Error(ErrorExpr { span = span })
     }
 }
 
 fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
     let params: List(FunctionParam) = list(cst.node_child_count(), Some(self.alloc))
-    let return_type: TypeExpr? = null
-    let body: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = list(0, Some(self.alloc)),
-        trailing = null,
-    }
+    let return_node: CstNode? = null
+    let body_node: CstNode? = null
     // Lambda params are surfaced as a loose token run: identifier (`:` type-node)? (`,` ...). We
     // walk children, pairing each identifier with the immediately-following type sub-node.
     let pending_name: String = ""
@@ -2444,7 +2386,6 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
     let pending_active = false
     let saw_open_paren = false
     let after_close_paren = false
-    let body_seen = false
     let depth: i32 = 0
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -2487,15 +2428,14 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
             }
             NodeChild(child) => {
                 if child.kind == NodeKind.BlockExpr {
-                    body = self.project_block_node(child).unwrap_or(body)
-                    body_seen = true
+                    body_node = Some(child)
                     continue
                 }
                 if !saw_open_paren or after_close_paren {
                     // Either before `(` (shouldn't happen) or after `)` - type-expression role:
                     // return type.
-                    if after_close_paren and is_type_kind(child.kind) and return_type.is_none() {
-                        return_type = Some(self.project_type_expr(child))
+                    if after_close_paren and is_type_kind(child.kind) and return_node.is_none() {
+                        return_node = Some(child)
                     }
                     continue
                 }
@@ -2505,7 +2445,7 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
                     params.push(FunctionParam {
                         span = pending_span,
                         name = pending_name,
-                        type_expr = self.boxed(t),
+                        type_expr = self.boxed(move t),
                         default_value = null,
                         is_variadic = false,
                         is_move = false,
@@ -2517,9 +2457,9 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
     }
     return .{
         span = self.span_from(cst),
-        params = params,
-        return_type = self.boxed_opt(return_type),
-        body = self.boxed(body),
+        params = move params,
+        return_type = self.boxed_opt(self.opt_type(return_node)),
+        body = self.boxed(self.block_or_empty(body_node, cst)),
     }
 }
 
@@ -2537,7 +2477,7 @@ fn make_lambda_param(self: &Projector, name: String, span: SourceSpan) FunctionP
 fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr {
     let parts: List(InterpolationPart) = list(cst.node_child_count(), Some(self.alloc))
     let target_args: List(Expr) = list(0, Some(self.alloc))
-    let into_builder: Expr? = null
+    let into_builder: Token? = null
     let after_dollar = false
     let after_paren = false
     let paren_depth: i32 = 0
@@ -2563,10 +2503,7 @@ fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr 
                 }
                 if after_dollar and !after_paren and !in_body and tok.kind == TokenKind.Identifier {
                     // `$sb"…"` write-into-builder form.
-                    into_builder = Some(Expr.Identifier(IdentifierExpr {
-                        span = self.span_from_token(tok),
-                        name = tok.text,
-                    }))
+                    into_builder = Some(tok.*)
                     continue
                 }
                 if tok.kind == TokenKind.InterpStringStart {
@@ -2605,7 +2542,7 @@ fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr 
                     const e = self.project_expr(child)
                     parts.push(InterpolationPart.Hole(InterpolationHole {
                         span = self.span_from(child),
-                        expr = self.boxed(e),
+                        expr = self.boxed(move e),
                         format = null,
                     }))
                     continue
@@ -2614,24 +2551,25 @@ fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr 
                 // contributes its VALUE; `builder_ctor_args` routes an `&expr` to the allocator
                 // slot and anything else to capacity, which is the same mapping the names spell.
                 if after_paren and child.kind == NodeKind.NamedArgumentExpr {
-                    target_args.push(self.project_named_argument(child).value.*)
+                    const named = self.project_named_argument(child)
+                    target_args.push(move named.value.*)
                 } else if after_paren and is_expr_kind(child.kind) {
                     target_args.push(self.project_expr(child))
                 }
             }
         }
     }
-    let target: InterpolationTarget = InterpolationTarget.NewString(target_args)
-    into_builder match {
-        Some(e) => {
-            target = InterpolationTarget.IntoBuilder(self.boxed(e))
-        }
-        None => {}
+    const target: InterpolationTarget = into_builder match {
+        Some(tok) => InterpolationTarget.IntoBuilder(self.boxed(Expr.Identifier(IdentifierExpr {
+            span = self.span_from_token(&tok),
+            name = tok.text,
+        })))
+        None => InterpolationTarget.NewString(move target_args)
     }
     return .{
         span = self.span_from(cst),
-        target = target,
-        parts = parts,
+        target = move target,
+        parts = move parts,
     }
 }
 
@@ -2693,50 +2631,36 @@ fn project_named_type(self: &Projector, cst: CstNode) TypeExpr {
     return TypeExpr.Named(NamedType {
         span = self.span_from(cst),
         name = name,
-        generic_args = generic_args,
+        generic_args = move generic_args,
     })
 }
 
 fn project_reference_type(self: &Projector, cst: CstNode) TypeExpr {
-    let inner: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
-    nth_node(cst, 0) match {
-        Some(child) => { if is_type_kind(child.kind) {
-                inner = self.project_type_expr(child)
-            } }
-        None => {}
-    }
+    const inner = self.type_or_error(nth_node(cst, 0), cst)
     return TypeExpr.Reference(ReferenceType {
         span = self.span_from(cst),
-        inner = self.boxed(inner),
+        inner = self.boxed(move inner),
     })
 }
 
 fn project_optional_type(self: &Projector, cst: CstNode) TypeExpr {
-    let inner: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
-    nth_node(cst, 0) match {
-        Some(child) => { if is_type_kind(child.kind) {
-                inner = self.project_type_expr(child)
-            } }
-        None => {}
-    }
+    const inner = self.type_or_error(nth_node(cst, 0), cst)
     return TypeExpr.Optional(OptionalType {
         span = self.span_from(cst),
-        inner = self.boxed(inner),
+        inner = self.boxed(move inner),
     })
 }
 
 fn project_array_type(self: &Projector, cst: CstNode) TypeExpr {
-    let element: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
-    let length: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let element_seen = false
+    let element_node: CstNode? = null
+    let length_node: CstNode? = null
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
-                if is_type_kind(child.kind) and !element_seen {
-                    element = self.project_type_expr(child)
-                    element_seen = true
+                if is_type_kind(child.kind) and element_node.is_none() {
+                    element_node = Some(child)
                 } else if is_expr_kind(child.kind) {
-                    length = self.project_expr(child)
+                    length_node = Some(child)
                 }
             }
             TokenChild(_) => {}
@@ -2744,22 +2668,16 @@ fn project_array_type(self: &Projector, cst: CstNode) TypeExpr {
     }
     return TypeExpr.Array(ArrayType {
         span = self.span_from(cst),
-        element = self.boxed(element),
-        length = self.boxed(length),
+        element = self.boxed(self.type_or_error(element_node, cst)),
+        length = self.boxed(self.expr_or_error(length_node, cst)),
     })
 }
 
 fn project_slice_type(self: &Projector, cst: CstNode) TypeExpr {
-    let element: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
-    nth_node(cst, 0) match {
-        Some(child) => { if is_type_kind(child.kind) {
-                element = self.project_type_expr(child)
-            } }
-        None => {}
-    }
+    const element = self.type_or_error(nth_node(cst, 0), cst)
     return TypeExpr.Slice(SliceType {
         span = self.span_from(cst),
-        element = self.boxed(element),
+        element = self.boxed(move element),
     })
 }
 
@@ -2777,14 +2695,14 @@ fn project_tuple_type(self: &Projector, cst: CstNode) TypeExpr {
     }
     return TypeExpr.Tuple(TupleType {
         span = self.span_from(cst),
-        elements = elements,
+        elements = move elements,
     })
 }
 
 fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
     let params: List(TypeExpr) = list(cst.node_child_count(), Some(self.alloc))
     let param_names: List(String) = list(0, Some(self.alloc))
-    let return_type: TypeExpr? = null
+    let return_node: CstNode? = null
     let in_params = false
     let saw_close = false
     let depth: i32 = 0
@@ -2822,22 +2740,17 @@ fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
                     params.push(self.project_type_expr(child))
                     param_names.push(pending_name)
                     pending_name = ""
-                } else if saw_close and return_type.is_none() {
-                    return_type = Some(self.project_type_expr(child))
+                } else if saw_close and return_node.is_none() {
+                    return_node = Some(child)
                 }
             }
         }
     }
-    let ret_ref: &TypeExpr? = null
-    return_type match {
-        Some(t) => { ret_ref = Some(self.boxed(t)) }
-        None => {}
-    }
     return TypeExpr.Function(FunctionType {
         span = self.span_from(cst),
-        params = params,
-        param_names = param_names,
-        return_type = ret_ref,
+        params = move params,
+        param_names = move param_names,
+        return_type = self.boxed_opt(self.opt_type(return_node)),
     })
 }
 
@@ -2860,8 +2773,8 @@ fn project_anon_struct_type(self: &Projector, cst: CstNode) TypeExpr {
     }
     return TypeExpr.AnonStruct(AnonStructType {
         span = self.span_from(cst),
-        generics = generics,
-        fields = fields,
+        generics = move generics,
+        fields = move fields,
     })
 }
 
@@ -2881,8 +2794,8 @@ fn project_anon_enum_type(self: &Projector, cst: CstNode) TypeExpr {
     }
     return TypeExpr.AnonEnum(AnonEnumType {
         span = self.span_from(cst),
-        generics = generics,
-        variants = variants,
+        generics = move generics,
+        variants = move variants,
     })
 }
 
@@ -2902,7 +2815,7 @@ fn project_anon_enum_type(self: &Projector, cst: CstNode) TypeExpr {
 // land there. Projecting them to `Wildcard` would make them match everything, so a match would
 // silently take the wrong arm. `Error` instead makes consumers refuse the match outright.
 
-fn project_pattern_from_tokens(self: &Projector, tokens: List(Token), start: usize,
+fn project_pattern_from_tokens(self: &Projector, tokens: &List(Token), start: usize,
     end: usize) Pattern {
     const span: SourceSpan = .{ file_id = self.file_id, start = start, length = end - start }
     if tokens.len == 0 {
@@ -2955,7 +2868,7 @@ fn project_pattern_from_tokens(self: &Projector, tokens: List(Token), start: usi
             }
         }
         alts.push(self.payload_pattern_slice(tokens, seg, tokens.len))
-        return Pattern.Or(OrPattern { span = span, alternatives = alts })
+        return Pattern.Or(OrPattern { span = span, alternatives = move alts })
     }
 
     // `a..b` / `a..=b` / `..b` / `a..` - a top-level range token makes a range pattern with
@@ -3000,7 +2913,7 @@ fn project_pattern_from_tokens(self: &Projector, tokens: List(Token), start: usi
     return self.enum_variant_pattern_from_tokens(tokens, span)
 }
 
-fn has_top_level_brace(tokens: List(Token)) bool {
+fn has_top_level_brace(tokens: &List(Token)) bool {
     for i in 0..tokens.len {
         if tokens[i].kind == TokenKind.OpenBrace {
             return true
@@ -3011,7 +2924,7 @@ fn has_top_level_brace(tokens: List(Token)) bool {
 
 // `(p0, p1, …)` - the parenthesised run split at top-level commas. An
 // unbalanced or trailing-garbage run degrades to `Error` (E2115) rather than guess a shape.
-fn tuple_pattern_from_tokens(self: &Projector, tokens: List(Token), span: SourceSpan) Pattern {
+fn tuple_pattern_from_tokens(self: &Projector, tokens: &List(Token), span: SourceSpan) Pattern {
     let elements: List(Pattern) = list(2, Some(self.alloc))
     let depth: i32 = 0
     let seg = 1usize
@@ -3042,12 +2955,12 @@ fn tuple_pattern_from_tokens(self: &Projector, tokens: List(Token), span: Source
     if !closed or i != tokens.len {
         return self.error_pattern(span)
     }
-    return Pattern.Tuple(TuplePattern { span = span, elements = elements })
+    return Pattern.Tuple(TuplePattern { span = span, elements = move elements })
 }
 
 // `Name { x = p, y, .. }`. A field with no `= pattern` is shorthand for binding the field's own
 // name; `..` marks the rest as ignored.
-fn struct_pattern_from_tokens(self: &Projector, tokens: List(Token), span: SourceSpan) Pattern {
+fn struct_pattern_from_tokens(self: &Projector, tokens: &List(Token), span: SourceSpan) Pattern {
     const a = self.alloc
     let name = tokens[0].text
     let fields: List(StructPatternField) = list(2, Some(a))
@@ -3086,13 +2999,13 @@ fn struct_pattern_from_tokens(self: &Projector, tokens: List(Token), span: Sourc
             name = name,
             generic_args = list(0, Some(a)),
         })),
-        fields = fields,
+        fields = move fields,
         has_rest = has_rest,
     })
 }
 
 fn push_struct_pattern_field(self: &Projector, fields: &List(StructPatternField), has_rest: &bool,
-    tokens: List(Token), lo: usize, hi: usize) {
+    tokens: &List(Token), lo: usize, hi: usize) {
     if hi <= lo {
         return
     }
@@ -3115,12 +3028,13 @@ fn push_struct_pattern_field(self: &Projector, fields: &List(StructPatternField)
         return
     }
     const sub = self.payload_pattern_slice(tokens, lo + 2, hi)
-    fields.push(StructPatternField { span = fspan, name = fname, binding = Some(self.boxed(sub)) })
+    fields.push(StructPatternField { span = fspan, name = fname,
+        binding = Some(self.boxed(move sub)) })
 }
 
 // `lo..hi` in pattern position: at most one literal token on either side of the range token;
 // anything fancier degrades to Error (E2115) rather than guess.
-fn range_pattern_from(self: &Projector, tokens: List(Token), dd: usize, inclusive: bool,
+fn range_pattern_from(self: &Projector, tokens: &List(Token), dd: usize, inclusive: bool,
     span: SourceSpan) Pattern {
     let start_ref: &Expr? = null
     let end_ref: &Expr? = null
@@ -3132,7 +3046,7 @@ fn range_pattern_from(self: &Projector, tokens: List(Token), dd: usize, inclusiv
         if b.is_none() {
             return self.error_pattern(span)
         }
-        start_ref = Some(self.boxed(b.unwrap()))
+        start_ref = Some(self.boxed(unwrap(move b)))
     }
     if dd + 1 < tokens.len {
         if dd + 2 != tokens.len {
@@ -3142,7 +3056,7 @@ fn range_pattern_from(self: &Projector, tokens: List(Token), dd: usize, inclusiv
         if b2.is_none() {
             return self.error_pattern(span)
         }
-        end_ref = Some(self.boxed(b2.unwrap()))
+        end_ref = Some(self.boxed(unwrap(move b2)))
     }
     return Pattern.Range(RangePattern {
         span = span,
@@ -3261,7 +3175,7 @@ fn literal_pattern_for(self: &Projector, tok: Token, span: SourceSpan) Pattern {
     return self.error_pattern(span)
 }
 
-fn enum_variant_pattern_from_tokens(self: &Projector, tokens: List(Token),
+fn enum_variant_pattern_from_tokens(self: &Projector, tokens: &List(Token),
     span: SourceSpan) Pattern {
     let qualifier: String? = null
     let name: String = ""
@@ -3286,7 +3200,7 @@ fn enum_variant_pattern_from_tokens(self: &Projector, tokens: List(Token),
             span = span,
             qualifier = qualifier,
             name = name,
-            payloads = payloads,
+            payloads = move payloads,
         })
     }
     // Expect `(` - anything else is a shape this projector cannot read.
@@ -3318,11 +3232,11 @@ fn enum_variant_pattern_from_tokens(self: &Projector, tokens: List(Token),
         span = span,
         qualifier = qualifier,
         name = name,
-        payloads = payloads,
+        payloads = move payloads,
     })
 }
 
-fn payload_pattern_slice(self: &Projector, tokens: List(Token), lo: usize, hi: usize) Pattern {
+fn payload_pattern_slice(self: &Projector, tokens: &List(Token), lo: usize, hi: usize) Pattern {
     let slice_list: List(Token) = list(0, Some(self.alloc))
     for i in lo..hi {
         slice_list.push(tokens[i])
@@ -3335,7 +3249,7 @@ fn payload_pattern_slice(self: &Projector, tokens: List(Token), lo: usize, hi: u
         start = first.offset
         end = last.offset + last.text.len
     }
-    return self.project_pattern_from_tokens(slice_list, start, end)
+    return self.project_pattern_from_tokens(&slice_list, start, end)
 }
 
 // ─────────────────────────────────────────────────────────────────────────

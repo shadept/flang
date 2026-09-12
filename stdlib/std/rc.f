@@ -59,12 +59,17 @@ pub fn deinit(self: &Rc($T)) {
 
     if inner.ref_count == 0 {
         #if !type_info(T).copyable {
-            inner.value.deinit()
+            inner.value.deinit(self.__allocator.or_global())
         }
         self.__allocator.or_global().free(inner)
     }
 
     self.__inner = null
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Rc($T), allocator: &Allocator) {
+    self.deinit()
 }
 
 // Transparent access to the inner value via field syntax (e.g., rc.field).
@@ -235,12 +240,17 @@ pub fn deinit(self: &Arc($T)) {
 
     if old == 1 {
         #if !type_info(T).copyable {
-            inner.value.deinit()
+            inner.value.deinit(self.__allocator.or_global())
         }
         self.__allocator.or_global().free(inner)
     }
 
     self.__inner = null
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Arc($T), allocator: &Allocator) {
+    self.deinit()
 }
 
 // Transparent access to the inner value via field syntax.

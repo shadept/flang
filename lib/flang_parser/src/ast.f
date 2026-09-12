@@ -38,8 +38,8 @@ pub type Module = struct {
 // Scoped mutability: `decls` is writable only in this file. Installs the resolved decl list after
 // decl-level #if flattening (see comptime.f). The old list's buffer stays in the arena; it is
 // reclaimed with it.
-// Append declarations produced by template expansion (RFC-021 §2). The
-// Decl values are copied; whatever they point into must outlive the module.
+// Append declarations produced by template expansion (RFC-021 §2). The Decl values are moved
+// out of both lists; whatever they point into must outlive the module.
 //
 // Rebuilds the list on the global allocator rather than growing in place: `decls`' stored allocator
 // points at a projection-time local (dead once `project_module` returns), so a push that reallocs
@@ -49,13 +49,13 @@ pub type Module = struct {
 // of build.
 pub fn append_decls(self: &Module, decls: &List(Decl)) {
     let merged: List(Decl) = list(self.decls.len + decls.len)
-    for &d in self.decls { merged.push(d.*) }
-    for &d in decls { merged.push(d.*) }
-    self.decls = merged
+    for &d in self.decls { merged.push(move d.*) }
+    for &d in decls { merged.push(move d.*) }
+    self.decls = move merged
 }
 
 pub fn set_decls(self: &Module, decls: List(Decl)) {
-    self.decls = decls
+    self.decls = move decls
 }
 
 pub fn deinit(self: &Module) {
@@ -64,6 +64,11 @@ pub fn deinit(self: &Module) {
     // lists carry allocator pointers into the (stack-local) arena view they were built with, which
     // does not survive the Module being moved (see docs/known-issues.md on allocator identity).
     self.arena.deinit()
+}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &Module, allocator: &Allocator) {
+    self.deinit()
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -82,6 +87,7 @@ pub type Decl = enum {
     GenDef(GenDef)
     GenInvoke(GenInvoke)
     IfDirective(IfDirectiveDecl)
+    ErrorDirective(ErrorDirective)
     Error(DeclError)
 }
 
@@ -264,6 +270,7 @@ pub type Stmt = enum {
     While(WhileStmt)
     Loop(LoopStmt)
     IfDirective(IfDirectiveStmt)
+    ErrorDirective(ErrorDirective)
 }
 
 // `let|const name(: T)? (= init)?` - LHS is an identifier only. There is no destructuring `let` in
@@ -341,6 +348,15 @@ pub type IfDirectiveStmt = struct {
     condition: &Expr
     then_stmts: List(Stmt)
     else_stmts: List(Stmt)
+}
+
+// `#error(message[, hint])`: a compile-time diagnostic raised where the directive is reached. Both
+// arguments are compile-time expressions rendered as text. One node serves statement and
+// declaration position. `span` is the `#error` name, where the diagnostic's caret goes.
+pub type ErrorDirective = struct {
+    span: SourceSpan
+    message: &Expr
+    hint: &Expr?
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -677,6 +693,9 @@ pub type BlockExpr = struct {
 // The statement list lives in the module arena, which `Module.deinit` frees in one go; walking the
 // tree element-wise would free through allocator pointers into a view that no longer exists.
 pub fn deinit(self: &BlockExpr) {}
+
+// Element form (README, Expected functions). The value carries its own allocator.
+pub fn deinit(self: &BlockExpr, allocator: &Allocator) {}
 
 // `if cond { then } else { else }` and `if cond { then } else if … { … }`.
 // Else-if is encoded as `else_branch` being another `If` - there is no separate "else-if" node.
@@ -1056,10 +1075,10 @@ fn function_mentions_generic(f: &FunctionType) bool {
 }
 
 fn any_generic(tes: &List(TypeExpr)) bool {
-    return tes.any(mentions_generic_value)
-}
-
-// `any` takes elements by value; adapt the reference-taking walk.
-fn mentions_generic_value(te: TypeExpr) bool {
-    return mentions_generic(&te)
+    for &te in tes {
+        if mentions_generic(te) {
+            return true
+        }
+    }
+    return false
 }
