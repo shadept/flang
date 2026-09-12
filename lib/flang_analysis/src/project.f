@@ -87,7 +87,7 @@ pub fn parse_project(text: String, allocator: &Allocator? = null) Project {
             apply_kv(&proj, section, kv.0, kv.1, allocator)
         }
     }
-    return proj
+    return move proj
 }
 
 pub fn deinit(self: &Project) {
@@ -120,9 +120,9 @@ pub fn glob_sources(pattern: String, allocator: &Allocator? = null) List(OwnedSt
     let out: List(OwnedString) = list(0, allocator)
     let r = glob(pattern, allocator)
     if r.is_err() {
-        return out
+        return move out
     }
-    let it = r.unwrap()
+    let it = unwrap(move r)
     defer it.deinit()
     for path in it {
         if ends_with(path, ".generated.f") {
@@ -130,7 +130,7 @@ pub fn glob_sources(pattern: String, allocator: &Allocator? = null) List(OwnedSt
         }
         out.push(from_view(path))
     }
-    return out
+    return move out
 }
 
 // Construction / teardown helpers
@@ -353,7 +353,7 @@ fn parse_array(val: String, alloc: &Allocator?) List(OwnedString) {
         i = i + 1
     }
     push_element(&out, inner[start..inner.len])
-    return out
+    return move out
 }
 
 fn push_element(out: &List(OwnedString), raw: String) {

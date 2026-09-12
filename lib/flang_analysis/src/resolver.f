@@ -109,7 +109,7 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String),
     if segs.len > 1 and segs[0] == ctx.project_name.as_view() {
         let p = join_module_path(ctx.project_source_root.as_view(), segs, 1, allocator)
         if exists(p.as_view()) {
-            return Some(p)
+            return Some(move p)
         }
         p.deinit()
     }
@@ -120,7 +120,7 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String),
             if segs[0] == d.name.as_view() {
                 let p = join_module_path(d.root.as_view(), segs, 1, allocator)
                 if exists(p.as_view()) {
-                    return Some(p)
+                    return Some(move p)
                 }
                 p.deinit()
             }
@@ -130,13 +130,13 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String),
     // Include rule: stdlib first, then the working directory.
     let p1 = join_module_path(ctx.stdlib_root.as_view(), segs, 0, allocator)
     if exists(p1.as_view()) {
-        return Some(p1)
+        return Some(move p1)
     }
     p1.deinit()
 
     let p2 = join_module_path(ctx.cwd.as_view(), segs, 0, allocator)
     if exists(p2.as_view()) {
-        return Some(p2)
+        return Some(move p2)
     }
     p2.deinit()
 
@@ -207,7 +207,7 @@ pub fn resolve_ctx_at(proj: &Project, project_dir: String, stdlib_root: String,
         let dep_dir = join_under(project_dir, d.path.as_view(), allocator)
         let root = normalized_owned(dep_source_root(dep_dir.as_view(), allocator), allocator)
         dep_dir.deinit()
-        deps.push(DepRoot { name = from_view(d.name.as_view()), root = root })
+        deps.push(DepRoot { name = from_view(d.name.as_view()), root = move root })
     }
     let globals: List(OwnedString) = list(proj.global_imports.len, allocator)
     for &g in proj.global_imports {
@@ -217,10 +217,10 @@ pub fn resolve_ctx_at(proj: &Project, project_dir: String, stdlib_root: String,
         project_name = from_view(proj.name.as_view()),
         project_source_root = normalized_owned(source_root(project_dir, proj.source.as_view(),
                 allocator), allocator),
-        deps = deps,
+        deps = move deps,
         stdlib_root = normalize_sep(stdlib_root, allocator),
         cwd = normalize_sep(project_dir, allocator),
-        global_imports = globals,
+        global_imports = move globals,
         comptime = host_ctx(),
         lib_kind = proj.kind match {
             Lib => true
@@ -261,10 +261,10 @@ pub fn single_file_ctx(stdlib_root: String, allocator: &Allocator? = null) Resol
     return ResolveCtx {
         project_name = from_view(""),
         project_source_root = from_view(""),
-        deps = deps,
+        deps = move deps,
         stdlib_root = normalize_sep(stdlib_root, allocator),
         cwd = from_view("."),
-        global_imports = globals,
+        global_imports = move globals,
         comptime = host_ctx(),
         lib_kind = false,
         lazy_bodies = false,
@@ -282,7 +282,7 @@ fn dep_source_root(dep_dir: String, allocator: &Allocator?) OwnedString {
     if text.is_none() {
         return source_root(dep_dir, "src/**/*.f", allocator)
     }
-    let t = text.unwrap()
+    let t = unwrap(move text)
     defer t.deinit()
     let dp = parse_project(t.as_view(), allocator)
     defer dp.deinit()
@@ -320,7 +320,7 @@ fn source_root(project_dir: String, source_glob: String, allocator: &Allocator?)
         out.deinit()
         return from_view(".")
     }
-    return out
+    return move out
 }
 
 // Read a whole file as text, or null when it cannot be opened or read.
@@ -335,7 +335,7 @@ pub fn read_text(path: String) OwnedString? {
     if rd.is_err() {
         return null
     }
-    return Some(rd.unwrap())
+    return Some(unwrap(move rd))
 }
 
 // Internal helpers
@@ -354,7 +354,7 @@ pub fn normalize_sep(path: String, allocator: &Allocator? = null) OwnedString {
 fn normalized_owned(s: OwnedString, allocator: &Allocator?) OwnedString {
     let n = normalize_sep(s.as_view(), allocator)
     s.deinit()
-    return n
+    return move n
 }
 
 // One spelling for one file: forward slashes, absolute (joined under the current directory when
@@ -367,15 +367,16 @@ pub fn canon_path(p: String, allocator: &Allocator? = null) OwnedString {
     if !is_absolute(norm.as_view()) {
         const wd = cwd(allocator)
         if wd.is_ok() {
-            let base = wd.unwrap()
+            let base = unwrap(move wd)
             const joined = $"{base.as_view()}/{norm.as_view()}"
             base.deinit()
-            norm.deinit()
+            const relative = move norm
+            relative.deinit()
             norm = normalize_sep(joined.as_view(), allocator)
             joined.deinit()
         }
     }
-    return fold_dots(norm, allocator)
+    return fold_dots(move norm, allocator)
 }
 
 // Resolve `.` and `..` segments of a forward-slash path; consumes the input. A `..` that would
@@ -397,7 +398,7 @@ fn fold_dots(p: OwnedString, alloc: &Allocator?) OwnedString {
         kept.push(s)
     }
     if kept.len == 0 {
-        return p
+        return move p
     }
 
     let sb = string_builder(v.len, alloc)
@@ -503,10 +504,10 @@ fn fixture_ctx() ResolveCtx {
     return ResolveCtx {
         project_name = from_view("flang_analysis"),
         project_source_root = from_view("lib/flang_analysis/src"),
-        deps = deps,
+        deps = move deps,
         stdlib_root = from_view("stdlib"),
         cwd = from_view("."),
-        global_imports = globals,
+        global_imports = move globals,
         comptime = host_ctx(),
         lib_kind = false,
         lazy_bodies = false,

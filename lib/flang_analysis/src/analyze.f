@@ -61,7 +61,7 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
 
     let lx = lexer(src, allocator)
     let tokens = lx.tokenize()
-    let p = parser(tokens, src, allocator)
+    let p = parser(move tokens, src, allocator)
     const cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, 0i32, allocator, Some(&diagnostics))
 
@@ -80,7 +80,7 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
     let result = empty_result(allocator)
     if checked {
         let modules: List(Module) = list(1, allocator)
-        modules.push(module)
+        modules.push(move module)
         let paths: List(String) = list(1, allocator)
         paths.push(path)
 
@@ -91,6 +91,8 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
         let chk = checker(allocator)
         let gens = template_state(allocator)
 
+        const placeholder = move result
+        placeholder.deinit()
         result = check_all(&chk, &modules, &paths, &srcs, &fps, &gens)
         drain_diagnostics(&diagnostics, &chk.diagnostics)
 
@@ -101,21 +103,21 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
         srcs.deinit()
         fps.deinit()
 
-        // `push` copied the struct; `module` still owns the arena. `pop` moves the alias out before
-        // the list is freed.
-        const _alias = modules.pop()
+        // The module comes back out with whatever expansion appended to it.
+        module = unwrap(modules.pop())
         modules.deinit()
         paths.deinit()
     }
 
-    diagnostics = filter_allowed(&diagnostics, &module, allocator)
+    let published = filter_allowed(&diagnostics, &module, allocator)
+    diagnostics.deinit()
 
     return .{
-        source = source,
-        module = module,
-        result = result,
+        source = move source,
+        module = move module,
+        result = move result,
         checked = checked,
-        diagnostics = diagnostics,
+        diagnostics = move published,
     }
 }
 
@@ -135,10 +137,10 @@ pub fn filter_allowed(diags: &List(Diagnostic), module: &Module,
             taken.0[i].deinit()
             continue
         }
-        kept.push(taken.0[i])
+        kept.push(move taken.0[i])
     }
     taken.1.free(taken.0)
-    return kept
+    return move kept
 }
 
 // The project-wide form: a diagnostic is matched against the declarations of the module its span's
@@ -159,10 +161,10 @@ pub fn filter_allowed_project(diags: &List(Diagnostic), modules: &List(Module),
             taken.0[i].deinit()
             continue
         }
-        kept.push(taken.0[i])
+        kept.push(move taken.0[i])
     }
     taken.1.free(taken.0)
-    return kept
+    return move kept
 }
 
 fn is_allowed(d: &Diagnostic, module: &Module) bool {
@@ -241,7 +243,9 @@ pub fn error_count(self: &AnalyzedUnit) usize {
 // elements travel out of `src` in its backing buffer, leaving it empty; only that buffer is freed.
 fn drain_diagnostics(dst: &List(Diagnostic), src: &List(Diagnostic)) {
     const taken = src.to_owned_slice()
-    dst.push_all(taken.0)
+    for i in 0..taken.0.len {
+        dst.push(move taken.0[i])
+    }
     taken.1.free(taken.0)
 }
 
@@ -357,19 +361,19 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), overrides:
         let src_opt = read_source(path, overrides)
         if src_opt.is_none() {
             const msg = $"cannot read source `{path}`"
-            parse_diags.push(error("E0001", msg, none_span()))
+            parse_diags.push(error("E0001", move msg, none_span()))
             continue
         }
-        let src = src_opt.unwrap()
+        let src = unwrap(move src_opt)
         let fid = modules.len as i32
         let module = parse_to_module(src.as_view(), fid, &ctx.comptime, &parse_diags, allocator)
         let fqn = module_fqn(ctx, path, allocator)
         enqueue_imports(ctx, &module, modules.len, &queue, &seen, &edge_from, &edge_to,
             &parse_diags, allocator)
-        sources.push(src)
+        sources.push(move src)
         file_paths.push(from_view(path))
-        fqns.push(fqn)
-        modules.push(module)
+        fqns.push(move fqn)
+        modules.push(move module)
         project_origin.push(is_project)
     }
 
@@ -378,18 +382,18 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), overrides:
     const parse_ns = elapsed_ns(parse_start)
 
     let unit = AnalyzedProject {
-        sources = sources,
-        fqns = fqns,
-        file_paths = file_paths,
-        modules = modules,
-        project_origin = project_origin,
+        sources = move sources,
+        fqns = move fqns,
+        file_paths = move file_paths,
+        modules = move modules,
+        project_origin = move project_origin,
         demanded = list(0, allocator),
         retired_sources = list(0, allocator),
         retired_modules = list(0, allocator),
         retired_results = list(0, allocator),
         result = empty_result(allocator),
         checked = false,
-        parse_diags = parse_diags,
+        parse_diags = move parse_diags,
         diagnostics = list(0, allocator),
         checker = checker(allocator),
         generated = empty_template_output(allocator),
@@ -399,7 +403,7 @@ pub fn analyze_project(ctx: &ResolveCtx, entries: &List(OwnedString), overrides:
     const check_start = monotonic_ns()
     check_project(&unit, ctx, &edge_from, &edge_to, null, allocator)
     unit.check_ns = elapsed_ns(check_start)
-    return unit
+    return move unit
 }
 
 // Run the checker over the module set `self` already holds and install the result.
@@ -414,25 +418,27 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     // from a previous check holds string views into them; the matching `file_paths` entries are
     // freed, because `TypeCheckResult` keeps its own copies of paths.
     while self.sources.len > self.modules.len {
-        const gone = self.sources.pop()
-        if gone.is_some() {
-            self.retired_sources.push(gone.unwrap())
-        }
+        self.retired_sources.push(unwrap(self.sources.pop()))
     }
     trim_owned(&self.file_paths, self.modules.len)
 
     // The check tier is regenerated whole on every demand, so the previous run's copy goes and the
     // parse tier is replayed underneath it.
-    self.diagnostics.deinit()
-    self.diagnostics = self.parse_diags.map(fn(d: Diagnostic) { clone_diag(&d) }, allocator)
+    self.diagnostics.clear()
+    for &d in self.parse_diags {
+        self.diagnostics.push(clone_diag(d))
+    }
 
     self.checked = count_errors(&self.diagnostics) == 0
     if !self.checked {
         return
     }
 
-    let path_views = self.fqns.map(fn(s: OwnedString) { s.as_view() })
+    let path_views: List(String) = list(self.fqns.len, allocator)
     defer path_views.deinit()
+    for &s in self.fqns {
+        path_views.push(s.as_view())
+    }
     let edges = index_edges(&self.file_paths, edge_from, edge_to, allocator)
     defer edges.deinit()
     let order = demand_order(path_views.len, &path_views, &edges, allocator)
@@ -465,7 +471,7 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     const sizes = table_caps(&self.result)
     chk.presize_results(&sizes)
     slim_retire(&self.result)
-    self.retired_results.push(self.result)
+    self.retired_results.push(move self.result)
     let gens = template_state(allocator)
     chk.set_comptime_ctx(ctx.comptime)
     // Set once per context, not per demand: a carried body slot (RFC-022 5d) replays what the
@@ -539,7 +545,7 @@ fn demand_mask(fqns: &List(String), project_origin: &List(bool), globals: &List(
             }
         }
     }
-    return mask
+    return move mask
 }
 
 fn demand_root(fqn: String, i: usize, project_origin: &List(bool),
@@ -561,10 +567,8 @@ fn demand_root(fqn: String, i: usize, project_origin: &List(bool),
 // Drop trailing entries until `xs` holds `n`, freeing each one.
 fn trim_owned(xs: &List(OwnedString), n: usize) {
     while xs.len > n {
-        const gone = xs.pop()
-        if gone.is_some() {
-            gone.unwrap().deinit()
-        }
+        let gone = unwrap(xs.pop())
+        gone.deinit()
     }
 }
 
@@ -607,12 +611,12 @@ pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
         const fresh = read_source(path, overrides)
         if fresh.is_none() {
             const msg = $"cannot read source `{path}`"
-            self.parse_diags.push(error("E0001", msg, none_span()))
+            self.parse_diags.push(error("E0001", move msg, none_span()))
             continue
         }
-        self.retired_sources.push(srcs[i])
-        self.retired_modules.push(mods[i])
-        srcs[i] = fresh.unwrap()
+        self.retired_sources.push(move srcs[i])
+        self.retired_modules.push(move mods[i])
+        srcs[i] = unwrap(move fresh)
         mods[i] = parse_to_module(srcs[i].as_view(), i as i32, &ctx.comptime, &self.parse_diags,
             allocator)
         recollect[i] = true
@@ -641,13 +645,13 @@ pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
 fn collect_edges(ctx: &ResolveCtx, modules: &List(Module), edge_from: &List(usize),
     edge_to: &List(OwnedString), alloc: &Allocator?) {
     for i in 0..modules.len {
-        for d in modules[i].decls {
-            d match {
+        for &d in modules[i].decls {
+            d.* match {
                 Import(id) => {
                     const r = resolve_import(ctx, &id.path, alloc)
                     if r.is_some() {
                         edge_from.push(i)
-                        edge_to.push(r.unwrap())
+                        edge_to.push(unwrap(move r))
                     }
                 }
                 _ => {}
@@ -673,38 +677,41 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String),
         file_paths.push(from_view(fqns[i]))
     }
 
-    let diagnostics = parse_diags.map(fn(d: Diagnostic) { clone_diag(&d) }, allocator)
+    let diagnostics: List(Diagnostic) = list(parse_diags.len, allocator)
+    for &d in parse_diags {
+        diagnostics.push(clone_diag(d))
+    }
     let checked = count_errors(&diagnostics) == 0
-    let result = empty_result(allocator)
-    let generated = empty_template_output(allocator)
     // The checker rides on the returned unit like `analyze_project`'s does - consumers (the LSP)
     // read its registries and type-parameter names.
     let chk = checker(allocator)
-    if checked {
-        let gens = template_state(allocator)
-        result = check_all(&chk, &modules, fqns, &srcs, &file_paths, &gens)
-        drain_diagnostics(&diagnostics, &chk.diagnostics)
-        generated = gens.take_output()
-        gens.deinit()
+    let gens = template_state(allocator)
+    let result = if checked {
+        check_all(&chk, &modules, fqns, &srcs, &file_paths, &gens)
+    } else {
+        empty_result(allocator)
     }
+    drain_diagnostics(&diagnostics, &chk.diagnostics)
+    let generated = gens.take_output()
+    gens.deinit()
 
     let no_origin: List(bool) = list(0, allocator)
     return AnalyzedProject {
-        sources = srcs,
-        fqns = owned_fqns,
-        file_paths = file_paths,
-        modules = modules,
-        project_origin = no_origin,
+        sources = move srcs,
+        fqns = move owned_fqns,
+        file_paths = move file_paths,
+        modules = move modules,
+        project_origin = move no_origin,
         demanded = list(0, allocator),
         retired_sources = list(0, allocator),
         retired_modules = list(0, allocator),
         retired_results = list(0, allocator),
-        result = result,
+        result = move result,
         checked = checked,
-        parse_diags = parse_diags,
-        diagnostics = diagnostics,
-        checker = chk,
-        generated = generated,
+        parse_diags = move parse_diags,
+        diagnostics = move diagnostics,
+        checker = move chk,
+        generated = move generated,
         parse_ns = 0,
         check_ns = 0,
     }
@@ -758,13 +765,13 @@ fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List
     alloc: &Allocator?) Module {
     let lx = lexer(src, alloc)
     let tokens = lx.tokenize()
-    let p = parser(tokens, src, alloc)
+    let p = parser(move tokens, src, alloc)
     let cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, file_id, alloc, Some(diags))
     flatten_module_decls(&module, target, diags, alloc)
     drain_diagnostics(diags, &p.diagnostics)
     p.deinit()
-    return module
+    return move module
 }
 
 // Queue every module `m` imports, recording `from -> imported` so the checker can be given a
@@ -773,15 +780,15 @@ fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List
 fn enqueue_imports(ctx: &ResolveCtx, m: &Module, from: usize, queue: &List(OwnedString),
     seen: &Set(OwnedString), edge_from: &List(usize), edge_to: &List(OwnedString),
     diags: &List(Diagnostic), alloc: &Allocator?) {
-    for d in m.decls {
-        d match {
+    for &d in m.decls {
+        d.* match {
             Import(id) => {
                 let r = resolve_import(ctx, &id.path, alloc)
                 r match {
                     Some(p) => {
                         edge_from.push(from)
                         edge_to.push(from_view(p.as_view()))
-                        enqueue_owned(queue, seen, p)
+                        enqueue_owned(queue, seen, move p)
                     }
                     None => push_unresolved(diags, &id, alloc)
                 }
@@ -801,10 +808,10 @@ fn seed_globals(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(OwnedStr
         let r = resolve_import(ctx, &segs, alloc)
         segs.deinit()
         r match {
-            Some(p) => enqueue_owned(queue, seen, p)
+            Some(p) => enqueue_owned(queue, seen, move p)
             None => {
                 const msg = $"unresolved global import `{g.as_view()}` from flang.toml [imports].global"
-                diags.push(error("E0001", msg, none_span()))
+                diags.push(error("E0001", move msg, none_span()))
             }
         }
     }
@@ -818,7 +825,7 @@ fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(OwnedStr
     let r = resolve_import(ctx, &segs, alloc)
     segs.deinit()
     r match {
-        Some(p) => enqueue_owned(queue, seen, p)
+        Some(p) => enqueue_owned(queue, seen, move p)
         None => {}
     }
 }
@@ -847,7 +854,7 @@ fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(OwnedStri
             norm.deinit()
             continue
         }
-        enqueue_owned(queue, seen, norm)
+        enqueue_owned(queue, seen, move norm)
     }
     found.deinit()
 }
@@ -865,7 +872,7 @@ fn shadowed_by_project(ctx: &ResolveCtx, stdlib_file: String, alloc: &Allocator?
     if r.is_none() {
         return false
     }
-    const p = r.unwrap()
+    const p = unwrap(move r)
     const shadowed = p.as_view() != stdlib_file
     p.deinit()
     return shadowed
@@ -925,7 +932,7 @@ fn index_edges(file_paths: &List(OwnedString), edge_from: &List(usize), edge_to:
         }
         edges.push(ImportEdge { from = edge_from[i], to = to.unwrap() })
     }
-    return edges
+    return move edges
 }
 
 fn enqueue_copy(queue: &List(OwnedString), seen: &Set(OwnedString), path: String) {
@@ -940,7 +947,7 @@ fn enqueue_owned(queue: &List(OwnedString), seen: &Set(OwnedString), owned: Owne
         owned.deinit()
         return
     }
-    queue.push(owned)
+    queue.push(move owned)
 }
 
 // Record `path`'s canonical identity; false when that file was already enqueued under any spelling.
@@ -958,7 +965,7 @@ fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl, alloc: &Allocator?
     let dotted = dot_join(&id.path, alloc)
     const msg = $"unresolved import `{dotted.as_view()}`"
     dotted.deinit()
-    diags.push(error("E0001", msg, id.span))
+    diags.push(error("E0001", move msg, id.span))
 }
 
 // Tests
@@ -969,7 +976,7 @@ test "an override stands in for a file that is not on disk" {
     ov.set("no/such/file.f", "fn main() i32 { return 0 }\n")
     let got = read_source("no/such/file.f", Some(&ov))
     assert_true(got.is_some(), "the override supplied the text")
-    let text = got.unwrap()
+    let text = unwrap(move got)
     defer text.deinit()
     assert_true(text.as_view() == "fn main() i32 { return 0 }\n", "and it is the buffer verbatim")
 }

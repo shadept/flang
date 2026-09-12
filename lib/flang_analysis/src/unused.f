@@ -109,7 +109,7 @@ pub fn unused_functions(result: &TypeCheckResult, modules: &List(Module), fqns: 
     defer work.deinit()
 
     for entry in result.functions.by_name {
-        const overloads = entry.value
+        const overloads = &entry.value
         for j in 0..overloads.len {
             const f = &overloads[j]
             if f.retired or f.is_foreign {
@@ -191,7 +191,7 @@ pub fn unused_functions(result: &TypeCheckResult, modules: &List(Module), fqns: 
                 length = n.end - n.start },
         })
     }
-    return out
+    return move out
 }
 
 fn is_root(n: &FnNode, lib_kind: bool, tests_checked: bool, has_tests: &List(bool)) bool {
@@ -389,7 +389,7 @@ pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &L
     let fn_module: Dict(u32, String) = dict(allocator)
     defer fn_module.deinit()
     for entry in result.functions.by_name {
-        const overloads = entry.value
+        const overloads = &entry.value
         for j in 0..overloads.len {
             if overloads[j].module.is_some() {
                 fn_module.set(overloads[j].id, overloads[j].module.unwrap())
@@ -450,7 +450,7 @@ pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &L
     defer memos.deinit()
     for _i in 0..modules.len {
         let m: Dict(Ty, bool) = dict(allocator)
-        memos.push(m)
+        memos.push(move m)
     }
     for i in 0..modules.len {
         for t in buckets[i] {
@@ -463,7 +463,7 @@ pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &L
     // function's body is never checked, so nothing else records them). The registries hold the
     // resolved types - walk each project declaration's.
     for entry in result.functions.by_name {
-        const overloads = entry.value
+        const overloads = &entry.value
         for j in 0..overloads.len {
             const f = &overloads[j]
             if f.retired or f.module.is_none() {
@@ -555,7 +555,7 @@ pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &L
                 _ => {}
             }
         }
-        reexports.push(row)
+        reexports.push(move row)
     }
 
     let missed: List(ImportSite) = list(0, allocator)
@@ -578,25 +578,24 @@ pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &L
     missed.sort(cmp_site)
 
     let out: List(Diagnostic) = list(missed.len, allocator)
-    for &m in missed {
+    for m in missed {
+        const dotted = dotted_name(m.path, allocator)
+        defer dotted.deinit()
         out.push(Diagnostic {
             severity = Severity.Warning,
             code = W_UNUSED_IMPORT,
-            message = $"unused import `{m.name.as_view()}`",
+            message = $"unused import `{dotted.as_view()}`",
             hint = from_view("nothing from it is used - remove the import"),
             span = m.span,
         })
     }
-    return out
+    return move out
 }
 
+// An unused import, by reference into the module's AST: `path` is the declaration's segments.
 type ImportSite = struct {
-    name: OwnedString
+    path: &List(String)
     span: SourceSpan
-}
-
-pub fn deinit(self: &ImportSite) {
-    self.name.deinit()
 }
 
 fn is_project(project_origin: &List(bool), i: usize) bool {
@@ -635,13 +634,12 @@ fn check_import(id: &ImportDecl, from: usize, fqns: &List(String), index_of: &Di
         return
     }
     let dotted = dotted_name(&id.path, allocator)
+    defer dotted.deinit()
     if dotted.as_view() == "core.prelude" or index_of.get(dotted.as_view()).is_none() {
-        dotted.deinit()
         return
     }
     const target = index_of.get(dotted.as_view()).unwrap()
     if target == from {
-        dotted.deinit()
         return
     }
 
@@ -661,12 +659,11 @@ fn check_import(id: &ImportDecl, from: usize, fqns: &List(String), index_of: &Di
     }
     for m in closure {
         if used.contains(fqns[m]) or exports_invisibles(&modules[m]) {
-            dotted.deinit()
             return
         }
     }
 
-    missed.push(ImportSite { name = dotted, span = id.span })
+    missed.push(ImportSite { path = &id.path, span = id.span })
 }
 
 // Whether a module exports anything the recorded edges cannot witness: a `pub` type alias (its
@@ -871,7 +868,7 @@ fn diag_messages(unit: &AnalyzedProject, code: String) List(String) {
             out.push(unit.diagnostics[i].message.as_view())
         }
     }
-    return out
+    return move out
 }
 
 test "an unreachable function warns and a called one does not" {

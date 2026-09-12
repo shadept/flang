@@ -97,11 +97,11 @@ pub fn demand_order(count: usize, fqns: &List(String), edges: &List(ImportEdge),
     }
     // The order goes to the caller as a list over the same allocator; everything else was scratch.
     // Leaving an empty list behind keeps `deinit` free to release every field it owns.
-    let out: List(usize) = .{ __storage = t.out, allocator = alloc }
+    let out: List(usize) = .{ __storage = move t.out, allocator = alloc }
     let empty: UnmanagedList(usize)
-    t.out = empty
+    t.out = move empty
     t.deinit()
-    return out
+    return move out
 }
 
 // Returns the successors of each node, one row per node, deduplicated and in FQN order. Edges
@@ -111,7 +111,7 @@ fn build_adjacency(count: usize, fqns: &List(String), edges: &List(ImportEdge),
     let adj: UnmanagedList(UnmanagedList(usize)) = unmanaged_list(count, allocator)
     for _i in 0..count {
         let row: UnmanagedList(usize)
-        adj.push(row, allocator)
+        adj.push(move row, allocator)
     }
     for e in edges {
         if e.from >= count or e.to >= count {
@@ -128,7 +128,7 @@ fn build_adjacency(count: usize, fqns: &List(String), edges: &List(ImportEdge),
     for &row in adj {
         row.sort_by(fn(i) { name_of(fqns, i) })
     }
-    return adj
+    return move adj
 }
 
 fn visit(t: &Tarjan, v: usize, fqns: &List(String)) {
@@ -179,7 +179,7 @@ fn by_fqn(count: usize, fqns: &List(String), allocator: &Allocator) List(usize) 
         all.push(i)
     }
     all.sort_by(fn(i) { name_of(fqns, i) })
-    return all
+    return move all
 }
 
 // The key `sort_by` orders indices with. An index with no name sorts first, and ties among such
@@ -196,7 +196,7 @@ fn name_of(fqns: &List(String), i: usize) String {
 fn names(xs: String[]) List(String) {
     let l = list(xs.len)
     l.push_all(xs)
-    return l
+    return move l
 }
 
 fn edge(from: usize, to: usize) ImportEdge {

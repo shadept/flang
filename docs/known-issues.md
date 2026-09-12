@@ -2760,7 +2760,9 @@ break in two ways. Three changes closed them:
   that IS a bare var blocks instantiation. `List($T)` does not, so
   `to_list` instantiates and its body derives `$T` from the iterator it
   drives. The previous deep test refused and reported E2001
-  (`stdlib/dict_iter_chain.f`).
+  (`stdlib/dict_iter_chain.f`). Since 2026-09-12 the *parameter* side is
+  deep again, function types excepted; the return stays shallow. See "A
+  Pending Pick Whose Type Argument Is Still Open Counts as Ready".
 - **`zonk_specializations`**, a final program-wide re-zonk of every
   stored specialization signature. A nested instantiation can finish
   before its CALLER's body pins a type argument it inherited
@@ -3719,7 +3721,7 @@ stored, and `#if type_info(T).copyable` in the stdlib is to be read as "has no d
 
 ### A Pending Pick Whose Type Argument Is Still Open Counts as Ready
 
-**Status:** Open
+**Status:** Fixed in source (2026-09-12), unverified until the compiler is rebuilt
 **Affected:** `lib/flang_typer/src/checker.f` (`pending_ready`, `drain_pending_specs`)
 
 `pending_ready` tests the pick's parameter and return types for being variables. A parameter that
@@ -3733,13 +3735,21 @@ silently did nothing, which is how such lists went unnoticed.
 The typer sweep leaves five of these in `lib/flang_typer` (`flang build --check`): lists whose
 element type is never pinned by any push and whose `deinit` pick was parked until the final drain.
 Bisecting with a probe list shows the ids are minted after every body, so they cannot be
-attributed by position.
+attributed by position. `lib/flang_analysis` adds three more (eight under its `check`, five of
+them the typer's); annotating every unannotated container construction in its sources, stripping
+its test blocks, and pinning the inner lists pushed into `List(List(T))` each leave the count at
+eight, so the open argument is minted inside a dependency's or the stdlib's generic body, not at
+an analysis `let`.
 
-**Fix:** `pending_ready` should also require every `tp_binds` value to be settled; a pick left with
-an open type argument then reports E2001 at the call, naming the site, instead of instantiating.
-Requires rebuilding the compiler, which the sweep blocks until the whole tree checks: the typer
-now calls stdlib API the dist toolchain lacks (`clone(&Allocator)`, `Dict.clone`, `remove` with an
-allocator).
+**Fix:** `pending_ready` now walks each parameter type (`has_open_arg`): a variable anywhere under
+a reference, array, tuple, record or nominal blocks the pick, so it stays deferred through the
+drain's fixpoint and `report_uninferable_spec` reports E2001 at the call span, naming the site.
+Function types are skipped: a lambda's parameter vars are pinned by the instantiation's body
+re-check (spec 7.3). The return is still tested shallowly, for the return-only type parameters
+above. Pinned by `tests/harness/errors/error_e2001_unpinned_list_element.f`. The rebuild that
+verifies it, and re-attributes the eight residual E2011 to their `let`s, is blocked until the whole
+tree checks: the typer calls stdlib API the dist toolchain lacks (`clone(&Allocator)`,
+`Dict.clone`, `remove` with an allocator).
 
 ---
 

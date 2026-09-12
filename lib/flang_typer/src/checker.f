@@ -2495,23 +2495,52 @@ const MAX_SPEC_DEPTH: usize = 64
 // Drain the pending picks of the body scope that just finished. `process_pending` never appends to
 // this list: picks recorded during a nested instantiation's body check land on that frame's own
 // (swapped-in) list and drain there.
-// Whether a pending can be instantiated now. The test is SHALLOW, and deliberately so (reference
-// parity): only a type that IS a bare var blocks. A type argument nested inside a known constructor
-// - `to_list(it: $I) List($T)`, `max(it: $I) $T?` - does NOT block, because instantiating runs the
-// template body, and it is the body that derives `$T` from the iterator it drives. The settled
-// signature is re-zonked and re-keyed at the end of `instantiate`, and once more program-wide in
-// `zonk_specializations` for the nested instantiations that finished before their caller's body
-// pinned the var.
+// Whether a pending can be instantiated now. A bare var blocks, and so does a var nested inside a
+// PARAMETER's constructor (`deinit(&List(?T))`, `Dict(?K, u32)`): the body has nothing to derive it
+// from, and instantiating would run its `#if type_info(T)` cascades against `?`, reporting inside
+// the template with nothing naming the call. Function types are exempt: a lambda's parameter vars
+// are pinned by the instantiation's body re-check (spec 7.3), so `any(it, fn(v) { ... })` is ready
+// with `fn(?a) ?b` in its parameter.
 //
-// A bare var, by contrast, gives the body nothing to work from - that is the genuinely un-inferable
-// call site (E2001).
+// The return stays SHALLOW (reference parity): `to_list(it: $I) List($T)`, `max(it: $I) $T?` derive
+// `$T` in the body from the iterator they drive. The settled signature is re-zonked and re-keyed at
+// the end of `instantiate`, and once more program-wide in `zonk_specializations` for the nested
+// instantiations that finished before their caller's body pinned the var.
+//
+// What stays deferred through the whole drain is the genuinely un-inferable call site (E2001).
 fn pending_ready(self: &Checker, p: &PendingSpec) bool {
     for i in 0..p.inst_params.len {
-        if self.engine.is_var(self.engine.zonk(p.inst_params[i])) {
+        if has_open_arg(self, self.engine.zonk(p.inst_params[i])) {
             return false
         }
     }
     return !self.engine.is_var(self.engine.zonk(p.inst_ret))
+}
+
+// Whether a zonked type still cites a variable anywhere outside a function type.
+fn has_open_arg(self: &Checker, t: Ty) bool {
+    const it = &self.engine.interner
+    if it.is_ground(t) {
+        return false
+    }
+    return it.node(t) match {
+        NVar(_) => true
+        NRef(inner) => has_open_arg(self, inner)
+        NArray(a) => has_open_arg(self, a.elem)
+        NTuple(span) => span_has_open_arg(self, span)
+        NRecord(r) => span_has_open_arg(self, r.tys)
+        NNominal(n) => span_has_open_arg(self, n.args)
+        _ => false
+    }
+}
+
+fn span_has_open_arg(self: &Checker, span: ChildSpan) bool {
+    for i in 0..span.len {
+        if has_open_arg(self, self.engine.interner.child_at(span, i)) {
+            return true
+        }
+    }
+    return false
 }
 
 // Drain the pending picks of the body scope that just finished, to a FIXPOINT. One pass is not
