@@ -10,6 +10,7 @@
 import std.allocator
 import std.mem
 import std.option
+import std.string
 import std.test
 
 // A double-ended queue of `T` over a ring buffer, carrying no allocator: `push_back`, `push_front`
@@ -106,7 +107,7 @@ pub fn push_back(self: &UnmanagedDeque($T), value: T, allocator: &Allocator) {
     self.reserve(self.len + 1, allocator)
     const tail = (self.head + self.len) % self.cap
     const slot: &T = self.ptr + tail
-    slot.* = value
+    slot.* = move value
     self.len = self.len + 1
 }
 
@@ -117,7 +118,7 @@ pub fn push_front(self: &UnmanagedDeque($T), value: T, allocator: &Allocator) {
     // Wrap backwards. Adding cap-1 then mod cap avoids underflow on usize.
     self.head = (self.head + self.cap - 1) % self.cap
     const slot: &T = self.ptr + self.head
-    slot.* = value
+    slot.* = move value
     self.len = self.len + 1
 }
 
@@ -152,11 +153,10 @@ pub fn pop_front(self: &UnmanagedDeque($T)) T? {
     if self.len == 0 {
         return null
     }
-    const slot: &T = self.ptr + self.head
-    const v = slot.*
+    const at = self.head
     self.head = (self.head + 1) % self.cap
     self.len = self.len - 1
-    return Some(v)
+    return Some(move (self.ptr + at).*)
 }
 
 // Removes and returns the back element, or null when empty. The element is the caller's to deinit.
@@ -166,12 +166,16 @@ pub fn pop_back(self: &UnmanagedDeque($T)) T? {
     }
     self.len = self.len - 1
     const tail = (self.head + self.len) % self.cap
-    const slot: &T = self.ptr + tail
-    return Some(slot.*)
+    return Some(move (self.ptr + tail).*)
 }
 
-// Returns the front element without removing it, or null when empty.
+// Returns the front element without removing it, or null when empty. Copyable elements only; an
+// owning element type is a compile-time error at the call (RFC-032).
 pub fn peek_front(self: &UnmanagedDeque($T)) T? {
+    #if !type_info(T).copyable {
+        #error($"peek_front copies the element out, and {T.name} owns something",
+            "use peek_front_ref")
+    }
     if self.len == 0 {
         return null
     }
@@ -179,14 +183,37 @@ pub fn peek_front(self: &UnmanagedDeque($T)) T? {
     return Some(slot.*)
 }
 
-// Returns the back element without removing it, or null when empty.
+// Returns a reference to the front element, or null when empty. Writes through it land in the
+// deque; a push that grows the buffer invalidates it.
+pub fn peek_front_ref(self: &UnmanagedDeque($T)) &T? {
+    if self.len == 0 {
+        return null
+    }
+    return Some(self.ptr + self.head)
+}
+
+// Returns the back element without removing it, or null when empty. Copyable elements only; an
+// owning element type is a compile-time error at the call (RFC-032).
 pub fn peek_back(self: &UnmanagedDeque($T)) T? {
+    #if !type_info(T).copyable {
+        #error($"peek_back copies the element out, and {T.name} owns something",
+            "use peek_back_ref")
+    }
     if self.len == 0 {
         return null
     }
     const tail = (self.head + self.len - 1) % self.cap
     const slot: &T = self.ptr + tail
     return Some(slot.*)
+}
+
+// Returns a reference to the back element, or null when empty. Writes through it land in the deque;
+// a push that grows the buffer invalidates it.
+pub fn peek_back_ref(self: &UnmanagedDeque($T)) &T? {
+    if self.len == 0 {
+        return null
+    }
+    return Some(self.ptr + ((self.head + self.len - 1) % self.cap))
 }
 
 // Drops every element without deiniting any; the buffer is kept for reuse. Elements that own
@@ -230,19 +257,66 @@ pub fn next(self: &DequeIterator($T)) T? {
 }
 
 // =============================================================================
+// UnmanagedDeque: draining
+// =============================================================================
+
+// Moves the elements out of a deque, front to back, and hands the untaken ones back when it is
+// released: `for x in dq.drain()` is the loop that consumes a deque's elements.
+//
+// The deque reads as empty for as long as the drain is live. A drain that is never released leaks
+// whatever it did not take and frees nothing twice.
+pub type DequeDrain = struct(T) {
+    owned __deque: &UnmanagedDeque(T)
+    taken: usize
+    count: usize
+}
+
+// Takes the deque's elements: it reads as empty until the drain is released.
+pub fn drain(self: &UnmanagedDeque($T)) DequeDrain(T) {
+    let out: DequeDrain(T) = .{ __deque = self, taken = 0, count = self.len }
+    self.len = 0
+    return move out
+}
+
+// A drain is its own iterable, and consumes itself: `for x in dq.drain()`.
+pub fn iter(self: DequeDrain($T)) DequeDrain(T) {
+    return move self
+}
+
+// Moves the next element out of the deque, front to back, or null when every one has been taken.
+pub fn next(self: &DequeDrain($T)) T? {
+    if self.taken >= self.count {
+        return null
+    }
+    const idx = (self.__deque.head + self.taken) % self.__deque.cap
+    self.taken = self.taken + 1
+    return Some(move (self.__deque.ptr + idx).*)
+}
+
+// Advances the deque's front past the taken elements and restores its length as the number left.
+// The loop calls this on every path that leaves it (spec 7.4).
+pub fn deinit(self: DequeDrain($T)) {
+    const left = self.count - self.taken
+    if left > 0 {
+        self.__deque.head = (self.__deque.head + self.taken) % self.__deque.cap
+    }
+    self.__deque.len = left
+}
+
+// =============================================================================
 // Deque: the managed API
 // =============================================================================
 
 // Appends `value` at the back, growing when full. The deque owns it from here. Panics when the
 // allocation fails.
 pub fn push_back(self: &Deque($T), value: T) {
-    self.__storage.push_back(value, self.allocator)
+    self.__storage.push_back(move value, self.allocator)
 }
 
 // Prepends `value` at the front, growing when full. The deque owns it from here. Panics when the
 // allocation fails.
 pub fn push_front(self: &Deque($T), value: T) {
-    self.__storage.push_front(value, self.allocator)
+    self.__storage.push_front(move value, self.allocator)
 }
 
 // Deinits every element, front to back, and frees the buffer. Idempotent: a second call is a no-op.
@@ -293,4 +367,30 @@ test "a wrapped window survives growth in order" {
         expected = expected + 1
     }
     assert_eq(expected, 16i32, "both survivors visited")
+}
+
+test "a drain moves the elements out front to back and hands the untaken ones back" {
+    let dq: Deque(OwnedString) = deque(4)
+    defer dq.deinit()
+    dq.push_back(from_view("a"))
+    dq.push_back(from_view("b"))
+    dq.push_back(from_view("c"))
+
+    let seen: usize = 0
+    for owned in dq.drain() {
+        seen = seen + 1
+        owned.deinit()
+        if seen == 2 {
+            break
+        }
+    }
+    assert_eq(seen, 2 as usize, "took two, front first")
+    assert_eq(dq.len, 1 as usize, "the untaken one is back")
+    assert_true(dq.peek_front_ref().unwrap().as_view() == "c",
+        "and it is the one that was not taken")
+
+    for rest in dq.drain() {
+        rest.deinit()
+    }
+    assert_eq(dq.len, 0 as usize, "a drain run to the end leaves the deque empty")
 }

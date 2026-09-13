@@ -152,22 +152,15 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
     return out
 }
 
-// Creates a list holding a copy of `source`, in fresh storage sized to fit. Copyable elements are
-// copied bitwise; owning elements are cloned through `clone(&T, allocator)`, so the new list owns
-// its own. An empty source allocates nothing. Panics when the allocation fails.
-//
-// - `allocator`: kept for the list's whole life. Null is the global allocator.
-pub fn list(source: $T[], allocator: &Allocator? = null) List(T) {
-    const alloc = allocator.or_global()
-    let st: UnmanagedList(T) = unmanaged_list(source, alloc)
-    return .{ __storage = move st, allocator = alloc }
-}
-
 // Creates an unmanaged list of `count` bitwise copies of `value`, in storage sized to fit. Zero
 // allocates nothing. Panics when the allocation fails.
 //
 // - `allocator`: grows and frees the storage. Pass the same one to every allocating call.
 pub fn filled_unmanaged_list(count: usize, value: $T, allocator: &Allocator) UnmanagedList(T) {
+    #if !type_info(T).copyable {
+        #error($"filled_unmanaged_list needs copyable elements, {T.name} owns something",
+            "push a clone per element")
+    }
     let out: UnmanagedList(T) = unmanaged_list(count, allocator)
     for _i in 0..count {
         out.push(value, allocator)
@@ -180,6 +173,10 @@ pub fn filled_unmanaged_list(count: usize, value: $T, allocator: &Allocator) Unm
 //
 // - `allocator`: kept for the list's whole life. Null is the global allocator.
 pub fn filled_list(count: usize, value: $T, allocator: &Allocator? = null) List(T) {
+    #if !type_info(T).copyable {
+        #error($"filled_list needs copyable elements, {T.name} owns something",
+            "push a clone per element")
+    }
     const alloc = allocator.or_global()
     return .{ __storage = filled_unmanaged_list(count, value, alloc), allocator = alloc }
 }
@@ -214,37 +211,6 @@ pub fn clone(self: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
         }
     }
     return out
-}
-
-// Hands over the buffer, shrunk to `len`, and resets the list to empty. Elements are not deinited:
-// the caller owns them now, and frees the slice through the same allocator.
-pub fn to_owned_slice(self: &UnmanagedList($T), allocator: &Allocator) T[] {
-    const elem_size: usize = size_of(T)
-
-    if self.len == 0 {
-        if self.cap > 0 {
-            allocator.free(slice_from_raw_parts(self.ptr, self.cap))
-        }
-        self.ptr = 0usize as &T
-        self.cap = 0
-        const empty: T[] = slice_from_raw_parts(0usize as &T, 0)
-        return empty
-    }
-
-    if self.cap > self.len {
-        const old_slice = slice_from_raw_parts(self.ptr as &u8, self.cap * elem_size)
-        const resized = allocator.realloc(old_slice, align_of(T), self.len * elem_size)
-        if resized.is_some() {
-            self.ptr = resized.unwrap().ptr as &T
-            self.cap = self.len
-        }
-    }
-
-    const result_slice = slice_from_raw_parts(self.ptr, self.len)
-    self.ptr = 0usize as &T
-    self.len = 0
-    self.cap = 0
-    return result_slice
 }
 
 // =============================================================================
@@ -474,14 +440,14 @@ pub fn insert(self: &UnmanagedList($T), index: usize, value: T, allocator: &Allo
         panic("insert(List(T), index): index out of bounds")
     }
     self.reserve(self.len + 1, allocator)
-    self.len = self.len + 1
-    let data = self.as_slice()
-    let i = self.len - 1
-    while i > index {
-        data[i] = move data[i - 1]
-        i = i - 1
+    const rest = self.len - index
+    if rest > 0 {
+        const at: &T = self.ptr + index
+        memmove((at + 1usize) as &u8, at as &u8, rest * size_of(T))
     }
-    data[index] = move value
+    self.len = self.len + 1
+    const slot: &T = self.ptr + index
+    slot.* = move value
 }
 
 // Removes and returns the last element, or null when empty.
@@ -491,8 +457,36 @@ pub fn pop(self: &UnmanagedList($T)) T? {
     }
 
     self.len = self.len - 1
-    let last: &T = self.ptr + self.len
-    return Some(move last.*)
+    return Some(move (self.ptr + self.len).*)
+}
+
+// Removes the element at `index` and returns it, or null past the end. The last element takes its
+// place, so the order of the rest is not kept. O(1).
+pub fn swap_remove(self: &UnmanagedList($T), index: usize) T? {
+    if index >= self.len {
+        return null
+    }
+    self.len = self.len - 1
+    if index != self.len {
+        swap(self.ptr + index, self.ptr + self.len)
+    }
+    return Some(move (self.ptr + self.len).*)
+}
+
+// Removes the element at `index` and returns it, or null past the end. Everything after it shifts
+// one slot toward the front, so the order is kept. O(len - index).
+pub fn remove_at(self: &UnmanagedList($T), index: usize) T? {
+    if index >= self.len {
+        return null
+    }
+    const taken: T = move (self.ptr + index).*
+    const rest = self.len - index - 1
+    if rest > 0 {
+        const at: &T = self.ptr + index
+        memmove(at as &u8, (at + 1usize) as &u8, rest * size_of(T))
+    }
+    self.len = self.len - 1
+    return Some(move taken)
 }
 
 // Set the element at the given index.
@@ -511,11 +505,12 @@ pub fn set(self: &UnmanagedList($T), index: usize, value: T) {
 // Drops every element, deiniting each. The backing storage is kept for reuse.
 pub fn clear(self: &UnmanagedList($T), allocator: &Allocator) {
     #if !type_info(T).copyable {
-        for &elem in self {
-            elem.deinit(allocator)
+        for x in self.drain() {
+            x.deinit(allocator)
         }
+    } else {
+        self.len = 0
     }
-    self.len = 0
 }
 
 // Drops every element past the first `n`, deiniting each. The backing storage is kept; a length at
@@ -566,6 +561,17 @@ pub fn fill(self: &UnmanagedList($T), value: T) {
 // Each returns a fresh list and leaves the receiver untouched.
 // =============================================================================
 
+// One element of a new list, read out of the receiver's storage: a copyable element is copied, an
+// owning one goes through its own `clone`, so the result owns what it holds and the receiver keeps
+// what it had.
+fn clone_elem(src: &$T, allocator: &Allocator) T {
+    #if type_info(T).copyable {
+        return src.*
+    } else {
+        return src.clone(allocator)
+    }
+}
+
 // Returns a new list of `f(x)` for every element, in order, allocated through `allocator`.
 pub fn map(self: &UnmanagedList($T), f: $F, allocator: &Allocator) UnmanagedList($U) {
     let out = unmanaged_list(self.len, allocator)
@@ -594,9 +600,16 @@ pub fn flat_map(self: &UnmanagedList($T), f: $F, allocator: &Allocator) Unmanage
 // Returns a new list of the elements `keep` accepts, in order.
 pub fn filter(self: &UnmanagedList($T), keep: $F, allocator: &Allocator) UnmanagedList(T) {
     let out = unmanaged_list(self.len, allocator)
-    for x in self {
-        if keep(x) {
-            out.push(x, allocator)
+    for i in 0..self.len {
+        const x: &T = self.ptr + i
+        let wanted: bool = false
+        #if type_info(T).copyable {
+            wanted = keep(x.*)
+        } else {
+            wanted = keep(x)
+        }
+        if wanted {
+            out.push(clone_elem(x, allocator), allocator)
         }
     }
     return out
@@ -605,10 +618,16 @@ pub fn filter(self: &UnmanagedList($T), keep: $F, allocator: &Allocator) Unmanag
 // Returns a new list of the elements `drop` rejects, in order: `filter` with the predicate negated.
 pub fn remove(self: &UnmanagedList($T), drop: $F, allocator: &Allocator) UnmanagedList(T) {
     let out = unmanaged_list(self.len, allocator)
-    for x in self {
-        let dropped: bool = drop(x)
+    for i in 0..self.len {
+        const x: &T = self.ptr + i
+        let dropped: bool = false
+        #if type_info(T).copyable {
+            dropped = drop(x.*)
+        } else {
+            dropped = drop(x)
+        }
         if !dropped {
-            out.push(x, allocator)
+            out.push(clone_elem(x, allocator), allocator)
         }
     }
     return out
@@ -619,7 +638,7 @@ pub fn drop_first(self: &UnmanagedList($T), n: usize, allocator: &Allocator) Unm
     let out = unmanaged_list(self.len, allocator)
     let start = min(n, self.len)
     for i in start..self.len {
-        out.push(self[i], allocator)
+        out.push(clone_elem(self.ptr + i, allocator), allocator)
     }
     return out
 }
@@ -630,7 +649,7 @@ pub fn reversed(self: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T
     let i = self.len
     while i > 0 {
         i = i - 1
-        out.push(self[i], allocator)
+        out.push(clone_elem(self.ptr + i, allocator), allocator)
     }
     return out
 }
@@ -640,7 +659,7 @@ pub fn take_last(self: &UnmanagedList($T), n: usize, allocator: &Allocator) Unma
     let out = unmanaged_list(n, allocator)
     let start = if n > self.len { 0 as usize } else { self.len - n }
     for i in start..self.len {
-        out.push(self[i], allocator)
+        out.push(clone_elem(self.ptr + i, allocator), allocator)
     }
     return out
 }
@@ -651,7 +670,8 @@ pub fn zip(self: &UnmanagedList($T), other: &UnmanagedList($B),
     let n = if self.len < other.len { self.len } else { other.len }
     let out: UnmanagedList((T, B)) = unmanaged_list(n, allocator)
     for i in 0..n {
-        out.push((self[i], other[i]), allocator)
+        out.push((clone_elem(self.ptr + i, allocator), clone_elem(other.ptr + i, allocator)),
+            allocator)
     }
     return out
 }
@@ -661,11 +681,18 @@ pub fn partition(self: &UnmanagedList($T), pred: $F, allocator: &Allocator) (Unm
     UnmanagedList(T)) {
     let yes = unmanaged_list(0, allocator)
     let no = unmanaged_list(0, allocator)
-    for x in self {
-        if pred(x) {
-            yes.push(x, allocator)
+    for i in 0..self.len {
+        const x: &T = self.ptr + i
+        let wanted: bool = false
+        #if type_info(T).copyable {
+            wanted = pred(x.*)
         } else {
-            no.push(x, allocator)
+            wanted = pred(x)
+        }
+        if wanted {
+            yes.push(clone_elem(x, allocator), allocator)
+        } else {
+            no.push(clone_elem(x, allocator), allocator)
         }
     }
     return (move yes, move no)
@@ -691,13 +718,12 @@ pub fn flatten(self: &UnmanagedList(List($T)), allocator: &Allocator) UnmanagedL
 pub fn uniq(self: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
     let out: UnmanagedList(T) = unmanaged_list(0, allocator)
     for i in 0..self.len {
-        if i == 0 {
-            out.push(self[i], allocator)
-        } else {
-            let same: bool = self[i] == self[i - 1]
-            if !same {
-                out.push(self[i], allocator)
-            }
+        let same: bool = false
+        if i > 0 {
+            same = (self.ptr + i).* == (self.ptr + (i - 1)).*
+        }
+        if !same {
+            out.push(clone_elem(self.ptr + i, allocator), allocator)
         }
     }
     return out
@@ -756,6 +782,74 @@ pub fn iter_rev(self: &UnmanagedList($T)) SliceRevIterator(T) {
     return self.as_slice().iter_rev()
 }
 
+// Iterates the elements by reference, last to first: the `for &x` form of `iter_rev`.
+pub fn iter_rev_ref(self: &UnmanagedList($T)) SliceRevRefIterator(T) {
+    return self.as_slice().iter_rev_ref()
+}
+
+// =============================================================================
+// UnmanagedList: draining
+// =============================================================================
+
+// Moves the elements out of a list, one at a time, and hands the untaken tail back when it is
+// released: `for x in xs.drain()` is the loop that consumes a list's elements.
+//
+// The list reads as empty for as long as the drain is live, so no path through its API reaches an
+// element that is about to leave. A drain that is never released leaks whatever it did not take and
+// frees nothing twice: the list's own `deinit` walks a length of zero.
+//
+// `__list` is `owned` in the RFC-028 sense - the value is responsible for handing the tail back,
+// and two copies would hand it back twice - so a `Drain` is not copyable.
+pub type Drain = struct(T) {
+    owned __list: &UnmanagedList(T)
+    taken: usize
+    count: usize
+    // Which end the next element comes from. The back is the order `pop` yields, which is what a
+    // stack drains in; the front is the list's own order.
+    from_back: bool
+}
+
+// Takes the list's elements: it reads as empty until the drain is released.
+pub fn drain(self: &UnmanagedList($T)) Drain(T) {
+    let out: Drain(T) = .{ __list = self, taken = 0, count = self.len, from_back = false }
+    self.len = 0
+    return out
+}
+
+// Takes the list's elements last to first, the order `pop` yields them in. The untaken ones are
+// already at the front, so releasing this drain moves nothing.
+pub fn drain_rev(self: &UnmanagedList($T)) Drain(T) {
+    let out: Drain(T) = .{ __list = self, taken = 0, count = self.len, from_back = true }
+    self.len = 0
+    return out
+}
+
+// A drain is its own iterable, and consumes itself: `for x in xs.drain()`.
+pub fn iter(self: Drain($T)) Drain(T) {
+    return self
+}
+
+// Moves the next element out of the list, from the end this drain takes from, or null when every
+// one has been taken.
+pub fn next(self: &Drain($T)) T? {
+    if self.taken >= self.count {
+        return null
+    }
+    const at = if self.from_back { self.count - 1 - self.taken } else { self.taken }
+    self.taken = self.taken + 1
+    return Some(move (self.__list.ptr + at).*)
+}
+
+// Returns the untaken elements to the front of the list and restores its length as their count. The
+// loop calls this on every path that leaves it (spec 7.4), so a `break` keeps the tail.
+pub fn deinit(self: Drain($T)) {
+    const left = self.count - self.taken
+    if left > 0 and self.taken > 0 and !self.from_back {
+        memmove(self.__list.ptr as &u8, (self.__list.ptr + self.taken) as &u8, left * size_of(T))
+    }
+    self.__list.len = left
+}
+
 // =============================================================================
 // The managed API: `List` and `ListRef`
 //
@@ -763,8 +857,8 @@ pub fn iter_rev(self: &UnmanagedList($T)) SliceRevIterator(T) {
 // one implementation - by a generator, so a managed carrier is any type with a `__storage` reaching
 // an `UnmanagedList(T)` and an `allocator` beside it. A transformation takes an optional allocator
 // for its result and otherwise uses the receiver's; it returns a `List` either way, since a new
-// list needs storage of its own. Only what owns storage lives outside the template: `deinit` and
-// `to_owned_slice` are `List`'s alone.
+// list needs storage of its own. Only what owns storage lives outside the template: `deinit` is
+// `List`'s alone.
 // =============================================================================
 
 #define(managed_list, Self: Ident) {
@@ -901,14 +995,6 @@ pub fn deinit(self: &List($T), allocator: &Allocator) {
     self.deinit()
 }
 
-// Hands over the buffer as a `(T[], &Allocator)` pair and resets the list to empty, so a later
-// `deinit()` is a no-op; `let l = list(...); defer l.deinit(); ...; l.to_owned_slice()` is the
-// pattern. The slice is shrunk to fit. Elements are not deinited: the caller owns them now and
-// frees the slice with `alloc.free(s)`, deiniting the elements first when they own anything.
-pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
-    return (self.__storage.to_owned_slice(self.allocator), self.allocator)
-}
-
 // =============================================================================
 // Tests
 // =============================================================================
@@ -956,14 +1042,15 @@ test "a ListRef grows the field it wraps and owns nothing" {
     assert_eq(counting.live_bytes, 0 as usize, "the field's allocator saw every free")
 }
 
-test "list from a slice, first_ref, last_ref and iter_rev" {
+test "push_all from a slice, first_ref, last_ref and iter_rev" {
     let src: List(i32) = list(0)
     defer src.deinit()
     src.push(1i32)
     src.push(2i32)
     src.push(3i32)
-    let xs: List(i32) = list(src.as_slice())
+    let xs: List(i32) = list(0)
     defer xs.deinit()
+    xs.push_all(src.as_slice())
     assert_eq(xs.len, 3 as usize, "copied every element")
     let top = xs.last_ref().unwrap()
     top.* = 30i32
@@ -1056,7 +1143,7 @@ test "push_all appends a slice in order" {
     assert_eq(xs.len, 3 as usize, "empty source is a no-op")
 }
 
-test "push_all and list(source) clone owning elements" {
+test "push_all and clone clone owning elements" {
     let src: List(OwnedString) = list(1)
     defer src.deinit()
     src.push(from_view("alpha"))
@@ -1066,14 +1153,77 @@ test "push_all and list(source) clone owning elements" {
     xs.push_all(src.as_slice())
     assert_true(xs[0].as_view() == "alpha", "element cloned by push_all")
 
-    let ys: List(OwnedString) = list(src.as_slice())
-    defer ys.deinit()
-    assert_true(ys[0].as_view() == "alpha", "element cloned by the constructor")
-
     let zs = src.clone()
     defer zs.deinit()
     assert_true(zs[0].as_view() == "alpha", "element cloned by clone")
-    // Four lists each own an "alpha"; the test allocator reports a double free or a leak.
+    // Three lists each own an "alpha"; the test allocator reports a double free or a leak.
+}
+
+test "a drain moves the elements out and hands the untaken tail back" {
+    let xs: List(OwnedString) = list(3)
+    defer xs.deinit()
+    xs.push(from_view("a"))
+    xs.push(from_view("b"))
+    xs.push(from_view("c"))
+
+    let seen: usize = 0
+    for owned in xs.drain() {
+        seen = seen + 1
+        owned.deinit()
+        if seen == 2 {
+            break
+        }
+    }
+    assert_eq(seen, 2 as usize, "took two")
+    assert_eq(xs.len, 1 as usize, "the untaken one is back")
+    assert_true(xs[0].as_view() == "c", "and it is the one that was not taken")
+
+    for rest in xs.drain() {
+        rest.deinit()
+    }
+    assert_eq(xs.len, 0 as usize, "a drain run to the end leaves the list empty")
+}
+
+test "clear drains the elements it drops" {
+    let xs: List(OwnedString) = list(2)
+    defer xs.deinit()
+    xs.push(from_view("a"))
+    xs.push(from_view("b"))
+    xs.clear()
+    assert_eq(xs.len, 0 as usize, "empty afterwards")
+    xs.push(from_view("c"))
+    assert_true(xs[0].as_view() == "c", "and reusable")
+}
+
+test "swap_remove takes an element out without keeping order" {
+    let xs: List(OwnedString) = list(3)
+    defer xs.deinit()
+    xs.push(from_view("a"))
+    xs.push(from_view("b"))
+    xs.push(from_view("c"))
+
+    const got = xs.swap_remove(0).unwrap()
+    assert_true(got.as_view() == "a", "the element at the index came out")
+    got.deinit()
+    assert_eq(xs.len, 2 as usize, "one shorter")
+    assert_true(xs[0].as_view() == "c", "the last one took its place")
+    assert_true(xs.swap_remove(9).is_none(), "past the end is null")
+}
+
+test "remove_at takes an element out and keeps the order" {
+    let xs: List(OwnedString) = list(3)
+    defer xs.deinit()
+    xs.push(from_view("a"))
+    xs.push(from_view("b"))
+    xs.push(from_view("c"))
+
+    const got = xs.remove_at(0).unwrap()
+    assert_true(got.as_view() == "a", "the element at the index came out")
+    got.deinit()
+    assert_eq(xs.len, 2 as usize, "one shorter")
+    assert_true(xs[0].as_view() == "b", "the rest kept its order")
+    assert_true(xs[1].as_view() == "c", "all of it")
+    assert_true(xs.remove_at(9).is_none(), "past the end is null")
 }
 
 test "binary search trickles through to the list" {

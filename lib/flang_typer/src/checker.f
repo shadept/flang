@@ -29,6 +29,7 @@ import std.collections.dict
 import std.collections.list
 import std.collections.set
 import std.collections.string_pool
+import std.mem
 import std.option
 import std.string
 import std.string_builder
@@ -2571,24 +2572,36 @@ fn drain_pending_specs(self: &Checker, report: bool = true) {
     loop {
         let deferred: List(PendingSpec) = list(queue.len, self.allocator)
         let progressed = false
-        for &p in queue {
-            if pending_ready(self, p) {
-                process_pending(self, p)
+        let taking = queue.drain()
+        loop {
+            let nx = taking.next()
+            if nx.is_none() {
+                break
+            }
+            let p = unwrap(move nx)
+            if pending_ready(self, &p) {
+                process_pending(self, &p)
                 // A processed pick's collections are done; a deferred one keeps its storage into
-                // the next pass, so the queue itself is never element-deinited.
+                // the next pass.
                 p.tp_binds.deinit()
                 p.inst_params.deinit()
                 progressed = true
             } else {
-                deferred.push(move p.*)
+                deferred.push(move p)
             }
         }
+        taking.deinit()
         // Picks the instantiations just made at THIS level join the queue.
-        for &q in self.pending_specs {
-            deferred.push(move q.*)
+        let fresh = self.pending_specs.drain()
+        loop {
+            let nx = fresh.next()
+            if nx.is_none() {
+                break
+            }
+            deferred.push(unwrap(move nx))
             progressed = true
         }
-        self.pending_specs.clear()
+        fresh.deinit()
         const done = move queue
         done.deinit()
         queue = move deferred
@@ -2599,15 +2612,22 @@ fn drain_pending_specs(self: &Checker, report: bool = true) {
             break
         }
     }
-    for &p in queue {
+    let rest = queue.drain()
+    loop {
+        let nx = rest.next()
+        if nx.is_none() {
+            break
+        }
+        let p = unwrap(move nx)
         if report {
-            report_uninferable_spec(self, p)
+            report_uninferable_spec(self, &p)
             p.tp_binds.deinit()
             p.inst_params.deinit()
         } else {
-            self.pending_specs.push(move p.*)
+            self.pending_specs.push(move p)
         }
     }
+    rest.deinit()
     queue.deinit()
 }
 
@@ -3451,16 +3471,16 @@ fn builder_ctor_args(self: &Checker, given: &List(Expr)) List(CallArgument) {
     // one the allocator, wrapped in `Some` when it is an address.
     const first_is_alloc = given.len == 1 and is_address_of(&given[0])
     const cap_e: Expr = if given.len >= 1 and !first_is_alloc {
-        move given[0]
+        alias_expr(&given[0])
     } else {
         synth_int_lit(self, "0")
     }
     const alloc_e: Expr = if first_is_alloc {
-        wrap_some(self, move given[0])
+        wrap_some(self, alias_expr(&given[0]))
     } else if given.len >= 2 and is_address_of(&given[1]) {
-        wrap_some(self, move given[1])
+        wrap_some(self, alias_expr(&given[1]))
     } else if given.len >= 2 {
-        move given[1]
+        alias_expr(&given[1])
     } else {
         synth_null(self)
     }
@@ -3509,6 +3529,16 @@ fn synth_span(self: &Checker) SourceSpan {
 
 // Synthesized nodes live as long as the check result - allocated on the global allocator and
 // deliberately leaked with it.
+// A second name for an expression the AST owns, byte for byte. A desugar builds a synthetic tree
+// over the caller's own sub-expressions and the AST arena releases each of them once, so this is a
+// copy of the bytes rather than a transfer - the source node stays where it is, readable by a
+// re-check of the same body.
+fn alias_expr(src: &Expr) Expr {
+    let out: Expr
+    memcpy(&out as &u8, src as &u8, size_of(Expr))
+    return move out
+}
+
 fn synth_box(self: &Checker, e: Expr) &Expr {
     return box(or_global(self.allocator), move e)
 }
@@ -4185,9 +4215,9 @@ fn try_set_index_assignment(self: &Checker, a: &AssignmentExpr, ix: &IndexExpr) 
 // pass's business (RFC-028).
 fn check_move(self: &Checker, m: &MoveExpr) Ty {
     const inner = check_expr(self, m.operand)
-    if !is_move_operand(m.operand) {
+    if !move_place(self, m.operand) {
         push_diag_e(self, m.span, E_MOVE_NOT_LVALUE,
-            from_view("`move` needs a place to take from; an expression with no storage of its own leaves nothing behind to mark moved"))
+            from_view("`move` takes from a binding, a field, or an element of an `owned` field in its own module; this is none of those"))
         return inner
     }
     // Moving a field takes the same rights as writing one: the declaring module owns the type's
@@ -4231,17 +4261,63 @@ fn append_copy_blame(self: &Checker, ty: Ty, sb: &StringBuilder) {
     }
 }
 
-// The expression forms `move` accepts: the grammar of an assignment target (spec 3.4.1). A call is
-// not one of them - it returns a value with no storage of its own, which is what separates this
-// from `is_place_expr`, where `&f()` is legal because the call may return a reference.
-fn is_move_operand(e: &Expr) bool {
+// The places `move` takes from (RFC-032): a binding; a field path on one; an element of an `owned`
+// field inside the module declaring it - `self.buf[i]` on an owned array, `(self.ptr + i).*` on an
+// owned pointer - optionally followed by a field path. An rvalue has no storage to take, and
+// storage reached through anyone else's reference or container is theirs to hand over - the
+// container never learns that the element left.
+fn move_place(self: &Checker, e: &Expr) bool {
     return e.* match {
         Identifier(_) => true
-        MemberAccess(_) => true
-        Index(_) => true
-        Dereference(_) => true
+        MemberAccess(ma) => move_place(self, ma.receiver)
+        Index(ix) => owned_field_here(self, ix.receiver)
+        Dereference(d) => owned_field_here(self, d.operand) or owned_field_offset(self, d.operand)
         _ => false
     }
+}
+
+// `self.ptr + i` or `self.ptr - i` on an `owned` field of this module: the pointer arithmetic that
+// names one element of the buffer it owns.
+fn owned_field_offset(self: &Checker, e: &Expr) bool {
+    return e.* match {
+        Binary(b) => (b.op == BinaryOp.Add or b.op == BinaryOp.Sub) and owned_field_here(self,
+            b.lhs)
+        _ => false
+    }
+}
+
+// Whether `e` reads an `owned` field of a struct declared in the current module: the one place a
+// value may be taken out of the storage behind a reference.
+fn owned_field_here(self: &Checker, e: &Expr) bool {
+    const ma: &MemberAccessExpr = e.* match {
+        MemberAccess(m) => &m
+        _ => return false
+    }
+    if self.current_module.is_none() {
+        return false
+    }
+    const recv = self.results.get_type(self.node_of(expr_span(ma.receiver)))
+    if recv.is_none() {
+        return false
+    }
+    const nid = ty_node(self, peel_refs(self, recv.unwrap())) match {
+        NNominal(nn) => nn.id
+        _ => return false
+    }
+    return self.nominals.get(nid).* match {
+        NomStruct(sd) => sd.module == self.current_module.unwrap() and struct_field_owned(&sd,
+            ma.member)
+        _ => false
+    }
+}
+
+fn struct_field_owned(sd: &StructDef, name: String) bool {
+    for &f in sd.fields {
+        if f.name == name {
+            return f.owned
+        }
+    }
+    return false
 }
 
 fn check_address_of(self: &Checker, a: &AddressOfExpr) Ty {
@@ -5524,6 +5600,9 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         return self.engine.fresh_var()
     }
     let p = unwrap(move ip)
+    // The iterable is the receiver of `xs.iter()`: a by-value `iter` on a non-copyable iterable
+    // consumes it, and through a reference or a hop that is E2128 as for any method (spec 7.2).
+    check_consuming_receiver(self, &p, iter_name, 1, expr_span(fs.iterable), Some(z))
     self.results.record_operator(self.node_of(fs.body.span), ResolvedOperator {
         function_id = p.id,
         negate_result = false,
@@ -5534,6 +5613,7 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     note_pending(self, fs.body.span, true, &p)
 
     let state = self.engine.resolve(p.ret)
+    record_state_release(self, fs, state)
     // A self-iterator's `iter` returns `&State`; `next(&State)` then takes it AS-IS - so try the
     // wrapped shape first, the state unchanged second (reference parity).
     const wrapped = protocol_pick(self, "next", self.engine.mk_ref(state), fs.span)
@@ -5568,6 +5648,43 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         Some(t) => t
         None => self.engine.fresh_var()
     }
+}
+
+// A non-copyable iterator state is released by the loop on every path that leaves it (spec 7.4):
+// its `deinit`, by value first and by reference second (reference parity with `next`), is recorded
+// on the loop variable's name node beside the `iter` and `next` picks, where `lower_for_iter` reads
+// it. A copyable state has nothing to release. The name node equals the `for` node only under error
+// recovery, when the `next` pick already sits there.
+fn record_state_release(self: &Checker, fs: &ForStmt, state: Ty) {
+    if self.engine.is_var(state) or self.engine.is_copyable(state) {
+        return
+    }
+    const var_node = self.node_of(fs.var_span)
+    if var_node == self.node_of(fs.span) {
+        return
+    }
+    const by_value = protocol_pick(self, "deinit", state, fs.span)
+    const dp: OverloadPick? = by_value match {
+        Some(p) => Some(move p)
+        None => protocol_pick(self, "deinit", self.engine.mk_ref(state), fs.span)
+    }
+    if dp.is_none() {
+        let sb = string_builder(120, self.allocator)
+        sb.append("the iterator state `")
+        format_with_names(&self.engine.interner, state, &sb, Some(&self.nominals))
+        sb.append("` is not copyable and has no `deinit` for the loop to release it with")
+        push_diag_e(self, fs.span, E_NO_OVERLOAD, sb.to_string())
+        return
+    }
+    let d = unwrap(move dp)
+    self.results.record_operator(var_node, ResolvedOperator {
+        function_id = d.id,
+        negate_result = false,
+        cmp_derived_op = null,
+        is_ref_form = false,
+        spec_id = null,
+    })
+    note_pending(self, fs.var_span, true, &d)
 }
 
 fn check_range_bounds(self: &Checker, r: &RangeExpr) Ty {
@@ -6478,15 +6595,23 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
     let parked: List(PendingCall) = list(self.pending_calls.len - from, self.allocator)
     let all = move self.pending_calls
     self.pending_calls = list(all.len, self.allocator)
-    for k in 0..all.len {
-        if k < from {
-            self.pending_calls.push(move all[k])
-        } else {
-            parked.push(move all[k])
+    let taking = all.drain()
+    let k: usize = 0
+    loop {
+        let nx = taking.next()
+        if nx.is_none() {
+            break
         }
+        let pc = unwrap(move nx)
+        if k < from {
+            self.pending_calls.push(move pc)
+        } else {
+            parked.push(move pc)
+        }
+        k = k + 1
     }
-    const shells = all.to_owned_slice()
-    shells.1.free(shells.0)
+    taking.deinit()
+    all.deinit()
     const was_resolving = self.resolving_parked
     self.resolving_parked = true
     defer self.resolving_parked = was_resolving
@@ -6665,7 +6790,7 @@ fn synth_variadic_pack(self: &Checker, pos_exprs: &List(&Expr), from: usize, par
     // The pack holds its own copies of the arena nodes, like every synthesized literal.
     let elems: List(Expr) = list(pos_exprs.len - from, self.allocator)
     for i in from..pos_exprs.len {
-        elems.push(move pos_exprs[i].*)
+        elems.push(alias_expr(pos_exprs[i]))
     }
     const arr = Expr.ArrayLit(ArrayLiteralExpr {
         span = synth_span(self),
@@ -9002,7 +9127,54 @@ fn own_receiver(self: &Checker, p: &OwnPass, c: &CallExpr, ma: &MemberAccessExpr
                 None => {}
             }
         }
+        // An element or a dereference follows the `move` operand table (RFC-032), the one predicate
+        // every consuming site shares: only an `owned` field's element, inside its module.
+        Index(_) => own_element_receiver(self, p, c, ma)
+        Dereference(_) => own_element_receiver(self, p, c, ma)
         _ => {}
+    }
+}
+
+fn own_element_receiver(self: &Checker, p: &OwnPass, c: &CallExpr, ma: &MemberAccessExpr) {
+    if move_place(self, ma.receiver) or !own_claim(p, self.node_of(c.span)) {
+        return
+    }
+    own_report(self, c.span, E_MOVE_NOT_LVALUE,
+        $"`{ma.member}` consumes its receiver, which is an element that belongs to its container - take it out with `pop`, `remove` or `drain` first")
+}
+
+// The iterable is the receiver of the `iter` call the loop desugars to (spec 7.4): a by-value
+// `iter` on a non-copyable binding is the inferred move of that binding, as `d.iter()` would be,
+// and an explicit `move` on it is the doubled spelling `(move h).close()` is.
+fn own_for_iterable(self: &Checker, p: &OwnPass, fs: &ForStmt) {
+    const span = expr_span(fs.iterable)
+    const consumes = own_iter_by_value(self, fs) and !own_is_copyable(self, span)
+        and !own_is_ref(self, span)
+    if !consumes {
+        own_expr(self, p, fs.iterable, own_read())
+        return
+    }
+    fs.iterable.* match {
+        Identifier(id) => {
+            own_expr(self, p, fs.iterable, own_read())
+            own_mark_binding(self, p, id.span)
+        }
+        Move(m) => {
+            own_expr(self, p, m.operand, own_read())
+            if own_claim(p, self.node_of(fs.span)) {
+                own_report(self, m.span, E_CONSUMING_RECEIVER,
+                    from_view("`for` already consumes this iterable - drop the `move`"))
+            }
+        }
+        _ => own_expr(self, p, fs.iterable, own_read())
+    }
+}
+
+// Whether the loop's `iter` pick, recorded on the body node, takes its receiver by value.
+fn own_iter_by_value(self: &Checker, fs: &ForStmt) bool {
+    return self.results.resolved_ops.get(self.node_of(fs.body.span)) match {
+        Some(op) => first_param_by_value(self, op.function_id)
+        None => false
     }
 }
 
@@ -9017,7 +9189,26 @@ fn own_is_ref(self: &Checker, span: SourceSpan) bool {
 // Whether the call's winner takes its first parameter by value, read off the declaration: `&T` in
 // the signature is what makes a receiver borrowed, whatever `T` turns out to be.
 fn own_first_param_by_value(self: &Checker, call_span: SourceSpan) bool {
-    const dp = own_decl_params(self, call_span)
+    return own_call_target(self, call_span) match {
+        Some(f) => first_param_by_value(self, f)
+        None => false
+    }
+}
+
+// The registry function the call at `call_span` resolved to, when it did.
+fn own_call_target(self: &Checker, call_span: SourceSpan) u32? {
+    const t = self.results.resolved_targets.get(self.node_of(call_span))
+    if t.is_none() {
+        return null
+    }
+    return t.unwrap() match {
+        RtFunction(f) => Some(f)
+        _ => null
+    }
+}
+
+fn first_param_by_value(self: &Checker, fid: u32) bool {
+    const dp = own_decl_params(self, fid)
     if dp.is_none() or dp.unwrap().len == 0 {
         return false
     }
@@ -9027,16 +9218,8 @@ fn own_first_param_by_value(self: &Checker, call_span: SourceSpan) bool {
     }
 }
 
-// The declared parameters of the call's winner, when it resolved to a registry function.
-fn own_decl_params(self: &Checker, call_span: SourceSpan) &List(FunctionParam)? {
-    const t = self.results.resolved_targets.get(self.node_of(call_span))
-    if t.is_none() {
-        return null
-    }
-    const fid = t.unwrap() match {
-        RtFunction(f) => f
-        _ => return null
-    }
+// The declared parameters of a registry function.
+fn own_decl_params(self: &Checker, fid: u32) &List(FunctionParam)? {
     return self.fn_decl_params.get_ref(fid) match {
         Some(dp) => Some(dp.params)
         None => null
@@ -9044,7 +9227,11 @@ fn own_decl_params(self: &Checker, call_span: SourceSpan) &List(FunctionParam)? 
 }
 
 fn own_param_moves(self: &Checker, call_span: SourceSpan, idx: usize, name: String) bool {
-    const dp = own_decl_params(self, call_span)
+    const fid = own_call_target(self, call_span)
+    if fid.is_none() {
+        return false
+    }
+    const dp = own_decl_params(self, fid.unwrap())
     if dp.is_none() {
         return false
     }
@@ -9159,14 +9346,14 @@ fn own_stmt(self: &Checker, p: &OwnPass, st: &Stmt) {
         Break(_) => own_escape(self, p, true)
         Continue(_) => own_escape(self, p, false)
         For(fs) => {
-            own_expr(self, p, fs.iterable, own_read())
-            own_loop(self, p, fs.body)
+            own_for_iterable(self, p, &fs)
+            own_loop(self, p, fs.body, Some(self.node_of(fs.var_span)))
         }
         While(ws) => {
             own_expr(self, p, ws.condition, own_read())
-            own_loop(self, p, ws.body)
+            own_loop(self, p, ws.body, null)
         }
-        Loop(ls) => own_loop(self, p, ls.body)
+        Loop(ls) => own_loop(self, p, ls.body, null)
         IfDirective(ifd) => own_if_directive(self, p, &ifd)
         ErrorDirective(_) => {}
     }
@@ -9220,8 +9407,12 @@ fn own_escape(self: &Checker, p: &OwnPass, is_break: bool) {
 // The body runs an unknown number of times, so whatever it moves is moved on entry to the next
 // iteration. The first pass is silent and only settles what the back edge carries; the second
 // reports from that, which is a superset of the entry state, so a first-iteration error is reported
-// too. Paths that left through `break` do not feed the back edge - they feed the exit.
-fn own_loop(self: &Checker, p: &OwnPass, body: &BlockExpr) {
+// too. Paths that left through `break` do not feed the back edge - they feed the exit. A loop body
+// is walked twice: once silently, to learn what the iteration carries into the next one, and once
+// for real from that merged state. `fresh` is a binding the loop declares anew on every iteration -
+// a `for` variable - so a move of it in one iteration says nothing about the next, and it is
+// cleared from the state the second walk starts in.
+fn own_loop(self: &Checker, p: &OwnPass, body: &BlockExpr, fresh: NodeId?) {
     const was_in = p.in_loop
     const was_scope = p.loop_scope
     const was_div = p.diverged
@@ -9252,6 +9443,9 @@ fn own_loop(self: &Checker, p: &OwnPass, body: &BlockExpr) {
     p.escaped.clear()
     p.continued.clear()
     own_restore(&p.moved, &back)
+    if fresh.is_some() {
+        own_unmark(p, fresh.unwrap())
+    }
     p.diverged = false
     own_block(self, p, body, own_read())
 
@@ -11010,8 +11204,8 @@ fn redemand_errors(b_first: String, b_again: String, a_src: String) RedemandErro
     chk.begin_demand()
     chk.adopt_interner(take_interner(&res1))
     chk.adopt_specs(take_specs(&res1))
-    let old_b = move mods[0]
-    mods[0] = parse_src(b_again, 0i32)
+    let old_b = parse_src(b_again, 0i32)
+    swap(&mods[0], &old_b)
     let recollect: List(bool) = list(2)
     recollect.push(true)
     recollect.push(false)
@@ -11185,10 +11379,10 @@ test "a changed default value invalidates the carried slots" {
     chk.begin_demand()
     chk.adopt_interner(take_interner(&res1))
     chk.adopt_specs(take_specs(&res1))
-    let old_b = move mods[0]
-    mods[0] = parse_src(b2, 0i32)
-    let old_src = move srcs[0]
-    srcs[0] = from_view(b2)
+    let old_b = parse_src(b2, 0i32)
+    swap(&mods[0], &old_b)
+    let old_src = from_view(b2)
+    swap(&srcs[0], &old_src)
     let recollect: List(bool) = list(2)
     recollect.push(true)
     recollect.push(false)
@@ -11277,8 +11471,8 @@ test "a carried specialization keeps its id across a clean re-demand" {
     chk.begin_demand()
     chk.adopt_interner(take_interner(&res1))
     chk.adopt_specs(take_specs(&res1))
-    let old_b = move mods[0]
-    mods[0] = parse_src(b_src, 0i32)
+    let old_b = parse_src(b_src, 0i32)
+    swap(&mods[0], &old_b)
     let recollect: List(bool) = list(2)
     recollect.push(true)
     recollect.push(false)
@@ -11321,8 +11515,8 @@ test "a removed call site sweeps its specialization" {
     chk.begin_demand()
     chk.adopt_interner(take_interner(&res1))
     chk.adopt_specs(take_specs(&res1))
-    let old_a = move mods[1]
-    mods[1] = parse_src(a2, 1i32)
+    let old_a = parse_src(a2, 1i32)
+    swap(&mods[1], &old_a)
     let recollect: List(bool) = list(2)
     recollect.push(false)
     recollect.push(true)

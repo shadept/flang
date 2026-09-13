@@ -1,10 +1,15 @@
 ---
-status: draft
+status: superseded
 type: language
 created: 2026-05-11
+superseded-by: [RFC-032]
 ---
 
 # RFC-016: `#auto_deinit` directive and the managed-lifecycle contract
+
+> Superseded by RFC-032. The contract below rests on an idempotent, self-disarming
+> `deinit(&self)`; by-value `deinit` (RFC-028, RFC-032) makes a second release a
+> compile error instead, so there is no disarm to write and no directive to mark.
 
 ## Summary
 

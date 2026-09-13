@@ -26,7 +26,7 @@ Type: language, compiler, stdlib, tooling.
 | [013](013-pub-import.md) | `pub import` and non-transitive import enforcement | language | implemented | 2026-05-03 | 2026-05-03 |
 | [014](014-callable-types-and-closures.md) | `op_call` and closure literals | language | provisional | 2026-05-05 |  |
 | [015](015-fir-inliner-and-dce.md) | FIR optimization pipeline (inliner + DCE + cleanup passes) | compiler | draft | 2026-05-05 |  |
-| [016](016-auto-deinit-directive.md) | `#auto_deinit` directive and the managed-lifecycle contract | language | draft | 2026-05-11 |  |
+| [016](016-auto-deinit-directive.md) | `#auto_deinit` directive and the managed-lifecycle contract | language | superseded | 2026-05-11 |  |
 | [017](017-typer-as-library.md) | `flang_typer` — type system as a library | compiler | provisional | 2026-05-15 |  |
 | [018](018-fn-ref-promotion-and-callback-params.md) | `fn(T)` → `fn(&T)` promotion, and `&T` callback parameters in the stdlib | compiler | withdrawn | 2026-08-20 |  |
 | [019](019-callback-adaptation-and-generic-constraints.md) | Deferred designs from the lambda/stdlib-combinator milestone | language | draft | 2026-08-20 |  |
@@ -42,4 +42,5 @@ Type: language, compiler, stdlib, tooling.
 | [029](029-checking-uninstantiated-generic-bodies.md) | Checking uninstantiated generic bodies | compiler | deferred | 2026-09-01 |  |
 | [030](030-reference-form-operator-dispatch.md) | Reference-form operator dispatch | language | draft | 2026-09-01 |  |
 | [031](031-owned-generic-consolidation.md) | `Owned(T)`, one ownership wrapper | stdlib | draft | 2026-09-01 |  |
+| [032](032-consuming-iteration.md) | Consuming iteration | language | accepted | 2026-09-13 |  |
 | [099](099-stack-only-types-and-bindings.md) | `#stack` types and stack-only bindings | language | deferred | 2026-08-27 |  |

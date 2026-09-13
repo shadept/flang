@@ -7,6 +7,7 @@
 
 import std.allocator
 import std.collections.list
+import std.option
 import std.test
 
 import flang_core.diagnostic
@@ -39,11 +40,15 @@ pub fn parse_doc(text: String, allocator: &Allocator? = null, file_id: i32 = 0i3
     let module = project_module(cst, file_id, allocator, Some(&diagnostics))
     const cctx = host_ctx()
     flatten_module_decls(&module, &cctx, &diagnostics, allocator)
-    const taken = p.diagnostics.to_owned_slice()
-    for i in 0..taken.0.len {
-        diagnostics.push(move taken.0[i])
+    let taking = p.diagnostics.drain()
+    loop {
+        let nx = taking.next()
+        if nx.is_none() {
+            break
+        }
+        diagnostics.push(unwrap(move nx))
     }
-    taken.1.free(taken.0)
+    taking.deinit()
     p.deinit()
     return .{ module = move module, diagnostics = move diagnostics }
 }

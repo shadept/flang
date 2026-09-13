@@ -594,6 +594,58 @@ pub fn next(self: &DictIterator($K, $V)) &Entry(K, V)? {
     return null
 }
 
+// =============================================================================
+// UnmanagedDict: draining
+// =============================================================================
+
+// Moves the entries out of a dict, one at a time, and hands the untaken ones back when it is
+// released: `for (k, v) in d.drain()` is the loop that consumes a dict's entries.
+//
+// The dict reads as empty for as long as the drain is live, so no lookup reaches an entry that is
+// about to leave; a taken entry becomes a tombstone, as a removal does. A drain that is never
+// released leaks whatever it did not take and frees nothing twice.
+pub type DictDrain = struct(K, V) {
+    owned __dict: &UnmanagedDict(K, V)
+    current: usize
+    taken: usize
+    count: usize
+}
+
+// Takes the dict's entries: it reads as empty until the drain is released.
+pub fn drain(self: &UnmanagedDict($K, $V)) DictDrain(K, V) {
+    let out: DictDrain(K, V) = .{ __dict = self, current = 0, taken = 0, count = self.length }
+    self.length = 0
+    return move out
+}
+
+// A drain is its own iterable, and consumes itself: `for (k, v) in d.drain()`.
+pub fn iter(self: DictDrain($K, $V)) DictDrain(K, V) {
+    return move self
+}
+
+// Moves the next key and value out of the dict, in table order, or null when every entry has been
+// taken. The slot it came from is left as a tombstone.
+pub fn next(self: &DictDrain($K, $V)) (K, V)? {
+    for idx in self.current..self.__dict.cap {
+        const entry: &Entry(K, V) = self.__dict.entries + idx
+        if entry.hash >= 2 {
+            self.current = idx + 1
+            self.taken = self.taken + 1
+            entry.hash = HASH_DEAD
+            return Some((move entry.key, move entry.value))
+        }
+    }
+    self.current = self.__dict.cap
+    return null
+}
+
+// Restores the dict's length as the number of entries left in it, and counts the taken ones among
+// its tombstones. The loop calls this on every path that leaves it (spec 7.4).
+pub fn deinit(self: DictDrain($K, $V)) {
+    self.__dict.length = self.count - self.taken
+    self.__dict.dead = self.__dict.dead + self.taken
+}
+
 // Iterator over a dict's keys, in unspecified order.
 pub type KeysIter = struct(K, V) {
     it: DictIterator(K, V)
@@ -982,4 +1034,30 @@ test "get_or update merge" {
     d.merge(&other)
     assert_eq(d.len(), 2 as usize, "merged entry added")
     assert_eq(d.get(1u32).unwrap(), 100i32, "collision overwritten by other")
+}
+
+test "a drain moves the entries out and hands the untaken ones back" {
+    let d: Dict(OwnedString, OwnedString) = dict(4)
+    defer d.deinit()
+    d.set(from_view("a"), from_view("1"))
+    d.set(from_view("b"), from_view("2"))
+    d.set(from_view("c"), from_view("3"))
+
+    let seen: usize = 0
+    for kv in d.drain() {
+        seen = seen + 1
+        kv.0.deinit()
+        kv.1.deinit()
+        if seen == 2 {
+            break
+        }
+    }
+    assert_eq(seen, 2 as usize, "took two")
+    assert_eq(d.len(), 1 as usize, "the untaken one is back")
+
+    for rest in d.drain() {
+        rest.0.deinit()
+        rest.1.deinit()
+    }
+    assert_eq(d.len(), 0 as usize, "a drain run to the end leaves the dict empty")
 }

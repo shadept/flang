@@ -3808,28 +3808,39 @@ reached through a `&T` parameter.
 
 ---
 
-### E2125: `move` Operand Is Not an Lvalue
+### E2125: `move` Operand Is Not a Place `move` Can Take From
 
 **Category**: Semantic Analysis
 **Severity**: Error
 
 #### Description
 
-`move` is a prefix operator over a place - the operand grammar is the grammar of an assignment
-target (spec 3.4.1). An expression with no storage of its own leaves nothing behind to mark moved,
-so there is nothing for the keyword to say.
+`move` takes from one of three places (RFC-032): a binding, which it marks moved; a field path,
+which takes the declaring module's rights (E2127 elsewhere); or an index or dereference of an
+`owned` field, optionally followed by a field path, inside the module that declares the field.
+Anything else is refused. An rvalue has no storage to take from. A dereference of a local
+reference, an index through a container's `op_index_ref`, or an element of a local array names
+storage that belongs to someone else - the container does not learn that the element left, and
+its own release would free it a second time.
+
+The receiver of a consuming call follows the same table: `xs[0].close()` is refused where
+`move xs[0]` is.
 
 #### Example
 
 ```flang
 let n = move open(3)            // error[E2125]: a call result has no place to move from
-let m = move 3                  // error[E2125]
+close(move p.*)                 // error[E2125]: `p` is a local `&FileHandle`
+close(move xs[0])               // error[E2125]: `xs[0]` is the list's element
 let g = move h                  // ok
+Some(move (self.ptr + self.len).*)   // ok inside the list's module: `ptr` is `owned`
 ```
 
 #### Solution
 
-Drop the `move`. A temporary is already a transfer.
+Take the element out through the container: `pop`, `swap_remove`, `remove_at` or `xs.drain()`. Inside
+the container's own module, index or dereference the `owned` field directly. Drop the `move` on a
+temporary: it is already a transfer.
 
 ---
 

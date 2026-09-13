@@ -152,9 +152,12 @@ pub fn compact(self: &MultiMap($K, $V)) {
         }
         chain.last = (fresh.len - 1) as u32
     }
-    // Every live value moved out and every dead one was deinited at `remove_key`: the old pool is
-    // stale bytes, released without an element pass.
-    self.allocator.free(self.pool.to_owned_slice(self.allocator))
+    // Every live value moved out and every dead one was deinited at `remove_key`, so the old pool
+    // holds stale bytes: the drain takes them out without releasing anything, and the list that is
+    // left frees its buffer.
+    for _stale in self.pool.drain() {
+    }
+    self.pool.deinit(self.allocator)
     self.pool = move fresh
     self.dead = 0
 }

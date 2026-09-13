@@ -6,12 +6,12 @@ import std.collections.list
 
 // `List` reaches its storage through `op_deref`; a consumer of the storage itself is not reachable
 // as a method of the list.
-fn drain(xs: UnmanagedList(i32)) usize {
+fn consume(xs: UnmanagedList(i32)) usize {
     return xs.len
 }
 
 pub fn main() i32 {
     let l: List(i32) = list(1)
     defer l.deinit()
-    return l.drain() as i32
+    return l.consume() as i32
 }

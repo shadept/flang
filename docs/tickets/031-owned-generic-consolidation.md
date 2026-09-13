@@ -265,6 +265,8 @@ One site, so no mechanism replaces `transfer()`.
 
 ### `to_owned_slice`'s tuple
 
+> Moot: RFC-032 removes `to_owned_slice`; a list hands its elements over through `drain`.
+
 `List.to_owned_slice` returns `(T[], &Allocator)` today, and its doc comment
 tells the caller to free the buffer by hand and to walk the elements deiniting
 each. That is `Owned(T[])` and its `deinit` written longhand. It returns

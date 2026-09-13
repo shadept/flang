@@ -23,11 +23,14 @@ import std.option
 import std.test
 
 // A view into a contiguous sequence of elements of type T. A Slice does not own ptr.
-
 pub type Slice = struct(T) {
     ptr: &T
     len: usize
 }
+
+// =============================================================================
+// Construction
+// =============================================================================
 
 // Creates a slice from a raw pointer and length.
 // The caller must ensure `ptr` points to at least `len` contiguous elements of T.
@@ -36,11 +39,21 @@ pub fn slice_from_raw_parts(ptr: &$T, len: usize) T[] {
 }
 
 // =============================================================================
-// Element access
+// Queries
+//
+// Element access, then search. Predicate forms take any callable `$F` usable as `fn(T) bool`; value
+// forms compare with `==`. A form that copies an element out is a compile-time error on an owning
+// element type (RFC-032) and names the reference twin to use instead.
 // =============================================================================
 
-// Returns the element at `idx`, or null if `idx` is out of bounds.
+// Returns the element at `idx`, or null if `idx` is out of bounds. Copyable elements only: a slice
+// lends its storage and never hands an element over, so an owning element type is a compile-time
+// error at the call (RFC-032).
 pub fn get(s: $T[], idx: usize) T? {
+    #if !type_info(T).copyable {
+        #error($"get copies the element out, and {T.name} owns something",
+            $"read it in place with get_ref, or take it out of the container with pop or drain")
+    }
     if idx >= s.len {
         return null
     }
@@ -56,66 +69,29 @@ pub fn get_ref(s: $T[], idx: usize) &T? {
     return Some(s.ptr + idx)
 }
 
-// Returns the element at `idx`. Panics if `idx >= s.len`.
-pub fn op_index(s: $T[], idx: usize) T {
-    if idx >= s.len {
-        panic("index out of bounds")
-    }
-
-    const ptr = s.ptr + idx
-    return ptr.*
-}
-
-// Returns a sub-slice for the given range.
-// Out-of-bounds indices are clamped; an invalid range (start > end) yields an empty slice.
-pub fn op_index(s: $T[], range: Range(usize)) T[] {
-    let start = range.start
-    let end = range.end
-
-    // Clamp to valid bounds, return empty slice for invalid ranges
-    if start > s.len {
-        start = s.len
-    }
-    if end > s.len {
-        end = s.len
-    }
-    if start > end {
-        end = start
-    }
-
-    return slice_from_raw_parts(s.ptr + start, end - start)
-}
-
-// Sets the element at `index` to `value`. Panics if `index >= s.len`.
-pub fn op_set_index(self: &Slice($T), index: usize, value: T) {
-    if index >= self.len {
-        panic("index out of bounds")
-    }
-    const slot = self.ptr + index
-    slot.* = value
-}
-
-// Returns the first element, or null when empty.
+// Returns the first element, or null when empty. Copyable elements only; an owning element type is
+// a compile-time error at the call (RFC-032).
 pub fn first(s: $T[]) T? {
+    #if !type_info(T).copyable {
+        #error($"first copies the element out, and {T.name} owns something", "use first_ref")
+    }
     if s.len == 0 {
         return null
     }
     return Some(s[0])
 }
 
-// Returns the last element, or null when empty.
+// Returns the last element, or null when empty. Copyable elements only; an owning element type is a
+// compile-time error at the call (RFC-032).
 pub fn last(s: $T[]) T? {
+    #if !type_info(T).copyable {
+        #error($"last copies the element out, and {T.name} owns something", "use last_ref")
+    }
     if s.len == 0 {
         return null
     }
     return Some(s[s.len - 1])
 }
-
-// =============================================================================
-// Search and query
-//
-// Predicate forms take any callable `$F` usable as `fn(T) bool`; value forms compare with `==`.
-// =============================================================================
 
 // Returns true if the slice contains `value`.
 pub fn contains(s: $T[], value: T) bool {
@@ -163,16 +139,26 @@ pub fn count(s: $T[], value: T) usize {
 // Returns how many elements satisfy `pred`. `count` counts occurrences of a value.
 pub fn count_if(s: $T[], pred: $F) usize {
     let n: usize = 0
-    for x in s {
-        if pred(x) {
+    for i in 0..s.len {
+        let hit: bool = false
+        #if type_info(T).copyable {
+            hit = pred(s[i])
+        } else {
+            hit = pred(s.ptr + i)
+        }
+        if hit {
             n = n + 1
         }
     }
     return n
 }
 
-// Returns the first element satisfying `pred`, or null.
+// Returns the first element satisfying `pred`, or null. Copyable elements only; an owning element
+// type is a compile-time error at the call (RFC-032).
 pub fn find(s: $T[], pred: $F) T? {
+    #if !type_info(T).copyable {
+        #error($"find copies the element out, and {T.name} owns something", "use find_ref")
+    }
     for x in s {
         if pred(x) {
             return Some(x)
@@ -181,10 +167,23 @@ pub fn find(s: $T[], pred: $F) T? {
     return null
 }
 
+// Returns a reference to the first element satisfying `pred`, or null. The reference is valid until
+// the storage behind the slice moves.
+pub fn find_ref(s: $T[], pred: $F) &T? {
+    const i = s.find_index(pred)?
+    return Some(s.ptr + i)
+}
+
 // Returns the index of the first element satisfying `pred`, or null.
 pub fn find_index(s: $T[], pred: $F) usize? {
     for i in 0..s.len {
-        if pred(s[i]) {
+        let hit: bool = false
+        #if type_info(T).copyable {
+            hit = pred(s[i])
+        } else {
+            hit = pred(s.ptr + i)
+        }
+        if hit {
             return Some(i)
         }
     }
@@ -198,8 +197,13 @@ pub fn any(s: $T[], pred: $F) bool {
 
 // Returns whether every element satisfies `pred`. True when empty.
 pub fn all(s: $T[], pred: $F) bool {
-    for x in s {
-        let ok: bool = pred(x)
+    for i in 0..s.len {
+        let ok: bool = false
+        #if type_info(T).copyable {
+            ok = pred(s[i])
+        } else {
+            ok = pred(s.ptr + i)
+        }
         if !ok {
             return false
         }
@@ -281,8 +285,12 @@ pub fn ends_with(s: $T[], suffix: T[]) bool {
     return true
 }
 
-// Returns the smallest element by `<`, or null when empty.
+// Returns the smallest element by `<`, or null when empty. Copyable elements only; an owning
+// element type is a compile-time error at the call (RFC-032).
 pub fn min(s: $T[]) T? {
+    #if !type_info(T).copyable {
+        #error($"min copies the element out, and {T.name} owns something", "use min_ref")
+    }
     if s.len == 0 {
         return null
     }
@@ -295,8 +303,28 @@ pub fn min(s: $T[]) T? {
     return Some(best)
 }
 
-// Returns the largest element by `<`, or null when empty.
+// Returns a reference to the smallest element by `<`, or null when empty. The reference is valid
+// until the storage behind the slice moves.
+pub fn min_ref(s: $T[]) &T? {
+    if s.len == 0 {
+        return null
+    }
+    let best: &T = s.ptr
+    for i in 1..s.len {
+        const cand: &T = s.ptr + i
+        if cand.* < best.* {
+            best = cand
+        }
+    }
+    return Some(best)
+}
+
+// Returns the largest element by `<`, or null when empty. Copyable elements only; an owning element
+// type is a compile-time error at the call (RFC-032).
 pub fn max(s: $T[]) T? {
+    #if !type_info(T).copyable {
+        #error($"max copies the element out, and {T.name} owns something", "use max_ref")
+    }
     if s.len == 0 {
         return null
     }
@@ -309,8 +337,28 @@ pub fn max(s: $T[]) T? {
     return Some(best)
 }
 
+// Returns a reference to the largest element by `<`, or null when empty. The reference is valid
+// until the storage behind the slice moves.
+pub fn max_ref(s: $T[]) &T? {
+    if s.len == 0 {
+        return null
+    }
+    let best: &T = s.ptr
+    for i in 1..s.len {
+        const cand: &T = s.ptr + i
+        if best.* < cand.* {
+            best = cand
+        }
+    }
+    return Some(best)
+}
+
 // Returns the element with the smallest `key(x)`, or null when empty. Ties keep the earliest.
+// Copyable elements only; an owning element type is a compile-time error at the call (RFC-032).
 pub fn min_by(s: $T[], key: $F) T? {
+    #if !type_info(T).copyable {
+        #error($"min_by copies the element out, and {T.name} owns something", "use min_ref")
+    }
     if s.len == 0 {
         return null
     }
@@ -327,7 +375,11 @@ pub fn min_by(s: $T[], key: $F) T? {
 }
 
 // Returns the element with the largest `key(x)`, or null when empty. Ties keep the earliest.
+// Copyable elements only; an owning element type is a compile-time error at the call (RFC-032).
 pub fn max_by(s: $T[], key: $F) T? {
+    #if !type_info(T).copyable {
+        #error($"max_by copies the element out, and {T.name} owns something", "use max_ref")
+    }
     if s.len == 0 {
         return null
     }
@@ -344,57 +396,48 @@ pub fn max_by(s: $T[], key: $F) T? {
 }
 
 // =============================================================================
-// Traversal and folds
+// Mutations
 // =============================================================================
 
-// Calls `f` on every element, in order. To accumulate, use `fold`; to mutate outer state from a
-// closure, capture a reference and write through it.
-pub fn each(s: $T[], f: $F) {
-    for x in s {
-        f(x)
-    }
-}
-
-// Combines left to right: `f(f(f(init, x0), x1), x2)`.
-pub fn fold(s: $T[], init: $A, f: $F) A {
-    let acc = init
-    for x in s {
-        acc = f(acc, x)
-    }
-    return acc
-}
-
-// Combines right to left: `f(x0, f(x1, f(x2, init)))`. The accumulator is `f`'s second argument.
-pub fn fold_right(s: $T[], init: $A, f: $F) A {
-    let acc = init
-    let i = s.len
-    while i > 0 {
-        i = i - 1
-        acc = f(s[i], acc)
-    }
-    return acc
-}
-
-// =============================================================================
-// In-place mutation
-// =============================================================================
-
-// Swaps the values at two mutable references.
+// Swaps the values at two mutable references. No value is read into a second location and none is
+// released, so the same owners exist before and after: this is the one exchange an owning element
+// type has (RFC-032), and `reverse` and `sort` are built on it.
+//
+// A copyable element goes through a local temporary, which the C compiler turns into register
+// moves; an owning one cannot be read into a temporary at all, so its bytes are exchanged in place.
+//
+// - `a`, `b`: must not point into each other. The same reference twice is a no-op.
 pub fn swap(a: &$T, b: &T) {
-    let tmp = a.*
-    a.* = b.*
-    b.* = tmp
+    #if type_info(T).copyable {
+        let tmp = a.*
+        a.* = b.*
+        b.* = tmp
+    } else {
+        memswap(a as &u8, b as &u8, size_of(T))
+    }
 }
 
-// Fills every element of the slice with `value`.
+// Fills every element of the slice with `value`. Copyable elements only: every element it
+// overwrites would be dropped with nobody releasing it, and one owning value cannot be `len` of
+// them, so an owning element type is a compile-time error at the call (RFC-032).
 pub fn fill(s: $T[], value: T) {
+    #if !type_info(T).copyable {
+        #error($"fill needs copyable elements, {T.name} owns something",
+            "clear the container and push a clone per element")
+    }
     for i in 0..s.len {
         s[i] = value
     }
 }
 
 // Replaces all occurrences of `old` with `new` in-place. Returns the number of replacements made.
+// Copyable elements only, for the reason `fill` is: an owning element type is a compile-time error
+// at the call (RFC-032).
 pub fn replace(s: $T[], old: T, new: T) usize {
+    #if !type_info(T).copyable {
+        #error($"replace needs copyable elements, {T.name} owns something",
+            "exchange the element with swap, or go through the container's set")
+    }
     let n: usize = 0
     for i in 0..s.len {
         if s[i] == old {
@@ -420,8 +463,48 @@ pub fn reverse(s: $T[]) {
 }
 
 // =============================================================================
-// Copy and reinterpretation
+// Traversal, folds and copies
 // =============================================================================
+
+// Calls `f` on every element, in order. To accumulate, use `fold`; to mutate outer state from a
+// closure, capture a reference and write through it.
+pub fn each(s: $T[], f: $F) {
+    for i in 0..s.len {
+        #if type_info(T).copyable {
+            f(s[i])
+        } else {
+            f(s.ptr + i)
+        }
+    }
+}
+
+// Combines left to right: `f(f(f(init, x0), x1), x2)`.
+pub fn fold(s: $T[], init: $A, f: $F) A {
+    let acc = init
+    for i in 0..s.len {
+        #if type_info(T).copyable {
+            acc = f(acc, s[i])
+        } else {
+            acc = f(acc, s.ptr + i)
+        }
+    }
+    return acc
+}
+
+// Combines right to left: `f(x0, f(x1, f(x2, init)))`. The accumulator is `f`'s second argument.
+pub fn fold_right(s: $T[], init: $A, f: $F) A {
+    let acc = init
+    let i = s.len
+    while i > 0 {
+        i = i - 1
+        #if type_info(T).copyable {
+            acc = f(s[i], acc)
+        } else {
+            acc = f(s.ptr + i, acc)
+        }
+    }
+    return acc
+}
 
 // Copies min(src.len, dest.len) elements from `src` into `dest` bitwise and returns the number
 // copied. Copyable elements only: a slice carries no allocator to clone owning elements with, so
@@ -439,7 +522,13 @@ pub fn copy_to(src: $T[], dest: T[]) usize {
 
 // Reinterprets a slice of T as a slice of U.
 // Panics if the total byte size is not evenly divisible by size_of(U).
+//
+// Copyable elements only: two views over one owner is two releasers, with nothing in either view
+// saying which holds the element. An owning element type is a compile-time error at the call.
 pub fn reinterpret(src: $T[]) $U[] {
+    #if !type_info(T).copyable {
+        #error($"reinterpret would make a second view over elements {T.name} owns", "")
+    }
     const total_bytes = src.len * size_of(T)
     const size_of_u = size_of(U)
     if total_bytes % size_of(U) != 0 {
@@ -449,7 +538,61 @@ pub fn reinterpret(src: $T[]) $U[] {
 }
 
 // =============================================================================
-// Iteration
+// Operators
+// =============================================================================
+
+// Returns the element at `idx`. Panics if `idx >= s.len`. Copyable elements only; an owning element
+// type is a compile-time error at the call (RFC-032).
+pub fn op_index(s: $T[], idx: usize) T {
+    #if !type_info(T).copyable {
+        #error($"s[i] copies the element out, and {T.name} owns something",
+            $"take a reference with &s[i], or take the element out with pop or drain")
+    }
+    if idx >= s.len {
+        panic("index out of bounds")
+    }
+
+    const ptr = s.ptr + idx
+    return ptr.*
+}
+
+// Returns a sub-slice for the given range.
+// Out-of-bounds indices are clamped; an invalid range (start > end) yields an empty slice.
+pub fn op_index(s: $T[], range: Range(usize)) T[] {
+    let start = range.start
+    let end = range.end
+
+    // Clamp to valid bounds, return empty slice for invalid ranges
+    if start > s.len {
+        start = s.len
+    }
+    if end > s.len {
+        end = s.len
+    }
+    if start > end {
+        end = start
+    }
+
+    return slice_from_raw_parts(s.ptr + start, end - start)
+}
+
+// Sets the element at `index` to `value`. Panics if `index >= s.len`. Copyable elements only: the
+// overwritten element would be dropped with nobody releasing it, so an owning element type is a
+// compile-time error at the call (RFC-032).
+pub fn op_set_index(self: &Slice($T), index: usize, value: T) {
+    #if !type_info(T).copyable {
+        #error($"s[i] = v drops the element it overwrites, and {T.name} owns something",
+            "exchange it with swap, or go through the container's set, which deinits the old value")
+    }
+    if index >= self.len {
+        panic("index out of bounds")
+    }
+    const slot = self.ptr + index
+    slot.* = value
+}
+
+// =============================================================================
+// Iterators
 // =============================================================================
 
 // Iterator state for slices. Created by `iter(&slice)`. Stores a copy of the slice and tracks the
@@ -459,8 +602,13 @@ pub type SliceIterator = struct(T) {
     index: usize
 }
 
-// Creates an iterator over the elements of a slice.
+// Creates an iterator over the elements of a slice. Copyable elements only: the iterator yields a
+// copy per step, so an owning element type is a compile-time error at the loop (RFC-032).
 pub fn iter(slice: &$T[]) SliceIterator(T) {
+    #if !type_info(T).copyable {
+        #error($"`for x in xs` copies each element, and {T.name} owns something",
+            "iterate by reference with `for &x in xs`, or consume the container with `for x in xs.drain()`")
+    }
     return .{ slice = slice.*, index = 0 }
 }
 
@@ -513,8 +661,12 @@ pub type SliceRevIterator = struct(T) {
     remaining: usize
 }
 
-// Iterates the elements by value, last to first: `for x in s.iter_rev()`.
+// Iterates the elements by value, last to first: `for x in s.iter_rev()`. Copyable elements only;
+// an owning element type is a compile-time error at the loop (RFC-032).
 pub fn iter_rev(slice: &$T[]) SliceRevIterator(T) {
+    #if !type_info(T).copyable {
+        #error($"iter_rev copies each element, and {T.name} owns something", "use iter_rev_ref")
+    }
     return .{ slice = slice.*, remaining = slice.len }
 }
 
@@ -531,6 +683,32 @@ pub fn next(self: &SliceRevIterator($T)) T? {
     self.remaining = self.remaining - 1
     let val: T = self.slice[self.remaining]
     return Some(val)
+}
+
+// Iterator over a slice's elements by reference, last to first: the reference form of
+// `SliceRevIterator`, for an element type that is not copied.
+pub type SliceRevRefIterator = struct(T) {
+    slice: T[]
+    remaining: usize
+}
+
+// Iterates the elements by reference, last to first: `for &x in s.iter_rev_ref()`.
+pub fn iter_rev_ref(slice: &$T[]) SliceRevRefIterator(T) {
+    return .{ slice = slice.*, remaining = slice.len }
+}
+
+// An iterator is its own iterable, so adapter chains can consume it.
+pub fn iter(self: &SliceRevRefIterator($T)) SliceRevRefIterator(T) {
+    return self.*
+}
+
+// Advances toward the front and returns a reference to the next element, or null after the first.
+pub fn next(self: &SliceRevRefIterator($T)) &T? {
+    if self.remaining == 0 {
+        return null
+    }
+    self.remaining = self.remaining - 1
+    return Some(self.slice.ptr + self.remaining)
 }
 
 // =============================================================================
@@ -598,3 +776,7 @@ test "min, max and the folds over a slice" {
 
 // Copies `len` bytes from `src` to `dst`. Handles overlapping regions safely.
 #foreign fn memmove(dst: &u8, src: &u8, len: usize)
+
+// Exchanges the `len` bytes at `a` with the `len` bytes at `b`. The regions must not overlap
+// (`slice.c`).
+#foreign fn memswap(a: &u8, b: &u8, len: usize)

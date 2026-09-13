@@ -1,5 +1,6 @@
 //! TEST: receiver_index_element
-//! EXIT: 3
+//! COMPILE-ERROR: E2125 belongs to its container
+//! EXIT: 1
 
 type FileHandle = struct {
     owned fd: i32
@@ -13,7 +14,8 @@ fn close(h: FileHandle) i32 {
     return h.fd
 }
 
-// An index receiver marks nothing, like `move xs[0]`: the element left the array unchecked.
+// An index receiver follows the `move` operand table (RFC-032): `xs[0].close()` is refused where
+// `move xs[0]` is.
 pub fn main() i32 {
     let xs = [open(3)]
     return xs[0].close()

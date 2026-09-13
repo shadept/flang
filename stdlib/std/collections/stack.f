@@ -10,6 +10,7 @@
 import std.allocator
 import std.collections.list
 import std.option
+import std.string
 import std.test
 
 // A last-in, first-out stack of `T` that carries no allocator: `push` and `deinit` take one as
@@ -122,6 +123,17 @@ pub fn iter(self: &UnmanagedStack($T)) SliceIterator(T) {
 // any. The stack is not modified while it is being iterated.
 pub fn iter_rev(self: &UnmanagedStack($T)) SliceRevIterator(T) {
     return self.__inner.iter_rev()
+}
+
+// =============================================================================
+// UnmanagedStack: draining
+// =============================================================================
+
+// Moves the elements out of a stack, top to bottom, and hands the untaken ones back when it is
+// released: `for x in st.drain()` yields what a run of `pop` would, and a `break` leaves the rest
+// of the stack standing.
+pub fn drain(self: &UnmanagedStack($T)) Drain(T) {
+    return self.__inner.drain_rev()
 }
 
 // =============================================================================
@@ -255,4 +267,34 @@ test "elements are deinited top to bottom" {
     s.deinit()
     assert_eq(log[3], 5i32, "deinit releases top first")
     assert_eq(log[4], 4i32, "then the bottom")
+}
+
+test "a drain moves the elements out top to bottom" {
+    let st: Stack(OwnedString) = stack(4)
+    defer st.deinit()
+    st.push(from_view("a"))
+    st.push(from_view("b"))
+    st.push(from_view("c"))
+
+    let seen: usize = 0
+    let top_first = false
+    for owned in st.drain() {
+        if seen == 0 {
+            top_first = owned.as_view() == "c"
+        }
+        owned.deinit()
+        seen = seen + 1
+        if seen == 2 {
+            break
+        }
+    }
+    assert_true(top_first, "the top came out first")
+    assert_eq(seen, 2 as usize, "took two")
+    assert_eq(st.len(), 1 as usize, "the untaken one is still there")
+    assert_true(st.peek_ref().unwrap().as_view() == "a", "and it is the bottom of the stack")
+
+    for rest in st.drain() {
+        rest.deinit()
+    }
+    assert_eq(st.len(), 0 as usize, "a drain run to the end leaves the stack empty")
 }

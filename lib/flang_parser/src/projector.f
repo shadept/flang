@@ -1708,27 +1708,43 @@ fn project_call(self: &Projector, cst: CstNode) Expr {
 }
 
 fn project_named_argument(self: &Projector, cst: CstNode) NamedCallArgument {
-    let name: String = ""
+    return .{
+        span = self.span_from(cst),
+        name = named_argument_name(cst),
+        value = self.boxed(self.project_named_argument_value(cst)),
+    }
+}
+
+// The value half of a named argument, unboxed: the argument list of an interpolated builder takes
+// the expression itself, not the arena box `project_named_argument` puts it in.
+fn project_named_argument_value(self: &Projector, cst: CstNode) Expr {
     let value_node: CstNode? = null
     for i in 0..cst.child_count() {
         cst.child(i) match {
-            TokenChild(tok) => {
-                if tok.kind == TokenKind.Identifier and name.len == 0 {
-                    name = tok.text
-                }
-            }
             NodeChild(child) => {
                 if is_expr_kind(child.kind) {
                     value_node = Some(child)
                 }
             }
+            _ => {}
         }
     }
-    return .{
-        span = self.span_from(cst),
-        name = name,
-        value = self.boxed(self.expr_or_error(value_node, cst)),
+    return self.expr_or_error(value_node, cst)
+}
+
+// The name half: the first identifier token under the node, empty when there is none.
+fn named_argument_name(cst: CstNode) String {
+    for i in 0..cst.child_count() {
+        cst.child(i) match {
+            TokenChild(tok) => {
+                if tok.kind == TokenKind.Identifier {
+                    return tok.text
+                }
+            }
+            _ => {}
+        }
     }
+    return ""
 }
 
 fn project_cast(self: &Projector, cst: CstNode) Expr {
@@ -1867,8 +1883,8 @@ fn project_array_literal(self: &Projector, cst: CstNode) Expr {
         }
     }
     if saw_semicolon and exprs.len >= 2 {
-        const value: Expr = move exprs[0]
-        const count: Expr = move exprs[1]
+        const value: Expr = exprs.remove_at(0).unwrap()
+        const count: Expr = exprs.remove_at(0).unwrap()
         return Expr.ArrayLit(ArrayLiteralExpr {
             span = self.span_from(cst),
             kind = ArrayLiteralKind.Repeat(RepeatLiteral {
@@ -2551,8 +2567,7 @@ fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr 
                 // contributes its VALUE; `builder_ctor_args` routes an `&expr` to the allocator
                 // slot and anything else to capacity, which is the same mapping the names spell.
                 if after_paren and child.kind == NodeKind.NamedArgumentExpr {
-                    const named = self.project_named_argument(child)
-                    target_args.push(move named.value.*)
+                    target_args.push(self.project_named_argument_value(child))
                 } else if after_paren and is_expr_kind(child.kind) {
                     target_args.push(self.project_expr(child))
                 }

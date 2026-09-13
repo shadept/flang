@@ -2,7 +2,7 @@
 status: accepted
 type: language
 created: 2026-08-30
-relates: [RFC-026, RFC-020, RFC-016]
+relates: [RFC-026, RFC-020, RFC-016, RFC-032]
 ---
 
 # RFC-028: `owned` fields, non-copyable types, and `move`
@@ -25,7 +25,7 @@ Three pieces:
 
 The check is: **a copy of a non-copyable value is an error unless it is a
 move.** Nothing else. Use-after-free, leaks, double-release and aliasing remain
-the programmer's responsibility (§3.6).
+the programmer's responsibility (§3.7).
 
 ## `owned`
 
@@ -121,26 +121,29 @@ return h                // by-value return of a local: inferred, `return move h`
 move h.fd               // error: partial moves are out in v1
 ```
 
-**Any lvalue is a valid operand.** If you can assign to it, you can move from
-it — the operand grammar of `move` is the grammar of an assignment target
-(§3.4.1). What differs between the four lvalue forms is what the move marks:
+**The operand is a binding, a field path, or an element of an `owned` field.**
+(Narrowed by RFC-032; the first draft admitted every assignment target.) What
+differs between the forms is what the move marks:
 
 | operand | marks |
 |---|---|
 | `x` — a binding | `x` moved |
-| `p.*` — a dereference | nothing |
-| `base[i]` — an index | nothing |
-| `base.field` — a field | nothing; requires scoped-mutability rights |
+| `base.field` — a field path | nothing; requires scoped-mutability rights |
+| `(self.ptr + i).*`, `self.buf[i]`, `self.__inner.*` — an element of an `owned` field, optionally followed by a field path | nothing; only inside the module declaring the field |
+| anything else — `p.*` through a local reference, `xs[i]` through a container, `arr[i]` | `E2125` |
 
-`p.*` marks nothing because a pointer carries no ownership: references are how
-FLang shares a value, and they are leaves of the derivation. There is no binding
-behind the dereference to put in the moved state, so the move is unchecked — the
-same lane as reading an `owned` field whose own type is copyable.
+A pointer carries no ownership: references are how FLang shares a value, and
+they are leaves of the derivation. There is no binding behind a dereference to
+put in the moved state, so a move through one is unchecked, and the storage it
+reads out of belongs to whoever holds the `owned` field behind it. That holder
+is the only one who can take the element out - which is what `pop`
+(`Some(move (self.ptr + self.len).*)`) and `drain` (RFC-032) do - so the operand rule
+gives the right to the declaring module and nobody else.
 
-`base[i]` is not a special form. Indexing desugars to the ref-form operator
-(§5.2), so `xs[i]` is `op_index_ref(xs, i)`: `xs` and `i` are ordinary
-arguments checked by the ordinary rules, and the move applies to the `&T` it
-returns. That is the `p.*` case, and it is unchecked for the same reason.
+`xs[i]` outside the container's module desugars to the ref-form operator
+(§5.2), `op_index_ref(xs, i)`, a `&T` into storage the caller does not own;
+that is `E2125`, and the container's `pop`, `swap_remove`, `remove` and
+`drain` are the ways out.
 
 `base.field` carries one rule and no tracking: **moving a field requires the same
 rights as writing one** — the module that declares the type (§scoped mutability,
@@ -251,7 +254,8 @@ open("f").close()               // an rvalue: the callee owns it, nothing to mar
 
 The receiver follows the `move` operand table above: a binding is marked, a
 field takes the declaring module's rights (E2127 elsewhere), an index or a
-dereference marks nothing.
+dereference is accepted on an `owned` field inside its module and marks
+nothing, and is `E2125` anywhere else.
 
 **Not through a reference.** A `&T` receiver adapting to the by-value parameter,
 or an `op_deref` hop into a wrapper, would read the value out of storage the
@@ -451,18 +455,19 @@ defer deinit(move h)            // the move happens at scope end
 discipline in spec §4.1 ("don't defer-deinit a value you're returning by
 value") a diagnostic rather than a comment. See Liveness below for the rule.
 
-A container's element loop deinits through a pointer:
+A container's element loop drains (RFC-032):
 
 ```flang
-for i in 0..self.len {
-    const elem: &T = self.ptr + i
-    deinit(move elem.*)
+#if !type_info(T).copyable {
+    for x in self.drain() {
+        deinit(x, allocator)
+    }
 }
 ```
 
-`elem` is a `&T` and `deinit` takes `T` by value, so the call moves through the
-dereference. This is the value leg of RFC-020 into a consuming parameter, and it
-is unchecked for the reason above — there is no binding to kill.
+`drain` moves each element out of the `owned` buffer inside the list's own
+module, the one place the operand rule allows it, and the loop variable is a
+binding the by-value `deinit` consumes.
 
 The element loop is gated on the non-copyable bit, resolved per specialization:
 `#if !type_info(T).copyable { ... }`. A copyable element has nothing to release
@@ -650,7 +655,8 @@ the stdlib frame as a note.
    needs the element-form `deinit(&T, &Allocator)` or the container's gated
    `deinit` fails to instantiate (reported as E2011 on `&?N`, which is the
    open diagnostic defect there), and a list that had elements moved out of it
-   with `move x.*` must be drained with `to_owned_slice`, never `deinit()`ed.
+   with `move x.*` had to be drained with `to_owned_slice`, never `deinit()`ed
+   - the hazard RFC-032 closes by refusing the move and adding `drain`.
    Landed with the step:
    `clone` on `UnmanagedList`/`List`/`OwnedString`, `retain` replacing
    `Rc.clone`/`Arc.clone`, `Dict` entries iterate by reference (`keys()` and
@@ -664,17 +670,20 @@ the stdlib frame as a note.
    reports at the body line, not the outermost instantiation site. `#error`
    (spec §7.7) took the opposite rule, the outermost call site with notes
    walking inward; whether E2123/E2124/E2126 follow it is open.
-8. **Remove what the check rejects for non-copyable `T`:** `get`, `first`,
-   `last`, `peek`, `peek_front`, `peek_back`, `get_or`, `get_or_else` — the
-   element stays in the container, so the return is a second owner.
-   `Option.unwrap/expect/ok` and `Result.unwrap/unwrap_err/err` stay for the
-   same reason `pop` does: the payload leaves the wrapper, so exactly one owner
-   survives. They become free-call sites on a non-copyable payload
-   (`unwrap(move opt)`).
-   `pop`, `pop_front`, `pop_back`, `remove`, `take_last`, `to_owned_slice`
-   stay: the element left the container.
-   Also removed: `filled_list`, the `list(source)` memcpy constructor, the Dict
-   fake-key.
+8. **Gate what the check rejects for non-copyable `T`** (RFC-032; the first
+   draft deleted them): `get`, `first`, `last`, `find`, `min`, `max`,
+   `min_by`, `max_by`, `iter`, `iter_rev`, `op_index(idx)`, `op_set_index`,
+   `fill`, `replace`, `reinterpret` on slices, and the container forwarders
+   over them, `peek`, `peek_front`, `peek_back`, `get_or`, `get_or_else` -
+   the element stays in the container, so the return is a second owner. Each
+   is `#if !type_info(T).copyable { #error(...) }` naming the `_ref` twin or
+   the drain, reported at the caller's line. `Option.unwrap/expect/ok` and
+   `Result.unwrap/unwrap_err/err` stay for the same reason `pop` does: the
+   payload leaves the wrapper, so exactly one owner survives.
+   `pop`, `pop_front`, `pop_back`, `remove`, `drain` stay: the element left
+   the container. `take_last` clones.
+   Removed: `to_owned_slice`, the `list(source)` copying constructors, the Dict
+   fake-key. `filled_list` is gated.
 
 `copyable` on `core.rtti.TypeInfo` turned out not to be independent: it is the
 substrate of step 6's element loops. A container's `clone` and `deinit` select

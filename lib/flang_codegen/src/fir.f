@@ -4,6 +4,7 @@ import std.allocator
 import std.collections.dict
 import std.collections.list
 import std.collections.set
+import std.option
 import std.string
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -544,16 +545,20 @@ pub fn add_test(self: &IrModule, label: OwnedString, symbol: OwnedString) {
 // fixpoint: a block whose function was dropped must leave the runner's table with it.
 pub fn retain_defined_tests(self: &IrModule, dropped: &Set(String)) {
     let kept: List(TestCase) = list(self.tests.len, self.tests.allocator)
-    const taken = self.tests.to_owned_slice()
-    for i in 0..taken.0.len {
-        let t = move taken.0[i]
+    let taking = self.tests.drain()
+    loop {
+        let nx = taking.next()
+        if nx.is_none() {
+            break
+        }
+        let t = unwrap(move nx)
         if dropped.contains(t.symbol.as_view()) {
             t.deinit()
             continue
         }
         kept.push(move t)
     }
-    taken.1.free(taken.0)
+    taking.deinit()
     self.tests.deinit()
     self.tests = move kept
 }

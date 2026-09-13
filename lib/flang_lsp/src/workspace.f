@@ -210,9 +210,10 @@ pub fn reopen_project(self: &Workspace, idx: ProjectId, docs: &DocumentStore,
     if fresh.is_none() {
         return false
     }
-    let old = move self.projects[idx]
+    // The new project goes into the slot and the old one comes back out of the exchange.
+    let old = unwrap(move fresh)
+    swap(&self.projects[idx], &old)
     old.deinit()
-    self.projects[idx] = unwrap(move fresh)
     return true
 }
 

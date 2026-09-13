@@ -185,9 +185,8 @@ means `lookup` handing back a borrow of the stored list (or candidate ids) inste
 changes `FnLookup` and its seven call sites.
 
 The general shape: a copy of a record that owns heap is a copy of the ownership. `Diagnostic` had
-the same flaw and was fixed by routing its bulk moves through `List.to_owned_slice`, which hands the
-elements out in the backing buffer and leaves the source list empty, so exactly one list owns each
-message.
+the same flaw and was fixed by routing its bulk moves through the list's `drain`, which moves each
+element out and leaves the source list empty, so exactly one list owns each message.
 
 ---
 
@@ -3792,11 +3791,12 @@ the nested-instantiation error rendered the element type as `&?N`. Adding the el
 `DependencySpec`, `FmtEntry`, `Function`, `Block`, `Instr`, `ForeignDecl`, `AggDef`, `TestCase`,
 `Document`, `DocSymbol`, `IndexSymbol`, `ModuleIndex` and `OpenProject` took every library to zero.
 
-**Related hazard, element deinit.** `move x.*` out of a list element leaves the bits in place. A
-later `deinit()` of that list element-deinits them too, freeing what the move handed over:
-`retain_defined_tests` did exactly that and the test runner's name table was emitted from freed
-strings. Drain with `to_owned_slice` and free the slice, or pop the stale headers, never
-`deinit()` a list you moved elements out of.
+**Related hazard, element deinit - RESOLVED (RFC-032).** `move x.*` out of a list element left the
+bits in place, and a later `deinit()` of that list element-deinited them too, freeing what the move
+had handed over: `retain_defined_tests` did exactly that and the test runner's name table was
+emitted from freed strings. The lane is closed at the language level: `move` through a reference or
+an index into a container is now E2125, and a container hands its elements over through `pop`,
+`swap_remove`, `remove_at` or `drain`, each of which shortens the container as it goes.
 
 ---
 

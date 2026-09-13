@@ -95,9 +95,10 @@ value to that state.
 **Lookups by view.** `Dict(OwnedString, V)` and `Set(OwnedString)` accept a `String` view for `get`,
 `contains` and `remove`. Only an insert copies the key.
 
-**Two iteration forms.** `for x in xs` copies each element and is the form for copyable element
-types. `for &x in xs` yields references and is the form for owning element types. Dict entries are
-always yielded by reference.
+**Three iteration forms.** `for x in xs` copies each element and is the form for copyable element
+types; over an owning element type it is a compile-time error at the loop. `for &x in xs` yields
+references and is the form for reading or mutating owning elements in place. `for x in xs.drain()`
+moves each element out and empties the container. Dict entries are always yielded by reference.
 
 ## Idioms
 
@@ -106,7 +107,14 @@ the index loop, so `for i in 0..xs.len` is written only when the index itself is
 
 **Element access.** Elements are reached through the container's API: `self.get_ref(i)`,
 `&self[i]`, `self.pop()`. Arithmetic on `self.ptr` appears only in the handful of functions that
-own the buffer layout (`reserve`, `insert`, `to_owned_slice`).
+own the buffer layout (`reserve`, `insert`, `drain`).
+
+**Handing elements over.** A container's elements leave it through `pop`, `swap_remove`,
+`remove_at` or `drain`; `for x in xs.drain()` is the loop that consumes a container, and a `break`
+hands the untaken rest back. Nothing else takes an element out: `move` through a reference or an
+index into someone else's storage is E2125, because the container would not learn that the element
+left. A slice owns nothing, so its copying functions (`get`, `first`, `find`, `iter`, ...) are a
+compile-time error on an owning element type and name the `_ref` twin or the drain instead.
 
 **Field access.** Struct fields are addressed by name, `&inner.value`, never through an offset
 computed from `size_of`. The compiler knows the layout, including padding and alignment.
@@ -116,7 +124,7 @@ out, changing the copy and writing it back with `set` leaves two owners of whate
 
 **Cleanup.** The `defer` is registered when the value is created:
 `let sb = string_builder(64); defer sb.deinit()`. A function that hands the storage on uses
-`to_owned_slice` or `transfer` on the success path, and the deferred `deinit` becomes a no-op.
+`transfer` on the success path, and the deferred `deinit` becomes a no-op.
 
 **Transfers.** A transfer of ownership is spelled `move`: `xs.push(move v)`,
 `Wrapper { inner = move x }`, `unwrap(move r)`. Two positions imply it (spec 7.2): the receiver of

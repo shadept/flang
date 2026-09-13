@@ -1166,8 +1166,14 @@ pub fn flatten_module_decls(m: &Module, ctx: &ComptimeCtx, diags: &List(Diagnost
 }
 
 fn splice_decls(decls: &List(Decl), ctx: &ComptimeCtx, diags: &List(Diagnostic), out: &List(Decl)) {
-    for i in 0..decls.len {
-        decls[i] match {
+    let taking = decls.drain()
+    loop {
+        let nx = taking.next()
+        if nx.is_none() {
+            break
+        }
+        let d = unwrap(move nx)
+        d match {
             IfDirective(ifd) => {
                 eval_condition(ctx, ifd.condition) match {
                     Active(active) => {
@@ -1178,9 +1184,10 @@ fn splice_decls(decls: &List(Decl), ctx: &ComptimeCtx, diags: &List(Diagnostic),
                 }
             }
             ErrorDirective(ed) => raise_error_directive(ctx, &ed, diags)
-            _ => { out.push(move decls[i]) }
+            _ => { out.push(move d) }
         }
     }
+    taking.deinit()
 }
 
 // A decl-level `#error` reached at top level or in an active branch: reported at the directive over

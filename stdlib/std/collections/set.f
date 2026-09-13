@@ -188,6 +188,36 @@ pub fn next(self: &SetIterator($T)) T? {
     }
 }
 
+// Moves the elements out of a set, one at a time, and hands the untaken ones back when it is
+// released: `for x in s.drain()` is the loop that consumes a set's elements. The dict's drain, over
+// the table the set wraps, with the value half dropped.
+pub type SetDrain = struct(T) {
+    __inner: DictDrain(T, u8)
+}
+
+// Takes the set's elements: it reads as empty until the drain is released.
+pub fn drain(self: &UnmanagedSet($T)) SetDrain(T) {
+    return .{ __inner = self.__inner.drain() }
+}
+
+// A drain is its own iterable, and consumes itself: `for x in s.drain()`.
+pub fn iter(self: SetDrain($T)) SetDrain(T) {
+    return move self
+}
+
+// Moves the next element out of the set, or null when every one has been taken.
+pub fn next(self: &SetDrain($T)) T? {
+    return self.__inner.next() match {
+        Some(kv) => Some(move kv.0)
+        None => None
+    }
+}
+
+// Restores the set's length as the number of elements left in it.
+pub fn deinit(self: SetDrain($T)) {
+    deinit(move self.__inner)
+}
+
 // Iterator over a set's elements by reference, in unspecified order: the form for an element type
 // that cannot be copied.
 pub type SetRefIterator = struct(T) {
@@ -222,7 +252,7 @@ pub fn next(self: &SetRefIterator($T)) &T? {
 // Adds `value` unless it is present, and returns whether it was added. A present value is left as
 // it is, and the `value` passed stays the caller's. Panics when the table cannot grow.
 pub fn add(self: &Set($T), value: T) bool {
-    return self.__storage.add(value, self.allocator)
+    return self.__storage.add(move value, self.allocator)
 }
 
 // String `add` for `Set(OwnedString)`: `value` is copied into an owned element only when added.
@@ -320,4 +350,28 @@ test "set functional utilities" {
     xs.sort()
     assert_eq(xs.len, 3 as usize, "all elements collected")
     assert_eq(xs[0], 1i32, "sorted view starts at the smallest")
+}
+
+test "a drain moves the elements out and hands the untaken ones back" {
+    let s: Set(OwnedString) = set()
+    defer s.deinit()
+    s.add(from_view("a"))
+    s.add(from_view("b"))
+    s.add(from_view("c"))
+
+    let seen: usize = 0
+    for owned in s.drain() {
+        seen = seen + 1
+        owned.deinit()
+        if seen == 2 {
+            break
+        }
+    }
+    assert_eq(seen, 2 as usize, "took two")
+    assert_eq(s.len(), 1 as usize, "the untaken one is back")
+
+    for rest in s.drain() {
+        rest.deinit()
+    }
+    assert_eq(s.len(), 0 as usize, "a drain run to the end leaves the set empty")
 }

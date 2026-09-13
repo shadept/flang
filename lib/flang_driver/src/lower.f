@@ -125,11 +125,11 @@ type LowerCtx = struct {
     const_blobs: List(List(u8))
     const_relocs: List(List(Reloc))
     // Defer schedule, mirroring the reference's per-function stack + per-scope marks: `defers`
-    // holds every pending deferred expression (copies of the AST nodes - their children stay in the
-    // module's arena), `defer_marks` the stack depth at each open block scope. Normal scope exit
-    // emits and pops its own suffix; `return`, `break`, `continue` and `?` emit down to their
-    // target depth WITHOUT popping - they traverse scopes the owning blocks still close themselves.
-    defers: List(&Expr)
+    // holds every pending deferred action (the user's `defer expr`, or a call lowering registered
+    // itself), `defer_marks` the stack depth at each open block scope. Normal scope exit emits and
+    // pops its own suffix; `return`, `break`, `continue` and `?` emit down to their target depth
+    // WITHOUT popping - they traverse scopes the owning blocks still close themselves.
+    defers: List(DeferEntry)
     defer_marks: List(usize)
     // True while a defer flush is being emitted. An escaping construct inside a deferred expression
     // (`defer { return }`, `?` in a defer - E2091 in the reference) would recurse into the flush
@@ -253,6 +253,20 @@ fn unlowerable_about(ctx: &LowerCtx, why: String, subject: String) Operand {
         ctx.blocked_subject = Some(subject)
     }
     return unlowerable_why(ctx, why)
+}
+
+// A pending deferred action: the user's `defer expr` (the arena's node, copied nowhere), or a call
+// lowering registered itself - the release of a non-copyable iterator state when its loop is left
+// (RFC-032), fired by the same flush as everything else on the schedule.
+type DeferEntry = enum {
+    Expr(&Expr)
+    Call(DeferCall)
+}
+
+type DeferCall = struct {
+    sym: String
+    sig: FnSig
+    arg: Operand
 }
 
 // Enclosing loops, innermost last, so `break` and `continue` can name the block they branch to.
@@ -385,7 +399,7 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult,
     let globals: List(Global) = list(0, allocator)
     let const_blobs: List(List(u8)) = list(0, allocator)
     let const_relocs: List(List(Reloc)) = list(0, allocator)
-    let defer_stack: List(&Expr) = list(0, allocator)
+    let defer_stack: List(DeferEntry) = list(0, allocator)
     let defer_marks: List(usize) = list(0, allocator)
     let ctx = LowerCtx {
         result = result,
@@ -453,7 +467,7 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     let globals: List(Global) = list(0, allocator)
     let const_blobs: List(List(u8)) = list(0, allocator)
     let const_relocs: List(List(Reloc)) = list(0, allocator)
-    let defer_stack: List(&Expr) = list(0, allocator)
+    let defer_stack: List(DeferEntry) = list(0, allocator)
     let defer_marks: List(usize) = list(0, allocator)
     // The BUILD's compile-time context, not the host's: a cross-target build (`--target-os`) must
     // lower the same `#if` branch the checker checked, or the emitted C is the host's branch of a
@@ -611,18 +625,29 @@ fn drop_callers_of_refused(m: &IrModule, ctx: &LowerCtx, alloc: &Allocator?) {
     // the copy); a dropped one frees its tree here. The stale headers are popped out of both lists,
     // so each function tree is deinited exactly once.
     let keep: List(Function) = list(m.functions.len, alloc)
-    for &f in m.functions {
+    let taking = m.functions.drain()
+    loop {
+        let nx = taking.next()
+        if nx.is_none() {
+            break
+        }
+        let f = unwrap(move nx)
         if defined.get(f.name).is_some() {
-            keep.push(move f.*)
+            keep.push(move f)
         } else {
             f.deinit()
         }
     }
-    while m.functions.pop().is_some() {}
-    for &f in keep {
-        m.functions.push(move f.*)
+    taking.deinit()
+    let back = keep.drain()
+    loop {
+        let nx = back.next()
+        if nx.is_none() {
+            break
+        }
+        m.functions.push(unwrap(move nx))
     }
-    while keep.pop().is_some() {}
+    back.deinit()
     keep.deinit()
     defined.deinit()
 }
@@ -1347,11 +1372,16 @@ fn wire_const_inits(m: &IrModule, ctx: &LowerCtx) {
         }
         let entry = &m.functions[i].blocks[0]
         let old = entry.replace_instrs(move calls)
-        const taken = old.to_owned_slice()
-        for k in 0..taken.0.len {
-            entry.instrs.push(move taken.0[k])
+        let taking = old.drain()
+        loop {
+            let nx = taking.next()
+            if nx.is_none() {
+                break
+            }
+            entry.instrs.push(unwrap(move nx))
         }
-        taken.1.free(taken.0)
+        taking.deinit()
+        old.deinit()
         live.deinit()
         return
     }
@@ -1894,7 +1924,16 @@ fn emit_defers_down_to(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, target: usi
     let i = ctx.defers.len
     while i > target {
         i = i - 1
-        let _v = lower_expr(ctx, bb, env, ctx.defers[i])
+        ctx.defers[i] match {
+            Expr(e) => {
+                let _v = lower_expr(ctx, bb, env, e)
+            }
+            Call(c) => {
+                let args: List(Operand) = list(1, ctx.allocator)
+                args.push(c.arg)
+                let _r = emit_call(ctx, bb, c.sym, &c.sig, move args)
+            }
+        }
     }
     ctx.flushing = prev
 }
@@ -1928,7 +1967,7 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
         // `defer expr` - registered on the schedule; it fires at the enclosing scope's exit and at
         // every escaping jump that passes through it (`return`, `break`, `continue`, `?`). The
         // schedule holds the arena's `&Expr` directly, so registering a defer copies nothing.
-        Defer(d) => ctx.defers.push(d.expr)
+        Defer(d) => ctx.defers.push(DeferEntry.Expr(d.expr))
 
         // Not lowered yet - named rather than caught by a wildcard, so adding a `Stmt` variant is a
         // compile error here instead of a silent skip.
@@ -2397,17 +2436,24 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
     let iargs: List(Operand) = list(2, ctx.allocator)
     iargs.push(recv)
     let state = emit_call(ctx, bb, isym.unwrap(), &ig, move iargs)
-    // `next` takes the state as its parameter declares: a self-iterator (`iter -> &State`,
-    // `next(&State)`) passes it unchanged; otherwise the state's address (an aggregate's value IS
-    // one; a scalar spills).
+    // `next` and `deinit` take the state as their parameter declares: a self-iterator (`iter ->
+    // &State`, `next(&State)`) passes it unchanged; otherwise the state's address (an aggregate's
+    // value IS one; a scalar spills once).
     let state_addr = state
-    if !repr_compatible(ctx, &ig.ret, &ng.params[0]) {
-        if !is_by_ref(ctx, &ig.ret) {
-            let sir = ir_of(ctx, ig.ret)
-            let slot = alloc_slot(bb, sir)
-            bb.store(sir, state, slot)
-            state_addr = slot
-        }
+    if !repr_compatible(ctx, &ig.ret, &ng.params[0]) and !is_by_ref(ctx, &ig.ret) {
+        let sir = ir_of(ctx, ig.ret)
+        let slot = alloc_slot(bb, sir)
+        bb.store(sir, state, slot)
+        state_addr = slot
+    }
+    // A non-copyable state (a drain) is released once the loop is left: the `deinit` pick the
+    // checker recorded on the loop variable's node goes on the defer schedule inside a scope that
+    // wraps the loop, so fallthrough and `break` fire it at the exit block and `return` / `?` on
+    // their way out, while `continue` stays inside it.
+    let release = release_call(ctx, f, state_addr)
+    if release.is_some() {
+        ctx.defer_marks.push(ctx.defers.len)
+        ctx.defers.push(DeferEntry.Call(release.unwrap()))
     }
 
     let fb = bb.fb
@@ -2462,6 +2508,32 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
     }
 
     bb.move_to(&exit)
+    if release.is_some() {
+        pop_defer_scope(ctx, bb, env, false)
+    }
+}
+
+// The release of a non-copyable iterator state, when the checker recorded one on the loop
+// variable's node (`record_state_release`); null for a copyable state. `state_addr` is the state as
+// `next` takes it, which is how `deinit` takes it too.
+fn release_call(ctx: &LowerCtx, f: &ForStmt, state_addr: Operand) DeferCall? {
+    let dop = ctx_operator(ctx, node_id_of(f.var_span))
+    if dop.is_none() {
+        return null
+    }
+    let d = dop.unwrap()
+    let sym = op_symbol(ctx, &d)
+    let sig = op_sig(ctx, &d)
+    if sym.is_none() or sig.is_none() {
+        let _u = unlowerable_why(ctx, "for-iter without deinit symbol")
+        return null
+    }
+    let g = sig.unwrap()
+    if g.params.len != 1 {
+        let _u = unlowerable(ctx)
+        return null
+    }
+    return Some(DeferCall { sym = sym.unwrap(), sig = g, arg = state_addr })
 }
 
 fn lower_for_range(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt, rng: &RangeExpr) {
@@ -5736,7 +5808,12 @@ fn builtin_base_pointer(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Exp
 // for everything else, which means the checker either resolved an operator or reported the type as
 // non-indexable.
 fn builtin_elem_ty(ctx: &LowerCtx, ty: &Ty) Ty? {
-    return tn(ctx, peel_ref(ctx, ty.*)) match {
+    return sequence_elem_ty(ctx, peel_ref(ctx, ty.*))
+}
+
+// The element type of a fixed array or slice; null for anything else.
+fn sequence_elem_ty(ctx: &LowerCtx, ty: Ty) Ty? {
+    return tn(ctx, ty) match {
         NArray(a) => Some(a.elem)
         NNominal(n) => slice_element_ty(ctx, &n)
         _ => null

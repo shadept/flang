@@ -333,9 +333,7 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
     let parse_diags: List(Diagnostic) = list(0, Some(&a))
     const nodes = parse_template_body(def.body, def.base, def.file_id, &a, &parse_diags)
     if parse_diags.len > 0 {
-        const taken = parse_diags.to_owned_slice()
-        for &d in taken.0 { chk.diagnostics.push(move d.*) }
-        taken.1.free(taken.0)
+        move_diags(&parse_diags, &chk.diagnostics)
         return Outcome.Failed
     }
     let raw = string_builder(def.body.len, Some(&a))
@@ -490,11 +488,22 @@ fn parse_chunk(chk: &Checker, text: String, file_id: i32) Module {
     const cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, file_id, chk.allocator, Some(&chk.diagnostics))
     flatten_module_decls(&module, &chk.comptime, &chk.diagnostics, chk.allocator)
-    const taken = p.diagnostics.to_owned_slice()
-    for &d in taken.0 { chk.diagnostics.push(move d.*) }
-    taken.1.free(taken.0)
+    move_diags(&p.diagnostics, &chk.diagnostics)
     p.deinit()
     return move module
+}
+
+// Moves every diagnostic of `from` into `to`, leaving `from` empty with its buffer intact.
+fn move_diags(from: &List(Diagnostic), to: &List(Diagnostic)) {
+    let taking = from.drain()
+    loop {
+        let nx = taking.next()
+        if nx.is_none() {
+            break
+        }
+        to.push(unwrap(move nx))
+    }
+    taking.deinit()
 }
 
 fn emitted_for(state: &TemplateState, allocator: &Allocator?, origin_path: String) &EmittedFile {

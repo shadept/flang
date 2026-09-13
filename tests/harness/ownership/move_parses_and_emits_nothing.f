@@ -1,8 +1,8 @@
 //! TEST: move_parses_and_emits_nothing
 //! EXIT: 42
 
-// `move` is transparent until RFC-028 enforcement lands: it marks a transfer and emits no code, so
-// every position that accepts an lvalue accepts it and the value is unchanged.
+// `move` emits no code: it marks a transfer and leaves the value unchanged, in every position the
+// operand table admits (spec 3.6) - a binding and a field path here.
 
 type Handle = struct {
     fd: i32
@@ -22,12 +22,8 @@ pub fn main() i32 {
     let h2 = Handle { fd = 1i32 }
     let h3 = move h2
 
-    // field, index and dereference operands
+    // field operand
     let n: i32 = move h3.fd
-    let xs: [i32; 2] = [1i32, 0i32]
-    let e: i32 = move xs[0]
-    let p: &i32 = &n
-    let d: i32 = move p.*
 
-    return a + e + d
+    return a + n + 1
 }

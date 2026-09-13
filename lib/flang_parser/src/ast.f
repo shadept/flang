@@ -18,6 +18,7 @@
 
 import std.allocator
 import std.collections.list
+import std.mem
 import std.option
 
 import flang_core.span
@@ -49,9 +50,25 @@ pub type Module = struct {
 // of build.
 pub fn append_decls(self: &Module, decls: &List(Decl)) {
     let merged: List(Decl) = list(self.decls.len + decls.len)
-    for &d in self.decls { merged.push(move d.*) }
-    for &d in decls { merged.push(move d.*) }
+    alias_into(&self.decls, &merged)
+    alias_into(decls, &merged)
     self.decls = move merged
+}
+
+// Adds a second list naming the same declarations, byte for byte, leaving `from` as it was.
+//
+// A chunk's declarations are folded into the module that invoked the template so the checker sees
+// them, while the chunk module keeps its own list: the template index holds references into that
+// list (`&g.params`, `&inv`), and a module that grows rebuilds its buffer, so the index needs
+// storage that does not move. Both lists sit in the build's arena and neither releases a
+// declaration, so the second name is bytes rather than a second release - which is why this is a
+// `memcpy` and not a `move`.
+fn alias_into(from: &List(Decl), to: &List(Decl)) {
+    for i in 0..from.len {
+        let slot: Decl
+        memcpy(&slot as &u8, (from.ptr + i) as &u8, size_of(Decl))
+        to.push(move slot)
+    }
 }
 
 pub fn set_decls(self: &Module, decls: List(Decl)) {

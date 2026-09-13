@@ -130,16 +130,22 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
 // Returns the survivors in order and leaves `diags` empty, its backing buffer released.
 pub fn filter_allowed(diags: &List(Diagnostic), module: &Module,
     alloc: &Allocator? = null) List(Diagnostic) {
-    const taken = diags.to_owned_slice()
-    let kept: List(Diagnostic) = list(taken.0.len, alloc)
-    for i in 0..taken.0.len {
-        if is_allowed(&taken.0[i], module) {
-            taken.0[i].deinit()
+    let kept: List(Diagnostic) = list(diags.len, alloc)
+    let taking = diags.drain()
+    loop {
+        let nx = taking.next()
+        if nx.is_none() {
+            break
+        }
+        let d = unwrap(move nx)
+        if is_allowed(&d, module) {
+            d.deinit()
             continue
         }
-        kept.push(move taken.0[i])
+        kept.push(move d)
     }
-    taken.1.free(taken.0)
+    taking.deinit()
+    diags.deinit()
     return move kept
 }
 
@@ -147,23 +153,29 @@ pub fn filter_allowed(diags: &List(Diagnostic), module: &Module,
 // file id selects.
 pub fn filter_allowed_project(diags: &List(Diagnostic), modules: &List(Module),
     alloc: &Allocator? = null) List(Diagnostic) {
-    const taken = diags.to_owned_slice()
-    let kept: List(Diagnostic) = list(taken.0.len, alloc)
-    for i in 0..taken.0.len {
+    let kept: List(Diagnostic) = list(diags.len, alloc)
+    let taking = diags.drain()
+    loop {
+        let nx = taking.next()
+        if nx.is_none() {
+            break
+        }
+        let d = unwrap(move nx)
         let dropped = false
         for &m in modules {
-            if is_allowed(&taken.0[i], m) {
+            if is_allowed(&d, m) {
                 dropped = true
                 break
             }
         }
         if dropped {
-            taken.0[i].deinit()
+            d.deinit()
             continue
         }
-        kept.push(move taken.0[i])
+        kept.push(move d)
     }
-    taken.1.free(taken.0)
+    taking.deinit()
+    diags.deinit()
     return move kept
 }
 
@@ -242,11 +254,16 @@ pub fn error_count(self: &AnalyzedUnit) usize {
 // Move every diagnostic from `src` into `dst`, which owns their message buffers afterwards. The
 // elements travel out of `src` in its backing buffer, leaving it empty; only that buffer is freed.
 fn drain_diagnostics(dst: &List(Diagnostic), src: &List(Diagnostic)) {
-    const taken = src.to_owned_slice()
-    for i in 0..taken.0.len {
-        dst.push(move taken.0[i])
+    let taking = src.drain()
+    loop {
+        let nx = taking.next()
+        if nx.is_none() {
+            break
+        }
+        dst.push(unwrap(move nx))
     }
-    taken.1.free(taken.0)
+    taking.deinit()
+    src.deinit()
 }
 
 fn count_errors(diags: &List(Diagnostic)) usize {
@@ -614,11 +631,15 @@ pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
             self.parse_diags.push(error("E0001", move msg, none_span()))
             continue
         }
-        self.retired_sources.push(move srcs[i])
-        self.retired_modules.push(move mods[i])
-        srcs[i] = unwrap(move fresh)
-        mods[i] = parse_to_module(srcs[i].as_view(), i as i32, &ctx.comptime, &self.parse_diags,
-            allocator)
+        // The fresh source and its module go into the slots and what was there comes back out of
+        // the exchange, to be retired rather than released: spans and views into it stay live.
+        let retired_src = unwrap(move fresh)
+        swap(&srcs[i], &retired_src)
+        self.retired_sources.push(move retired_src)
+        let retired_mod = parse_to_module(srcs[i].as_view(), i as i32, &ctx.comptime,
+            &self.parse_diags, allocator)
+        swap(&mods[i], &retired_mod)
+        self.retired_modules.push(move retired_mod)
         recollect[i] = true
     }
     self.parse_ns = elapsed_ns(parse_start)
