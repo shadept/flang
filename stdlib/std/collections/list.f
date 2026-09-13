@@ -106,7 +106,7 @@ pub fn unmanaged_list(capacity: usize, allocator: &Allocator) UnmanagedList($T) 
         out.ptr = buf.ptr as &T
         out.cap = capacity
     }
-    return move out
+    return out
 }
 
 // Creates an unmanaged list holding a copy of `source`, in fresh storage sized to its length.
@@ -119,7 +119,7 @@ pub fn unmanaged_list(capacity: usize, allocator: &Allocator) UnmanagedList($T) 
 pub fn unmanaged_list(source: $T[], allocator: &Allocator) UnmanagedList(T) {
     let out: UnmanagedList(T) = unmanaged_list(source.len, allocator)
     out.push_all(source, allocator)
-    return move out
+    return out
 }
 
 // Creates a list with room for `capacity` elements that allocates through `allocator` for its whole
@@ -132,7 +132,7 @@ pub fn list(capacity: usize, allocator: &Allocator) List($T) {
             align_of(T)).expect("list: allocation failed")
         out.__storage = .{ ptr = buf.ptr as &T, len = 0usize, cap = capacity }
     }
-    return move out
+    return out
 }
 
 // Creates a list with room for `capacity` elements. Zero allocates nothing; a zero-initialised
@@ -149,7 +149,7 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
             align_of(T)).expect("list: allocation failed")
         out.__storage = .{ ptr = buf.ptr as &T, len = 0usize, cap = capacity }
     }
-    return move out
+    return out
 }
 
 // Creates a list holding a copy of `source`, in fresh storage sized to fit. Copyable elements are
@@ -172,7 +172,7 @@ pub fn filled_unmanaged_list(count: usize, value: $T, allocator: &Allocator) Unm
     for _i in 0..count {
         out.push(value, allocator)
     }
-    return move out
+    return out
 }
 
 // Creates a list of `count` bitwise copies of `value`, in storage sized to fit. Zero allocates
@@ -213,7 +213,7 @@ pub fn clone(self: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
             out.push(elem.clone(allocator), allocator)
         }
     }
-    return move out
+    return out
 }
 
 // Hands over the buffer, shrunk to `len`, and resets the list to empty. Elements are not deinited:
@@ -228,7 +228,7 @@ pub fn to_owned_slice(self: &UnmanagedList($T), allocator: &Allocator) T[] {
         self.ptr = 0usize as &T
         self.cap = 0
         const empty: T[] = slice_from_raw_parts(0usize as &T, 0)
-        return move empty
+        return empty
     }
 
     if self.cap > self.len {
@@ -568,65 +568,81 @@ pub fn fill(self: &UnmanagedList($T), value: T) {
 
 // Returns a new list of `f(x)` for every element, in order, allocated through `allocator`.
 pub fn map(self: &UnmanagedList($T), f: $F, allocator: &Allocator) UnmanagedList($U) {
-    let out: UnmanagedList(U) = unmanaged_list(self.len, allocator)
+    let out = unmanaged_list(self.len, allocator)
     for x in self {
         out.push(f(x), allocator)
     }
-    return move out
+    return out
+}
+
+// Returns a new list of the results of `f` concatenated, in order, allocated through `allocator`.
+// Each list `f` returns is consumed: `f` hands over ownership and this frees it.
+//
+// ponytail: one allocation and one free per element, pure scratch; the upgrade path is an allocator
+// threaded into `f` (docs/known-issues.md, "Higher-Order Stdlib Functions Cannot Thread an
+// Allocator Into the Callback").
+pub fn flat_map(self: &UnmanagedList($T), f: $F, allocator: &Allocator) UnmanagedList($U) {
+    let out = unmanaged_list(self.len, allocator)
+    for x in self {
+        let part = f(x)
+        out.push_all(part.as_slice(), allocator)
+        part.deinit()
+    }
+    return out
 }
 
 // Returns a new list of the elements `keep` accepts, in order.
 pub fn filter(self: &UnmanagedList($T), keep: $F, allocator: &Allocator) UnmanagedList(T) {
-    let out: UnmanagedList(T) = unmanaged_list(self.len, allocator)
+    let out = unmanaged_list(self.len, allocator)
     for x in self {
         if keep(x) {
             out.push(x, allocator)
         }
     }
-    return move out
+    return out
 }
 
 // Returns a new list of the elements `drop` rejects, in order: `filter` with the predicate negated.
 pub fn remove(self: &UnmanagedList($T), drop: $F, allocator: &Allocator) UnmanagedList(T) {
-    let out: UnmanagedList(T) = unmanaged_list(self.len, allocator)
+    let out = unmanaged_list(self.len, allocator)
     for x in self {
         let dropped: bool = drop(x)
         if !dropped {
             out.push(x, allocator)
         }
     }
-    return move out
+    return out
 }
 
 // Returns a new list of everything after the first `n` elements; empty when `n` exceeds the length.
 pub fn drop_first(self: &UnmanagedList($T), n: usize, allocator: &Allocator) UnmanagedList(T) {
-    let out: UnmanagedList(T) = unmanaged_list(self.len, allocator)
-    let start = if n > self.len { self.len } else { n }
+    let out = unmanaged_list(self.len, allocator)
+    let start = min(n, self.len)
     for i in start..self.len {
         out.push(self[i], allocator)
     }
-    return move out
+    return out
 }
 
 // Returns a reversed copy.
 pub fn reversed(self: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
-    let out: UnmanagedList(T) = unmanaged_list(self.len, allocator)
+    let out = unmanaged_list(self.len, allocator)
     let i = self.len
     while i > 0 {
         i = i - 1
         out.push(self[i], allocator)
     }
-    return move out
+    return out
 }
 
 // Returns a new list of the last `n` elements, or all of them when `n` exceeds the length.
 pub fn take_last(self: &UnmanagedList($T), n: usize, allocator: &Allocator) UnmanagedList(T) {
-    let out: UnmanagedList(T) = unmanaged_list(n, allocator)
+    let out = unmanaged_list(n, allocator)
     let start = if n > self.len { 0 as usize } else { self.len - n }
     for i in start..self.len {
         out.push(self[i], allocator)
     }
-    return move out
+    return out
 }
 
 // Returns a new list pairing elements positionally with `other`, stopping at the shorter.
@@ -637,14 +653,14 @@ pub fn zip(self: &UnmanagedList($T), other: &UnmanagedList($B),
     for i in 0..n {
         out.push((self[i], other[i]), allocator)
     }
-    return move out
+    return out
 }
 
 // Splits into two new lists, (accepted, rejected) by `pred`, each in order.
 pub fn partition(self: &UnmanagedList($T), pred: $F, allocator: &Allocator) (UnmanagedList(T),
     UnmanagedList(T)) {
-    let yes: UnmanagedList(T) = unmanaged_list(0, allocator)
-    let no: UnmanagedList(T) = unmanaged_list(0, allocator)
+    let yes = unmanaged_list(0, allocator)
+    let no = unmanaged_list(0, allocator)
     for x in self {
         if pred(x) {
             yes.push(x, allocator)
@@ -667,7 +683,7 @@ pub fn flatten(self: &UnmanagedList(List($T)), allocator: &Allocator) UnmanagedL
     for &inner in self {
         out.push_all(inner.as_slice(), allocator)
     }
-    return move out
+    return out
 }
 
 // Returns a copy with runs of consecutive `==` duplicates collapsed to one element, `sort | uniq`
@@ -684,7 +700,7 @@ pub fn uniq(self: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
             }
         }
     }
-    return move out
+    return out
 }
 
 // =============================================================================
@@ -747,8 +763,8 @@ pub fn iter_rev(self: &UnmanagedList($T)) SliceRevIterator(T) {
 // one implementation - by a generator, so a managed carrier is any type with a `__storage` reaching
 // an `UnmanagedList(T)` and an `allocator` beside it. A transformation takes an optional allocator
 // for its result and otherwise uses the receiver's; it returns a `List` either way, since a new
-// list needs storage of its own. Only what owns storage lives outside the template: `deinit`,
-// `to_owned_slice` and `flat_map` are `List`'s alone.
+// list needs storage of its own. Only what owns storage lives outside the template: `deinit` and
+// `to_owned_slice` are `List`'s alone.
 // =============================================================================
 
 #define(managed_list, Self: Ident) {
@@ -788,6 +804,13 @@ pub fn iter_rev(self: &UnmanagedList($T)) SliceRevIterator(T) {
     pub fn map(self: &#(Self)($T), f: $F, allocator: &Allocator? = null) List($U) {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.map(f, alloc), allocator = alloc }
+    }
+
+    // Returns a new list of the results of `f` concatenated, in order; each list `f` returns is
+    // consumed.
+    pub fn flat_map(self: &#(Self)($T), f: $F, allocator: &Allocator? = null) List($U) {
+        const alloc = allocator ?? self.allocator
+        return .{ __storage = self.__storage.flat_map(f, alloc), allocator = alloc }
     }
 
     // Returns a new list of the elements `keep` accepts, in order.
@@ -884,24 +907,6 @@ pub fn deinit(self: &List($T), allocator: &Allocator) {
 // frees the slice with `alloc.free(s)`, deiniting the elements first when they own anything.
 pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
     return (self.__storage.to_owned_slice(self.allocator), self.allocator)
-}
-
-// Returns a new list of the results of `f` concatenated, in order. Each list `f` returns is
-// consumed: `f` hands over ownership and this frees it. ponytail: one allocation and one free per
-// element, plus a copy into `out`. The intermediates are pure scratch - nothing outlives the loop
-// iteration that made it - so the allocator traffic is the whole cost of the call for small
-// results. Upgrade path: thread an allocator into `f` and hand it a temporary arena created once
-// per call, so the intermediates are bump allocations reclaimed in one shot; better still, let `f`
-// append directly into `out` and drop the intermediates entirely. Both need an API decision about
-// the callback's shape, not just an implementation change - see docs/known-issues.md.
-pub fn flat_map(self: &List($T), f: $F, allocator: &Allocator? = null) List($U) {
-    let out: List(U) = list(self.len, allocator ?? self.allocator)
-    for x in self {
-        let part = f(x)
-        out.push_all(part.as_slice())
-        part.deinit()
-    }
-    return move out
 }
 
 // =============================================================================

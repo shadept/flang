@@ -15,6 +15,7 @@ import std.test
 import flang_analysis.analyze
 import flang_core.span
 import flang_parser.ast
+import flang_typer.copyable
 import flang_typer.function_registry
 import flang_typer.inference_results
 import flang_typer.interner
@@ -22,6 +23,7 @@ import flang_typer.node_id
 import flang_typer.nominal_registry
 import flang_typer.reporter
 import flang_typer.result
+import flang_typer.specialization
 import flang_typer.type
 
 // The file id of `path` inside `unit`, by exact path comparison (both sides use the resolver's path
@@ -195,6 +197,126 @@ pub fn type_of_node(result: &TypeCheckResult, node: NodeId) Ty? {
         }
     }
     return null
+}
+
+// `ty`, the checked type of `node`, as the source spells it. Inside a generic template body the
+// base tables hold nothing and the type comes from an instantiation, which saw `i32` where the
+// source says `T`. The instantiation's type arguments are abstracted back to the template's
+// parameters: every subtree equal to a bound argument becomes the parameter's variable, which
+// renders under its `$T` name. A type from the base tables is returned as is.
+pub fn display_ty(result: &TypeCheckResult, node: NodeId, ty: Ty,
+    allocator: &Allocator? = null) Ty {
+    if result.get_type(node).is_some() {
+        return ty
+    }
+    for s in result.specializations.specs.iter() {
+        if s.value.overlay.node_types.get(node).is_none() {
+            continue
+        }
+        const f = result.functions.find_by_id(s.value.function_id)
+        if f.is_none() {
+            return ty
+        }
+        const it = &result.interner
+        let binds: Dict(Ty, Ty) = dict(allocator)
+        defer binds.deinit()
+        it.node(f.unwrap().signature.body) match {
+            NFunc(sig) => {
+                for i in 0..min(sig.params.len, s.value.concrete_params.len) {
+                    bind_type_args(it, it.child_at(sig.params, i), s.value.concrete_params[i],
+                        &binds)
+                }
+            }
+            _ => {}
+        }
+        return abstract_ty(it, ty, &binds, allocator)
+    }
+    return ty
+}
+
+// Match a signature type against the instantiation's concrete one, recording what each variable
+// stood for. First binding wins.
+fn bind_type_args(it: &TypeInterner, pat: Ty, conc: Ty, out: &Dict(Ty, Ty)) {
+    it.node(pat) match {
+        NVar(_) => {
+            if out.get(conc).is_none() {
+                out.set(conc, pat)
+            }
+        }
+        NRef(pi) => it.node(conc) match {
+            NRef(ci) => bind_type_args(it, pi, ci, out)
+            _ => {}
+        }
+        NArray(pa) => it.node(conc) match {
+            NArray(ca) => bind_type_args(it, pa.elem, ca.elem, out)
+            _ => {}
+        }
+        NFunc(pf) => it.node(conc) match {
+            NFunc(cf) => {
+                bind_spans(it, pf.params, cf.params, out)
+                bind_type_args(it, pf.ret, cf.ret, out)
+            }
+            _ => {}
+        }
+        NTuple(ps) => it.node(conc) match {
+            NTuple(cs) => bind_spans(it, ps, cs, out)
+            _ => {}
+        }
+        NNominal(pn) => it.node(conc) match {
+            NNominal(cn) => {
+                if pn.id == cn.id {
+                    bind_spans(it, pn.args, cn.args, out)
+                }
+            }
+            _ => {}
+        }
+        _ => {}
+    }
+}
+
+fn bind_spans(it: &TypeInterner, pat: ChildSpan, conc: ChildSpan, out: &Dict(Ty, Ty)) {
+    if pat.len != conc.len {
+        return
+    }
+    for i in 0..pat.len {
+        bind_type_args(it, it.child_at(pat, i), it.child_at(conc, i), out)
+    }
+}
+
+fn abstract_ty(it: &TypeInterner, ty: Ty, binds: &Dict(Ty, Ty), allocator: &Allocator?) Ty {
+    const hit = binds.get(ty)
+    if hit.is_some() {
+        return hit.unwrap()
+    }
+    return it.node(ty) match {
+        NRef(inner) => it.ref_of(abstract_ty(it, inner, binds, allocator))
+        NArray(a) => it.array_of(abstract_ty(it, a.elem, binds, allocator), a.length)
+        NFunc(f) => {
+            let ps = abstract_span(it, f.params, binds, allocator)
+            defer ps.deinit()
+            it.func_of(&ps, abstract_ty(it, f.ret, binds, allocator))
+        }
+        NTuple(span) => {
+            let es = abstract_span(it, span, binds, allocator)
+            defer es.deinit()
+            it.tuple_of(&es)
+        }
+        NNominal(nn) => {
+            let args = abstract_span(it, nn.args, binds, allocator)
+            defer args.deinit()
+            it.nominal_of(nn.id, &args)
+        }
+        _ => ty
+    }
+}
+
+fn abstract_span(it: &TypeInterner, span: ChildSpan, binds: &Dict(Ty, Ty),
+    allocator: &Allocator?) List(Ty) {
+    let out: List(Ty) = list(span.len, allocator)
+    for i in 0..span.len {
+        out.push(abstract_ty(it, it.child_at(span, i), binds, allocator))
+    }
+    return move out
 }
 
 // The largest typed node ending exactly at `end` - the receiver chain of a member access whose `.`
@@ -614,4 +736,69 @@ test "same_target distinguishes variants and payloads" {
     assert_true(same_target(&a, &b), "equal function ids match")
     assert_true(!same_target(&a, &c), "different ids do not")
     assert_true(!same_target(&a, &l), "different variants do not")
+}
+
+// Whether the site is an inferred move (spec 7.2). A `return` of a binding: the binding is a
+// non-copyable value. A method call on one: that, plus the winner takes its first parameter by
+// value and no `op_deref` hop reached the receiver.
+pub fn inferred_move(result: &TypeCheckResult, call: NodeId, recv: NodeId, is_return: bool) bool {
+    if !is_return {
+        if result.receiver_derefs.get_ref(call).is_some() {
+            return false
+        }
+        const first = first_param_type(result, call)
+        if first.is_none() {
+            return false
+        }
+        const by_ref = result.interner.node(first.unwrap()) match { NRef(_) => true, _ => false }
+        if by_ref {
+            return false
+        }
+    }
+    const it = &result.interner
+    const rt = type_of_node(result, recv)
+    if rt.is_none() {
+        return false
+    }
+    const r = rt.unwrap()
+    const recv_ref = it.node(r) match { NRef(_) => true, _ => false }
+    if recv_ref {
+        return false
+    }
+    return !is_copyable_ty(it, &result.nominals, r, null)
+}
+
+fn first_param_type(result: &TypeCheckResult, call: NodeId) Ty? {
+    const t = result.resolved_targets.get(call)
+    if t.is_none() {
+        return null
+    }
+    return t.unwrap() match {
+        RtFunction(id) => {
+            const f = result.functions.find_by_id(id)
+            if f.is_none() {
+                return null
+            }
+            result.interner.node(f.unwrap().signature.body) match {
+                NFunc(fn_ty) => {
+                    if fn_ty.params.len == 0 {
+                        return null
+                    }
+                    Some(result.interner.child_at(fn_ty.params, 0))
+                }
+                _ => null
+            }
+        }
+        RtSpecialized(sid) => {
+            const sp = result.specializations.find(sid)
+            if sp.is_none() {
+                return null
+            }
+            if sp.unwrap().concrete_params.len == 0 {
+                return null
+            }
+            Some(sp.unwrap().concrete_params[0])
+        }
+        _ => null
+    }
 }

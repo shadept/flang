@@ -33,17 +33,57 @@ pub type Binder = struct {
 }
 
 pub fn module_binders(m: &Module, allocator: &Allocator? = null) List(Binder) {
-    let out: List(Binder) = list(16, allocator)
+    let w = walk_module(m, allocator)
+    w.moves.deinit()
+    return move w.binders
+}
+
+// A method call on a plain binding, or a `return` of one: the shapes an inferred move has (spec
+// 7.2). Whether a site is one is the checker's answer (`query.inferred_move`); the walk only finds
+// the shape.
+pub type MoveSite = struct {
+    // Where the ghost `move` renders: the binding's start.
+    offset: usize
+    // The call node for a receiver; the binding node itself for a `return`.
+    call: NodeId
+    recv: NodeId
+    is_return: bool
+}
+
+pub fn move_sites(m: &Module, allocator: &Allocator? = null) List(MoveSite) {
+    let w = walk_module(m, allocator)
+    w.binders.deinit()
+    return move w.moves
+}
+
+type Walk = struct {
+    binders: List(Binder)
+    moves: List(MoveSite)
+}
+
+// A template expansion is spliced into the module's declarations under its own file id, with
+// offsets into the generated text; a site in one has no position in this file and is skipped.
+fn walk_module(m: &Module, allocator: &Allocator?) Walk {
+    let out = Walk { binders = list(16, allocator), moves = list(8, allocator) }
+    const fid = m.span.file_id
     for &d in m.decls {
         d.* match {
             Function(f) => {
+                if f.span.file_id != fid {
+                    continue
+                }
                 push_params(&out, &f.params, f.span)
                 f.body match {
                     Some(b) => walk_block(&out, b, f.span)
                     None => {}
                 }
             }
-            Test(t) => walk_block(&out, t.body, t.span)
+            Test(t) => {
+                if t.span.file_id != fid {
+                    continue
+                }
+                walk_block(&out, t.body, t.span)
+            }
             _ => {}
         }
     }
@@ -113,9 +153,9 @@ pub fn live_hint_sites(live_text: String, analyzed: &Module,
     return move out
 }
 
-fn push_params(out: &List(Binder), params: &List(FunctionParam), owner: SourceSpan) {
+fn push_params(out: &Walk, params: &List(FunctionParam), owner: SourceSpan) {
     for &p in params {
-        out.push(.{
+        out.binders.push(.{
             name = p.name,
             name_span = p.span,
             owner = owner,
@@ -126,7 +166,7 @@ fn push_params(out: &List(Binder), params: &List(FunctionParam), owner: SourceSp
     }
 }
 
-fn push_let(out: &List(Binder), ls: &LetStmt, owner: SourceSpan) {
+fn push_let(out: &Walk, ls: &LetStmt, owner: SourceSpan) {
     // Error recovery leaves the name span equal to the statement span - nothing to bind.
     if ls.name.len == 0 {
         return
@@ -135,7 +175,7 @@ fn push_let(out: &List(Binder), ls: &LetStmt, owner: SourceSpan) {
         Some(t) => Some(type_expr_span(t))
         None => null
     }
-    out.push(.{
+    out.binders.push(.{
         name = ls.name,
         name_span = ls.name_span,
         owner = owner,
@@ -145,11 +185,11 @@ fn push_let(out: &List(Binder), ls: &LetStmt, owner: SourceSpan) {
     })
 }
 
-fn push_for(out: &List(Binder), fs: &ForStmt, owner: SourceSpan) {
+fn push_for(out: &Walk, fs: &ForStmt, owner: SourceSpan) {
     if fs.var_name.len == 0 {
         return
     }
-    out.push(.{
+    out.binders.push(.{
         name = fs.var_name,
         name_span = fs.var_span,
         owner = owner,
@@ -159,7 +199,7 @@ fn push_for(out: &List(Binder), fs: &ForStmt, owner: SourceSpan) {
     })
 }
 
-fn walk_block(out: &List(Binder), b: &BlockExpr, owner: SourceSpan) {
+fn walk_block(out: &Walk, b: &BlockExpr, owner: SourceSpan) {
     for &s in b.stmts {
         walk_stmt(out, s, owner)
     }
@@ -169,7 +209,7 @@ fn walk_block(out: &List(Binder), b: &BlockExpr, owner: SourceSpan) {
     }
 }
 
-fn walk_stmt(out: &List(Binder), s: &Stmt, owner: SourceSpan) {
+fn walk_stmt(out: &Walk, s: &Stmt, owner: SourceSpan) {
     s.* match {
         Let(ls) => {
             push_let(out, &ls, owner)
@@ -180,7 +220,18 @@ fn walk_stmt(out: &List(Binder), s: &Stmt, owner: SourceSpan) {
         }
         Expression(es) => walk_expr(out, es.expr, owner)
         Return(rs) => rs.value match {
-            Some(v) => walk_expr(out, v, owner)
+            Some(v) => {
+                v.* match {
+                    Identifier(id) => out.moves.push(.{
+                        offset = id.span.start,
+                        call = node_id_of(id.span),
+                        recv = node_id_of(id.span),
+                        is_return = true,
+                    })
+                    _ => {}
+                }
+                walk_expr(out, v, owner)
+            }
             None => {}
         }
         Defer(ds) => walk_expr(out, ds.expr, owner)
@@ -206,14 +257,14 @@ fn walk_stmt(out: &List(Binder), s: &Stmt, owner: SourceSpan) {
     }
 }
 
-fn walk_opt(out: &List(Binder), e: &Expr?, owner: SourceSpan) {
+fn walk_opt(out: &Walk, e: &Expr?, owner: SourceSpan) {
     e match {
         Some(x) => walk_expr(out, x, owner)
         None => {}
     }
 }
 
-fn walk_expr(out: &List(Binder), e: &Expr, owner: SourceSpan) {
+fn walk_expr(out: &Walk, e: &Expr, owner: SourceSpan) {
     e.* match {
         Lit(_) => {}
         InterpolatedString(is) => {
@@ -267,6 +318,18 @@ fn walk_expr(out: &List(Binder), e: &Expr, owner: SourceSpan) {
             walk_expr(out, ix.index, owner)
         }
         Call(c) => {
+            c.callee.* match {
+                MemberAccess(ma) => ma.receiver.* match {
+                    Identifier(id) => out.moves.push(.{
+                        offset = id.span.start,
+                        call = node_id_of(c.span),
+                        recv = node_id_of(id.span),
+                        is_return = false,
+                    })
+                    _ => {}
+                }
+                _ => {}
+            }
             walk_expr(out, c.callee, owner)
             for &a in c.args {
                 a.* match {
@@ -314,7 +377,7 @@ fn walk_expr(out: &List(Binder), e: &Expr, owner: SourceSpan) {
     }
 }
 
-fn walk_if(out: &List(Binder), i: &IfExpr, owner: SourceSpan) {
+fn walk_if(out: &Walk, i: &IfExpr, owner: SourceSpan) {
     walk_expr(out, i.condition, owner)
     walk_block(out, i.then_branch, owner)
     i.else_branch match {
@@ -334,6 +397,20 @@ test "hint sites cover annotation-less lets and for binders, nested included" {
     defer sites.deinit()
     // a, x, c, d - b is annotated.
     assert_eq(sites.len, 4 as usize, "annotation-less binders only")
+}
+
+test "hint sites skip declarations spliced in from a generated file" {
+    const src = "fn go() {\n    let a = 1\n}\n"
+    let doc = parse_doc(src)
+    defer doc.deinit()
+    // A declaration under another file id: what a template expansion looks like once `append_decls`
+    // has spliced it in.
+    let other = parse_doc("fn made() {\n    let b = 2\n}\n", null, 7i32)
+    defer other.deinit()
+    doc.module.append_decls(&other.module.decls)
+    let sites = hint_sites(&doc.module)
+    defer sites.deinit()
+    assert_eq(sites.len, 1 as usize, "only this file's binder")
 }
 
 test "module_binders carries params with annotations and owners" {

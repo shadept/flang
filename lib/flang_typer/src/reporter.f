@@ -23,6 +23,7 @@ import flang_typer.inference_engine
 import flang_typer.interner
 import flang_typer.nominal_registry
 import flang_typer.type
+import flang_typer.well_known
 
 // Where the unification happened. The caller carries the span and chooses the error code (e.g.
 // `E2071` for return-statement mismatch vs `E2002` for general type mismatch) and may supply a
@@ -173,21 +174,34 @@ pub fn format_with_names(it: &TypeInterner, t: Ty, sb: &StringBuilder, reg: &Nom
     let r = reg.unwrap()
     it.node(t) match {
         NNominal(nn) => {
-            sb.append(short_name(nominal_fqn(r, nn.id)))
-            if nn.args.len > 0 {
-                sb.append("(")
-                for i in 0..nn.args.len {
-                    if i > 0 {
-                        sb.append(", ")
-                    }
-                    format_with_names(it, it.child_at(nn.args, i), sb, reg, vars)
-                }
-                sb.append(")")
+            // The source spellings: `T?` for Option and `T[]` for Slice. `?` binds loosest, so any
+            // operand takes it; `[]` binds tighter than `&` and has no `?` form, so a reference or
+            // an option element keeps the long form (`Slice(&T)`, `Slice(T?)`).
+            if is_option(it, r, t) {
+                format_with_names(it, it.child_at(nn.args, 0), sb, reg, vars)
+                sb.append("?")
+                return
             }
+            const elem = if nn.args.len == 1 { Some(it.child_at(nn.args, 0)) } else { null }
+            if elem.is_some() and nominal_fqn(r, nn.id) == FQN_SLICE and !needs_long_slice(it, r,
+                elem.unwrap()) {
+                format_with_names(it, elem.unwrap(), sb, reg, vars)
+                sb.append("[]")
+                return
+            }
+            format_nominal_long(it, &nn, sb, reg, vars)
         }
         NRef(inner) => {
             sb.append("&")
-            format_with_names(it, inner, sb, reg, vars)
+            // `&T?` is `Option(&T)`, so a referenced option keeps the long form.
+            if is_option(it, r, inner) {
+                it.node(inner) match {
+                    NNominal(nn) => format_nominal_long(it, &nn, sb, reg, vars)
+                    _ => {}
+                }
+            } else {
+                format_with_names(it, inner, sb, reg, vars)
+            }
         }
         NArray(a) => {
             sb.append("[")
@@ -231,6 +245,35 @@ pub fn format_with_names(it: &TypeInterner, t: Ty, sb: &StringBuilder, reg: &Nom
             }
         }
         _ => it.format(t, sb)
+    }
+}
+
+fn format_nominal_long(it: &TypeInterner, nn: &NNominalNode, sb: &StringBuilder,
+    reg: &NominalRegistry?, vars: &Dict(VarId, String)?) {
+    sb.append(short_name(nominal_fqn(reg.unwrap(), nn.id)))
+    if nn.args.len > 0 {
+        sb.append("(")
+        for i in 0..nn.args.len {
+            if i > 0 {
+                sb.append(", ")
+            }
+            format_with_names(it, it.child_at(nn.args, i), sb, reg, vars)
+        }
+        sb.append(")")
+    }
+}
+
+fn needs_long_slice(it: &TypeInterner, reg: &NominalRegistry, elem: Ty) bool {
+    return it.node(elem) match {
+        NRef(_) => true
+        _ => is_option(it, reg, elem)
+    }
+}
+
+fn is_option(it: &TypeInterner, reg: &NominalRegistry, t: Ty) bool {
+    return it.node(t) match {
+        NNominal(nn) => nn.args.len == 1 and nominal_fqn(reg, nn.id) == FQN_OPTION
+        _ => false
     }
 }
 

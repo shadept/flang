@@ -632,6 +632,28 @@ of refactor breakage, and the eventual error names lowering rather than the
 offending expression. Member access on a type with no fields should be an
 E2xxx at the access site.
 
+### A generic pick whose return type is a nominal with a free hole drains without a diagnostic
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (`pending_ready`, `process_pending`)
+
+`pending_ready` treats a pending specialization as ready when its instantiated
+return type is not a bare variable. A nominal with a variable inside
+(`Slice(?U)` from `reinterpret(xs)` with nothing pinning `U`) passes, the
+specialization is minted with the hole still open, `flang check` reports
+success, and lowering refuses the enclosing body with `callee is not a
+callable value` instead of the checker's E2xxx "cannot infer the type
+arguments".
+
+```
+let t = reinterpret(source)   // U never pinned; `flang check` says nothing
+```
+
+The readiness test is deliberately shallow: a hole inside a callable slot is
+pinned by the instantiated body (a lambda parameter), so "no var anywhere"
+would break those. Distinguishing a callable hole from a data hole in the
+return type would let the data case report at the call site.
+
 ### CST ownership is copy-with-shared-children; no `deinit` can be correct for it
 
 **Status:** FIXED — the CST is struct-of-arrays; a node exists exactly once
@@ -1590,7 +1612,7 @@ already demonstrates the arena half of the pattern.
 **Affected:** `stdlib/std/collections/list.f` (`flat_map` today; any future `group_by`, `partition_map`, `permutations`, `combinations`)
 
 A callback that returns a container has to allocate it, and the caller has no
-way to say where from. `List.flat_map` therefore does one allocation and one
+way to say where from. `flat_map` (unmanaged, forwarded by `List`) therefore does one allocation and one
 free per element for values that are pure scratch — nothing outlives the
 iteration that produced it. For small results that allocator traffic is the
 entire cost of the call.

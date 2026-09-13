@@ -425,11 +425,12 @@ pub fn reverse(s: $T[]) {
 
 // Copies min(src.len, dest.len) elements from `src` into `dest` bitwise and returns the number
 // copied. Copyable elements only: a slice carries no allocator to clone owning elements with, so
-// those are cloned by the caller, one `clone(&T, allocator)` per element. Panics on an owning
-// element type.
+// those are cloned by the caller, one `clone(&T, allocator)` per element. An owning element type is
+// a compile-time error at the call.
 pub fn copy_to(src: $T[], dest: T[]) usize {
     #if !type_info(T).copyable {
-        panic("copy_to: owning elements are cloned by the caller with its allocator")
+        #error($"copy_to needs copyable elements, {T.name} owns something",
+            $"clone each element with clone(&{T.name}, allocator)")
     }
     const len = min(src.len, dest.len)
     memmove(dest.ptr, src.ptr, len * size_of(T))

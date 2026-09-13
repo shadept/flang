@@ -118,9 +118,11 @@ out, changing the copy and writing it back with `set` leaves two owners of whate
 `let sb = string_builder(64); defer sb.deinit()`. A function that hands the storage on uses
 `to_owned_slice` or `transfer` on the success path, and the deferred `deinit` becomes a no-op.
 
-**Transfers.** A transfer of ownership is spelled `move`: `xs.push(move v)`, `return move out`,
-`Wrapper { inner = move x }`, `unwrap(move r)`. The checker reports each site that needs one
-(E2124, E2128), so a missing `move` is a compile error, never a silent copy.
+**Transfers.** A transfer of ownership is spelled `move`: `xs.push(move v)`,
+`Wrapper { inner = move x }`, `unwrap(move r)`. Two positions imply it (spec 7.2): the receiver of
+a call whose first parameter is by value, `r.unwrap()`, and `return out` of a binding. The checker
+reports each other site that needs one (E2124), and a consuming call reached through a reference
+or an `op_deref` hop (E2128), so a missing `move` is a compile error, never a silent copy.
 
 ## Tests
 

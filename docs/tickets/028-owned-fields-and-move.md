@@ -117,7 +117,7 @@ let b = move a          // rebinding
 close(move h)           // by-value argument
 Wrapper { h = move h }  // struct literal field
 xs[i] = move h          // element store
-return move h           // by-value return of a local
+return h                // by-value return of a local: inferred, `return move h` also accepted
 move h.fd               // error: partial moves are out in v1
 ```
 
@@ -222,44 +222,53 @@ let m = move n                          // warning W2005: `i32` is copyable
 by-value argument, struct literal field, element store, by-value return of a
 local. A copy of a non-copyable value without it is `E2124`.
 
-A later phase makes the keyword omittable where a signature already states the
-transfer - a by-value parameter, a `return` type, and the receiver of a UFCS
-call, which lifts the receiver rule below. Relaxing a requirement never
-invalidates existing source; the strict form comes first for that reason. That
-phase is parser and typer work on top of a working ownership check, so it is
-sequenced after the stdlib and compiler have moved to the strict form.
+Two positions infer it. The receiver of a UFCS call, because the keyword cannot
+be written there: see below. And `return h` of a non-copyable binding, because
+the transfer is the only return that unifies; `return move h` is still
+accepted. Every other position keeps the explicit `move`, so that a transfer
+is visible where it happens. Widening the
+inference to the other positions is a seam in the checker (`MoveInference`,
+`Default` in tree, `All` the widening), kept as a seam rather than a language
+rule or a project setting until there is a reason to turn it.
 
 **Always accepted where a move happens.** The set of positions the LSP renders
 a ghost `move` on and the set the parser accepts an explicit `move` in are the
 same set. The receiver is not in either set; see below.
 
-### The receiver never consumes
+### The receiver is the inferred move
 
-Transitional: this rule holds for the explicit form of `move` and goes away with
-the inference phase above, where `h.close()` on a local `h` is the inferred
-`close(move h)`. Spec §7.2 carries the same note.
-
-**A by-value receiver of a non-copyable type is not reachable through UFCS.**
-Write the call in free-function form and move the argument:
+**A by-value first parameter on a non-copyable receiver consumes it.** Called as
+a method on a binding, the receiver is the inferred `move`: the position has no
+spelling for the keyword, so it is implied, and the binding is marked exactly as
+the free form marks it.
 
 ```flang
-close(move h)                   // ok
-h.close()                       // error E2128: `close` consumes its receiver
-(move h).close()                // error E2128: the receiver position, still
+h.close()                       // moves `h`, same as close(move h)
+close(move h)                   // the explicit form, still accepted
+open("f").close()               // an rvalue: the callee owns it, nothing to mark
+(move h).close()                // error E2128: the position is already the move
 ```
 
-The rule is about the receiver position, not about `move`. A consuming call
-spells its transfer one way everywhere - `move` in an argument of a plain call -
-and the parenthesised receiver form does not exist. `move` is a prefix operator
-over an lvalue in argument, binding, field, element and return position, and
-nowhere else.
+The receiver follows the `move` operand table above: a binding is marked, a
+field takes the declaring module's rights (E2127 elsewhere), an index or a
+dereference marks nothing.
 
-It reads off the callee's first parameter and the receiver's copyable bit, and
-nothing else. An **rvalue** receiver is refused on the same test: `open("f")`
-carries no move obligation, but `open("f").close()` is still a consuming call
-written in receiver position, and admitting it would make the rule "no consuming
-receiver unless the receiver happens to be a temporary". Write
-`close(open("f"))`.
+**Not through a reference.** A `&T` receiver adapting to the by-value parameter,
+or an `op_deref` hop into a wrapper, would read the value out of storage the
+caller does not own - a second owner with no binding to mark. That shape is
+E2128, at the pick:
+
+```flang
+fn peek(h: &FileHandle) i32 { return h.close() }   // error E2128
+rc.close()                      // error E2128: Rc.op_deref hands out &FileHandle
+list.drain()                    // error E2128: drain(UnmanagedList(T)) through List.op_deref
+```
+
+`op_deref` itself never consumes: it takes `&self` and returns `&T`. The
+resolver still offers the wrapped value by value after a hop, and for a
+copyable type that read is a copy, which is what `owned.starts_with("x")` on an
+`Owned(String)` is built on. For a non-copyable type the same read is the
+second owner above, and the pick refuses it.
 
 Nothing changes for a copyable type. `s.trim()`, `opt.map(f)`, `xs.iter()` and
 `c.is_digit()` keep their by-value receivers: a copy of a copyable value is
@@ -267,16 +276,23 @@ unchecked, so the receiver is not a consuming site. Value-mode UFCS chains are
 what `String`, `Option` and the primitives are built on, and `&` on those
 receivers would be a second indirection to read a tag or a length.
 
-What the rule costs is the method spelling of a consuming function, for
-non-copyable types only. `deinit` is the whole of it in tree.
+The knock-on is that a **read-only** method on a non-copyable type must take
+`&T` to stay reachable through references and wrappers, which is step 1's
+conversion applied to `Option` and `Result`: `is_some`, `is_none`, `is_ok` and
+`is_err` take `&`. The consuming members take the payload out - `unwrap`,
+`expect`, `ok`, `err`, `unwrap_err`, `op_try`, `map`, `flat_map`, `filter`,
+`and_then` - so exactly one owner survives and the by-value receiver is what
+states it: `r.unwrap()` on a binding moves `r`.
 
-The knock-on is that a **read-only** method must take `&T` to stay reachable on
-a non-copyable receiver, which is step 1's conversion applied to `Option` and
-`Result`: `is_some`, `is_none`, `is_ok` and `is_err` become `&`. The consuming
-members do not move: `unwrap`, `expect`, `ok`, `err`, `unwrap_err`, `op_try`,
-`map`, `flat_map`, `filter` and `and_then` all take the payload out, so exactly
-one owner survives and the by-value receiver is what states it. `unwrap(move opt)`
-is the spelling for a non-copyable payload.
+**Temporaries.** A chain is one expression; every receiver after the first is
+an rvalue, which carries no move obligation. A consuming callee becomes its
+owner; a borrowing callee reads it for the duration of the expression, however
+the backend materialises the address. An owning temporary that no callee
+consumed - `open("f").is_ok()` - is leaked. Two follow-ups, after by-value
+`deinit`, close that: a binding of a non-copyable type live at scope exit on
+any path, never moved, is a warning (since `deinit(move x)` is a move, every
+resource is moved exactly once); and a discarded non-copyable rvalue is the
+same warning at the expression.
 
 ### Parameter side
 
@@ -485,10 +501,10 @@ error[E2124]: `h` cannot be copied here — use `move h`
 ```
 
 ```
-error[E2128]: `close` consumes its argument and has no receiver form
+error[E2128]: `close` consumes its receiver, and this one is reached through a reference
   `close(self: FileHandle)` takes `FileHandle` by value
   `FileHandle` is not copyable: field `fd` is `owned`
-  write `close(move h)`
+  call it on a value you own, or write `close(move h)`
 ```
 
 New codes:
@@ -498,7 +514,7 @@ New codes:
 - `E2125` - `move` operand is not an lvalue.
 - `E2126` - assignment over a live non-copyable binding.
 - `E2127` - partial move outside the module declaring the type.
-- `E2128` - a consuming call written in receiver position.
+- `E2128` - a consuming call through a reference or an `op_deref` hop.
 - `W2005` - `move` at a site that does not consume (warning).
 
 `E2123` and `W2005` were `E2122` and `W2004` in an earlier draft; both are taken
@@ -519,10 +535,10 @@ the stdlib frame as a note.
 
 ## LSP
 
-- Ghost `move` inlay at every derived move position, rendered distinctly from a
-  written one. The receiver is not one of them: a consuming call has no receiver
-  form, so there is no position to render an inlay on.
-- Quick fix on `E2128`: rewrite `h.close()` as `close(move h)`.
+- Ghost `move` inlay before the binding of every inferred move - a receiver,
+  or a returned binding - rendered distinctly from a written one.
+- Quick fix on `E2128`: rewrite `p.close()` as `close(move p.*)` where the
+  caller owns the referent.
 - Ghost `owned` on fields whose type is non-copyable, rendered distinctly from a
   declared one, plus the bit on the struct header.
 
@@ -575,6 +591,10 @@ the stdlib frame as a note.
    tree is non-copyable yet, so only `E2125` and `W2005` can fire at all, and
    neither does outside `tests/harness/ownership/`.
 
+   2026-09-13: the receiver became the inferred move (`own_receiver`), `E2128`
+   narrowed to the through-a-reference case, and `MoveInference` is the seam
+   for widening.
+
    Step 1's remainder came with it: `Option.is_some/is_none` and
    `Result.is_ok/is_err` now take `&self`, so a read-only method stays reachable
    on a non-copyable receiver, and their free-call sites moved to the receiver
@@ -622,8 +642,16 @@ the stdlib frame as a note.
    `UnmanagedList.ptr`, `UnmanagedDict.entries`, `UnmanagedDeque.ptr`,
    `OwnedString.ptr`, `StringBuilder.ptr` and `Rc`/`Arc.__inner` are `owned`
    (2026-09-12); everything else in the stdlib derives the bit from them. The
-   stdlib is clean under the check; the compiler sweep (~1500 sites, `lib/*`
-   and `compiler/`) is the remaining work of this step. Landed with it:
+   stdlib is clean under the check, and the compiler sweep (`lib/*`, `tools/*`
+   and `compiler/`) landed 2026-09-12 with the seed promoted to it: every
+   project checks for all three targets, the stage-2 = stage-3 fixpoint holds
+   and the harness and every colocated test block pass. Two things the sweep
+   settled are recorded in `docs/known-issues.md`: a container element type
+   needs the element-form `deinit(&T, &Allocator)` or the container's gated
+   `deinit` fails to instantiate (reported as E2011 on `&?N`, which is the
+   open diagnostic defect there), and a list that had elements moved out of it
+   with `move x.*` must be drained with `to_owned_slice`, never `deinit()`ed.
+   Landed with the step:
    `clone` on `UnmanagedList`/`List`/`OwnedString`, `retain` replacing
    `Rc.clone`/`Arc.clone`, `Dict` entries iterate by reference (`keys()` and
    `values()` still copy), `Dict` lookups borrow the key internally, the
@@ -672,7 +700,8 @@ The stdlib vocabulary the annotation lands with - `clone`, by-value `deinit`,
 
 `copy_let_binding`, `copy_assignment_after_move`, `copy_call_argument`,
 `copy_struct_literal_field`, `copy_element_store`,
-`copy_array_literal_element`, `copy_tuple_element`, `copy_return_local`,
+`copy_array_literal_element`, `copy_tuple_element` (`copy_return_local` was
+superseded by `return_binding_inferred`),
 `copy_via_list_get`, `copy_via_by_value_loop`, `copy_transitive_chain`.
 
 The last two pin diagnostic attribution: the copy happens inside `list.f`, and
@@ -708,13 +737,21 @@ Defer, all following from "the body runs at scope exit":
 
 `move_call_result`, `move_literal`, `move_arithmetic`, `move_match_result`.
 
-### E2128 — a consuming call in receiver position
+### E2128 — a consuming call through a reference
 
-`consuming_receiver_plain` (`h.close()`), `consuming_receiver_parenthesised`
-(`(move h).close()` - refused for the position, not the `move`),
-`consuming_receiver_deinit` (`h.deinit()`), and
-`consuming_receiver_chained` (`open("f").close()`, an rvalue receiver: also
-refused, so the rule needs no lvalue test of its own).
+`receiver_through_reference` (`h.close()` on `h: &FileHandle`),
+`receiver_through_rc` (through `Rc.op_deref`), `receiver_through_list`
+(`drain(UnmanagedList(T))` through `List.op_deref`), and
+`consuming_receiver_parenthesised` (`(move h).close()`: the position is already
+the move).
+
+Inferred receiver moves, positives: `consuming_receiver_plain` (`h.close()`),
+`consuming_receiver_deinit` (`h.deinit()`), `consuming_receiver_chained`
+(`open("f").close()`, an rvalue), `receiver_field_inside_module`,
+`receiver_index_element`, `copyable_receiver_through_hop`. And the liveness
+that follows: `receiver_move_then_use`, `receiver_move_in_loop`,
+`receiver_move_defer_then_return` (all E2123). `return h` inferred:
+`return_binding_inferred`, `return_binding_then_defer` (E2123).
 
 The receiver rule superseded three tests written before it:
 `copy_ufcs_receiver` and `receiver_paren_form` became

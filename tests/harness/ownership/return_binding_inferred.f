@@ -1,6 +1,5 @@
-//! TEST: copy_return_local
-//! COMPILE-ERROR: E2124
-//! EXIT: 1
+//! TEST: return_binding_inferred
+//! EXIT: 3
 
 type FileHandle = struct {
     owned fd: i32
@@ -14,11 +13,13 @@ fn close(h: FileHandle) i32 {
     return h.fd
 }
 
+// `return h` of a non-copyable local is the inferred `move` (spec 7.2).
 fn make() FileHandle {
     let h = open(3)
-    return h                       // error E2124: needs `move h`
+    return h
 }
 
 pub fn main() i32 {
-    return close(make())
+    let h = make()
+    return h.close()
 }

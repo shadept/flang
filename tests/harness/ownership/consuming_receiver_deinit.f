@@ -1,6 +1,5 @@
 //! TEST: consuming_receiver_deinit
-//! COMPILE-ERROR: E2128
-//! EXIT: 1
+//! EXIT: 0
 
 type FileHandle = struct {
     owned fd: i32
@@ -18,6 +17,6 @@ fn deinit(self: FileHandle) {}
 
 pub fn main() i32 {
     let h = open(3)
-    h.deinit()                     // error E2128: write `deinit(move h)`
+    h.deinit()                     // moves `h`
     return 0
 }

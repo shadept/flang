@@ -251,6 +251,9 @@ pub type Checker = struct {
     // instantiations they reach. Only the project's own modules are visited: a dependency's tests
     // are that project's concern. Off for a build, on for `flang test` and `flang check`.
     check_tests: bool
+    // Which consuming positions imply `move` on a binding (spec 7.2). `Default` is the language;
+    // `All` is the seam for widening it, off everywhere in tree.
+    move_inference: MoveInference
 
     // Working state - reset between modules.
     current_module: String?
@@ -698,6 +701,7 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         diagnostics = list(0, allocator),
         comptime = host_ctx(),
         check_tests = false,
+        move_inference = MoveInference.Default,
         current_module = null,
         fn_stack = list(0, allocator),
         fn_decl_params = dict(allocator),
@@ -1273,6 +1277,19 @@ pub fn set_comptime_ctx(self: &Checker, ctx: ComptimeCtx) {
 // Turn `test {}` body checking on or off for every demand run through this checker.
 pub fn set_check_tests(self: &Checker, on: bool) {
     self.check_tests = on
+}
+
+// Where a non-copyable binding moves without the keyword. `Default` is the language (spec 7.2): the
+// receiver of a call whose first parameter is by value, and a `return` of the binding. `All` adds
+// every other consuming position - argument, rebinding, literal field, element store - a seam,
+// nothing in tree turns it on.
+pub type MoveInference = enum {
+    Default
+    All
+}
+
+pub fn set_move_inference(self: &Checker, mode: MoveInference) {
+    self.move_inference = mode
 }
 
 // Install `flang.toml`'s `[imports].global` for this check. `origin` is parallel to the module list
@@ -4789,7 +4806,12 @@ fn check_cast(self: &Checker, c: &CastExpr) Ty {
         }
         _ => false
     }
-    if is_bindable_lit {
+    // A shaped operand with open holes (`reinterpret(xs)` returning `Slice(?U)`) takes them from
+    // the target too: `as u64[]` is the only source `U` has. A bare var stays out - it may settle
+    // to a type the cast CONVERTS rather than equals.
+    let zv = self.engine.zonk(v)
+    let has_holes = !self.engine.is_var(zv) and !self.engine.interner.is_ground(zv)
+    if is_bindable_lit or has_holes {
         // Best-effort: a numeric target binds the literal; a failure (casting a literal to a
         // pointer, say) is the cast's business, not a unification diagnostic.
         let _o = self.engine.unify(v, target)
@@ -6370,7 +6392,7 @@ fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize,
         Some(p) => {
             self.results.record_target(self.node_of(span), ResolvedTarget.RtFunction(p.id))
             warn_deprecated_call(self, p.id, name, span)
-            check_consuming_receiver(self, &p, name, recv_extra, span)
+            check_consuming_receiver(self, &p, name, recv_extra, span, recv)
             note_pending(self, span, false, &p)
             // The AST's argument order is the call's argument order except when names select
             // parameters or a variadic tail packs; those two record a complete list instead.
@@ -6399,13 +6421,13 @@ fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize,
     }
 }
 
-// A by-value receiver of a non-copyable type is not reachable through UFCS (RFC-028): a consuming
-// call spells its transfer one way everywhere - `move` in an argument of a plain call - and the
-// parenthesised receiver form does not exist. The test is the callee's first parameter and nothing
-// else, so a temporary in receiver position is refused on the same grounds; admitting it would make
-// the rule "no consuming receiver unless the receiver happens to be one".
+// A by-value first parameter on a non-copyable receiver consumes it: on a binding as written that
+// is the inferred `move` (spec 7.2, marked by the ownership pass), on an rvalue a transfer. Reached
+// through a reference - an adapted `&T` receiver, or an `op_deref` hop - the receiver is a value
+// read out of storage nothing here owns, a second owner with no binding to mark; that shape is
+// refused.
 fn check_consuming_receiver(self: &Checker, p: &OverloadPick, name: String, recv_extra: usize,
-    span: SourceSpan) {
+    span: SourceSpan, recv: Ty?) {
     if recv_extra == 0 or p.params.len == 0 {
         return
     }
@@ -6414,8 +6436,15 @@ fn check_consuming_receiver(self: &Checker, p: &OverloadPick, name: String, recv
     if by_ref or self.engine.is_copyable(slot) {
         return
     }
-    let sb = string_builder(128, self.allocator)
-    sb.append($"`{name}` consumes its receiver and has no receiver form - write `{name}(move ...)`")
+    const through_ref = recv match {
+        Some(r) => ty_node(self, self.engine.resolve(r)) match { NRef(_) => true, _ => false }
+        None => false
+    }
+    if p.hops == 0 and !through_ref {
+        return
+    }
+    let sb = string_builder(160, self.allocator)
+    sb.append($"`{name}` consumes its receiver, and this one is reached through a reference - call it on a value you own, or write `{name}(move ...)`")
     append_copy_blame(self, slot, &sb)
     own_report(self, span, E_CONSUMING_RECEIVER, sb.to_string())
 }
@@ -8715,6 +8744,19 @@ fn own_copy_site(self: &Checker, p: &OwnPass, span: SourceSpan, slot: OwnSlot, n
         return
     }
     const node = self.node_of(span)
+    self.move_inference match {
+        All => {
+            // Every consuming position implies the move on a binding.
+            if name.len > 0 {
+                const d = own_local_decl(self, node)
+                if d.is_some() {
+                    own_mark(p, d.unwrap())
+                    return
+                }
+            }
+        }
+        Default => {}
+    }
     if !own_claim(p, node) {
         return
     }
@@ -8829,14 +8871,17 @@ fn own_move(self: &Checker, p: &OwnPass, m: &MoveExpr, slot: OwnSlot) {
         return
     }
     m.operand.* match {
-        Identifier(id) => {
-            const d = own_local_decl(self, self.node_of(id.span))
-            d match {
-                Some(dd) => own_mark(p, dd)
-                None => {}
-            }
-        }
+        Identifier(id) => own_mark_binding(self, p, id.span)
         _ => {}
+    }
+}
+
+// Mark the binding declared behind the name at `span` moved; a name that is not a local marks
+// nothing.
+fn own_mark_binding(self: &Checker, p: &OwnPass, span: SourceSpan) {
+    own_local_decl(self, self.node_of(span)) match {
+        Some(dd) => own_mark(p, dd)
+        None => {}
     }
 }
 
@@ -8897,14 +8942,11 @@ fn own_interp(self: &Checker, p: &OwnPass, interp: &InterpolatedStringExpr) {
     }
 }
 
-// The receiver is read, never consumed: a by-value receiver of a non-copyable type has no receiver
-// form at all (E2128), so every call that reaches here borrows its receiver or copies a copyable
-// one.
 fn own_call(self: &Checker, p: &OwnPass, c: &CallExpr) {
     let first = 0usize
     c.callee.* match {
         MemberAccess(ma) => {
-            own_expr(self, p, ma.receiver, own_read())
+            own_receiver(self, p, c, &ma)
             first = 1usize
         }
         Identifier(_) => {}
@@ -8924,20 +8966,89 @@ fn own_call(self: &Checker, p: &OwnPass, c: &CallExpr) {
     }
 }
 
-fn own_param_moves(self: &Checker, call_span: SourceSpan, idx: usize, name: String) bool {
+// The receiver of a call whose first parameter is by value, on a non-copyable type, is the inferred
+// `move` (spec 7.2): the one consuming position the keyword cannot be written in. The `move`
+// operand table applies - a binding is marked, a field takes the declaring module's rights (E2127
+// elsewhere), an index or dereference marks nothing. A receiver read through a reference or an
+// `op_deref` hop was refused at the pick (E2128) and is read here. Every other receiver is read.
+fn own_receiver(self: &Checker, p: &OwnPass, c: &CallExpr, ma: &MemberAccessExpr) {
+    own_expr(self, p, ma.receiver, own_read())
+    const rspan = expr_span(ma.receiver)
+    if !own_first_param_by_value(self, c.span) or own_is_copyable(self, rspan) or own_is_ref(self,
+        rspan) {
+        return
+    }
+    if self.results.receiver_derefs.get_ref(self.node_of(c.span)).is_some() {
+        return
+    }
+    ma.receiver.* match {
+        Identifier(id) => own_mark_binding(self, p, id.span)
+        // `(move h).close()`: the receiver position is already the move; there is no second
+        // spelling of it.
+        Move(_) => {
+            if own_claim(p, self.node_of(c.span)) {
+                own_report(self, c.span, E_CONSUMING_RECEIVER,
+                    $"`{ma.member}` already consumes its receiver - drop the `move`")
+            }
+        }
+        MemberAccess(inner) => {
+            field_owner_elsewhere(self, &inner) match {
+                Some(o) => {
+                    if own_claim(p, self.node_of(c.span)) {
+                        own_report(self, c.span, E_PARTIAL_MOVE,
+                            $"this call consumes field `{inner.member}`, which cannot be moved out of `{o.fqn}` from outside its defining module `{o.module}`")
+                    }
+                }
+                None => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+fn own_is_ref(self: &Checker, span: SourceSpan) bool {
+    const t = own_type(self, span)
+    return t match {
+        Some(ty) => ty_node(self, self.engine.resolve(ty)) match { NRef(_) => true, _ => false }
+        None => false
+    }
+}
+
+// Whether the call's winner takes its first parameter by value, read off the declaration: `&T` in
+// the signature is what makes a receiver borrowed, whatever `T` turns out to be.
+fn own_first_param_by_value(self: &Checker, call_span: SourceSpan) bool {
+    const dp = own_decl_params(self, call_span)
+    if dp.is_none() or dp.unwrap().len == 0 {
+        return false
+    }
+    return dp.unwrap()[0].type_expr.* match {
+        Reference(_) => false
+        _ => true
+    }
+}
+
+// The declared parameters of the call's winner, when it resolved to a registry function.
+fn own_decl_params(self: &Checker, call_span: SourceSpan) &List(FunctionParam)? {
     const t = self.results.resolved_targets.get(self.node_of(call_span))
     if t.is_none() {
-        return false
+        return null
     }
     const fid = t.unwrap() match {
         RtFunction(f) => f
-        _ => return false
+        _ => return null
     }
-    const dp = self.fn_decl_params.get_ref(fid)
+    return self.fn_decl_params.get_ref(fid) match {
+        Some(dp) => Some(dp.params)
+        None => null
+    }
+}
+
+fn own_param_moves(self: &Checker, call_span: SourceSpan, idx: usize, name: String) bool {
+    const dp = own_decl_params(self, call_span)
     if dp.is_none() {
         return false
     }
-    const decl = dp.unwrap().params
+    const decl = dp.unwrap()
     if name.len > 0 {
         for i in 0..decl.len {
             if decl[i].name == name {
@@ -9072,9 +9183,20 @@ fn own_let(self: &Checker, p: &OwnPass, ls: &LetStmt) {
 }
 
 // The value is evaluated first, then the active defers fire, then control transfers (spec 4.1).
+// `return h` of a non-copyable binding is the inferred `move` (spec 7.2): the only return that
+// unifies is the transfer, so the keyword is implied and `h` is marked. Anything else returned is
+// an ordinary value slot.
 fn own_return(self: &Checker, p: &OwnPass, rs: &ReturnStmt) {
     rs.value match {
-        Some(e) => own_expr(self, p, e, own_value())
+        Some(e) => e.* match {
+            Identifier(id) => {
+                own_expr(self, p, e, own_read())
+                if !own_is_copyable(self, id.span) and !own_is_ref(self, id.span) {
+                    own_mark_binding(self, p, id.span)
+                }
+            }
+            _ => own_expr(self, p, e, own_value())
+        }
         None => {}
     }
     own_fire_defers(self, p, 1usize)
@@ -11223,7 +11345,8 @@ test "a removed call site sweeps its specialization" {
 }
 
 // Parse each source as its own module, run check_all over them, and count error diagnostics.
-fn count_check_errors(srcs: String[], paths: String[]) usize {
+fn count_check_errors(srcs: String[], paths: String[],
+    moves: MoveInference = MoveInference.Default) usize {
     let mods = list(srcs.len)
     for i in 0..srcs.len {
         mods.push(parse_src(srcs[i], i as i32))
@@ -11232,6 +11355,7 @@ fn count_check_errors(srcs: String[], paths: String[]) usize {
     ps.push_all(paths)
 
     let chk = checker()
+    chk.set_move_inference(moves)
     let gen_srcs: List(OwnedString) = list(0, null)
     let gen_fps: List(OwnedString) = list(0, null)
     let gens = template_state(null)
@@ -11861,6 +11985,12 @@ test "unannotated lambda params pin through a generic callable slot" {
             "param pinned to i32 through the instantiation")
     }
     res.deinit()
+}
+
+test "MoveInference.All infers the move at a by-value argument" {
+    const src = "type H = struct { owned fd: i32 }\nfn shut(h: H) i32 { return h.fd }\nfn main() i32 { let h = H { fd = 1 }\n return shut(h) }\n"
+    assert_true(count_check_errors([src], ["m"]) > 0, "E2124 under Default")
+    assert_eq(count_check_errors([src], ["m"], MoveInference.All), 0 as usize, "none under All")
 }
 
 test "assigning to a captured variable is E2112" {

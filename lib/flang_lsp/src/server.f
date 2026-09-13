@@ -1383,7 +1383,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     }
 
     if label.is_none() and th.is_some() and th.unwrap().span.start == wstart {
-        const ty = th.unwrap().ty
+        const ty = display_ty(result, th.unwrap().node, th.unwrap().ty)
         const vars = type_param_names(&unit.checker)
         if renderable_ty(result, ty, vars) and !is_void_ty(result, ty) {
             const rendered = render_ty(result, ty, Some(vars))
@@ -1917,12 +1917,15 @@ fn on_inlay_hint(self: &LspServer, msg: &RpcMessage) {
         if site.offset < lo or site.offset > hi {
             continue
         }
-        const ty = type_of_node(result, site.node)
-        if ty.is_none() or !renderable_ty(result, ty.unwrap(), vars) or is_void_ty(result,
-            ty.unwrap()) {
+        const checked = type_of_node(result, site.node)
+        if checked.is_none() {
             continue
         }
-        const rendered = render_ty(result, ty.unwrap(), Some(vars))
+        const ty = display_ty(result, site.node, checked.unwrap())
+        if !renderable_ty(result, ty, vars) or is_void_ty(result, ty) {
+            continue
+        }
+        const rendered = render_ty(result, ty, Some(vars))
         e.begin_map(0)
         e.key("position")
         encode_pos(&e, lidx.to_position(text, site.offset, self.encoding))
@@ -1934,6 +1937,26 @@ fn on_inlay_hint(self: &LspServer, msg: &RpcMessage) {
         e.key("kind")
         e.encode_int(1, 8) // InlayHintKind.Type
         e.end_map()
+    }
+    // Ghost `move` before the binding of an inferred move (spec 7.2). Positions are the analyzed
+    // text's; an edited buffer waits for the next analysis.
+    if text == atext {
+        let moves = move_sites(&unit.modules[fid as usize])
+        defer moves.deinit()
+        for &ms in moves {
+            if ms.offset < lo or ms.offset > hi {
+                continue
+            }
+            if !inferred_move(result, ms.call, ms.recv, ms.is_return) {
+                continue
+            }
+            e.begin_map(0)
+            e.key("position")
+            encode_pos(&e, lidx.to_position(text, ms.offset, self.encoding))
+            e.key("label")
+            e.encode_str("move ")
+            e.end_map()
+        }
     }
     e.end_seq()
     e.end_map()
@@ -2407,7 +2430,7 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
 
 // A small analyzed project for the cursor-request tests, fabricated in memory: one file at
 // /t/m.f, no disk, no stdlib.
-const DEMO_SRC: String = "pub fn point(q: i32) i32 { return q }\npub type P = struct { x: i32 }\npub fn go(n: i32) i32 {\n    let a = point(3)\n    let s = P { x = 1 }\n    for v in 0..n {\n        let b = v\n    }\n    return a\n}\n// see Wide\npub fn pick(x: $T) $T { return x }\npub fn wait(k: i32) {\n    while k > 0 {\n        k = k - 1\n    }\n}\npub fn use_pick() i32 { return pick(7) }\npub fn wrap(y: $T) i32 { return point(8) }\npub fn use_wrap() i32 { return wrap(true) }\npub fn lone(z: $T) i32 { return point(4) }\npub fn read_x(pp: P) i32 { return pp.x }\npub fn solo(w: $T, point: i32) i32 { return point }\npub type E = enum { A B }\npub fn pick_e() E { return E.A }\npub type Q = struct {\n    // The y.\n    y: i32\n}\npub fn read_y(qq: Q) i32 { return qq.y }\n"
+const DEMO_SRC: String = "pub fn point(q: i32) i32 { return q }\npub type P = struct { x: i32 }\npub fn go(n: i32) i32 {\n    let a = point(3)\n    let s = P { x = 1 }\n    for v in 0..n {\n        let b = v\n    }\n    return a\n}\n// see Wide\npub fn pick(x: $T) $T { return x }\npub fn wait(k: i32) {\n    while k > 0 {\n        k = k - 1\n    }\n}\npub fn use_pick() i32 { return pick(7) }\npub fn wrap(y: $T) i32 { return point(8) }\npub fn use_wrap() i32 { return wrap(true) }\npub fn lone(z: $T) i32 { return point(4) }\npub fn read_x(pp: P) i32 { return pp.x }\npub fn solo(w: $T, point: i32) i32 { return point }\npub type E = enum { A B }\npub fn pick_e() E { return E.A }\npub type Q = struct {\n    // The y.\n    y: i32\n}\npub fn read_y(qq: Q) i32 { return qq.y }\npub fn dup(x: $T) $T {\n    let y = x\n    return y\n}\npub fn use_dup() i32 { return dup(9) }\npub type H = struct { owned fd: i32 }\npub fn shut(h: H) i32 { return h.fd }\npub fn use_h() i32 {\n    let h = H { fd = 1 }\n    return h.shut()\n}\n"
 
 fn demo_project_into(srv: &LspServer) {
     let srcs: List(OwnedString) = list(2)
@@ -2590,13 +2613,13 @@ test "hover on a function parameter renders its type" {
         "parameter with its intro, name and type")
 }
 
-test "hover inside a generic body answers from the instantiation overlay" {
+test "hover inside a generic body renders the instantiation's type as the type parameter" {
     let out = string_builder(4096)
     defer out.deinit()
     demo_run("{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":11,\"character\":31}}}",
         &out)
-    assert_true(contains(out.as_view(), "param x: i32"),
-        "the concrete instantiation's type answers, with the binder intro")
+    assert_true(contains(out.as_view(), "param x: T"),
+        "the overlay's i32 is abstracted back to T, with the binder intro")
 }
 
 test "hover on a callee inside a generic body shows the declaration" {
@@ -2761,6 +2784,9 @@ test "inlayHint lists annotation-less binders with their types" {
     assert_true(contains(out.as_view(), "\"label\":\": i32\""), "int binders hinted")
     assert_true(contains(out.as_view(), "\"label\":\": P\""), "struct binder hinted")
     assert_true(contains(out.as_view(), "\"kind\":1"), "typed as type hints")
+    assert_true(contains(out.as_view(), "\"label\":\"move \""), "inferred receiver move ghosted")
+    assert_true(contains(out.as_view(), "\"label\":\": T\""),
+        "a generic body's binder hints as its type parameter")
 }
 
 test "inlayHint answers empty when the edited buffer shares no binders" {

@@ -3883,39 +3883,42 @@ Ask the declaring module for a function that takes the value apart.
 
 ---
 
-### E2128: A Consuming Call in Receiver Position
-
-Transitional (spec §7.2): reported while `move` is explicit everywhere. The
-inference phase of RFC-028 makes `h.close()` on a local `h` an inferred move,
-and retires this code.
+### E2128: A Consuming Call Through a Reference
 
 **Category**: Semantic Analysis
 **Severity**: Error
 
 #### Description
 
-A by-value receiver of a non-copyable type is not reachable through UFCS (spec 7.2). A consuming
-call spells its transfer one way everywhere - `move` in an argument of a plain call - and the
-parenthesised receiver form does not exist. The test is the callee's first parameter and nothing
-else, so a temporary in receiver position is refused on the same grounds; admitting it would make
-the rule "no consuming receiver unless the receiver happens to be one".
+A function whose first parameter is a by-value non-copyable `T` consumes its receiver (spec 7.2):
+on a binding as written that is the inferred `move`, on an rvalue a transfer. Reached through a
+reference - a `&T` receiver adapting to the by-value parameter, or an `op_deref` hop into a wrapper
+such as `Rc` or `List` - the receiver would be a value read out of storage the caller does not own:
+a second owner, with no binding to mark moved. That shape is refused.
+
+`(move h).close()` is refused too: the receiver position is already the move, and the language has
+one spelling of it.
 
 Nothing changes for a copyable type: a copy of a copyable value is unchecked, so its by-value
-receiver is not a consuming site.
+receiver is never a consuming site, through a reference or not.
 
 #### Example
 
 ```flang
-h.close()                       // error[E2128]
-(move h).close()                // error[E2128]: the receiver position, still
-open("f").close()               // error[E2128]: an rvalue receiver, still
-close(move h)                   // ok
+h.close()                       // ok: moves `h`
+open("f").close()               // ok: the callee owns the temporary
+close(move h)                   // ok: the explicit form
+fn peek(h: &FileHandle) i32 {
+    return h.close()            // error[E2128]: reached through a reference
+}
+rc.close()                      // error[E2128]: `Rc.op_deref` hands out `&FileHandle`
+(move h).close()                // error[E2128]: already consumes
 ```
 
 #### Solution
 
-Write the free-function form. A read-only function on a non-copyable type takes `&T` instead, which
-keeps its receiver form.
+Call it on a value you own, or write `close(move h)`. A read-only function on a non-copyable type
+takes `&T` instead, which keeps its receiver form through references and wrappers.
 
 ---
 
