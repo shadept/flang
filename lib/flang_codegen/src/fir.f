@@ -432,13 +432,13 @@ pub type TestCase = struct {
     symbol: OwnedString
 }
 
-pub fn deinit(self: &TestCase) {
+pub fn deinit(self: TestCase) {
     self.label.deinit()
     self.symbol.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &TestCase, allocator: &Allocator) {
+pub fn deinit(self: TestCase, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -508,7 +508,7 @@ pub fn module(allocator: &Allocator? = null) IrModule {
     }
 }
 
-pub fn deinit(self: &IrModule) {
+pub fn deinit(self: IrModule) {
     self.tests.deinit()
     self.install_tests match {
         Some(s) => s.deinit()
@@ -544,23 +544,7 @@ pub fn add_test(self: &IrModule, label: OwnedString, symbol: OwnedString) {
 // Keep only the tests whose symbol is still defined. Lowering calls this once, after the refusal
 // fixpoint: a block whose function was dropped must leave the runner's table with it.
 pub fn retain_defined_tests(self: &IrModule, dropped: &Set(String)) {
-    let kept: List(TestCase) = list(self.tests.len, self.tests.allocator)
-    let taking = self.tests.drain()
-    loop {
-        let nx = taking.next()
-        if nx.is_none() {
-            break
-        }
-        let t = unwrap(move nx)
-        if dropped.contains(t.symbol.as_view()) {
-            t.deinit()
-            continue
-        }
-        kept.push(move t)
-    }
-    taking.deinit()
-    self.tests.deinit()
-    self.tests = move kept
+    self.tests.retain(fn(t) { !dropped.contains(t.symbol.as_view()) })
 }
 
 // Scoped mutability: named once by lowering, when the symbol is known to have been emitted.
@@ -568,30 +552,30 @@ pub fn set_install_tests(self: &IrModule, symbol: OwnedString) {
     self.install_tests = Some(move symbol)
 }
 
-pub fn deinit(self: &Function) {
+pub fn deinit(self: Function) {
     self.blocks.deinit()
     self.params.deinit()
     self.label_storage.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Function, allocator: &Allocator) {
+pub fn deinit(self: Function, allocator: &Allocator) {
     self.deinit()
 }
 
-pub fn deinit(self: &Block) {
+pub fn deinit(self: Block) {
     self.instrs.deinit()
     self.params.deinit()
     self.terminator.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Block, allocator: &Allocator) {
+pub fn deinit(self: Block, allocator: &Allocator) {
     self.deinit()
 }
 
-pub fn deinit(self: &Instr) {
-    self.* match {
+pub fn deinit(self: Instr) {
+    self match {
         Call(c) => {
             c.args.deinit()
             c.variadic_arg_types.deinit()
@@ -606,12 +590,12 @@ pub fn deinit(self: &Instr) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Instr, allocator: &Allocator) {
+pub fn deinit(self: Instr, allocator: &Allocator) {
     self.deinit()
 }
 
-pub fn deinit(self: &Terminator) {
-    self.* match {
+pub fn deinit(self: Terminator) {
+    self match {
         Br(t) => t.args.deinit()
         BrIf(b) => {
             b.then_target.args.deinit()
@@ -621,25 +605,25 @@ pub fn deinit(self: &Terminator) {
     }
 }
 
-pub fn deinit(self: &ForeignDecl) {
+pub fn deinit(self: ForeignDecl) {
     self.param_types.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &ForeignDecl, allocator: &Allocator) {
+pub fn deinit(self: ForeignDecl, allocator: &Allocator) {
     self.deinit()
 }
 
-pub fn deinit(self: &AggDef) {
+pub fn deinit(self: AggDef) {
     self.fields.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &AggDef, allocator: &Allocator) {
+pub fn deinit(self: AggDef, allocator: &Allocator) {
     self.deinit()
 }
 
-pub fn deinit(self: &Global) {
+pub fn deinit(self: Global) {
     // init_bytes and relocs are borrowed (caller owns); nothing to free here.
 }
 

@@ -22,14 +22,14 @@ pub type Document = struct {
     index: LineIndex
 }
 
-pub fn deinit(self: &Document) {
+pub fn deinit(self: Document) {
     self.text.deinit()
     self.path.deinit()
     self.index.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Document, allocator: &Allocator) {
+pub fn deinit(self: Document, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -41,7 +41,7 @@ pub fn document_store(allocator: &Allocator? = null) DocumentStore {
     return .{ docs = dict(allocator) }
 }
 
-pub fn deinit(self: &DocumentStore) {
+pub fn deinit(self: DocumentStore) {
     self.docs.deinit()
 }
 

@@ -48,7 +48,7 @@ pub type ImportRef = struct {
     span: SourceSpan
 }
 
-pub fn deinit(self: &ImportRef) {
+pub fn deinit(self: ImportRef) {
     self.path.deinit()
 }
 

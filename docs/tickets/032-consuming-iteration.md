@@ -1,10 +1,11 @@
 ---
-status: accepted
+status: implemented
 type: language
 created: 2026-09-13
 requires: [RFC-028]
 supersedes: [RFC-016]
 relates: [RFC-031]
+implemented: 2026-09-13
 ---
 
 # RFC-032: Consuming iteration
@@ -53,13 +54,16 @@ instead. `copy_to` already does this. The gated functions:
 | function | the message points at |
 |---|---|
 | `get`, `op_index(idx)`, `first`, `last` | `get_ref`, `&s[i]`, `first_ref`, `last_ref` |
-| `find`, `min`, `max`, `min_by`, `max_by` | `find_ref`, `min_ref`, `max_ref` |
+| `find`, `min`, `max`, `min_by`, `max_by` | `find_ref`; the ordered four name `get_ref` and an index scan |
 | `iter`, `iter_rev` | `for &x`, `iter_ref`, `iter_rev_ref`, or `.drain()` on the container |
 | `op_set_index`, `fill`, `replace` | `swap`, or the container's `set` |
 | `reinterpret` | nothing: two views over one owner |
 
-`find_ref`, `min_ref`, `max_ref` and `iter_rev_ref` are added: the reference
-twins of the gated searches, so an owning element type keeps the vocabulary.
+`find_ref` and `iter_rev_ref` are added: the reference twins of the gated
+searches an owning element type can actually reach. The ordered searches get
+none - `min_ref`/`max_ref` would compare with a by-value `<`, which an owning
+element cannot supply until RFC-030 gives the operators their reference form,
+so they would serve only the copyable case `min`/`max` already cover.
 
 **Callbacks receive owning elements by reference.** `each`, `any`, `all`,
 `count_if`, `find_index`, `fold` and `fold_right` call `f(s[i])` for a copyable

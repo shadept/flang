@@ -273,14 +273,14 @@ pub fn set_root(self: &Cst, id: CstNodeId) {
 }
 
 // Frees the nodes, the flat child array and the tokens. `source` is borrowed, not owned.
-pub fn deinit(self: &Cst) {
+pub fn deinit(self: Cst) {
     self.nodes.deinit()
     self.children.deinit()
     self.tokens.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Cst, allocator: &Allocator) {
+pub fn deinit(self: Cst, allocator: &Allocator) {
     self.deinit()
 }
 

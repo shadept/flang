@@ -362,7 +362,7 @@ fn get(self: &Env, name: String) LocalSlot? {
     }
 }
 
-pub fn deinit(self: &Env) {
+pub fn deinit(self: Env) {
     self.names.deinit(self.allocator)
     self.bindings.deinit(self.allocator)
 }
@@ -621,34 +621,8 @@ fn drop_callers_of_refused(m: &IrModule, ctx: &LowerCtx, alloc: &Allocator?) {
         }
     }
 
-    // Compact once the set has settled. A kept function MOVES into `keep` (its buffers now owned by
-    // the copy); a dropped one frees its tree here. The stale headers are popped out of both lists,
-    // so each function tree is deinited exactly once.
-    let keep: List(Function) = list(m.functions.len, alloc)
-    let taking = m.functions.drain()
-    loop {
-        let nx = taking.next()
-        if nx.is_none() {
-            break
-        }
-        let f = unwrap(move nx)
-        if defined.get(f.name).is_some() {
-            keep.push(move f)
-        } else {
-            f.deinit()
-        }
-    }
-    taking.deinit()
-    let back = keep.drain()
-    loop {
-        let nx = back.next()
-        if nx.is_none() {
-            break
-        }
-        m.functions.push(unwrap(move nx))
-    }
-    back.deinit()
-    keep.deinit()
+    // Compact once the set has settled: a function with no definition left frees its tree here.
+    m.functions.retain(fn(f) { defined.get(f.name).is_some() })
     defined.deinit()
 }
 
@@ -1372,15 +1346,7 @@ fn wire_const_inits(m: &IrModule, ctx: &LowerCtx) {
         }
         let entry = &m.functions[i].blocks[0]
         let old = entry.replace_instrs(move calls)
-        let taking = old.drain()
-        loop {
-            let nx = taking.next()
-            if nx.is_none() {
-                break
-            }
-            entry.instrs.push(unwrap(move nx))
-        }
-        taking.deinit()
+        entry.instrs.take_all(&old)
         old.deinit()
         live.deinit()
         return
@@ -1743,13 +1709,15 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, params: &List(FunctionParam
     // address-of-parameter bug cannot exist here).
     //
     // The shadow is emitted only where the body earns it (spec §3.2): `param_escape` reads the
-    // checked body first, and a parameter the body only reads keeps the caller's pointer.
+    // checked body first, and a parameter the body only reads keeps the caller's pointer. A
+    // by-value parameter of a non-copyable type earns none whatever the body does: the caller gave
+    // the value up at the call (RFC-028), so there is no caller state left for a write to reach.
     const shadow = shadowed_params(params, body, ctx.result, ctx.overlay, ctx.allocator)
     defer shadow.deinit()
     for i in 0..params.len {
         let pty = &sig.params[i]
         if is_by_ref(ctx, pty) {
-            if !shadow[i] {
+            if !shadow[i] or consumed_param(ctx, pty.*) {
                 env.bind_aggregate(params[i].name, param_ops[i], pty.*)
                 continue
             }
@@ -2511,6 +2479,13 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
     if release.is_some() {
         pop_defer_scope(ctx, bb, env, false)
     }
+}
+
+// Whether a by-value parameter of this type is consumed rather than copied: a non-copyable type has
+// one owner, and the call handed it over (RFC-028), so the callee works on the caller's storage
+// with nothing left behind for a shadow to protect.
+fn consumed_param(ctx: &LowerCtx, ty: Ty) bool {
+    return !is_copyable_ty(tyit(ctx), &ctx.result.nominals, ty, ctx.allocator)
 }
 
 // The release of a non-copyable iterator state, when the checker recorded one on the loop

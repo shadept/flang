@@ -40,6 +40,12 @@ pub type StructLayout = struct {
     offsets: List(usize)
 }
 
+// Frees the offset table. A caller that wanted only the size and alignment releases the layout with
+// this rather than reaching for the field.
+pub fn deinit(self: StructLayout) {
+    self.offsets.deinit()
+}
+
 // A tagged-union enum layout. `tag_size` is the discriminant width and `payload_offset` where the
 // largest variant payload begins. When `is_niche` is set the enum is a pointer-niche `Option(&T)`:
 // no tag, the null pointer encodes the empty case.
@@ -83,7 +89,7 @@ pub fn layout_cache(allocator: &Allocator? = null) LayoutCache {
     return .{ entries = list(0, allocator) }
 }
 
-pub fn deinit(self: &LayoutCache) {
+pub fn deinit(self: LayoutCache) {
     self.entries.deinit()
 }
 
@@ -285,7 +291,7 @@ fn aggregate_size(it: &TypeInterner, elems: &List(Ty), reg: &NominalRegistry, ca
     alloc: &Allocator?) Layout {
     let sl = fields_layout(it, elems, Repr.Auto, reg, cache, alloc)
     let r = lay(sl.size, sl.align)
-    sl.offsets.deinit()
+    sl.deinit()
     return r
 }
 
@@ -324,7 +330,7 @@ fn struct_size(it: &TypeInterner, def: &StructDef, args: &List(Ty), reg: &Nomina
     cache: &LayoutCache?, alloc: &Allocator?) Layout {
     let sl = struct_layout_impl(it, def, args, reg, cache, alloc)
     let r = lay(sl.size, sl.align)
-    sl.offsets.deinit()
+    sl.deinit()
     return r
 }
 

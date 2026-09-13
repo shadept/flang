@@ -3,9 +3,9 @@
 // Pair with `defer buf.deinit()` to clean up on error and `buf.transfer()` to hand off on success -
 // the transfer disarms the defer so the caller owns the value cleanly.
 //
-// Works for any T with `deinit(&T)` in scope: header-types like `StringBuilder` / `List` / `Dict`
+// Works for any T with `deinit(T)` in scope: header-types like `StringBuilder` / `List` / `Dict`
 // (cleanup is the type's own deinit), or raw heap pointers (cleanup is `mem.free` adapted to
-// `fn(&&u8)`).
+// `fn(&u8)`).
 
 import std.allocator
 import std.option
@@ -14,15 +14,15 @@ import std.test
 // `__value: T?` carries the ownership state inline: Some(_) = owned, None = transferred.
 pub type Owned = struct(T) {
     __value: T?
-    __cleanup: fn(&T) void
+    __cleanup: fn(T) void
 }
 
-// Cleanup defaults to T.deinit. Works for any T with deinit(&T) in scope.
+// Cleanup defaults to T.deinit. Works for any T with deinit(T) in scope.
 pub fn owned(value: $T) Owned(T) {
     return owned(move value, deinit)
 }
 
-pub fn owned(value: $T, cleanup: fn(&T) void) Owned(T) {
+pub fn owned(value: $T, cleanup: fn(T) void) Owned(T) {
     return .{ __value = Some(move value), __cleanup = cleanup }
 }
 
@@ -33,19 +33,16 @@ pub fn transfer(self: &Owned($T)) T {
     return move v
 }
 
-// Run cleanup if still owned. Idempotent.
-pub fn deinit(self: &Owned($T)) {
+// Runs cleanup on the value if this wrapper still holds it, and nothing at all after a `transfer`.
+pub fn deinit(self: Owned($T)) {
     self.__value match {
-        Some(v) => {
-            self.__cleanup(&v)
-            self.__value = None
-        }
+        Some(v) => self.__cleanup(move v)
         None => {}
     }
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Owned($T), allocator: &Allocator) {
+pub fn deinit(self: Owned($T), allocator: &Allocator) {
     self.deinit()
 }
 
@@ -84,25 +81,15 @@ fn owned_test_bump(self: &OwnedTestCounter) {
 
 test "owned deinit fires cleanup once" {
     let counter = OwnedTestCounter { count = 0 }
-    let o = owned(&counter, fn(p: &&OwnedTestCounter) { p.*.count = p.*.count + 1 })
+    let o = owned(&counter, fn(p: &OwnedTestCounter) { p.count = p.count + 1 })
     assert_true(o.is_owned(), "fresh Owned should be owned")
     o.deinit()
     assert_eq(counter.count, 1i32, "cleanup should fire exactly once")
-    assert_true(!o.is_owned(), "post-deinit should be empty")
-}
-
-test "owned deinit is idempotent" {
-    let counter = OwnedTestCounter { count = 0 }
-    let o = owned(&counter, fn(p: &&OwnedTestCounter) { p.*.count = p.*.count + 1 })
-    o.deinit()
-    o.deinit()
-    o.deinit()
-    assert_eq(counter.count, 1i32, "second/third deinit must be no-ops")
 }
 
 test "owned transfer disarms cleanup" {
     let counter = OwnedTestCounter { count = 0 }
-    let o = owned(&counter, fn(p: &&OwnedTestCounter) { p.*.count = p.*.count + 1 })
+    let o = owned(&counter, fn(p: &OwnedTestCounter) { p.count = p.count + 1 })
     let taken = o.transfer()
     assert_true(taken == &counter, "transfer returns the wrapped value")
     assert_true(!o.is_owned(), "post-transfer should be empty")
@@ -113,7 +100,7 @@ test "owned transfer disarms cleanup" {
 test "owned defer + transfer disarms in success path" {
     let counter = OwnedTestCounter { count = 0 }
     {
-        let o = owned(&counter, fn(p: &&OwnedTestCounter) { p.*.count = p.*.count + 1 })
+        let o = owned(&counter, fn(p: &OwnedTestCounter) { p.count = p.count + 1 })
         defer o.deinit()
         let taken = o.transfer()
         assert_true(taken == &counter, "transferred value matches")
@@ -124,7 +111,7 @@ test "owned defer + transfer disarms in success path" {
 test "owned defer fires when ? bails" {
     let counter = OwnedTestCounter { count = 0 }
     {
-        let o = owned(&counter, fn(p: &&OwnedTestCounter) { p.*.count = p.*.count + 1 })
+        let o = owned(&counter, fn(p: &OwnedTestCounter) { p.count = p.count + 1 })
         defer o.deinit()
     }
     assert_eq(counter.count, 1i32, "defer fires the cleanup on early exit")

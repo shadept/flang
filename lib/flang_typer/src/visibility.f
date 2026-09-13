@@ -30,7 +30,7 @@ pub fn visibility(current_module: String?, visible: Set(String)) Visibility {
     return .{ current_module = current_module, visible = move visible }
 }
 
-pub fn deinit(self: &Visibility) {
+pub fn deinit(self: Visibility) {
     self.visible.deinit()
 }
 

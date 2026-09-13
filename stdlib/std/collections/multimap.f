@@ -32,7 +32,7 @@ pub type Slot = struct(V) {
     next: u32
 }
 
-pub fn deinit(self: &Slot($V), allocator: &Allocator) {
+pub fn deinit(self: Slot($V), allocator: &Allocator) {
     #if !type_info(V).copyable {
         self.value.deinit(allocator)
     }
@@ -162,16 +162,14 @@ pub fn compact(self: &MultiMap($K, $V)) {
     self.dead = 0
 }
 
-// Deinits every value and key, then frees the pool and the key table. Idempotent: a second call is
-// a no-op.
-pub fn deinit(self: &MultiMap($K, $V)) {
+// Deinits every value and key, then frees the pool and the key table.
+pub fn deinit(self: MultiMap($K, $V)) {
     self.pool.deinit(self.allocator)
     self.chains.deinit(self.allocator)
-    self.dead = 0
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &MultiMap($K, $V), allocator: &Allocator) {
+pub fn deinit(self: MultiMap($K, $V), allocator: &Allocator) {
     self.deinit()
 }
 

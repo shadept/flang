@@ -151,8 +151,6 @@ type FieldSpan = struct {
 }
 
 // Two offsets into a caller-owned buffer.
-pub fn deinit(self: &FieldSpan) {}
-
 // =============================================================================
 // Shared row parsing - extracts field spans from a buffer
 // =============================================================================
@@ -511,13 +509,13 @@ pub fn skip_value(self: &CsvDecoder) bool {
 
 pub fn has_error(self: &CsvDecoder) bool { return self.error.is_some() }
 
-pub fn deinit(self: &CsvDecoder) {
+pub fn deinit(self: CsvDecoder) {
     self.field_buf.deinit()
     self.header_buf.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &CsvDecoder, allocator: &Allocator) {
+pub fn deinit(self: CsvDecoder, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -689,12 +687,12 @@ pub fn is_human_readable(self: &CsvEncoder) bool { return true }
 
 #implement(CsvEncoder, Encoder)
 
-pub fn deinit(self: &CsvEncoder) {
+pub fn deinit(self: CsvEncoder) {
     self.current_keys.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &CsvEncoder, allocator: &Allocator) {
+pub fn deinit(self: CsvEncoder, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -937,12 +935,12 @@ pub fn row_count(self: &CsvReader) usize {
     return self.rows.len
 }
 
-pub fn deinit(self: &CsvReader) {
+pub fn deinit(self: CsvReader) {
     self.buffer.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &CsvReader, allocator: &Allocator) {
+pub fn deinit(self: CsvReader, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -969,12 +967,12 @@ pub fn csv_table(r: Reader, options: CsvOptions = csv_options(),
     return Result.Ok(move table)
 }
 
-pub fn deinit(self: &CsvTable) {
+pub fn deinit(self: CsvTable) {
     self.buffer.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &CsvTable, allocator: &Allocator) {
+pub fn deinit(self: CsvTable, allocator: &Allocator) {
     self.deinit()
 }
 

@@ -64,10 +64,12 @@ much as the contract needs.
 **Expected functions.** Generic code calls a fixed set of functions by name, so a type that provides
 them under these signatures works everywhere the stdlib does (spec §9.4):
 
-- `deinit(self: &T, allocator: &Allocator)` releases what the value owns and leaves it zeroed, so a
-  second call is a no-op. Every type that owns something has one; containers call it on their
-  elements with their own allocator. A type that carries its allocator also provides
-  `deinit(self: &T)`, the form a `defer` calls; the parameter form then ignores the argument.
+- `deinit(self: T, allocator: &Allocator)` takes its value and releases what it owns. Every type
+  that owns something has one; containers call it on their elements with their own allocator. A type
+  that carries its allocator also provides `deinit(self: T)`, the form a `defer` calls; the
+  parameter form then ignores the argument. Calling it is a move, so a second call on the same
+  binding is E2123, and a value reached through a reference is released by whoever owns it - a
+  container does that through its `drain`.
 - `clone(self: &T, allocator: &Allocator) T` is the canonical deep copy, allocated from `allocator`.
   Containers call it to duplicate their elements. A type that carries its allocator also provides
   `clone(self: &T) T`, a copy on that allocator.

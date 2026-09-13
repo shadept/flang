@@ -113,16 +113,15 @@ pub fn clear(self: &Journal($T)) {
     self.marks.clear(self.allocator)
 }
 
-// Deinits every entry still logged, newest first, and frees both buffers. Idempotent: a second call
-// is a no-op.
-pub fn deinit(self: &Journal($T)) {
+// Deinits every entry still logged, newest first, and frees both buffers.
+pub fn deinit(self: Journal($T)) {
     self.entries.truncate(0, self.allocator)
     self.entries.deinit(self.allocator)
     self.marks.deinit(self.allocator)
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Journal($T), allocator: &Allocator) {
+pub fn deinit(self: Journal($T), allocator: &Allocator) {
     self.deinit()
 }
 

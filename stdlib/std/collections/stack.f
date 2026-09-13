@@ -63,9 +63,8 @@ pub fn push(self: &UnmanagedStack($T), value: T, allocator: &Allocator) {
     self.__inner.push(move value, allocator)
 }
 
-// Deinits every element, top to bottom, and frees the storage. Idempotent: a second call is a
-// no-op.
-pub fn deinit(self: &UnmanagedStack($T), allocator: &Allocator) {
+// Deinits every element, top to bottom, and frees the storage.
+pub fn deinit(self: UnmanagedStack($T), allocator: &Allocator) {
     self.__inner.truncate(0, allocator)
     self.__inner.deinit(allocator)
 }
@@ -151,14 +150,13 @@ pub fn clear(self: &Stack($T)) {
     self.__storage.clear(self.allocator)
 }
 
-// Deinits every element, top to bottom, and frees the storage. Idempotent: a second call is a
-// no-op.
-pub fn deinit(self: &Stack($T)) {
+// Deinits every element, top to bottom, and frees the storage.
+pub fn deinit(self: Stack($T)) {
     self.__storage.deinit(self.allocator)
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Stack($T), allocator: &Allocator) {
+pub fn deinit(self: Stack($T), allocator: &Allocator) {
     self.deinit()
 }
 
@@ -248,7 +246,7 @@ type Tracked = struct {
     log: &List(i32)
 }
 
-pub fn deinit(self: &Tracked, allocator: &Allocator) {
+pub fn deinit(self: Tracked, allocator: &Allocator) {
     self.log.push(self.id)
 }
 

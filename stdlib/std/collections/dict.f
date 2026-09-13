@@ -279,11 +279,11 @@ pub fn get_or_insert_with(self: &UnmanagedDict($K, $V), key: K, make: $F,
 pub fn set(self: &UnmanagedDict($K, $V), key: K, value: V, allocator: &Allocator) {
     const existing = self.find_entry(&key)
     if existing.is_some() {
-        const slot = &existing.unwrap().value
+        const entry = existing.unwrap()
         #if !type_info(V).copyable {
-            slot.deinit(allocator)
+            deinit(move entry.value, allocator)
         }
-        slot.* = move value
+        entry.value = move value
         #if !type_info(K).copyable {
             key.deinit(allocator)
         }
@@ -330,17 +330,12 @@ pub fn clone(self: &UnmanagedDict($K, $V), allocator: &Allocator) UnmanagedDict(
     return move out
 }
 
-// Deinits every live key and value, frees the table and resets to empty, so a second call is a
-// no-op.
-pub fn deinit(self: &UnmanagedDict($K, $V), allocator: &Allocator) {
+// Deinits every live key and value and frees the table.
+pub fn deinit(self: UnmanagedDict($K, $V), allocator: &Allocator) {
     if self.cap > 0 {
         self.deinit_entries(allocator)
         allocator.free(slice_from_raw_parts(self.entries, self.cap))
     }
-    self.entries = 0usize as &Entry(K, V)
-    self.length = 0
-    self.dead = 0
-    self.cap = 0
 }
 
 // Copies every entry of `other` into this dict, overwriting the value under a key both have.
@@ -822,13 +817,13 @@ pub fn clone(self: &Dict($K, $V)) Dict(K, V) {
     return self.clone(self.allocator)
 }
 
-// Deinits every live key and value and frees the table. Idempotent: a second call is a no-op.
-pub fn deinit(self: &Dict($K, $V)) {
+// Deinits every live key and value and frees the table.
+pub fn deinit(self: Dict($K, $V)) {
     self.__storage.deinit(self.allocator)
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Dict($K, $V), allocator: &Allocator) {
+pub fn deinit(self: Dict($K, $V), allocator: &Allocator) {
     self.deinit()
 }
 

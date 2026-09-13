@@ -75,7 +75,7 @@ pub fn set_decls(self: &Module, decls: List(Decl)) {
     self.decls = move decls
 }
 
-pub fn deinit(self: &Module) {
+pub fn deinit(self: Module) {
     // Every AST allocation - the decls list's buffer and every nested list in the tree - lives in
     // the arena, so ONE bulk free reclaims it all. Do not walk the tree element-wise: the nested
     // lists carry allocator pointers into the (stack-local) arena view they were built with, which
@@ -84,7 +84,7 @@ pub fn deinit(self: &Module) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Module, allocator: &Allocator) {
+pub fn deinit(self: Module, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -709,22 +709,22 @@ pub type BlockExpr = struct {
 
 // The statement list lives in the module arena, which `Module.deinit` frees in one go; walking the
 // tree element-wise would free through allocator pointers into a view that no longer exists.
-pub fn deinit(self: &BlockExpr) {}
+pub fn deinit(self: BlockExpr) {}
 
 // The AST enums are arena-owned like `BlockExpr`: a container of nodes frees its own buffer and
 // releases nothing per element.
-pub fn deinit(self: &Expr, allocator: &Allocator) {}
+pub fn deinit(self: Expr, allocator: &Allocator) {}
 
-pub fn deinit(self: &Stmt, allocator: &Allocator) {}
+pub fn deinit(self: Stmt, allocator: &Allocator) {}
 
-pub fn deinit(self: &Decl, allocator: &Allocator) {}
+pub fn deinit(self: Decl, allocator: &Allocator) {}
 
-pub fn deinit(self: &TypeExpr, allocator: &Allocator) {}
+pub fn deinit(self: TypeExpr, allocator: &Allocator) {}
 
-pub fn deinit(self: &Pattern, allocator: &Allocator) {}
+pub fn deinit(self: Pattern, allocator: &Allocator) {}
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &BlockExpr, allocator: &Allocator) {}
+pub fn deinit(self: BlockExpr, allocator: &Allocator) {}
 
 // `if cond { then } else { else }` and `if cond { then } else if … { … }`.
 // Else-if is encoded as `else_branch` being another `If` - there is no separate "else-if" node.

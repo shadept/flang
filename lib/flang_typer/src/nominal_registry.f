@@ -30,12 +30,12 @@ pub type VariantDef = struct {
     decl_span: SourceSpan
 }
 
-pub fn deinit(self: &VariantDef) {
+pub fn deinit(self: VariantDef) {
     self.payloads.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &VariantDef, allocator: &Allocator) {
+pub fn deinit(self: VariantDef, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -111,14 +111,14 @@ pub fn nominal_registry(allocator: &Allocator? = null) NominalRegistry {
     }
 }
 
-pub fn deinit(self: &NominalRegistry) {
+pub fn deinit(self: NominalRegistry) {
     self.defs.deinit()
     self.by_fqn.deinit()
     self.owned_fqns.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &NominalRegistry, allocator: &Allocator) {
+pub fn deinit(self: NominalRegistry, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -250,8 +250,8 @@ fn clone_tags(e: &EnumDef, a: &Allocator) Dict(String, i64)? {
     }
 }
 
-pub fn deinit(self: &NominalDef, allocator: &Allocator) {
-    free_body(self)
+pub fn deinit(self: NominalDef, allocator: &Allocator) {
+    free_body(&self)
 }
 
 // Free the lists a resolved body owns: type params, fields, variant payloads, tag values. The

@@ -23,13 +23,13 @@ pub type IndexSymbol = struct {
     span: SourceSpan
 }
 
-pub fn deinit(self: &IndexSymbol) {
+pub fn deinit(self: IndexSymbol) {
     self.name.deinit()
     self.container.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &IndexSymbol, allocator: &Allocator) {
+pub fn deinit(self: IndexSymbol, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -37,12 +37,12 @@ pub type ModuleIndex = struct {
     symbols: List(IndexSymbol)
 }
 
-pub fn deinit(self: &ModuleIndex) {
+pub fn deinit(self: ModuleIndex) {
     self.symbols.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &ModuleIndex, allocator: &Allocator) {
+pub fn deinit(self: ModuleIndex, allocator: &Allocator) {
     self.deinit()
 }
 

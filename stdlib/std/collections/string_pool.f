@@ -125,15 +125,15 @@ pub fn clear(self: &StringPool) {
     }
 }
 
-// Frees the buffer, the split table and the index. Idempotent: a second call is a no-op.
-pub fn deinit(self: &StringPool) {
+// Frees the buffer, the split table and the index.
+pub fn deinit(self: StringPool) {
     self.bytes.deinit(self.allocator)
     self.ends.deinit(self.allocator)
     self.index.deinit(self.allocator)
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &StringPool, allocator: &Allocator) {
+pub fn deinit(self: StringPool, allocator: &Allocator) {
     self.deinit()
 }
 

@@ -253,7 +253,7 @@ pub fn err(self: &WalkIter) FsError? {
     return self.last_error
 }
 
-pub fn deinit(self: &WalkIter) {
+pub fn deinit(self: WalkIter) {
     while !self.stack.is_empty() {
         const top: &WalkFrame = self.stack.peek_ref().unwrap()
         top.dir.deinit()
@@ -264,7 +264,7 @@ pub fn deinit(self: &WalkIter) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &WalkIter, allocator: &Allocator) {
+pub fn deinit(self: WalkIter, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -342,13 +342,13 @@ pub fn err(self: &GlobIter) FsError? {
     return self.walk.err()
 }
 
-pub fn deinit(self: &GlobIter) {
+pub fn deinit(self: GlobIter) {
     self.walk.deinit()
     self.pattern.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &GlobIter, allocator: &Allocator) {
+pub fn deinit(self: GlobIter, allocator: &Allocator) {
     self.deinit()
 }
 

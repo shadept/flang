@@ -185,16 +185,12 @@ pub fn filled_list(count: usize, value: $T, allocator: &Allocator? = null) List(
 // UnmanagedList: release and copies
 // =============================================================================
 
-// Deinits every live element, frees the buffer and resets to empty, so a second call is a no-op.
-pub fn deinit(self: &UnmanagedList($T), allocator: &Allocator) {
+// Deinits every live element and frees the buffer.
+pub fn deinit(self: UnmanagedList($T), allocator: &Allocator) {
     if self.cap > 0 {
         self.clear(allocator)
         allocator.free(slice_from_raw_parts(self.ptr, self.cap))
     }
-
-    self.ptr = 0usize as &T
-    self.len = 0
-    self.cap = 0
 }
 
 // Returns a deep copy in fresh storage sized to fit: copyable elements are copied bitwise, the
@@ -433,6 +429,22 @@ pub fn push_all(self: &UnmanagedList($T), xs: T[], allocator: &Allocator) {
     }
 }
 
+// Moves every element of `from` onto the end of this list and leaves `from` empty, its buffer
+// intact for its owner to free. The concatenation of two lists that own their elements: one
+// `memcpy` and a length, with no element duplicated - `push_all` clones each one instead, which is
+// what a caller that wants to keep `from` populated needs.
+//
+// - `from`: must not be this list. Growth may move and free this list's storage before the copy.
+pub fn take_all(self: &UnmanagedList($T), from: &UnmanagedList(T), allocator: &Allocator) {
+    if from.len == 0 {
+        return
+    }
+    self.reserve(self.len + from.len, allocator)
+    memcpy((self.ptr + self.len) as &u8, from.ptr as &u8, from.len * size_of(T))
+    self.len = self.len + from.len
+    from.len = 0
+}
+
 // Inserts `value` at `index`, shifting everything at and after it one slot toward the end. `index
 // == len` appends. O(len - index). Panics past the end or when the allocation fails.
 pub fn insert(self: &UnmanagedList($T), index: usize, value: T, allocator: &Allocator) {
@@ -458,6 +470,35 @@ pub fn pop(self: &UnmanagedList($T)) T? {
 
     self.len = self.len - 1
     return Some(move (self.ptr + self.len).*)
+}
+
+// Keeps the elements `wanted` accepts and deinits the rest, in place and in order. The list shrinks
+// to the survivors; nothing is allocated and nothing is copied out. O(len).
+//
+// - `wanted`: takes the element by value for a copyable `T` and by reference otherwise, the
+//   convention every callback in the collections follows.
+pub fn retain(self: &UnmanagedList($T), wanted: $F, allocator: &Allocator) {
+    let w: usize = 0
+    for r in 0..self.len {
+        const elem: &T = self.ptr + r
+        let keep: bool = false
+        #if type_info(T).copyable {
+            keep = wanted(elem.*)
+        } else {
+            keep = wanted(elem)
+        }
+        if !keep {
+            #if !type_info(T).copyable {
+                deinit(move (self.ptr + r).*, allocator)
+            }
+            continue
+        }
+        if w != r {
+            memcpy((self.ptr + w) as &u8, elem as &u8, size_of(T))
+        }
+        w = w + 1
+    }
+    self.len = w
 }
 
 // Removes the element at `index` and returns it, or null past the end. The last element takes its
@@ -522,8 +563,7 @@ pub fn truncate(self: &UnmanagedList($T), n: usize, allocator: &Allocator) {
     #if !type_info(T).copyable {
         while self.len > n {
             self.len = self.len - 1
-            const elem: &T = self.ptr + self.len
-            elem.deinit(allocator)
+            deinit(move (self.ptr + self.len).*, allocator)
         }
     } else {
         self.len = n
@@ -878,6 +918,16 @@ pub fn deinit(self: Drain($T)) {
         self.__storage.push_all(xs, self.allocator)
     }
 
+    // Moves every element of `from` onto the end of this list, leaving `from` empty.
+    pub fn take_all(self: &#(Self)($T), from: &#(Self)(T)) {
+        self.__storage.take_all(from.op_deref(), self.allocator)
+    }
+
+    // Keeps the elements `wanted` accepts and deinits the rest, in place and in order.
+    pub fn retain(self: &#(Self)($T), wanted: $F) {
+        self.__storage.retain(move wanted, self.allocator)
+    }
+
     // Drops every element, deiniting each. The backing storage is kept for reuse.
     pub fn clear(self: &#(Self)($T)) {
         self.__storage.clear(self.allocator)
@@ -985,13 +1035,13 @@ pub fn clone(self: &List($T)) List(T) {
     return self.clone(self.allocator)
 }
 
-// Deinits every live element and frees the backing storage. Idempotent: a second call is a no-op.
-pub fn deinit(self: &List($T)) {
+// Deinits every live element and frees the backing storage.
+pub fn deinit(self: List($T)) {
     self.__storage.deinit(self.allocator)
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &List($T), allocator: &Allocator) {
+pub fn deinit(self: List($T), allocator: &Allocator) {
     self.deinit()
 }
 
@@ -1124,6 +1174,24 @@ test "truncate drops the tail and clamps at the length" {
     assert_eq(xs.len, 2 as usize, "a length at or below n is left alone")
 }
 
+test "take_all moves every element over and leaves the source empty" {
+    let src: List(OwnedString) = list(2)
+    defer src.deinit()
+    src.push(from_view("a"))
+    src.push(from_view("b"))
+
+    let dst: List(OwnedString) = list(0)
+    defer dst.deinit()
+    dst.push(from_view("z"))
+    dst.take_all(&src)
+
+    assert_eq(dst.len, 3 as usize, "every element arrived")
+    assert_true(dst[1].as_view() == "a", "in order, after what was there")
+    assert_true(dst[2].as_view() == "b", "all of it")
+    assert_eq(src.len, 0 as usize, "the source is empty")
+    // One owner per element: the test allocator reports a double free or a leak.
+}
+
 test "push_all appends a slice in order" {
     let xs: List(u32) = list(0)
     defer xs.deinit()
@@ -1193,6 +1261,23 @@ test "clear drains the elements it drops" {
     assert_eq(xs.len, 0 as usize, "empty afterwards")
     xs.push(from_view("c"))
     assert_true(xs[0].as_view() == "c", "and reusable")
+}
+
+test "retain keeps the elements the predicate accepts and releases the rest" {
+    let xs: List(OwnedString) = list(4)
+    defer xs.deinit()
+    xs.push(from_view("keep1"))
+    xs.push(from_view("drop"))
+    xs.push(from_view("keep2"))
+    xs.push(from_view("drop"))
+
+    xs.retain(fn(s: &OwnedString) bool { s.as_view() != "drop" })
+
+    assert_eq(xs.len, 2 as usize, "two survived")
+    assert_true(xs[0].as_view() == "keep1", "in order")
+    assert_true(xs[1].as_view() == "keep2", "all of it")
+    // The dropped two were released exactly once; the test allocator reports a leak or a double
+    // free either way.
 }
 
 test "swap_remove takes an element out without keeping order" {
@@ -1366,34 +1451,31 @@ test "search utilities: find, find_index, any, all" {
     assert_true(empty.all(test_is_even), "all is vacuously true on empty")
 }
 
-test "deinit is idempotent on every core container" {
-    // Any deinit may run twice: state nulls on the first call, so the second is a no-op, not a
-    // double free.
-    let xs: List(OwnedString) = list(2)
-    xs.push(from_view("alpha"))
-    xs.push(from_view("beta"))
+test "a zero-initialised value of every core container is safe to deinit" {
+    // `deinit` consumes its value, so a second call is E2123 rather than a no-op. What survives
+    // from the old idempotence is that the zero pattern is a valid empty value: a container nobody
+    // constructed releases nothing (spec 4.1, "Zero is empty").
+    let xs: List(OwnedString)
     xs.deinit()
-    xs.deinit()
-    assert_eq(xs.len, 0 as usize, "list is empty after deinit")
 
-    let d: Dict(OwnedString, i32) = dict()
-    d.set("k", 1i32)
-    d.deinit()
+    let d: Dict(OwnedString, i32)
     d.deinit()
 
-    let s = from_view("gamma")
-    s.deinit()
+    let s: OwnedString
     s.deinit()
 
-    let sb = string_builder(8)
-    sb.append("x")
-    sb.deinit()
+    let sb: StringBuilder
     sb.deinit()
 
-    let o: OwnedString? = Some(from_view("delta"))
+    let o: OwnedString?
     o.deinit()
-    o.deinit()
-    assert_true(o.is_none(), "option resets to None on deinit")
+
+    // And a populated one releases exactly what it holds; the test allocator reports a leak or a
+    // double free either way.
+    let ys: List(OwnedString) = list(2)
+    ys.push(from_view("alpha"))
+    ys.push(from_view("beta"))
+    ys.deinit()
 }
 
 test "combinators accept capturing closures with unannotated params" {

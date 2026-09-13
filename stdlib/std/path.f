@@ -73,7 +73,7 @@ pub fn path(s: String, allocator: &Allocator? = null) Path {
 // StringBuilder have different shapes (no cap field on OwnedString), so the bytes are copied rather
 // than re-attached. Callers that care about avoiding the copy should build into a StringBuilder
 // directly and skip the OwnedString entirely.
-pub fn path_from_owned(self: &OwnedString) Path {
+pub fn path_from_owned(self: OwnedString) Path {
     const alloc = self.allocator
     let sb = string_builder(self.len + 1, alloc)
     sb.append(self.as_view())
@@ -85,12 +85,12 @@ pub fn path_from_owned(self: &OwnedString) Path {
 // Lifecycle
 // =============================================================================
 
-pub fn deinit(self: &Path) {
+pub fn deinit(self: Path) {
     self.__sb.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Path, allocator: &Allocator) {
+pub fn deinit(self: Path, allocator: &Allocator) {
     self.deinit()
 }
 

@@ -59,13 +59,13 @@ pub fn union_find(allocator: &Allocator? = null) UnionFind($K) {
 }
 
 // Frees the node table and the undo journal, open regions included. Idempotent.
-pub fn deinit(self: &UnionFind($K)) {
+pub fn deinit(self: UnionFind($K)) {
     self.nodes.deinit(self.allocator)
     self.undo.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &UnionFind($K), allocator: &Allocator) {
+pub fn deinit(self: UnionFind($K), allocator: &Allocator) {
     self.deinit()
 }
 

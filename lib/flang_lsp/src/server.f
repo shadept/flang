@@ -96,7 +96,7 @@ pub fn lsp_server(r: Reader, w: Writer, stdlib_path: String = "", version: Strin
     }
 }
 
-pub fn deinit(self: &LspServer) {
+pub fn deinit(self: LspServer) {
     self.folders.deinit()
     self.version.deinit()
     self.ws.deinit()

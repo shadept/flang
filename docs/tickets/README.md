@@ -38,9 +38,9 @@ Type: language, compiler, stdlib, tooling.
 | [025](025-built-in-profiler.md) | Built-in profiler | tooling | provisional | 2026-08-27 |  |
 | [026](026-copy-on-write-parameters.md) | Copy-on-write parameters - elide the shadow when nothing writes or escapes | compiler | implemented | 2026-08-29 | 2026-08-30 |
 | [027](027-diagnostic-rendering.md) | Diagnostic rendering - source snippets, carets and color | tooling | implemented | 2026-08-30 | 2026-08-30 |
-| [028](028-owned-fields-and-move.md) | `owned` fields, non-copyable types, and `move` | language | accepted | 2026-08-30 |  |
+| [028](028-owned-fields-and-move.md) | `owned` fields, non-copyable types, and `move` | language | implemented | 2026-08-30 | 2026-09-13 |
 | [029](029-checking-uninstantiated-generic-bodies.md) | Checking uninstantiated generic bodies | compiler | deferred | 2026-09-01 |  |
 | [030](030-reference-form-operator-dispatch.md) | Reference-form operator dispatch | language | draft | 2026-09-01 |  |
 | [031](031-owned-generic-consolidation.md) | `Owned(T)`, one ownership wrapper | stdlib | draft | 2026-09-01 |  |
-| [032](032-consuming-iteration.md) | Consuming iteration | language | accepted | 2026-09-13 |  |
+| [032](032-consuming-iteration.md) | Consuming iteration | language | implemented | 2026-09-13 | 2026-09-13 |
 | [099](099-stack-only-types-and-bindings.md) | `#stack` types and stack-only bindings | language | deferred | 2026-08-27 |  |

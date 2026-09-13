@@ -72,7 +72,7 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
 
     // The AST views `source`, not the token structs - tokens and the parser are dead once the
     // Module exists. Drain parse diagnostics first so they survive `p.deinit()`.
-    drain_diagnostics(&diagnostics, &p.diagnostics)
+    diagnostics.take_all(&p.diagnostics)
     p.deinit()
 
     // A file that didn't parse is not type-checked.
@@ -94,7 +94,7 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
         const placeholder = move result
         placeholder.deinit()
         result = check_all(&chk, &modules, &paths, &srcs, &fps, &gens)
-        drain_diagnostics(&diagnostics, &chk.diagnostics)
+        diagnostics.take_all(&chk.diagnostics)
 
         // ponytail: single-unit analysis leaks the generated chunk modules (their decls were
         // appended to `module`); AnalyzedUnit has no slot.
@@ -109,8 +109,7 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
         paths.deinit()
     }
 
-    let published = filter_allowed(&diagnostics, &module, allocator)
-    diagnostics.deinit()
+    let published = filter_allowed(move diagnostics, &module, allocator)
 
     return .{
         source = move source,
@@ -127,56 +126,31 @@ pub fn analyze(source: OwnedString, path: String, allocator: &Allocator? = null)
 // is silent for every diagnostic whose span falls within it, whichever phase raised it, because the
 // filter runs over the assembled list. Allowance is declaration-level only.
 //
-// Returns the survivors in order and leaves `diags` empty, its backing buffer released.
-pub fn filter_allowed(diags: &List(Diagnostic), module: &Module,
+// Consumes `diags` and returns the survivors in order, in a list of its own.
+pub fn filter_allowed(diags: List(Diagnostic), module: &Module,
     alloc: &Allocator? = null) List(Diagnostic) {
-    let kept: List(Diagnostic) = list(diags.len, alloc)
-    let taking = diags.drain()
-    loop {
-        let nx = taking.next()
-        if nx.is_none() {
-            break
-        }
-        let d = unwrap(move nx)
-        if is_allowed(&d, module) {
-            d.deinit()
-            continue
-        }
-        kept.push(move d)
-    }
-    taking.deinit()
-    diags.deinit()
-    return move kept
+    return filter_diags(move diags, fn(d) { is_allowed(d, module) })
 }
 
 // The project-wide form: a diagnostic is matched against the declarations of the module its span's
 // file id selects.
-pub fn filter_allowed_project(diags: &List(Diagnostic), modules: &List(Module),
+pub fn filter_allowed_project(diags: List(Diagnostic), modules: &List(Module),
     alloc: &Allocator? = null) List(Diagnostic) {
-    let kept: List(Diagnostic) = list(diags.len, alloc)
-    let taking = diags.drain()
-    loop {
-        let nx = taking.next()
-        if nx.is_none() {
-            break
-        }
-        let d = unwrap(move nx)
-        let dropped = false
+    return filter_diags(move diags, fn(d) {
         for &m in modules {
-            if is_allowed(&d, m) {
-                dropped = true
-                break
+            if is_allowed(d, m) {
+                return true
             }
         }
-        if dropped {
-            d.deinit()
-            continue
-        }
-        kept.push(move d)
-    }
-    taking.deinit()
-    diags.deinit()
-    return move kept
+        return false
+    })
+}
+
+// Drops the diagnostics `silenced` accepts, releasing each, and hands the rest back in the list
+// they were already in.
+fn filter_diags(diags: List(Diagnostic), silenced: $F) List(Diagnostic) {
+    diags.retain(fn(d) { !silenced(d) })
+    return move diags
 }
 
 fn is_allowed(d: &Diagnostic, module: &Module) bool {
@@ -239,7 +213,7 @@ fn contains_code(codes: &List(String), code: String) bool {
     return false
 }
 
-pub fn deinit(self: &AnalyzedUnit) {
+pub fn deinit(self: AnalyzedUnit) {
     self.diagnostics.deinit()
     self.result.deinit()
     self.module.deinit()
@@ -249,21 +223,6 @@ pub fn deinit(self: &AnalyzedUnit) {
 // Error-severity diagnostics only - warnings and hints don't fail a build.
 pub fn error_count(self: &AnalyzedUnit) usize {
     return count_errors(&self.diagnostics)
-}
-
-// Move every diagnostic from `src` into `dst`, which owns their message buffers afterwards. The
-// elements travel out of `src` in its backing buffer, leaving it empty; only that buffer is freed.
-fn drain_diagnostics(dst: &List(Diagnostic), src: &List(Diagnostic)) {
-    let taking = src.drain()
-    loop {
-        let nx = taking.next()
-        if nx.is_none() {
-            break
-        }
-        dst.push(unwrap(move nx))
-    }
-    taking.deinit()
-    src.deinit()
 }
 
 fn count_errors(diags: &List(Diagnostic)) usize {
@@ -498,7 +457,7 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     chk.set_project_globals(&ctx.global_imports, &self.project_origin)
     self.result = check_all(chk, &self.modules, &path_views, &self.sources, &self.file_paths, &gens,
         Some(&order), recollect, dm)
-    drain_diagnostics(&self.diagnostics, &chk.diagnostics)
+    self.diagnostics.take_all(&chk.diagnostics)
     self.generated = gens.take_output()
     gens.deinit()
 
@@ -510,16 +469,16 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     if ctx.warn_unused and self.project_origin.len > 0 and count_errors(&self.diagnostics) == 0 {
         let w = unused_functions(&self.result, &self.modules, &path_views, &self.project_origin,
             ctx.lib_kind, ctx.check_tests, allocator)
-        drain_diagnostics(&self.diagnostics, &w)
+        self.diagnostics.take_all(&w)
         w.deinit()
         let wi = unused_imports(&self.result, &self.modules, &path_views, &self.project_origin,
             ctx.check_tests, allocator)
-        drain_diagnostics(&self.diagnostics, &wi)
+        self.diagnostics.take_all(&wi)
         wi.deinit()
     }
 
     // Last, so a code is silenced whichever phase raised it, the unused warnings included.
-    self.diagnostics = filter_allowed_project(&self.diagnostics, &self.modules, allocator)
+    self.diagnostics = filter_allowed_project(move self.diagnostics, &self.modules, allocator)
 }
 
 // The demand set for a lazy check (RFC-022 §6): the project's own modules, the auto-imported
@@ -712,7 +671,7 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String),
     } else {
         empty_result(allocator)
     }
-    drain_diagnostics(&diagnostics, &chk.diagnostics)
+    diagnostics.take_all(&chk.diagnostics)
     let generated = gens.take_output()
     gens.deinit()
 
@@ -738,7 +697,7 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String),
     }
 }
 
-pub fn deinit(self: &AnalyzedProject) {
+pub fn deinit(self: AnalyzedProject) {
     self.retired_results.deinit()
     self.retired_modules.deinit()
     self.retired_sources.deinit()
@@ -790,7 +749,7 @@ fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List
     let cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, file_id, alloc, Some(diags))
     flatten_module_decls(&module, target, diags, alloc)
-    drain_diagnostics(diags, &p.diagnostics)
+    diags.take_all(&p.diagnostics)
     p.deinit()
     return move module
 }

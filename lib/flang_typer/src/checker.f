@@ -83,12 +83,12 @@ type GenericTemplate = struct {
 }
 
 // A re-registered signature's `Dict.set` overwrite frees the replaced template through this.
-pub fn deinit(self: &GenericTemplate) {
+pub fn deinit(self: GenericTemplate) {
     self.tps.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &GenericTemplate, allocator: &Allocator) {
+pub fn deinit(self: GenericTemplate, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -107,8 +107,6 @@ type SigTypeParam = struct {
     var_id: VarId
 }
 
-pub fn deinit(self: &SigTypeParam) {}
-
 // An unsuffixed numeric literal's fresh var, held for the post-inference sweep: still unresolved
 // once everything has settled means no context ever pinned the literal - E2001, matching the
 // reference.
@@ -118,8 +116,6 @@ type PendingLit = struct {
     text: String
     is_float: bool
 }
-
-pub fn deinit(self: &PendingLit) {}
 
 // An anonymous `.{ ... }` literal awaiting its nominal. The literal types as a fresh var the
 // surrounding context binds; once inference settles, each field initializer unifies against the
@@ -141,12 +137,12 @@ type PendingMember = struct {
     module: String?
 }
 
-pub fn deinit(self: &PendingAnon) {
+pub fn deinit(self: PendingAnon) {
     self.fields.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &PendingAnon, allocator: &Allocator) {
+pub fn deinit(self: PendingAnon, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -181,10 +177,10 @@ type PendingSpec = struct {
 
 // The drain owns `tp_binds` and `inst_params`: it frees them when a pick is processed and carries
 // them into the next pass when one is deferred, so dropping the queue must not touch them.
-pub fn deinit(self: &PendingSpec) {}
+pub fn deinit(self: PendingSpec) {}
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &PendingSpec, allocator: &Allocator) {}
+pub fn deinit(self: PendingSpec, allocator: &Allocator) {}
 
 // One instantiation frame's reuse bookkeeping (RFC-022 5e), pushed alongside `spec_callers`. The
 // counters at frame start plus what nested work minted give the frame's OWN burns; `deps` collects
@@ -215,13 +211,13 @@ type SpecFrame = struct {
 }
 
 // A frame still on the stack at teardown; a popped frame hands its lists to the registry.
-pub fn deinit(self: &SpecFrame) {
+pub fn deinit(self: SpecFrame) {
     self.deps.deinit()
     self.hints.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &SpecFrame, allocator: &Allocator) {
+pub fn deinit(self: SpecFrame, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -414,7 +410,7 @@ pub type ModuleNomDiags = struct {
     bodies: List(Diagnostic)
 }
 
-pub fn deinit(self: &ModuleNomDiags) {
+pub fn deinit(self: ModuleNomDiags) {
     self.collect.deinit()
     self.resolve.deinit()
     self.signatures.deinit()
@@ -422,7 +418,7 @@ pub fn deinit(self: &ModuleNomDiags) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &ModuleNomDiags, allocator: &Allocator) {
+pub fn deinit(self: ModuleNomDiags, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -434,8 +430,6 @@ pub type SigNodeFact = struct {
     span: SourceSpan
     ty: Ty?
 }
-
-pub fn deinit(self: &SigNodeFact) {}
 
 // What one module's signature pass produced, cached for demands that skip the pass. `var_burn` is
 // how many engine variables the pass minted - a skipping demand mints the same count so every later
@@ -462,17 +456,14 @@ pub type ModuleSigCache = struct {
     fresh: bool
 }
 
-pub fn deinit(self: &ModuleSigCache) {
+pub fn deinit(self: ModuleSigCache) {
     self.facts.deinit()
     self.lit_tys.deinit()
-    for &t in self.default_texts {
-        t.deinit()
-    }
     self.default_texts.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &ModuleSigCache, allocator: &Allocator) {
+pub fn deinit(self: ModuleSigCache, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -515,12 +506,12 @@ pub type NodeLambdaFact = struct {
     info: LambdaInfo
 }
 
-pub fn deinit(self: &NodeLambdaFact) {
+pub fn deinit(self: NodeLambdaFact) {
     self.info.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &NodeLambdaFact, allocator: &Allocator) {
+pub fn deinit(self: NodeLambdaFact, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -529,12 +520,12 @@ pub type NodeExprsFact = struct {
     exprs: List(&Expr)
 }
 
-pub fn deinit(self: &NodeExprsFact) {
+pub fn deinit(self: NodeExprsFact) {
     self.exprs.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &NodeExprsFact, allocator: &Allocator) {
+pub fn deinit(self: NodeExprsFact, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -543,12 +534,12 @@ pub type NodeDerefsFact = struct {
     chain: List(ResolvedTarget)
 }
 
-pub fn deinit(self: &NodeDerefsFact) {
+pub fn deinit(self: NodeDerefsFact) {
     self.chain.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &NodeDerefsFact, allocator: &Allocator) {
+pub fn deinit(self: NodeDerefsFact, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -567,13 +558,13 @@ pub type CapturedPick = struct {
     caller_module: String
 }
 
-pub fn deinit(self: &CapturedPick) {
+pub fn deinit(self: CapturedPick) {
     self.tp_binds.deinit()
     self.inst_params.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &CapturedPick, allocator: &Allocator) {
+pub fn deinit(self: CapturedPick, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -609,7 +600,7 @@ pub type ModuleBodyCache = struct {
     fresh: bool
 }
 
-pub fn deinit(self: &ModuleBodyCache) {
+pub fn deinit(self: ModuleBodyCache) {
     self.spec_sites.deinit()
     self.keys.deinit()
     self.types.deinit()
@@ -623,15 +614,11 @@ pub fn deinit(self: &ModuleBodyCache) {
     self.arg_lists.deinit()
     self.derefs.deinit()
     self.picks.deinit()
-    for &pc in self.calls {
-        pc.arg_tys.deinit()
-        pc.pos_exprs.deinit()
-    }
     self.calls.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &ModuleBodyCache, allocator: &Allocator) {
+pub fn deinit(self: ModuleBodyCache, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -666,18 +653,18 @@ type LambdaFrame = struct {
     captures: List(CaptureRec)
 }
 
-pub fn deinit(self: &LambdaFrame) {
+pub fn deinit(self: LambdaFrame) {
     self.captures.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &LambdaFrame, allocator: &Allocator) {
+pub fn deinit(self: LambdaFrame, allocator: &Allocator) {
     self.deinit()
 }
 
 // One overloaded-name-as-value site: the node, the fresh var its slot got, the name, and the module
 // whose visibility resolves it.
-pub fn deinit(self: &PendingCall, allocator: &Allocator) {
+pub fn deinit(self: PendingCall, allocator: &Allocator) {
     self.arg_tys.deinit()
     self.pos_exprs.deinit()
 }
@@ -805,8 +792,6 @@ pub fn begin_demand(self: &Checker) {
     self.sig_cache_keys = list(0, self.allocator)
     self.body_caches = dict(self.allocator)
     self.body_cache_keys = list(0, self.allocator)
-    self.deinit()
-
     let next = checker(self.allocator)
     next.nominals = move noms
     next.aliases = move aliases
@@ -824,7 +809,10 @@ pub fn begin_demand(self: &Checker) {
     next.body_caches = move body_caches
     next.body_cache_keys = move body_cache_keys
     next.comptime = ct
-    self.* = move next
+    // The replacement goes into place and the spent checker comes back out of the exchange, to be
+    // released as a value rather than through the reference.
+    swap(self, &next)
+    next.deinit()
 }
 
 // Start this demand's result tables at the previous demand's final sizes - a re-demand rewrites
@@ -910,7 +898,7 @@ type RetiredName = struct {
     from_module: bool
 }
 
-pub fn deinit(self: &Checker) {
+pub fn deinit(self: Checker) {
     self.engine.deinit()
     self.env.deinit()
     self.nominals.deinit()
@@ -935,7 +923,6 @@ pub fn deinit(self: &Checker) {
     self.pending_members.deinit()
     self.pending_fn_names.deinit()
     self.visible_by_module.deinit()
-    for &g in self.project_globals { g.deinit() }
     self.project_globals.deinit()
     self.project_origin.deinit()
     self.lambda_frames.deinit()
@@ -958,7 +945,7 @@ pub fn deinit(self: &Checker) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Checker, allocator: &Allocator) {
+pub fn deinit(self: Checker, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -1071,7 +1058,7 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
 
     // Nominal?
     let vis = current_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let look = self.nominals.lookup(n.name, &vis)
 
     let found_id: NominalId? = look match {
@@ -2014,11 +2001,12 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
         }
         variants.push(VariantDef { name = v.name, payloads = move payloads, decl_span = v.span })
     }
-    if !has_explicit_tag {
+    const tag_values: Dict(String, i64)? = if has_explicit_tag {
+        Some(move tag_by_name)
+    } else {
         tag_by_name.deinit()
+        null
     }
-    const tag_values: Dict(String,
-        i64)? = if has_explicit_tag { Some(move tag_by_name) } else { null }
     self.env.pop_scope()
 
     let existing = self.nominals.get(id)
@@ -2080,7 +2068,7 @@ fn collect_one_signature(self: &Checker, decl: &Decl) {
 // collisions count: two modules may each declare `deinit(&Foo)` for their own `Foo`.
 fn duplicate_overload(self: &Checker, name: String, sig: &Scheme) bool {
     let vis = current_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let found = self.functions.lookup(name, &vis) match {
         FnLookFound(c) => Some(move c)
         _ => null
@@ -2484,7 +2472,7 @@ fn directive_info(self: &Checker, ty: Ty) CtTypeInfo {
 // A generic nominal has no type to offer without its arguments, and a bare name carries none.
 fn directive_nominal(self: &Checker, name: String) Ty? {
     let vis = current_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     const id = self.nominals.lookup(name, &vis) match {
         NomLookFound(i) => i
         _ => return null
@@ -2572,13 +2560,7 @@ fn drain_pending_specs(self: &Checker, report: bool = true) {
     loop {
         let deferred: List(PendingSpec) = list(queue.len, self.allocator)
         let progressed = false
-        let taking = queue.drain()
-        loop {
-            let nx = taking.next()
-            if nx.is_none() {
-                break
-            }
-            let p = unwrap(move nx)
+        for p in queue.drain() {
             if pending_ready(self, &p) {
                 process_pending(self, &p)
                 // A processed pick's collections are done; a deferred one keeps its storage into
@@ -2590,18 +2572,11 @@ fn drain_pending_specs(self: &Checker, report: bool = true) {
                 deferred.push(move p)
             }
         }
-        taking.deinit()
         // Picks the instantiations just made at THIS level join the queue.
-        let fresh = self.pending_specs.drain()
-        loop {
-            let nx = fresh.next()
-            if nx.is_none() {
-                break
-            }
-            deferred.push(unwrap(move nx))
+        for q in self.pending_specs.drain() {
+            deferred.push(move q)
             progressed = true
         }
-        fresh.deinit()
         const done = move queue
         done.deinit()
         queue = move deferred
@@ -2612,13 +2587,7 @@ fn drain_pending_specs(self: &Checker, report: bool = true) {
             break
         }
     }
-    let rest = queue.drain()
-    loop {
-        let nx = rest.next()
-        if nx.is_none() {
-            break
-        }
-        let p = unwrap(move nx)
+    for p in queue.drain() {
         if report {
             report_uninferable_spec(self, &p)
             p.tp_binds.deinit()
@@ -2627,7 +2596,6 @@ fn drain_pending_specs(self: &Checker, report: bool = true) {
             self.pending_specs.push(move p)
         }
     }
-    rest.deinit()
     queue.deinit()
 }
 
@@ -3764,7 +3732,7 @@ fn collect_covered(self: &Checker, pat: &Pattern, e: &EnumDef, out: &List(String
 // tell that from a binding, so the name decides).
 fn match_names_variant(self: &Checker, m: &MatchExpr) bool {
     let vis = fn_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     for &arm in m.arms {
         arm.pattern match {
             EnumVariant(_) => return true
@@ -4835,7 +4803,7 @@ fn index_operator(self: &Checker, name: String, self_ty: Ty, index_ty: Ty,
 // supply their own diagnostic, and report once at the end.
 fn operator_pick(self: &Checker, name: String, args: &List(Ty), span: SourceSpan) OverloadPick? {
     let vis = fn_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let cands = self.functions.lookup(name, &vis) match {
         FnLookFound(c) => Some(move c)
         _ => null
@@ -5112,7 +5080,7 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
     }
 
     let vis = fn_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
 
     // Module-level constant? Consts resolve BEFORE function-as-value, matching the reference
     // checker, where module consts live in the scope environment: `stdin` (a const File in
@@ -6216,14 +6184,14 @@ type NamedArgs = struct {
     values: List(&Expr)
 }
 
-pub fn deinit(self: &NamedArgs) {
+pub fn deinit(self: NamedArgs) {
     self.names.deinit()
     self.tys.deinit()
     self.values.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &NamedArgs, allocator: &Allocator) {
+pub fn deinit(self: NamedArgs, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -6272,7 +6240,7 @@ fn resolve_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty), pos_exprs: 
 fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, arg_tys: &List(Ty),
     pos_exprs: &List(&Expr), named: &NamedArgs? = null) Ty? {
     let vis = fn_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let cands = self.functions.lookup(ide.name, &vis) match {
         FnLookFound(c) => Some(move c)
         _ => null
@@ -6321,7 +6289,7 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     }
 
     let vis = fn_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let cands = self.functions.lookup(ma.member, &vis) match {
         FnLookFound(c) => Some(move c)
         _ => null
@@ -6410,7 +6378,7 @@ fn receiver_overload(self: &Checker, candidates: &List(FunctionScheme), recv: Ty
 fn receiver_pick(self: &Checker, name: String, recv: Ty, extra: &List(Ty), span: SourceSpan,
     record_span: SourceSpan) OverloadPick? {
     let vis = fn_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let cands = self.functions.lookup(name, &vis) match {
         FnLookFound(c) => Some(move c)
         _ => null
@@ -6595,14 +6563,8 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
     let parked: List(PendingCall) = list(self.pending_calls.len - from, self.allocator)
     let all = move self.pending_calls
     self.pending_calls = list(all.len, self.allocator)
-    let taking = all.drain()
     let k: usize = 0
-    loop {
-        let nx = taking.next()
-        if nx.is_none() {
-            break
-        }
-        let pc = unwrap(move nx)
+    for pc in all.drain() {
         if k < from {
             self.pending_calls.push(move pc)
         } else {
@@ -6610,7 +6572,6 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
         }
         k = k + 1
     }
-    taking.deinit()
     all.deinit()
     const was_resolving = self.resolving_parked
     self.resolving_parked = true
@@ -6619,7 +6580,7 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
         let saved = self.current_module
         self.current_module = pc.module
         let vis = fn_visibility(self)
-        defer vis.visible.deinit()
+        defer vis.deinit()
         let cands = self.functions.lookup(pc.name, &vis) match {
             FnLookFound(c) => Some(move c)
             _ => null
@@ -6651,9 +6612,9 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
             }
         }
         self.current_module = saved
-        pc.arg_tys.deinit()
-        pc.pos_exprs.deinit()
     }
+    // `parked`'s own deinit releases each entry: a `deinit` consumes its value and disarms nothing,
+    // so a hand-release here would be a second one (spec 4.1).
     parked.deinit()
 }
 
@@ -7020,7 +6981,7 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
         return null
     }
     let vis = fn_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let cands = self.functions.lookup("op_call", &vis) match {
         FnLookFound(c) => Some(move c)
         _ => null
@@ -7119,7 +7080,7 @@ type OverloadPick = struct {
     hops: usize
 }
 
-pub fn deinit(self: &OverloadPick) {
+pub fn deinit(self: OverloadPick) {
     self.params.deinit()
     self.inst match {
         Some(i) => i.deinit()
@@ -7128,7 +7089,7 @@ pub fn deinit(self: &OverloadPick) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &OverloadPick, allocator: &Allocator) {
+pub fn deinit(self: OverloadPick, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -7170,7 +7131,7 @@ type PickInst = struct {
     ret: Ty
 }
 
-pub fn deinit(self: &PickInst) {
+pub fn deinit(self: PickInst) {
     self.tp_binds.deinit()
     self.params.deinit()
 }
@@ -7367,12 +7328,10 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
         }
     }
     const generic = w.signature.quantified_len() > 0
-    if !generic {
-        binds.deinit()
-    }
     const inst: PickInst? = if generic {
         Some(PickInst { tp_binds = move binds, params = fparams.clone(), ret = f.ret })
     } else {
+        binds.deinit()
         null
     }
     let hops = if best_used > 0 { alts[best_used - 1].hops } else { 0usize }
@@ -7780,7 +7739,7 @@ fn unqualified_variant_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List
         return null
     }
     let vis = current_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let nid = self.nominals.lookup_variant(ide.name, arg_tys.len, &vis)
     if nid.is_none() {
         return null
@@ -7795,7 +7754,7 @@ fn name_is_value_bound(self: &Checker, name: String) bool {
         return true
     }
     let vis = fn_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     return self.functions.lookup(name, &vis) match {
         FnLookFound(_) => true
         _ => false
@@ -7809,7 +7768,7 @@ fn type_instantiation_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List(
         return null
     }
     let vis = current_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let nid = self.nominals.lookup(ide.name, &vis) match {
         NomLookFound(n) => Some(n)
         _ => null
@@ -8152,7 +8111,7 @@ fn member_deref_retry(self: &Checker, ma: &MemberAccessExpr, recv_ty: Ty) Ty? {
 // members the source does not spell, such as the `len` an open range `xs[a..]` reads for its end.
 fn member_deref_retry_at(self: &Checker, member: String, span: SourceSpan, recv_ty: Ty) Ty? {
     let vis = fn_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let dcands = self.functions.lookup("op_deref", &vis) match {
         FnLookFound(c) => Some(move c)
         _ => null
@@ -8285,7 +8244,7 @@ fn enum_receiver(self: &Checker, recv: &Expr) NominalId? {
     }
 
     let vis = current_visibility(self)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     return self.nominals.lookup(name.unwrap(), &vis) match {
         NomLookFound(id) => Some(id)
         _ => null
@@ -8564,7 +8523,7 @@ fn resolve_fn_name_values(self: &Checker) {
         let saved = self.current_module
         self.current_module = pn.module
         let vis = fn_visibility(self)
-        defer vis.visible.deinit()
+        defer vis.deinit()
         let cands = self.functions.lookup(pn.name, &vis) match {
             FnLookFound(c) => Some(move c)
             _ => null
@@ -10115,8 +10074,8 @@ fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark,
     if default_texts_differ(&slot.default_texts, &cache.default_texts) {
         self.defaults_changed = true
     }
-    slot.deinit()
-    slot.* = move cache
+    swap(slot, &cache)
+    cache.deinit()
 }
 
 // Whether module `path`'s signature pass can be skipped this demand: a cache exists, nothing it
@@ -10454,10 +10413,6 @@ fn seal_slot(self: &Checker, lit_floor: usize) {
     names.deinit()
     let calls = move self.pending_calls
     self.pending_calls = list(0, self.allocator)
-    for &pc in calls {
-        pc.arg_tys.deinit()
-        pc.pos_exprs.deinit()
-    }
     calls.deinit()
     self.pending_literals.truncate(lit_floor)
 }
@@ -10550,8 +10505,8 @@ fn store_body_cache(self: &Checker, path: String, cache: ModuleBodyCache) {
         return
     }
     let slot = found.unwrap()
-    slot.deinit()
-    slot.* = move cache
+    swap(slot, &cache)
+    cache.deinit()
 }
 
 // Fill this demand's fresh body caches from the finished tables, once the final zonk has run.
@@ -11217,9 +11172,6 @@ fn redemand_errors(b_first: String, b_again: String, a_src: String) RedemandErro
     res2.deinit()
     chk.deinit()
     old_b.deinit()
-    for &m in mods {
-        m.deinit()
-    }
     mods.deinit()
     ps.deinit()
     recollect.deinit()
@@ -11396,9 +11348,6 @@ test "a changed default value invalidates the carried slots" {
     chk.deinit()
     old_b.deinit()
     old_src.deinit()
-    for &m in mods {
-        m.deinit()
-    }
     mods.deinit()
     ps.deinit()
     srcs.deinit()
@@ -11486,9 +11435,6 @@ test "a carried specialization keeps its id across a clean re-demand" {
     res2.deinit()
     chk.deinit()
     old_b.deinit()
-    for &m in mods {
-        m.deinit()
-    }
     mods.deinit()
     ps.deinit()
     recollect.deinit()
@@ -11530,9 +11476,6 @@ test "a removed call site sweeps its specialization" {
     res2.deinit()
     chk.deinit()
     old_a.deinit()
-    for &m in mods {
-        m.deinit()
-    }
     mods.deinit()
     ps.deinit()
     recollect.deinit()
@@ -11557,9 +11500,6 @@ fn count_check_errors(srcs: String[], paths: String[],
     let errors = count_error_diags(&chk.diagnostics)
 
     chk.deinit()
-    for &m in mods {
-        m.deinit()
-    }
     mods.deinit()
     ps.deinit()
     return errors

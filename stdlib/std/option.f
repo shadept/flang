@@ -7,24 +7,22 @@ import core.option
 import std.allocator
 import std.test
 
-// Deinit the payload (if any) and reset to `None`. Lets options participate in container cascades
+// Deinit the payload, if there is one. Lets options participate in container cascades
 // (`List(Option(T)).deinit` reaches the payloads) and makes `opt.deinit()` the one-liner for owned
-// optional fields. Idempotent: the second call sees `None`.
-pub fn deinit(self: &Option($T)) {
-    self.* match {
+// optional fields. A `None` releases nothing.
+pub fn deinit(self: Option($T)) {
+    self match {
         Some(v) => { v.deinit() }
         None => {}
     }
-    self.* = None
 }
 
 // Element form (README, Expected functions): the payload is deinited through `allocator`.
-pub fn deinit(self: &Option($T), allocator: &Allocator) {
-    self.* match {
+pub fn deinit(self: Option($T), allocator: &Allocator) {
+    self match {
         Some(v) => { v.deinit(allocator) }
         None => {}
     }
-    self.* = None
 }
 
 // Read-only, so the receiver is a reference: a by-value receiver of a non-copyable type has no

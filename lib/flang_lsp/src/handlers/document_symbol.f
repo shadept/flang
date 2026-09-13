@@ -32,13 +32,13 @@ pub type DocSymbol = struct {
     children: List(DocSymbol)
 }
 
-pub fn deinit(self: &DocSymbol) {
+pub fn deinit(self: DocSymbol) {
     self.children.deinit()
     self.name.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &DocSymbol, allocator: &Allocator) {
+pub fn deinit(self: DocSymbol, allocator: &Allocator) {
     self.deinit()
 }
 

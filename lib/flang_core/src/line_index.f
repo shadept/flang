@@ -31,12 +31,12 @@ pub fn line_index(text: String, allocator: &Allocator? = null) LineIndex {
     return .{ starts = move starts, all_ascii = is_ascii(text), text_len = text.len }
 }
 
-pub fn deinit(self: &LineIndex) {
+pub fn deinit(self: LineIndex) {
     self.starts.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &LineIndex, allocator: &Allocator) {
+pub fn deinit(self: LineIndex, allocator: &Allocator) {
     self.deinit()
 }
 

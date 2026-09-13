@@ -77,12 +77,12 @@ pub fn function_registry(allocator: &Allocator? = null) FunctionRegistry {
     return .{ by_name = move by_name, next_id = 0u32, changed = false, allocator = allocator }
 }
 
-pub fn deinit(self: &FunctionRegistry) {
+pub fn deinit(self: FunctionRegistry) {
     self.by_name.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &FunctionRegistry, allocator: &Allocator) {
+pub fn deinit(self: FunctionRegistry, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -359,7 +359,7 @@ test "a retired entry stops resolving until it is registered again" {
     reg.retire_module("m")
     let scope: Set(String) = set()
     let vis = visibility(Some("m"), move scope)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let missing = reg.lookup("f", &vis) match {
         FnLookMissing => true
         _ => false
@@ -409,7 +409,7 @@ test "purge drops what stayed retired and reports the ids" {
     assert_eq(dropped.len, 1 as usize, "the unclaimed retirement is dropped")
     assert_eq(dropped[0], b, "and named by id")
     let vis = open()
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let gone = reg.lookup("g", &vis) match {
         FnLookMissing => true
         _ => false

@@ -39,7 +39,7 @@ pub type OpenProject = struct {
     index: List(ModuleIndex)
 }
 
-pub fn deinit(self: &OpenProject) {
+pub fn deinit(self: OpenProject) {
     self.index.deinit()
     self.unit.deinit()
     self.ctx.deinit()
@@ -48,7 +48,7 @@ pub fn deinit(self: &OpenProject) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &OpenProject, allocator: &Allocator) {
+pub fn deinit(self: OpenProject, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -102,7 +102,7 @@ fn is_abs(p: String) bool {
     return p.len > 1 and p[1] == ':'
 }
 
-pub fn deinit(self: &Workspace) {
+pub fn deinit(self: Workspace) {
     self.projects.deinit()
     self.stdlib_path.deinit()
 }

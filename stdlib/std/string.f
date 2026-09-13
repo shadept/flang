@@ -477,18 +477,15 @@ pub fn clone(self: &OwnedString) OwnedString {
     return from_view(self.as_view(), self.allocator)
 }
 
-pub fn deinit(self: &OwnedString) {
-    // Idempotent: a second call sees the nulled pointer and no-ops.
+pub fn deinit(self: OwnedString) {
     if self.ptr == (0usize as &u8) {
         return
     }
     self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.len))
-    self.ptr = 0usize as &u8
-    self.len = 0
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &OwnedString, allocator: &Allocator) {
+pub fn deinit(self: OwnedString, allocator: &Allocator) {
     self.deinit()
 }
 

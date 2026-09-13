@@ -66,8 +66,8 @@ pub fn add(self: &UnmanagedSet(OwnedString), value: String, allocator: &Allocato
     return self.__inner.add(value, 1u8, allocator)
 }
 
-// Deinits every element and frees the table. Idempotent: a second call is a no-op.
-pub fn deinit(self: &UnmanagedSet($T), allocator: &Allocator) {
+// Deinits every element and frees the table.
+pub fn deinit(self: UnmanagedSet($T), allocator: &Allocator) {
     self.__inner.deinit(allocator)
 }
 
@@ -275,13 +275,13 @@ pub fn clear(self: &Set($T)) {
     self.__storage.clear(self.allocator)
 }
 
-// Deinits every element and frees the table. Idempotent: a second call is a no-op.
-pub fn deinit(self: &Set($T)) {
+// Deinits every element and frees the table.
+pub fn deinit(self: Set($T)) {
     self.__storage.deinit(self.allocator)
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Set($T), allocator: &Allocator) {
+pub fn deinit(self: Set($T), allocator: &Allocator) {
     self.deinit()
 }
 

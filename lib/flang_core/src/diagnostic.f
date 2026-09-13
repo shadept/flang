@@ -37,13 +37,13 @@ pub type Diagnostic = struct {
 // literal. Copying a diagnostic into a second container copies the OWNERSHIP with it, so a copy
 // that outlives its source is made with `clone_diag`, and a bulk move leaves the source with
 // `List.release` rather than `clear`.
-pub fn deinit(self: &Diagnostic) {
+pub fn deinit(self: Diagnostic) {
     self.message.deinit()
     self.hint.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Diagnostic, allocator: &Allocator) {
+pub fn deinit(self: Diagnostic, allocator: &Allocator) {
     self.deinit()
 }
 

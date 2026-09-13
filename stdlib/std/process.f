@@ -115,15 +115,14 @@ pub fn command(prog: String, allocator: &Allocator? = null) Command {
     }
 }
 
-pub fn deinit(self: &Command) {
+pub fn deinit(self: Command) {
     self.__args.deinit()
     self.__env_pairs.deinit()
     self.__cwd.deinit()
-    self.__has_cwd = false
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Command, allocator: &Allocator) {
+pub fn deinit(self: Command, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -290,18 +289,15 @@ pub fn kill(self: &Child) Result((), ProcessError) {
     return Ok(())
 }
 
-pub fn deinit(self: &Child) {
+pub fn deinit(self: Child) {
     if self.__stdin_fd >= 0 {
         __flang_proc_close_fd(self.__stdin_fd)
-        self.__stdin_fd = -1
     }
     if self.__stdout_fd >= 0 {
         __flang_proc_close_fd(self.__stdout_fd)
-        self.__stdout_fd = -1
     }
     if self.__stderr_fd >= 0 {
         __flang_proc_close_fd(self.__stderr_fd)
-        self.__stderr_fd = -1
     }
     if !self.__finished {
         // Reap any zombie state silently.
@@ -313,7 +309,7 @@ pub fn deinit(self: &Child) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Child, allocator: &Allocator) {
+pub fn deinit(self: Child, allocator: &Allocator) {
     self.deinit()
 }
 

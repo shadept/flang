@@ -340,6 +340,11 @@ of lowering rather than the optimization pipeline because the elision is a langu
 speed-up: the address of a read-only parameter is observably the caller's, and E2122 exists to keep
 that observation sound.
 
+A by-value parameter of a non-copyable type skips the shadow whatever the body does
+(`consumed_param` in `lower.f`, overriding the `param_escape` answer): the call handed the value
+over (RFC-028), so no caller state survives for a write to reach, and a `deinit` would otherwise
+copy every aggregate it is about to release.
+
 The analysis is intraprocedural and reads no callee bodies - any tainted address reaching a call
 argument is an escape. Working on FIR is what makes the classification total: twelve instruction
 forms cover every construct the language has, since desugars, operators, UFCS receivers and template

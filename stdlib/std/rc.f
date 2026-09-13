@@ -50,7 +50,7 @@ pub fn retain(self: &Rc($T)) Rc(T) {
 
 // Decrement the reference count. Frees the inner value when it reaches zero. Calls T.deinit()
 // before freeing (statically dispatched via monomorphization).
-pub fn deinit(self: &Rc($T)) {
+pub fn deinit(self: Rc($T)) {
     let inner = self.__inner match {
         Some(p) => p
         None => return
@@ -63,12 +63,10 @@ pub fn deinit(self: &Rc($T)) {
         }
         self.__allocator.or_global().free(inner)
     }
-
-    self.__inner = null
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Rc($T), allocator: &Allocator) {
+pub fn deinit(self: Rc($T), allocator: &Allocator) {
     self.deinit()
 }
 
@@ -125,10 +123,8 @@ test "rc deinit decrements ref_count" {
     assert_eq(r.ref_count(), 2usize, "ref_count should be 2")
     r2.deinit()
     assert_eq(r.ref_count(), 1usize, "ref_count should be 1 after deinit")
-    assert_true(r2.is_released(), "r2 should be released")
 
     r.deinit()
-    assert_true(r.is_released(), "r should be released")
 }
 
 test "rc deinit frees when last ref dropped" {
@@ -147,8 +143,6 @@ test "rc deinit frees when last ref dropped" {
 
 // Test helper type for struct tests
 type RcTestPoint = struct { x: i32, y: i32 }
-pub fn deinit(self: &RcTestPoint) {}
-
 test "rc with struct value via op_deref" {
     let r = rc(RcTestPoint { x = 3, y = 4 })
     defer r.deinit()
@@ -231,7 +225,7 @@ pub fn retain(self: &Arc($T)) Arc(T) {
 }
 
 // Atomically decrement the reference count. Frees when it reaches zero.
-pub fn deinit(self: &Arc($T)) {
+pub fn deinit(self: Arc($T)) {
     let inner = self.__inner match {
         Some(p) => p
         None => return
@@ -244,12 +238,10 @@ pub fn deinit(self: &Arc($T)) {
         }
         self.__allocator.or_global().free(inner)
     }
-
-    self.__inner = null
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Arc($T), allocator: &Allocator) {
+pub fn deinit(self: Arc($T), allocator: &Allocator) {
     self.deinit()
 }
 
@@ -306,10 +298,8 @@ test "arc deinit decrements ref_count" {
     assert_eq(a.ref_count(), 2usize, "arc ref_count should be 2")
     a2.deinit()
     assert_eq(a.ref_count(), 1usize, "arc ref_count should be 1 after deinit")
-    assert_true(a2.is_released(), "arc a2 should be released")
 
     a.deinit()
-    assert_true(a.is_released(), "arc a should be released")
 }
 
 test "arc with struct value via op_deref" {

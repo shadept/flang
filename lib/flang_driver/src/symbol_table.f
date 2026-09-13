@@ -112,7 +112,7 @@ pub fn spec_sig(self: &SymbolTable, spec_id: u32) FnSig? {
     return self.by_spec_sig.get(spec_id)
 }
 
-pub fn deinit(self: &SymbolTable) {
+pub fn deinit(self: SymbolTable) {
     self.by_fn_id.deinit()
     self.by_decl.deinit()
     self.by_fn_sig.deinit()
@@ -342,7 +342,7 @@ fn c_layout_agrees(it: &TypeInterner, ty: Ty, sd: &StructDef, reg: &NominalRegis
             ok = false
         }
     }
-    sl.offsets.deinit()
+    sl.deinit()
     return ok
 }
 

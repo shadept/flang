@@ -57,10 +57,7 @@ type Tarjan = struct {
 }
 
 // Frees every field, the adjacency rows included.
-fn deinit(self: &Tarjan) {
-    for &row in self.adj {
-        row.deinit(self.allocator)
-    }
+fn deinit(self: Tarjan) {
     self.adj.deinit(self.allocator)
     self.index.deinit(self.allocator)
     self.low.deinit(self.allocator)

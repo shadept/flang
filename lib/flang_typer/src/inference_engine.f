@@ -187,7 +187,7 @@ pub fn set_nominal_registry(self: &Engine, reg: &NominalRegistry) {
     self.nominals = Some(reg)
 }
 
-pub fn deinit(self: &Engine) {
+pub fn deinit(self: Engine) {
     self.uf.deinit()
     self.interner.deinit()
     self.bindings.deinit()
@@ -199,7 +199,7 @@ pub fn deinit(self: &Engine) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Engine, allocator: &Allocator) {
+pub fn deinit(self: Engine, allocator: &Allocator) {
     self.deinit()
 }
 

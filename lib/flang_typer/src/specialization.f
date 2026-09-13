@@ -42,14 +42,14 @@ pub type ClosureFact = struct {
     sig: ClosureSig
 }
 
-pub fn deinit(self: &ClosureFact) {
+pub fn deinit(self: ClosureFact) {
     self.fqn.deinit()
     self.fields.deinit()
     self.sig.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &ClosureFact, allocator: &Allocator) {
+pub fn deinit(self: ClosureFact, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -74,8 +74,6 @@ pub type SpecDep = struct {
     function_id: u32
     id: SpecId
 }
-
-pub fn deinit(self: &SpecDep) {}
 
 // One instantiated generic function. `key` is the unique signature the registry hashed on; `decl`
 // is a shallow copy of the template's declaration (children stay in the module's arena, which
@@ -154,7 +152,7 @@ pub fn new_specialization(function_id: u32, key: OwnedString, name: String, modu
 // What one specialization owns: the key buffer, the overlay tables, the concrete-params list, and
 // the reuse bookkeeping. `decl` is a shallow copy into the module arena and the name/module strings
 // are views - not ours.
-pub fn deinit(self: &Specialization) {
+pub fn deinit(self: Specialization) {
     self.key.deinit()
     self.overlay.deinit()
     self.concrete_params.deinit()
@@ -163,7 +161,7 @@ pub fn deinit(self: &Specialization) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Specialization, allocator: &Allocator) {
+pub fn deinit(self: Specialization, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -191,13 +189,13 @@ pub fn specialization_registry(allocator: &Allocator? = null) SpecializationRegi
     }
 }
 
-pub fn deinit(self: &SpecializationRegistry) {
+pub fn deinit(self: SpecializationRegistry) {
     self.by_key.deinit()
     self.specs.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &SpecializationRegistry, allocator: &Allocator) {
+pub fn deinit(self: SpecializationRegistry, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -393,9 +391,10 @@ pub fn sweep(self: &SpecializationRegistry) {
 // a global invalidation makes every carried entry unusable, exactly a cold check.
 pub fn reset(self: &SpecializationRegistry) {
     const g = self.gen
-    const a = self.allocator
-    self.deinit()
-    self.* = specialization_registry(a)
+    let fresh = specialization_registry(self.allocator)
+    // The empty registry goes into place and the spent one comes back out of the exchange.
+    swap(self, &fresh)
+    fresh.deinit()
     self.gen = g
 }
 

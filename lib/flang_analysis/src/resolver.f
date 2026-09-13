@@ -33,13 +33,13 @@ pub type DepRoot = struct {
     root: OwnedString
 }
 
-pub fn deinit(self: &DepRoot) {
+pub fn deinit(self: DepRoot) {
     self.name.deinit()
     self.root.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &DepRoot, allocator: &Allocator) {
+pub fn deinit(self: DepRoot, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -97,7 +97,7 @@ pub fn set_comptime(self: &ResolveCtx, c: ComptimeCtx) {
     self.comptime = c
 }
 
-pub fn deinit(self: &ResolveCtx) {
+pub fn deinit(self: ResolveCtx) {
     self.project_name.deinit()
     self.project_source_root.deinit()
     self.deps.deinit()

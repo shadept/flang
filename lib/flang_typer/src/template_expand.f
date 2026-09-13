@@ -100,22 +100,22 @@ pub fn take_output(self: &TemplateState) TemplateOutput {
     return move out
 }
 
-pub fn deinit(self: &EmittedFile) {
+pub fn deinit(self: EmittedFile) {
     self.text.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &EmittedFile, allocator: &Allocator) {
+pub fn deinit(self: EmittedFile, allocator: &Allocator) {
     self.deinit()
 }
 
-pub fn deinit(self: &TemplateOutput) {
+pub fn deinit(self: TemplateOutput) {
     self.chunk_modules.deinit()
     self.emitted.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &TemplateOutput, allocator: &Allocator) {
+pub fn deinit(self: TemplateOutput, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -129,7 +129,7 @@ pub fn forget(self: &TemplateState) {
     self.syntax.deinit()
 }
 
-pub fn deinit(self: &TemplateState) {
+pub fn deinit(self: TemplateState) {
     self.defs.deinit()
     self.syntax.deinit()
     let rest = self.take_output()
@@ -137,7 +137,7 @@ pub fn deinit(self: &TemplateState) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &TemplateState, allocator: &Allocator) {
+pub fn deinit(self: TemplateState, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -333,7 +333,7 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
     let parse_diags: List(Diagnostic) = list(0, Some(&a))
     const nodes = parse_template_body(def.body, def.base, def.file_id, &a, &parse_diags)
     if parse_diags.len > 0 {
-        move_diags(&parse_diags, &chk.diagnostics)
+        chk.diagnostics.take_all(&parse_diags)
         return Outcome.Failed
     }
     let raw = string_builder(def.body.len, Some(&a))
@@ -488,22 +488,9 @@ fn parse_chunk(chk: &Checker, text: String, file_id: i32) Module {
     const cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, file_id, chk.allocator, Some(&chk.diagnostics))
     flatten_module_decls(&module, &chk.comptime, &chk.diagnostics, chk.allocator)
-    move_diags(&p.diagnostics, &chk.diagnostics)
+    chk.diagnostics.take_all(&p.diagnostics)
     p.deinit()
     return move module
-}
-
-// Moves every diagnostic of `from` into `to`, leaving `from` empty with its buffer intact.
-fn move_diags(from: &List(Diagnostic), to: &List(Diagnostic)) {
-    let taking = from.drain()
-    loop {
-        let nx = taking.next()
-        if nx.is_none() {
-            break
-        }
-        to.push(unwrap(move nx))
-    }
-    taking.deinit()
 }
 
 fn emitted_for(state: &TemplateState, allocator: &Allocator?, origin_path: String) &EmittedFile {

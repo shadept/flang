@@ -75,13 +75,13 @@ pub type CaptureRec = struct {
     ty: Ty
 }
 
-pub fn deinit(self: &CaptureRec) {
+pub fn deinit(self: CaptureRec) {
     // name is a source view; ty is engine-owned structure shared with the type tables - neither is
     // ours to free.
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &CaptureRec, allocator: &Allocator) {
+pub fn deinit(self: CaptureRec, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -98,14 +98,14 @@ pub type LambdaInfo = struct {
     symbol: OwnedString
 }
 
-pub fn deinit(self: &LambdaInfo) {
+pub fn deinit(self: LambdaInfo) {
     self.params.deinit()
     self.captures.deinit()
     self.symbol.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &LambdaInfo, allocator: &Allocator) {
+pub fn deinit(self: LambdaInfo, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -120,13 +120,13 @@ pub type ClosureSig = struct {
     lambda_node: NodeId
 }
 
-pub fn deinit(self: &ClosureSig) {
+pub fn deinit(self: ClosureSig) {
     self.params.deinit()
     self.symbol.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &ClosureSig, allocator: &Allocator) {
+pub fn deinit(self: ClosureSig, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -218,7 +218,7 @@ pub fn captured_keys(allocator: &Allocator? = null) CapturedKeys {
     }
 }
 
-pub fn deinit(self: &CapturedKeys) {
+pub fn deinit(self: CapturedKeys) {
     self.spans.deinit()
     self.types.deinit()
     self.targets.deinit()
@@ -231,7 +231,7 @@ pub fn deinit(self: &CapturedKeys) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &CapturedKeys, allocator: &Allocator) {
+pub fn deinit(self: CapturedKeys, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -373,7 +373,7 @@ pub fn end_capture(self: &InferenceResults) CapturedKeys {
     return move out
 }
 
-pub fn deinit(self: &InferenceResults) {
+pub fn deinit(self: InferenceResults) {
     self.node_types.deinit()
     self.resolved_ops.deinit()
     self.resolved_targets.deinit()
@@ -397,7 +397,7 @@ pub fn deinit(self: &InferenceResults) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &InferenceResults, allocator: &Allocator) {
+pub fn deinit(self: InferenceResults, allocator: &Allocator) {
     self.deinit()
 }
 

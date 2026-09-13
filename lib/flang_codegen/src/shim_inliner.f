@@ -184,12 +184,7 @@ fn find_recursive(m: &IrModule, foreigns: &Set(OwnedString), alloc: &Allocator?)
     }
 
     let adj: List(List(usize)) = list(m.functions.len, alloc)
-    defer {
-        for &e in adj {
-            e.deinit()
-        }
-        adj.deinit()
-    }
+    defer adj.deinit()
     for i in 0..m.functions.len {
         let edges: List(usize) = list(0, alloc)
         const f = &m.functions[i]

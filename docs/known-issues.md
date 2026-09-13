@@ -2746,10 +2746,10 @@ stack of latent memory bugs, all of the same few shapes:
   aggregate stores through the value's type (layouts are identical by
   the coercion contract).
 
-`deinit` is now contractually idempotent (spec §4) and `Option(T)` has
-its own cascading `deinit`. `flang test` keeps its temp artifacts when
-the test runner exits on a signal, which is how the fallout was
-debugged.
+`Option(T)` gained its own cascading `deinit` here. (The idempotence this
+entry relied on is gone: RFC-032 made `deinit` consume its value, so a second
+call is E2123 - spec §4.1 rule 6.) `flang test` keeps its temp artifacts when
+the test runner exits on a signal, which is how the fallout was debugged.
 
 ## Self-host: `#inline` does not inline
 

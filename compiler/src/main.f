@@ -110,7 +110,7 @@ type BuildOpts = struct {
     start_ns: u64
 }
 
-pub fn deinit(self: &BuildOpts) {
+pub fn deinit(self: BuildOpts) {
     self.stdlib_path.deinit()
 }
 

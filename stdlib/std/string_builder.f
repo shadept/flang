@@ -62,17 +62,14 @@ pub fn string_builder_with_capacity_and_allocator(capacity: usize,
 }
 
 // Free the backing storage. The builder should not be used after this.
-pub fn deinit(self: &StringBuilder) {
+pub fn deinit(self: StringBuilder) {
     if (self.cap > 0) {
         self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.cap))
     }
-    self.ptr = 0usize as &u8
-    self.len = 0
-    self.cap = 0
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &StringBuilder, allocator: &Allocator) {
+pub fn deinit(self: StringBuilder, allocator: &Allocator) {
     self.deinit()
 }
 

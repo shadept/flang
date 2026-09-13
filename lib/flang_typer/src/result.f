@@ -128,7 +128,7 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
 
 // Free everything the snapshot owns. The desugars' AST blocks are global-allocator boxes
 // deliberately leaked (see checker.f synth helpers).
-pub fn deinit(self: &TypeCheckResult) {
+pub fn deinit(self: TypeCheckResult) {
     self.node_types.deinit()
     self.interner.deinit()
     self.resolved_ops.deinit()
@@ -149,7 +149,7 @@ pub fn deinit(self: &TypeCheckResult) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &TypeCheckResult, allocator: &Allocator) {
+pub fn deinit(self: TypeCheckResult, allocator: &Allocator) {
     self.deinit()
 }
 

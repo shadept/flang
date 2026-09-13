@@ -30,7 +30,7 @@ pub type Scope = struct {
     bindings: UnmanagedDict(String, Binding)
 }
 
-pub fn deinit(self: &Scope, allocator: &Allocator) {
+pub fn deinit(self: Scope, allocator: &Allocator) {
     self.bindings.deinit(allocator)
 }
 
@@ -51,7 +51,7 @@ pub fn type_env(allocator: &Allocator? = null) TypeEnv {
     return move out
 }
 
-pub fn deinit(self: &TypeEnv) {
+pub fn deinit(self: TypeEnv) {
     loop {
         self.scopes.pop() match {
             Some(scope) => {
@@ -65,7 +65,7 @@ pub fn deinit(self: &TypeEnv) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &TypeEnv, allocator: &Allocator) {
+pub fn deinit(self: TypeEnv, allocator: &Allocator) {
     self.deinit()
 }
 

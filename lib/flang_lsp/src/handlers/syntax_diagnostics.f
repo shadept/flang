@@ -23,7 +23,7 @@ pub type ParsedDoc = struct {
     diagnostics: List(Diagnostic)
 }
 
-pub fn deinit(self: &ParsedDoc) {
+pub fn deinit(self: ParsedDoc) {
     self.diagnostics.deinit()
     self.module.deinit()
 }
@@ -40,15 +40,7 @@ pub fn parse_doc(text: String, allocator: &Allocator? = null, file_id: i32 = 0i3
     let module = project_module(cst, file_id, allocator, Some(&diagnostics))
     const cctx = host_ctx()
     flatten_module_decls(&module, &cctx, &diagnostics, allocator)
-    let taking = p.diagnostics.drain()
-    loop {
-        let nx = taking.next()
-        if nx.is_none() {
-            break
-        }
-        diagnostics.push(unwrap(move nx))
-    }
-    taking.deinit()
+    diagnostics.take_all(&p.diagnostics)
     p.deinit()
     return .{ module = move module, diagnostics = move diagnostics }
 }

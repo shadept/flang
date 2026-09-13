@@ -117,13 +117,7 @@ fn error_at(self: &TemplateParser, index: usize, code: String, message: OwnedStr
 
 // Move body-relative parser diagnostics out, shifted to file offsets.
 fn shift_diags(self: &TemplateParser, from: &List(Diagnostic)) {
-    let taking = from.drain()
-    loop {
-        let nx = taking.next()
-        if nx.is_none() {
-            break
-        }
-        let d = unwrap(move nx)
+    for d in from.drain() {
         const sp: SourceSpan = .{
             file_id = self.file_id,
             start = self.base + d.span.start,
@@ -131,7 +125,6 @@ fn shift_diags(self: &TemplateParser, from: &List(Diagnostic)) {
         }
         self.diags.push(with_span(move d, sp))
     }
-    taking.deinit()
 }
 
 fn flush_verbatim(self: &TemplateParser, end: usize, out: &List(TemplateNode)) {

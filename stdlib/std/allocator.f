@@ -591,7 +591,7 @@ pub fn arena_allocator(backing: &Allocator, page_size: usize = 4096) ArenaAlloca
 }
 
 // Free all pages through the backing allocator.
-pub fn deinit(self: &ArenaAllocator) {
+pub fn deinit(self: ArenaAllocator) {
     const header_size = size_of(ArenaPage)
     let page = self.first_page
     while page.is_some() {
@@ -602,12 +602,10 @@ pub fn deinit(self: &ArenaAllocator) {
         self.backing.dealloc(raw, ARENA_PAGE_ALIGN)
         page = next
     }
-    self.first_page = null
-    self.current_page = null
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &ArenaAllocator, allocator: &Allocator) {
+pub fn deinit(self: ArenaAllocator, allocator: &Allocator) {
     self.deinit()
 }
 

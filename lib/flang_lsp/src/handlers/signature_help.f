@@ -21,7 +21,7 @@ pub type CallSite = struct {
     active: usize
 }
 
-pub fn deinit(self: &CallSite) {
+pub fn deinit(self: CallSite) {
     self.name.deinit()
 }
 

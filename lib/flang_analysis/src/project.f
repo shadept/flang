@@ -22,13 +22,13 @@ pub type DependencySpec = struct {
     path: OwnedString
 }
 
-pub fn deinit(self: &DependencySpec) {
+pub fn deinit(self: DependencySpec) {
     self.name.deinit()
     self.path.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &DependencySpec, allocator: &Allocator) {
+pub fn deinit(self: DependencySpec, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -47,13 +47,13 @@ pub type FmtEntry = struct {
     value: OwnedString
 }
 
-pub fn deinit(self: &FmtEntry) {
+pub fn deinit(self: FmtEntry) {
     self.key.deinit()
     self.value.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &FmtEntry, allocator: &Allocator) {
+pub fn deinit(self: FmtEntry, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -100,7 +100,7 @@ pub fn parse_project(text: String, allocator: &Allocator? = null) Project {
     return move proj
 }
 
-pub fn deinit(self: &Project) {
+pub fn deinit(self: Project) {
     self.name.deinit()
     self.version.deinit()
     self.source.deinit()

@@ -94,13 +94,13 @@ pub fn lexer(source: String, allocator: &Allocator? = null, start: usize = 0) Le
 // relevant if the caller abandons the lexer between `next_token()` calls - `tokenize()` always
 // drains the queue before returning). Tokens already handed to the caller are independent; deinit
 // the returned `List(Token)` to free them.
-pub fn deinit(self: &Lexer) {
+pub fn deinit(self: Lexer) {
     self.interp_stack.deinit()
     self.has_pending = false
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Lexer, allocator: &Allocator) {
+pub fn deinit(self: Lexer, allocator: &Allocator) {
     self.deinit()
 }
 

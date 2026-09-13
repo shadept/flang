@@ -273,10 +273,9 @@ pub fn err(self: &RawDir) FsError? {
     return self.last_error
 }
 
-pub fn deinit(self: &RawDir) {
+pub fn deinit(self: RawDir) {
     if self.handle != 0 {
         const _closed = raw_closedir(self.handle)
-        self.handle = 0
     }
 }
 

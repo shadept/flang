@@ -79,14 +79,14 @@ pub fn parser(tokens: List(Token), source: String, allocator: &Allocator? = null
 // Release the parser's diagnostics list. The token list is borrowed from the caller and is NOT
 // freed here. Each `Diagnostic` owns its `message` / `hint` OwnedStrings - those are freed by the
 // list's element walk inside `deinit()`.
-pub fn deinit(self: &Parser) {
+pub fn deinit(self: Parser) {
     self.diagnostics.deinit()
     self.scratch.deinit()
     self.tree.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Parser, allocator: &Allocator) {
+pub fn deinit(self: Parser, allocator: &Allocator) {
     self.deinit()
 }
 

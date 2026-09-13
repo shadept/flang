@@ -135,7 +135,7 @@ pub fn finish(self: &FunctionBuilder) Function {
 
 // Free a builder abandoned before `finish` (a refused body). Safe after `finish` too: the move left
 // empty lists behind.
-pub fn deinit(self: &FunctionBuilder) {
+pub fn deinit(self: FunctionBuilder) {
     self.func.deinit()
 }
 

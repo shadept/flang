@@ -24,6 +24,7 @@ import std.collections.dict
 import std.collections.list
 import std.collections.set
 import std.derive
+import std.mem
 import std.option
 import std.string
 import std.string_builder
@@ -262,7 +263,7 @@ fn intern_field_kids(self: &TypeInterner, fields: &List(Field)) u32 {
     return tail
 }
 
-pub fn deinit(self: &TypeInterner) {
+pub fn deinit(self: TypeInterner) {
     self.nodes.deinit()
     self.children.deinit()
     self.ground.deinit()
@@ -272,10 +273,22 @@ pub fn deinit(self: &TypeInterner) {
     self.kids.deinit()
     self.field_kids.deinit()
     for q in self.quantifier_sets {
-        q.deinit()
+        take_from(q).deinit()
         self.allocator.or_global().free(q)
     }
     self.quantifier_sets.deinit()
+}
+
+// Moves the value at `p` out of the storage behind it: the returned value owns what it held, so
+// whoever owns that storage must not release it again.
+//
+// A quantifier set lives in its own allocation, reached by a plain reference, and `move p.*`
+// through a reference is E2125 (RFC-032) because nothing behind it learns that the value left. Here
+// the allocation is freed in the same breath, so copying the bytes out leaves exactly one owner.
+fn take_from(p: &$T) T {
+    let out: T
+    memcpy(&out as &u8, p as &u8, size_of(T))
+    return move out
 }
 
 // Takes ownership of a quantifier set for the table's lifetime and hands back the shared view.
@@ -286,7 +299,7 @@ pub fn own_quantifiers(self: &TypeInterner, q: Set(VarId)) &Set(VarId) {
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &TypeInterner, allocator: &Allocator) {
+pub fn deinit(self: TypeInterner, allocator: &Allocator) {
     self.deinit()
 }
 

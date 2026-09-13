@@ -133,7 +133,7 @@ fn list_allocator(self: &BuildOptions) &Allocator {
     return self.allocator.or_global()
 }
 
-pub fn deinit(self: &BuildOptions) {
+pub fn deinit(self: BuildOptions) {
     const alloc = self.list_allocator()
     self.extra_c_files.deinit(alloc)
     self.extra_obj_files.deinit(alloc)
@@ -245,7 +245,7 @@ pub fn set_lower_ns(self: &BuildResult, ns: u64) {
     self.lower_ns = ns
 }
 
-pub fn deinit(self: &BuildResult) {
+pub fn deinit(self: BuildResult) {
     self.executable_path.deinit()
     self.c_source_path match {
         Some(p) => p.deinit()
@@ -295,7 +295,7 @@ pub type CompilerInfo = struct {
     allocator: &Allocator?
 }
 
-pub fn deinit(self: &CompilerInfo) {
+pub fn deinit(self: CompilerInfo) {
     self.name.deinit()
     self.path.deinit()
     self.extra_env_keys.deinit()

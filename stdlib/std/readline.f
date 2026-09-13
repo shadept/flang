@@ -193,14 +193,14 @@ pub fn readline(prompt: String) Readline {
     return rl
 }
 
-pub fn deinit(self: &Readline) {
+pub fn deinit(self: Readline) {
     if self.is_raw {
-        disable_raw(self)
+        disable_raw(&self)
     }
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Readline, allocator: &Allocator) {
+pub fn deinit(self: Readline, allocator: &Allocator) {
     self.deinit()
 }
 

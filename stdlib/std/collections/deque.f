@@ -122,21 +122,18 @@ pub fn push_front(self: &UnmanagedDeque($T), value: T, allocator: &Allocator) {
     self.len = self.len + 1
 }
 
-// Deinits every element, front to back, and frees the buffer. Idempotent: a second call is a no-op.
-pub fn deinit(self: &UnmanagedDeque($T), allocator: &Allocator) {
-    if self.cap > 0 {
-        #if !type_info(T).copyable {
-            for i in 0..self.len {
-                const elem: &T = self.ptr + ((self.head + i) % self.cap)
-                elem.deinit(allocator)
-            }
-        }
-        allocator.free(slice_from_raw_parts(self.ptr, self.cap))
+// Deinits every element, front to back, and frees the buffer.
+pub fn deinit(self: UnmanagedDeque($T), allocator: &Allocator) {
+    if self.cap == 0 {
+        return
     }
-    self.ptr = 0usize as &T
-    self.cap = 0
-    self.head = 0
-    self.len = 0
+    #if !type_info(T).copyable {
+        for i in 0..self.len {
+            const at = (self.head + i) % self.cap
+            deinit(move (self.ptr + at).*, allocator)
+        }
+    }
+    allocator.free(slice_from_raw_parts(self.ptr, self.cap))
 }
 
 // =============================================================================
@@ -197,7 +194,7 @@ pub fn peek_front_ref(self: &UnmanagedDeque($T)) &T? {
 pub fn peek_back(self: &UnmanagedDeque($T)) T? {
     #if !type_info(T).copyable {
         #error($"peek_back copies the element out, and {T.name} owns something",
-            "use peek_back_ref")
+            "take it with pop_back")
     }
     if self.len == 0 {
         return null
@@ -205,15 +202,6 @@ pub fn peek_back(self: &UnmanagedDeque($T)) T? {
     const tail = (self.head + self.len - 1) % self.cap
     const slot: &T = self.ptr + tail
     return Some(slot.*)
-}
-
-// Returns a reference to the back element, or null when empty. Writes through it land in the deque;
-// a push that grows the buffer invalidates it.
-pub fn peek_back_ref(self: &UnmanagedDeque($T)) &T? {
-    if self.len == 0 {
-        return null
-    }
-    return Some(self.ptr + ((self.head + self.len - 1) % self.cap))
 }
 
 // Drops every element without deiniting any; the buffer is kept for reuse. Elements that own
@@ -319,13 +307,13 @@ pub fn push_front(self: &Deque($T), value: T) {
     self.__storage.push_front(move value, self.allocator)
 }
 
-// Deinits every element, front to back, and frees the buffer. Idempotent: a second call is a no-op.
-pub fn deinit(self: &Deque($T)) {
+// Deinits every element, front to back, and frees the buffer.
+pub fn deinit(self: Deque($T)) {
     self.__storage.deinit(self.allocator)
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Deque($T), allocator: &Allocator) {
+pub fn deinit(self: Deque($T), allocator: &Allocator) {
     self.deinit()
 }
 

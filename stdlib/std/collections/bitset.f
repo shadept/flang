@@ -27,12 +27,12 @@ pub fn bitset(initial_bits: usize, allocator: &Allocator? = null) Bitset {
 }
 
 // Free the backing storage. The bitset should not be used after this.
-pub fn deinit(self: &Bitset) {
+pub fn deinit(self: Bitset) {
     self.words.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Bitset, allocator: &Allocator) {
+pub fn deinit(self: Bitset, allocator: &Allocator) {
     self.deinit()
 }
 

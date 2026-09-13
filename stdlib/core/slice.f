@@ -289,7 +289,8 @@ pub fn ends_with(s: $T[], suffix: T[]) bool {
 // element type is a compile-time error at the call (RFC-032).
 pub fn min(s: $T[]) T? {
     #if !type_info(T).copyable {
-        #error($"min copies the element out, and {T.name} owns something", "use min_ref")
+        #error($"min copies the element out, and {T.name} owns something",
+            "scan with get_ref and keep the index of the smallest")
     }
     if s.len == 0 {
         return null
@@ -303,27 +304,12 @@ pub fn min(s: $T[]) T? {
     return Some(best)
 }
 
-// Returns a reference to the smallest element by `<`, or null when empty. The reference is valid
-// until the storage behind the slice moves.
-pub fn min_ref(s: $T[]) &T? {
-    if s.len == 0 {
-        return null
-    }
-    let best: &T = s.ptr
-    for i in 1..s.len {
-        const cand: &T = s.ptr + i
-        if cand.* < best.* {
-            best = cand
-        }
-    }
-    return Some(best)
-}
-
 // Returns the largest element by `<`, or null when empty. Copyable elements only; an owning element
 // type is a compile-time error at the call (RFC-032).
 pub fn max(s: $T[]) T? {
     #if !type_info(T).copyable {
-        #error($"max copies the element out, and {T.name} owns something", "use max_ref")
+        #error($"max copies the element out, and {T.name} owns something",
+            "scan with get_ref and keep the index of the largest")
     }
     if s.len == 0 {
         return null
@@ -337,27 +323,12 @@ pub fn max(s: $T[]) T? {
     return Some(best)
 }
 
-// Returns a reference to the largest element by `<`, or null when empty. The reference is valid
-// until the storage behind the slice moves.
-pub fn max_ref(s: $T[]) &T? {
-    if s.len == 0 {
-        return null
-    }
-    let best: &T = s.ptr
-    for i in 1..s.len {
-        const cand: &T = s.ptr + i
-        if best.* < cand.* {
-            best = cand
-        }
-    }
-    return Some(best)
-}
-
 // Returns the element with the smallest `key(x)`, or null when empty. Ties keep the earliest.
 // Copyable elements only; an owning element type is a compile-time error at the call (RFC-032).
 pub fn min_by(s: $T[], key: $F) T? {
     #if !type_info(T).copyable {
-        #error($"min_by copies the element out, and {T.name} owns something", "use min_ref")
+        #error($"min_by copies the element out, and {T.name} owns something",
+            "scan with get_ref and keep the index of the smallest")
     }
     if s.len == 0 {
         return null
@@ -378,7 +349,8 @@ pub fn min_by(s: $T[], key: $F) T? {
 // Copyable elements only; an owning element type is a compile-time error at the call (RFC-032).
 pub fn max_by(s: $T[], key: $F) T? {
     #if !type_info(T).copyable {
-        #error($"max_by copies the element out, and {T.name} owns something", "use max_ref")
+        #error($"max_by copies the element out, and {T.name} owns something",
+            "scan with get_ref and keep the index of the largest")
     }
     if s.len == 0 {
         return null

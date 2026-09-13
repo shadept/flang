@@ -104,12 +104,12 @@ pub fn err(self: &Dir) DirError? {
     return self.raw.err().map(to_dir_error)
 }
 
-pub fn deinit(self: &Dir) {
+pub fn deinit(self: Dir) {
     self.raw.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Dir, allocator: &Allocator) {
+pub fn deinit(self: Dir, allocator: &Allocator) {
     self.deinit()
 }
 
@@ -190,12 +190,12 @@ type Doomed = struct {
     is_dir: bool
 }
 
-pub fn deinit(self: &Doomed) {
+pub fn deinit(self: Doomed) {
     self.path.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &Doomed, allocator: &Allocator) {
+pub fn deinit(self: Doomed, allocator: &Allocator) {
     self.deinit()
 }
 

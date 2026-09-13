@@ -1,8 +1,9 @@
 ---
-status: accepted
+status: implemented
 type: language
 created: 2026-08-30
 relates: [RFC-026, RFC-020, RFC-016, RFC-032]
+implemented: 2026-09-13
 ---
 
 # RFC-028: `owned` fields, non-copyable types, and `move`
@@ -684,6 +685,25 @@ the stdlib frame as a note.
    the container. `take_last` clones.
    Removed: `to_owned_slice`, the `list(source)` copying constructors, the Dict
    fake-key. `filled_list` is gated.
+9. **By-value `deinit`** - done 2026-09-13, on top of RFC-032's drain, which is
+   what lets a container release its elements without reaching through a
+   reference. `deinit(self: T)` and `deinit(self: T, allocator)` everywhere (69
+   signatures in the stdlib, 149 in the compiler and its libraries): calling it
+   is a move, so `defer x.deinit()` reads unchanged while a second call is
+   E2123. What went with the old shape: every disarm write (22 of them), the
+   idempotence claims, and `self.* match` in a body that now matches `self`.
+   `Owned(T).__cleanup` is `fn(T) void`.
+
+   Three things the sweep settled. The element-release loop before a container
+   `deinit` was a double free waiting for the disarm to go, and three of them
+   were still in tree; spec §4.1 rule 7 now forbids the shape outright. A value
+   released through a plain reference has no legal spelling at all, so the one
+   site that owned a heap value behind a `&T` (the interner's quantifier sets)
+   copies the bytes into a local that owns them, right before the allocation is
+   freed. And lowering no longer shadow-copies a by-value parameter of
+   non-copyable type (RFC-026's `param_escape` answer is overridden by
+   copyability): the caller gave the value up at the call, so there is no
+   caller state a write could reach.
 
 `copyable` on `core.rtti.TypeInfo` turned out not to be independent: it is the
 substrate of step 6's element loops. A container's `clone` and `deinit` select

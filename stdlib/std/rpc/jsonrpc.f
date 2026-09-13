@@ -149,7 +149,7 @@ pub type RpcMessage = struct {
     doc: JsonValue
 }
 
-pub fn deinit(self: &RpcMessage) {
+pub fn deinit(self: RpcMessage) {
     self.doc.deinit()
 }
 

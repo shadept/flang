@@ -146,20 +146,17 @@ pub fn json_contains(self: &Dict(OwnedString, JsonValue), key: String) bool {
 // Cleanup
 // =============================================================================
 
-pub fn deinit(self: &JsonValue) {
-    self.* match {
+pub fn deinit(self: JsonValue) {
+    self match {
         Str(s) => s.deinit()
         Array(arr) => arr.deinit()
         Object(obj) => obj.deinit()
         else => {}
     }
-    // The match arms bound payload COPIES - the stored payload still holds the freed pointers.
-    // Overwrite with Null so a second deinit is a no-op instead of a double free.
-    self.* = JsonValue.Null
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &JsonValue, allocator: &Allocator) {
+pub fn deinit(self: JsonValue, allocator: &Allocator) {
     self.deinit()
 }
 

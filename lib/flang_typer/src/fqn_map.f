@@ -41,13 +41,13 @@ pub fn fqn_map(allocator: &Allocator? = null) FqnMap($V) {
 }
 
 // Frees the table and the name pool. The values are not deinited: the map never owned them.
-pub fn deinit(self: &FqnMap($V)) {
+pub fn deinit(self: FqnMap($V)) {
     self.entries.deinit(self.allocator)
     self.names.deinit()
 }
 
 // Element form (README, Expected functions). The value carries its own allocator.
-pub fn deinit(self: &FqnMap($V), allocator: &Allocator) {
+pub fn deinit(self: FqnMap($V), allocator: &Allocator) {
     self.deinit()
 }
 
