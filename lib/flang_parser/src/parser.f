@@ -362,7 +362,7 @@ fn parse_top_level(self: &Parser) CstNodeId {
         if next == TokenKind.Struct or next == TokenKind.Enum {
             return self.parse_legacy_type_decl(move leading, next == TokenKind.Struct)
         }
-        if next == TokenKind.Const {
+        if next == TokenKind.Const or next == TokenKind.Let {
             return self.parse_variable_decl_with_directives(move leading)
         }
         if next == TokenKind.Import {
@@ -408,9 +408,18 @@ fn recover_unexpected_top_level(self: &Parser, leading: List(CstNodeId)) CstNode
     for i in 0..leading.len {
         self.push_node_into(&b, leading[i])
     }
-    const msg = $"unexpected `{self.current().text}` at top level"
-    self.record_error_here("E1001", move msg)
-    // Consume until we hit a recognisable top-level starter.
+    // `pub` followed by something no declaration begins with: the surprise is the next token.
+    const after_pub = self.current_kind() == TokenKind.Pub and self.peek_kind(1) != TokenKind.Eof
+    if after_pub {
+        self.eat_into(&b)
+    }
+    const where = if after_pub { "after `pub` " } else { "" }
+    self.record_error_here("E1001", $"unexpected `{self.current().text}` {where}at top level")
+    // The offending token is always consumed: a recovery that eats nothing leaves the module loop
+    // reopening this error forever.
+    if !self.at_eof() {
+        self.eat_into(&b)
+    }
     loop {
         if self.at_eof() {
             break

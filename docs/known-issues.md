@@ -3741,6 +3741,21 @@ stored, and `#if type_info(T).copyable` in the stdlib is to be read as "has no d
 
 ---
 
+### `pub let` at Top Level Spun the Parser Until the Machine Ran Out of Memory - RESOLVED
+
+**Status:** Resolved 2026-09-13
+**Affected:** `lib/flang_parser/src/parser.f` (`parse_top_level`, `recover_unexpected_top_level`)
+
+`pub` followed by `let` matched no branch of `parse_top_level` and fell into the recovery, which
+skips to the next top-level starter without consuming anything when the current token already is
+one. `pub` is a starter, so the module loop reopened the same error at the same position forever,
+one `Error` node per turn, until memory ran out - some 20 GB in a harness run with eight compilers
+in parallel. Two fixes: `pub let` is a declaration, like `pub const`; and the recovery always
+consumes the token it reports before looking for a starter. Pinned by
+`errors/error_e1001_pub_unknown_top_level` and `basics/pub_let_global`.
+
+---
+
 ### A Pending Pick Whose Type Argument Is Still Open Counts as Ready
 
 **Status:** Open (a deep readiness test was tried and reverted 2026-09-12)
