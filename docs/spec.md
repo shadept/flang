@@ -313,6 +313,7 @@ Every named binding has a memory location. `let x = expr` performs a shallow byt
 - The compiler inserts a shadow copy (alloca + memcpy) when the body **writes** to a parameter or lets its **address escape**. All accesses then use the shadow.
 - Escape means: passed as an argument to any call, stored somewhere outliving the expression, or returned as an address. Reading a field, indexing, matching, and returning the value by copy are not escapes.
 - The caller's value is never mutated by the callee.
+- A non-copyable parameter is never shadowed (§3.2 parameter modes): without `move` it cannot be written, and with `move` the caller no longer holds the value.
 
 This is transparent — source code reads as pass-by-value, but large structs avoid unnecessary copies.
 

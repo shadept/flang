@@ -340,6 +340,9 @@ promote, then use.
    Gaps are recorded in `docs/known-issues.md` ("RFC-033 Ownership Gaps After the Checker Step").
 2. **Lowering.** A non-copyable parameter never gets a copy-on-write shadow (rule 3 forbids the
    write, `move T` owns the value); `move T` of a copyable type lowers as `T`.
+
+   Done. `lower_function` skips the prologue copy on the copyable bit; a copyable `move` parameter
+   already went through the ordinary escape analysis.
 3. **Closures.** Captures by usage, `op_call(self: &Closure)`, retire E2112.
 4. **Harness.** Rewrite `tests/harness/ownership/*` call sites; add tests for rule 3, rule 5, the
    lent-to-owning callback, owning rvalues, move-and-lend in one call, and closure captures. `move_param_on_copyable.f` flips to a copy.

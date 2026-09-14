@@ -1717,13 +1717,16 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
     // address-of-parameter bug cannot exist here).
     //
     // The shadow is emitted only where the body earns it (spec §3.2): `param_escape` reads the
-    // checked body first, and a parameter the body only reads keeps the caller's pointer.
+    // checked body first, and a parameter the body only reads keeps the caller's pointer. A
+    // non-copyable parameter never earns one (RFC-033): without `move` the checker refuses the
+    // write, and with it the caller's binding is dead after the call.
     const shadow = shadowed_params(decl, ctx.result, ctx.overlay, ctx.allocator)
     defer shadow.deinit()
     for i in 0..decl.params.len {
         let pty = &sig.params[i]
         if is_by_ref(ctx, pty) {
-            if !shadow[i] {
+            const copyable = is_copyable_ty(tyit(ctx), &ctx.result.nominals, pty.*, ctx.allocator)
+            if !shadow[i] or !copyable {
                 env.bind_aggregate(decl.params[i].name, param_ops[i], pty.*)
                 continue
             }
@@ -8245,6 +8248,31 @@ test "returning an aggregate parameter copies out, not in (RFC-026)" {
     let f = &m.functions[find_fn_starting(&m, "f__")]
     // One copy, into the caller's sret buffer. Reading the parameter's bytes is not an escape.
     assert_eq(memcpy_count(f), 1 as usize, "the sret copy, and no prologue spill")
+}
+
+test "a non-copyable `move` parameter is never shadowed: it owns the caller's storage (RFC-033)" {
+    let unit = analyze(from_view("type H = struct { owned fd: i32, n: i32 }\nfn inner(q: &H) i32 { return q.fd }\nfn f(h: move H) i32 { h.fd = 9\nreturn inner(&h) }"),
+        "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "f__")]
+    assert_eq(memcpy_count(f), 0 as usize, "a write and an escape, and still no copy")
+}
+
+test "a non-copyable parameter passed on is never shadowed (RFC-033)" {
+    let unit = analyze(from_view("type H = struct { owned fd: i32, n: i32 }\nfn peek(h: H) i32 { return h.fd }\nfn f(h: H) i32 { return peek(h) + peek(h) }"),
+        "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "f__")]
+    assert_eq(memcpy_count(f), 0 as usize,
+        "a read-only parameter cannot be written, so it keeps the caller's pointer")
+}
+
+test "a copyable `move` parameter lowers as a by-value one (RFC-033)" {
+    let unit = analyze(from_view("type Pt = struct { x: i32, y: i32 }\nfn f(p: move Pt) i32 { p.x = 9 return p.x }"),
+        "test.f")
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "f__")]
+    assert_eq(memcpy_count(f), 1 as usize, "the write still copies: the caller keeps its value")
 }
 
 test "a call omitting a defaulted argument materializes the default (M11)" {

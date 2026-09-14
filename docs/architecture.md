@@ -361,6 +361,10 @@ of lowering rather than the optimization pipeline because the elision is a langu
 speed-up: the address of a read-only parameter is observably the caller's, and E2122 exists to keep
 that observation sound.
 
+A non-copyable parameter gets no shadow whatever its body does (RFC-033): without `move` the
+checker refuses every write (E2131), and with `move` the caller's binding is dead after the call,
+so writing the caller's storage is unobservable. The copyable bit is read before the analysis.
+
 The analysis is intraprocedural and reads no callee bodies - any tainted address reaching a call
 argument is an escape. Working on FIR is what makes the classification total: twelve instruction
 forms cover every construct the language has, since desugars, operators, UFCS receivers and template
