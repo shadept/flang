@@ -105,7 +105,8 @@ temporary at all, so its bytes are exchanged in place through a runtime
 `reverse` is built on `swap` and works on owning elements as it is. `sort` is
 not: powersort merges through a scratch buffer, assigning elements into it, so
 it stays unreachable for an owning `T` until that merge is written in terms of
-moves.
+moves. (Done since: the sorts move elements as bytes and call the comparator
+with `&T` for an owning `T`; spec, stdlib callback convention.)
 
 ## Drain
 

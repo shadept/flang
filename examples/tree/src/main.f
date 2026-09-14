@@ -32,7 +32,11 @@ type Entry = struct {
     kind: FileKind
 }
 
-fn entry_cmp(a: Entry, b: Entry) Ord {
+fn deinit(self: Entry, allocator: &Allocator) {
+    self.name.deinit()
+}
+
+fn entry_cmp(a: &Entry, b: &Entry) Ord {
     return op_cmp(a.name.as_view(), b.name.as_view())
 }
 
@@ -107,13 +111,6 @@ fn append_human_size(sb: &StringBuilder, n: u64) {
     }
 }
 
-fn free_entries(entries: &List(Entry)) {
-    for i in 0..entries.len {
-        entries[i].name.deinit()
-    }
-    entries.deinit()
-}
-
 // -----------------------------------------------------------------------------
 // Directory listing
 // -----------------------------------------------------------------------------
@@ -138,20 +135,19 @@ fn collect_entries(path: String, state: &State) Result(List(Entry), DirError) {
 
         // `e.name` is a view into the iterator's internal buffer - invalidated on the next next()
         // call, so take an owning copy.
-        const owned = from_view(e.name)
-        entries.push(Entry { name = owned, kind = e.kind })
+        entries.push(Entry { name = from_view(e.name), kind = e.kind })
     }
 
     it.err() match {
         Some(e) => {
-            free_entries(&entries)
+            entries.deinit()
             return Err(e)
         }
         None => {}
     }
 
     entries.sort(entry_cmp)
-    return Ok(entries)
+    return Ok(move entries)
 }
 
 // -----------------------------------------------------------------------------
@@ -231,7 +227,7 @@ fn walk(path: String, prefix: String, depth: usize, state: &State) {
     }
 
     let entries = entries_r.unwrap()
-    defer free_entries(&entries)
+    defer entries.deinit()
 
     for i in 0..entries.len {
         const is_last = i + 1 == entries.len
