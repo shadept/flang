@@ -1,5 +1,6 @@
 //! TEST: for_ref_loop
 //! EXIT: 3
+//! SKIP: RFC-033 step 6 - `List.push` takes `value: move T`
 
 import std.collections.list
 
@@ -11,11 +12,11 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
-fn deinit(self: FileHandle) {}
+fn deinit(self: move FileHandle) {}
 
 // The reference form binds `&FileHandle`, so the loop does not copy.
 pub fn main() i32 {

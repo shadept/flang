@@ -1799,6 +1799,9 @@ fn parse_lambda_expression(self: &Parser) CstNodeId {
             }
             if self.current_kind() == TokenKind.Colon {
                 self.eat_into(&b)
+                if self.current_kind() == TokenKind.Move {
+                    self.eat_into(&b)
+                }
                 const t = self.parse_type()
                 self.push_node_into(&b, t)
             }
@@ -2004,6 +2007,9 @@ fn parse_primary_type(self: &Parser) CstNodeId {
                 if self.current_kind() == TokenKind.Identifier
                     and self.peek_kind(1) == TokenKind.Colon {
                     self.eat_into(&b)
+                    self.eat_into(&b)
+                }
+                if self.current_kind() == TokenKind.Move {
                     self.eat_into(&b)
                 }
                 const t = self.parse_type()

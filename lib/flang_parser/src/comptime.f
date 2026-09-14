@@ -926,6 +926,9 @@ pub fn spell_type_into(sb: &StringBuilder, te: &TypeExpr) {
                     sb.append(f.param_names[i])
                     sb.append(": ")
                 }
+                if i < f.param_moves.len and f.param_moves[i] {
+                    sb.append("move ")
+                }
                 spell_type_into(sb, &f.params[i])
             }
             sb.append(')')

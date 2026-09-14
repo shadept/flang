@@ -14,6 +14,33 @@ When you discover a bug or limitation:
 
 ---
 
+### RFC-033 Ownership Gaps After the Checker Step
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (ownership pass), `stdlib/std/option.f`,
+`stdlib/std/result.f`, `stdlib/std/collections/list.f`
+
+The checker implements parameter-declared ownership (RFC-033 plan step 1). What it does not cover
+yet:
+
+- **Pattern bindings of a lent parameter own.** `fn unwrap(self: Option($T)) T { return self match
+  { Some(v) => move v, ... } }` compiles for a non-copyable payload: `v` is an ordinary binding, so
+  the payload leaves a value the function only reads and the caller keeps a second owner. Rule 3
+  holds for the parameter's own name, not for names bound out of it.
+- **The stdlib still reads where it should take.** `push`, `insert`, `unwrap`, `expect` and the rest
+  take `T`, not `move T`, until plan step 6 (after the promote, since the seed requires `move` at a
+  `move` parameter's call sites). So `List(<non-copyable>)` is E2131 at the instantiation, and
+  `unwrap(open_file(...))` is E2132. `for_ref_loop` is skipped on it. Compiler and tool sources take
+  a `File` out of its `Result` with `match`, which both the seed and the current compiler accept.
+- **Unannotated callbacks never take ownership.** A lambda's unannotated parameter, and a call
+  through a function variable whose type is still open, infer `fn(T)`; a slot typed `fn(move T)`
+  does not unify with it. Write `fn(v: move T)`.
+
+**Solution:** plan steps 3 (closures) and 6 (stdlib); the pattern-binding case needs the pass to
+treat names bound out of a lent scrutinee as lent.
+
+---
+
 ### `unused.f` Cannot Be Formatted
 
 **Status:** Open

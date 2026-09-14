@@ -13,7 +13,7 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 

@@ -10,15 +10,15 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
-fn pair(a: FileHandle, b: FileHandle) i32 {
+fn pair(a: move FileHandle, b: move FileHandle) i32 {
     return a.fd + b.fd
 }
 
 pub fn main() i32 {
     let h = open(3)
-    return pair(move h, move h)    // error E2123 on the second
+    return pair(h, h)              // error E2123 on the second
 }

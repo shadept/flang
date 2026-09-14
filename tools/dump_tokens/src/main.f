@@ -34,14 +34,15 @@ pub fn main() i32 {
     const argv = args.as_slice()
     const path = argv[1]
 
-    const open_result = open_file(path, FileMode.Read)
-    if open_result.is_err() {
-        const msg = $"dump_tokens: cannot open {path}"
-        defer msg.deinit()
-        println(msg.as_view())
-        return 1
+    let file = open_file(path, FileMode.Read) match {
+        Ok(v) => move v
+        Err(_) => {
+            const msg = $"dump_tokens: cannot open {path}"
+            defer msg.deinit()
+            println(msg.as_view())
+            return 1
+        }
     }
-    let file = unwrap(move open_result)
     const read_result = read_all(&file)
     close_file(&file)
     if read_result.is_err() {

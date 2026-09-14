@@ -14,13 +14,13 @@ fn close_handle(h: u32) {
 
 // `owned` is on the FIELD; the field's type is a copyable u32, so `deinit`
 // reads both without any move at all.
-fn deinit(self: HandleBundle) {
+fn deinit(self: move HandleBundle) {
     close_handle(self.a)
     close_handle(self.b)
 }
 
 pub fn main() i32 {
     let hb = HandleBundle { a = 7u32, b = 8u32 }
-    deinit(move hb)
+    hb.deinit()
     return closed + 1
 }

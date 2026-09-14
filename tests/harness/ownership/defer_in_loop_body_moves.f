@@ -10,17 +10,17 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
-fn deinit(self: FileHandle) {}
+fn deinit(self: move FileHandle) {}
 
 // The body fires once per iteration.
 pub fn main() i32 {
     let h = open(3)
     for _i in 0..2 {
-        defer deinit(move h)    // error E2123 on the second iteration
+        defer h.deinit()        // error E2123 on the second iteration
     }
     return 0
 }

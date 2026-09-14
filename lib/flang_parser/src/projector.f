@@ -2442,6 +2442,7 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
     let pending_name: String = ""
     let pending_span = self.span_from(cst)
     let pending_active = false
+    let pending_move = false
     let saw_open_paren = false
     let after_close_paren = false
     let body_seen = false
@@ -2483,6 +2484,9 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
                         params.push(self.make_lambda_param(pending_name, pending_span))
                         pending_active = false
                     }
+                    if tok.kind == TokenKind.Move and pending_active {
+                        pending_move = true
+                    }
                 }
             }
             NodeChild(child) => {
@@ -2508,9 +2512,10 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
                         type_expr = self.boxed(t),
                         default_value = null,
                         is_variadic = false,
-                        is_move = false,
+                        is_move = pending_move,
                     })
                     pending_active = false
+                    pending_move = false
                 }
             }
         }
@@ -2784,11 +2789,13 @@ fn project_tuple_type(self: &Projector, cst: CstNode) TypeExpr {
 fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
     let params: List(TypeExpr) = list(cst.node_child_count(), Some(self.alloc))
     let param_names: List(String) = list(0, Some(self.alloc))
+    let param_moves: List(bool) = list(0, Some(self.alloc))
     let return_type: TypeExpr? = null
     let in_params = false
     let saw_close = false
     let depth: i32 = 0
     let pending_name: String = ""
+    let pending_move = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -2813,6 +2820,9 @@ fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
                 if in_params and tok.kind == TokenKind.Identifier {
                     pending_name = tok.text
                 }
+                if in_params and tok.kind == TokenKind.Move {
+                    pending_move = true
+                }
             }
             NodeChild(child) => {
                 if !is_type_kind(child.kind) {
@@ -2821,7 +2831,9 @@ fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
                 if in_params {
                     params.push(self.project_type_expr(child))
                     param_names.push(pending_name)
+                    param_moves.push(pending_move)
                     pending_name = ""
+                    pending_move = false
                 } else if saw_close and return_type.is_none() {
                     return_type = Some(self.project_type_expr(child))
                 }
@@ -2837,6 +2849,7 @@ fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
         span = self.span_from(cst),
         params = params,
         param_names = param_names,
+        param_moves = param_moves,
         return_type = ret_ref,
     })
 }

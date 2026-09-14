@@ -10,7 +10,7 @@ type FileHandle = struct {
     owned fd: i32
 }
 
-fn probe(x: $T) i32 {
+fn probe(x: move $T) i32 {
     #if type_of(x).copyable {
         return 2
     } else {
@@ -19,6 +19,6 @@ fn probe(x: $T) i32 {
 }
 
 pub fn main() i32 {
-    // An rvalue argument is a transfer, not a copy, so the non-copyable handle needs no `move`.
+    // `probe` owns its argument, so the non-copyable temporary has an owner.
     return probe(7i32) + probe(FileHandle { fd = 3 })
 }

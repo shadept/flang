@@ -9,14 +9,14 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
 // The counterpart of assign_over_live_binding: after a move, assignment is fine.
 pub fn main() i32 {
     let h = open(3)
-    close(move h)
+    h.close()
     h = open(4)
-    return close(move h)
+    return h.close()
 }

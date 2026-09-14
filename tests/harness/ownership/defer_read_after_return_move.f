@@ -10,7 +10,7 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
@@ -21,5 +21,5 @@ fn log(n: i32) {}
 pub fn main() i32 {
     let h = open(3)
     defer log(h.fd)
-    return close(move h)
+    return h.close()
 }

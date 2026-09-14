@@ -5,7 +5,7 @@ type Inner = struct {
     owned fd: i32
 }
 
-fn deinit(self: Inner) {}
+fn deinit(self: move Inner) {}
 
 type Session = struct {
     conn: Inner

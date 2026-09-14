@@ -10,20 +10,20 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
-fn deinit(self: FileHandle) {}
+fn deinit(self: move FileHandle) {}
 
 // `break` unwinds the block's defers, so the move happens on that path too.
 pub fn main() i32 {
     let h = open(3)
     loop {
-        defer deinit(move h)
+        defer h.deinit()
         if h.fd > 0 {
             break
         }
     }
-    return close(move h)           // error E2123
+    return h.close()               // error E2123
 }

@@ -515,7 +515,7 @@ fn subst_nominal(it: &TypeInterner, nn: &NNominalNode, params: &List(VarId), arg
 fn subst_func(it: &TypeInterner, f: &NFuncNode, params: &List(VarId), args: &List(Ty)) Ty {
     let ps = subst_span(it, f.params, params, args)
     defer ps.deinit()
-    return it.func_of(&ps, subst(it, f.ret, params, args))
+    return it.func_of(&ps, f.moves, subst(it, f.ret, params, args))
 }
 
 // Helpers

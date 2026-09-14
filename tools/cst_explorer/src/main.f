@@ -89,14 +89,15 @@ pub fn main() i32 {
 }
 
 fn read_source(path: String) OwnedString? {
-    const open_result = open_file(path, FileMode.Read)
-    if open_result.is_err() {
-        const msg = $"cst_explorer: cannot open `{path}`"
-        defer msg.deinit()
-        println(msg.as_view())
-        return null
+    let file = open_file(path, FileMode.Read) match {
+        Ok(v) => move v
+        Err(_) => {
+            const msg = $"cst_explorer: cannot open `{path}`"
+            defer msg.deinit()
+            println(msg.as_view())
+            return null
+        }
     }
-    let file = unwrap(move open_result)
     const read_result = read_all(&file)
     close_file(&file)
     if read_result.is_err() {

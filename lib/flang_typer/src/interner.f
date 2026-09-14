@@ -43,9 +43,25 @@ pub type NArrayNode = struct {
     length: usize
 }
 
+// `moves` has bit i set when parameter i is declared `move` (RFC-033). Part of the identity:
+// `fn(T)` and `fn(move T)` are distinct types.
 pub type NFuncNode = struct {
     params: ChildSpan
+    moves: usize
     ret: Ty
+}
+
+// Whether parameter `i` of `f` is declared `move`.
+pub fn moves_at(f: &NFuncNode, i: usize) bool {
+    return i < MAX_MOVE_PARAMS and (f.moves & move_bit(i)) != 0usize
+}
+
+// ponytail: one machine word of mode bits, so a `move` past parameter 63 is refused at the
+// declaration (E2130). Widen to a kids-interned list if a signature ever needs it.
+pub const MAX_MOVE_PARAMS: usize = 64
+
+pub fn move_bit(i: usize) usize {
+    return 1usize << i
 }
 
 // `tys` windows `children`; `names_start` windows `rec_names` / `rec_spans`, with the same length
@@ -84,7 +100,7 @@ pub type TyNode = enum {
 //   TAG_VAR      a = var id            b = level
 //   TAG_REF      a = elem
 //   TAG_ARRAY    a = elem              b = length
-//   TAG_FUNC     a = return type                     kids = params
+//   TAG_FUNC     a = return type       b = move bits  kids = params
 //   TAG_TUPLE                                        kids = elements
 //   TAG_RECORD                                       kids = (name, type) fields
 //   TAG_NOMINAL  a = NominalId                       kids = type arguments
@@ -358,8 +374,8 @@ pub fn array_of(self: &TypeInterner, elem: Ty, length: usize) Ty {
     return add(self, key, node, self.is_ground(elem))
 }
 
-pub fn func_of(self: &TypeInterner, params: &List(Ty), ret: Ty) Ty {
-    const key = TyKey { tag = TAG_FUNC, a = ret, b = 0, kids = self.intern_kids(params) }
+pub fn func_of(self: &TypeInterner, params: &List(Ty), moves: usize, ret: Ty) Ty {
+    const key = TyKey { tag = TAG_FUNC, a = ret, b = moves, kids = self.intern_kids(params) }
     const hit = self.probe(key)
     if hit.is_some() {
         return hit.unwrap()
@@ -367,7 +383,7 @@ pub fn func_of(self: &TypeInterner, params: &List(Ty), ret: Ty) Ty {
 
     const g = all_ground(self, params) and self.is_ground(ret)
     const span = push_children(self, params)
-    const node = TyNode.NFunc(.{ params = span, ret = ret })
+    const node = TyNode.NFunc(.{ params = span, moves = moves, ret = ret })
     return add(self, key, node, g)
 }
 
@@ -453,7 +469,7 @@ fn substitute_func(self: &TypeInterner, f: &NFuncNode, subst: &Dict(VarId, Ty),
     alloc: &Allocator?) Ty {
     let ps = substitute_span(self, f.params, subst, alloc)
     defer ps.deinit()
-    return self.func_of(&ps, self.substitute(f.ret, subst, alloc))
+    return self.func_of(&ps, f.moves, self.substitute(f.ret, subst, alloc))
 }
 
 fn substitute_tuple(self: &TypeInterner, span: ChildSpan, subst: &Dict(VarId, Ty),
@@ -536,6 +552,9 @@ pub fn format(self: &TypeInterner, id: Ty, sb: &StringBuilder) {
             for i in 0..ps.len {
                 if i > 0 {
                     sb.append(", ")
+                }
+                if moves_at(&f, i) {
+                    sb.append("move ")
                 }
                 self.format(ps[i], sb)
             }
@@ -677,7 +696,7 @@ test "format renders through the node graph" {
     let ps: List(Ty) = list(1)
     ps.push(it.ref_of(prim_of(PrimitiveKind.U8)))
     defer ps.deinit()
-    const f = it.func_of(&ps, TY_VOID)
+    const f = it.func_of(&ps, 0usize, TY_VOID)
     let sb = string_builder(16)
     defer sb.deinit()
     it.format(f, &sb)

@@ -162,9 +162,8 @@ pub type FunctionParam = struct {
     // after name mangling.
     default_value: &Expr?
     is_variadic: bool
-    // `move x: T` - the slot consumes its argument. A by-value slot of a non-copyable type consumes
-    // on its own; this is what makes a copyable one consume too, and it is what the call site has
-    // to spell `move` against.
+    // `x: move T` - the function takes ownership of its argument (RFC-033). Without it a by-value
+    // slot only reads.
     is_move: bool
 }
 
@@ -952,12 +951,14 @@ pub type TupleType = struct {
     elements: List(TypeExpr)
 }
 
-// `fn(P1, P2) R` - function type. `return_type` is None for void. `param_names[i]` is the optional
-// `name:` before `params[i]` ("" when unnamed); always the same length as `params`.
+// `fn(P1, move P2) R` - function type. `return_type` is None for void. `param_names[i]` is the
+// optional `name:` before `params[i]` ("" when unnamed) and `param_moves[i]` whether it is declared
+// `move`; both always the same length as `params`.
 pub type FunctionType = struct {
     span: SourceSpan
     params: List(TypeExpr)
     param_names: List(String)
+    param_moves: List(bool)
     return_type: &TypeExpr?
 }
 

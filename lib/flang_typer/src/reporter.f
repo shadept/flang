@@ -202,6 +202,9 @@ pub fn format_with_names(it: &TypeInterner, t: Ty, sb: &StringBuilder, reg: &Nom
                 if i > 0 {
                     sb.append(", ")
                 }
+                if moves_at(&f, i) {
+                    sb.append("move ")
+                }
                 format_with_names(it, it.child_at(f.params, i), sb, reg, vars)
             }
             sb.append(") ")

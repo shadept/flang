@@ -124,9 +124,23 @@ pub const E_ASSIGN_OVER_LIVE: String = "E2126"
 // `move base.field` outside the module declaring `base`'s type. Moving a field takes the same
 // rights as writing one (E2114).
 pub const E_PARTIAL_MOVE: String = "E2127"
-// A consuming call written in receiver position. A by-value receiver of a non-copyable type is not
-// reachable through UFCS; the free-call form spells the transfer.
+// A `move self` parameter reached through a `&T` receiver or an `op_deref` hop. The value behind
+// the reference stays with its owner, so nothing is left to hand over (RFC-033).
 pub const E_CONSUMING_RECEIVER: String = "E2128"
+// `move` written in argument or receiver position. The parameter declares whether a call takes
+// ownership; the call site carries no marker (RFC-033).
+pub const E_MOVE_IN_ARGUMENT: String = "E2129"
+// `x: move &T`: a reference is copyable, and owning it says nothing about the value it refers to.
+// Also a `move` past the 64th parameter, which a function type's mode mask cannot carry.
+pub const E_MOVE_REF_PARAM: String = "E2130"
+// A use that needs ownership of a value the function does not own: a non-copyable `x: T` parameter
+// written, shared, returned, bound or moved, or a field moved out of a value reached through `&T`.
+pub const E_NOT_OWNED: String = "E2131"
+// A non-copyable temporary that lands where nothing takes ownership - a `T` parameter, a read-only
+// receiver, an operator operand, a field read, a discarded result - is never released.
+pub const E_RVALUE_NO_OWNER: String = "E2132"
+// One call both moves a place and lends or shares a place overlapping it with owned state.
+pub const E_MOVE_AND_LEND: String = "E2133"
 
 // A `let`/`const` re-declared in the SAME scope. Cross-scope shadowing stays silent; this only
 // fires when the earlier binding becomes unreachable in the same block (reference parity: a warning
@@ -154,3 +168,6 @@ pub const W_REF_TO_INT: String = "W2004"
 // `move` at a site that does not consume. It does nothing, so a `move` that outlives its type
 // becoming copyable does not break the build.
 pub const W_MOVE_NO_CONSUME: String = "W2005"
+
+// `return move x` of a binding. A returned binding can only move, so the marker says nothing.
+pub const I_REDUNDANT_MOVE: String = "I2001"

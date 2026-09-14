@@ -1102,12 +1102,13 @@ fn fmt_file(path: String, cfg: &FmtConfig, check: bool) FmtStatus {
         println(m.as_view())
         return FmtStatus.Changed
     }
-    const wr = open_file(path, FileMode.Write)
     let wrote = false
-    if !wr.is_err() {
-        let handle = unwrap(move wr)
-        wrote = !write(&handle, formatted.as_view()).is_err()
-        close_file(&handle)
+    open_file(path, FileMode.Write) match {
+        Ok(handle) => {
+            wrote = !write(&handle, formatted.as_view()).is_err()
+            const _closed = close_file(&handle)
+        }
+        Err(_) => {}
     }
     if !wrote {
         const m = $"flang: cannot write `{path}`"

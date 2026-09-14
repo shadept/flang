@@ -1136,14 +1136,38 @@ fn resolve_tuple(self: &Checker, t: &TupleType) Ty {
 
 fn resolve_function(self: &Checker, f: &FunctionType) Ty {
     let params: List(Ty) = list(f.params.len, self.allocator)
-    for &p in f.params {
-        params.push(resolve_type_expr(self, p))
+    let moves = 0usize
+    for i in 0..f.params.len {
+        const pt = resolve_type_expr(self, &f.params[i])
+        const declared = i < f.param_moves.len and f.param_moves[i]
+        moves = moves | move_bit_of(self, i, declared, pt, f.span)
+        params.push(pt)
     }
     let ret = f.return_type match {
         Some(rt) => resolve_type_expr(self, rt)
         None => TY_VOID
     }
-    return self.engine.mk_func(params, ret)
+    return self.engine.mk_func(params, ret, moves)
+}
+
+// Parameter `i`'s bit in a function type's `move` mask: zero unless it is declared `move`. A `move`
+// over a reference (rule 5) or past what the mask carries is E2130 and contributes nothing.
+fn move_bit_of(self: &Checker, i: usize, declared: bool, ty: Ty, span: SourceSpan) usize {
+    if !declared {
+        return 0usize
+    }
+    const is_ref = ty_node(self, self.engine.resolve(ty)) match { NRef(_) => true, _ => false }
+    if is_ref {
+        push_diag_e(self, span, E_MOVE_REF_PARAM,
+            from_view("`move` on a reference parameter: a reference is copyable, and owning it says nothing about the value it refers to"))
+        return 0usize
+    }
+    if i >= MAX_MOVE_PARAMS {
+        push_diag_e(self, span, E_MOVE_REF_PARAM,
+            $"`move` is supported on the first {MAX_MOVE_PARAMS} parameters only")
+        return 0usize
+    }
+    return move_bit(i)
 }
 
 fn resolve_generic_bind(self: &Checker, g: &GenericBindType) Ty {
@@ -1217,6 +1241,18 @@ pub fn push_diag_w(self: &Checker, span: SourceSpan, code: String, message: Owne
     let empty_hint: OwnedString
     self.diagnostics.push(Diagnostic {
         severity = Severity.Warning,
+        code = code,
+        message = message,
+        hint = empty_hint,
+        span = span,
+    })
+}
+
+// Info-severity counterpart: a note on source that is valid as written.
+pub fn push_diag_i(self: &Checker, span: SourceSpan, code: String, message: OwnedString) {
+    let empty_hint: OwnedString
+    self.diagnostics.push(Diagnostic {
+        severity = Severity.Info,
         code = code,
         message = message,
         hint = empty_hint,
@@ -2024,8 +2060,10 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     self.engine.enter_level()
 
     let params: List(Ty) = list(fd.params.len, self.allocator)
+    let moves = 0usize
     for &p in fd.params {
         const pt = param_ty(self, p)
+        moves = moves | move_bit_of(self, params.len, p.is_move, pt, p.span)
         // A default value is checked against its parameter HERE, at the declaration, so the
         // diagnostic names the parameter (E2070) rather than surfacing at some unrelated call site.
         p.default_value match {
@@ -2042,7 +2080,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
         Some(rt) => resolve_type_expr(self, rt)
         None => TY_VOID
     }
-    let fn_ty = self.engine.mk_func(params, ret)
+    let fn_ty = self.engine.mk_func(params, ret, moves)
 
     self.engine.exit_level()
     let scheme = self.engine.generalize(fn_ty)
@@ -2193,7 +2231,7 @@ fn check_test_body(self: &Checker, td: &TestDecl) {
     self.fn_stack.push(frame)
 
     const _body_ty = check_block(self, td.body)
-    own_check_body(self, td.body)
+    own_check_body(self, td.body, null, false)
 
     let _r = self.fn_stack.pop()
     self.engine.exit_level()
@@ -2260,7 +2298,7 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
         push_diag_e(self, fd.span, E_MISSING_RETURN, $"function `{fd.name}` must return a value")
     }
 
-    own_check_body(self, body)
+    own_check_body(self, body, Some(&fd.params), !ret_is_void and !ret_is_never)
 
     let _r = self.fn_stack.pop()
     self.engine.exit_level()
@@ -5080,10 +5118,12 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     // `TypeExpr.Error`) mints a fresh var the surrounding context - or an instantiation's body
     // re-check - pins.
     let params: List(Ty) = list(lam.params.len, self.allocator)
+    let moves = 0usize
     for &p in lam.params {
         let unannotated = p.type_expr match { Error(_) => true, _ => false }
         let ty = if unannotated { self.engine.fresh_var() }
         else { resolve_type_expr(self, p.type_expr) }
+        moves = moves | move_bit_of(self, params.len, p.is_move, ty, p.span)
         const p_node = self.node_of(p.span)
         self.results.record_type(p_node, ty)
         self.env.bind(p.name, Binding {
@@ -5151,7 +5191,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
             closure_id = null,
             symbol = $"__flang_lambda_{lid}",
         })
-        return self.engine.mk_func(fn_params, ret)
+        return self.engine.mk_func(fn_params, ret, moves)
     }
 
     // Capturing closure: synthesize the environment struct (fields = the captures, by value) and
@@ -5359,6 +5399,7 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         return self.engine.fresh_var()
     }
     let p = ip.unwrap()
+    check_consuming_receiver(self, &p, iter_name, Some(z), expr_span(fs.iterable))
     self.results.record_operator(self.node_of(fs.body.span), ResolvedOperator {
         function_id = p.id,
         negate_result = false,
@@ -5906,6 +5947,7 @@ fn check_call(self: &Checker, call: &CallExpr) Ty {
             return ti.unwrap()
         }
     }
+    report_argument_moves(self, call)
     let nref: &NamedArgs? = null
     if named_seen {
         nref = Some(&named)
@@ -5922,6 +5964,30 @@ fn check_call(self: &Checker, call: &CallExpr) Ty {
     named.deinit()
     let _r = check_expr(self, call.callee)
     return self.engine.fresh_var()
+}
+
+// Rule 6 of RFC-033: a call site carries no ownership marker, in argument or receiver position. The
+// parameter says whether the call takes ownership. Variant payloads are not arguments: they keep
+// `move` with struct literal fields.
+fn report_argument_moves(self: &Checker, call: &CallExpr) {
+    call.callee.* match {
+        MemberAccess(ma) => report_argument_move(self, ma.receiver)
+        _ => {}
+    }
+    for &a in call.args {
+        a.* match {
+            Positional(e) => report_argument_move(self, e)
+            Named(n) => report_argument_move(self, n.value)
+        }
+    }
+}
+
+fn report_argument_move(self: &Checker, e: &Expr) {
+    e.* match {
+        Move(m) => push_diag_e(self, m.span, E_MOVE_IN_ARGUMENT,
+            from_view("`move` in argument position: the parameter declares whether the call takes ownership - remove it"))
+        _ => {}
+    }
 }
 
 // The `name = value` slots of one call site, split out of `call.args`. Parallel lists: `names[i]`
@@ -6216,7 +6282,7 @@ fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize,
         Some(p) => {
             self.results.record_target(self.node_of(span), ResolvedTarget.RtFunction(p.id))
             warn_deprecated_call(self, p.id, name, span)
-            check_consuming_receiver(self, &p, name, recv_extra, span)
+            check_consuming_receiver(self, &p, name, recv, span)
             note_pending(self, span, false, &p)
             // The AST's argument order is the call's argument order except when names select
             // parameters or a variadic tail packs; those two record a complete list instead.
@@ -6245,25 +6311,55 @@ fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize,
     }
 }
 
-// A by-value receiver of a non-copyable type is not reachable through UFCS (RFC-028): a consuming
-// call spells its transfer one way everywhere - `move` in an argument of a plain call - and the
-// parenthesised receiver form does not exist. The test is the callee's first parameter and nothing
-// else, so a temporary in receiver position is refused on the same grounds; admitting it would make
-// the rule "no consuming receiver unless the receiver happens to be one".
-fn check_consuming_receiver(self: &Checker, p: &OverloadPick, name: String, recv_extra: usize,
+// A `move self` parameter takes the receiver's value, which a receiver reached through a reference
+// or an `op_deref` hop does not have to give: the pointee stays with its owner (RFC-033). A
+// receiver matched as written or auto-referenced is the ownership pass's business.
+fn check_consuming_receiver(self: &Checker, p: &OverloadPick, name: String, recv: Ty?,
     span: SourceSpan) {
-    if recv_extra == 0 or p.params.len == 0 {
+    if recv.is_none() or p.params.len == 0 or !pick_param_moves(self, p.id, 0usize) {
         return
     }
     const slot = self.engine.resolve(p.params[0])
-    const by_ref = ty_node(self, slot) match { NRef(_) => true, _ => false }
-    if by_ref or self.engine.is_copyable(slot) {
+    if self.engine.is_copyable(slot) {
+        return
+    }
+    const through_ref = ty_node(self, self.engine.resolve(recv.unwrap())) match {
+        NRef(_) => true
+        _ => false
+    }
+    if !through_ref and p.hops == 0 {
         return
     }
     let sb = string_builder(128, self.allocator)
-    sb.append($"`{name}` consumes its receiver and has no receiver form - write `{name}(move ...)`")
+    sb.append($"`{name}` takes ownership of its receiver, which is reached through a reference here - the value stays with its owner")
     append_copy_blame(self, slot, &sb)
     own_report(self, span, E_CONSUMING_RECEIVER, sb.to_string())
+}
+
+// The `move` mask of function `id`'s declared parameters, as its function type carries it.
+fn decl_moves(self: &Checker, id: u32) usize {
+    const dp = self.fn_decl_params.get_ref(id)
+    if dp.is_none() {
+        return 0usize
+    }
+    let moves = 0usize
+    const decl = &dp.unwrap().params
+    for i in 0..decl.len {
+        if decl[i].is_move and i < MAX_MOVE_PARAMS {
+            moves = moves | move_bit(i)
+        }
+    }
+    return moves
+}
+
+// Whether parameter `idx` of function `id` is declared `move`.
+fn pick_param_moves(self: &Checker, id: u32, idx: usize) bool {
+    const dp = self.fn_decl_params.get_ref(id)
+    if dp.is_none() {
+        return false
+    }
+    const decl = &dp.unwrap().params
+    return idx < decl.len and decl[idx].is_move
 }
 
 // Park a call whose overload choice depends on a type that has not settled: copy what the redo
@@ -8231,6 +8327,10 @@ fn resolve_fn_name_values(self: &Checker) {
             cl.deinit()
             pick match {
                 Some(w) => {
+                    if decl_moves(self, w.id) != f.moves {
+                        push_diag_e(self, pn.span, E_TYPE_MISMATCH,
+                            $"`{pn.name}` does not have the function type this slot requires: its parameters differ in `move`")
+                    }
                     self.results.record_target(self.node_of(pn.span),
                         ResolvedTarget.RtFunction(w.id))
                     note_pending(self, pn.span, false, &w)
@@ -8310,20 +8410,42 @@ type DeferRec = struct {
     scope: usize
 }
 
-// What an expression flows into. `value` is a by-value destination, where a copy of a non-copyable
-// value is the thing `move` has to say; `consumes` is a parameter declared `move`, which consumes
-// whatever its type says.
+// What an expression flows into (RFC-033). Nothing set is a read: an operand, a discarded value, an
+// argument or receiver that only reads.
 type OwnSlot = struct {
+    // A by-value destination - a binding, a struct literal field, an element, a variant payload -
+    // where a copy of a non-copyable place is spelled `move`.
     value: bool
+    // A `move` parameter, which takes ownership of what fills it.
     consumes: bool
+    // The function's result, where a returned binding can only move.
+    returns: bool
+    // A `match` scrutinee, which its arms take apart. It reads a place and owns a temporary.
+    owner: bool
 }
 
 fn own_read() OwnSlot {
-    return .{ value = false, consumes = false }
+    return .{ value = false, consumes = false, returns = false, owner = false }
 }
 
 fn own_value() OwnSlot {
-    return .{ value = true, consumes = false }
+    return .{ value = true, consumes = false, returns = false, owner = false }
+}
+
+fn own_consuming() OwnSlot {
+    return .{ value = false, consumes = true, returns = false, owner = false }
+}
+
+fn own_returning() OwnSlot {
+    return .{ value = false, consumes = false, returns = true, owner = false }
+}
+
+fn own_owning() OwnSlot {
+    return .{ value = false, consumes = false, returns = false, owner = true }
+}
+
+fn own_needs_value(slot: OwnSlot) bool {
+    return slot.value or slot.consumes or slot.returns
 }
 
 // The walk's state. `moved` is the lattice; everything else is control-flow bookkeeping.
@@ -8349,6 +8471,11 @@ type OwnPass = struct {
     // Nodes already reported on, so a defer body checked on several exit paths yields one
     // diagnostic rather than one per path.
     seen: Set(NodeId)
+    // By-value parameters declared without `move`, by declaration node: the function reads them and
+    // owns nothing (rule 3).
+    lent: List(NodeId)
+    // The function value a `move` argument is being handed to, "" for a declared function.
+    taker: String
 }
 
 // Liveness over the body's control flow. Runs once the body is checked, so every node has a type
@@ -8356,7 +8483,10 @@ type OwnPass = struct {
 //
 // ponytail: a loop body is walked twice, so the cost is 2^(loop nesting depth). Bodies nested more
 // than two or three deep do not occur; if one does, cache the first pass's effect per body node.
-fn own_check_body(self: &Checker, body: &BlockExpr) {
+//
+// `params` are the body's parameters, null for a `test {}` block; `returns` says whether the body's
+// trailing expression is the function's value.
+fn own_check_body(self: &Checker, body: &BlockExpr, params: &List(FunctionParam)?, returns: bool) {
     let p = OwnPass {
         moved = list(0, self.allocator),
         defers = list(0, self.allocator),
@@ -8369,9 +8499,23 @@ fn own_check_body(self: &Checker, body: &BlockExpr) {
         report = true,
         firing = false,
         seen = set(self.allocator),
+        lent = list(0, self.allocator),
+        taker = "",
     }
     defer own_deinit(&p)
-    own_block(self, &p, body, own_read())
+    params match {
+        Some(ps) => own_collect_lent(self, &p, ps)
+        None => {}
+    }
+    own_block(self, &p, body, if returns { own_returning() } else { own_read() })
+}
+
+fn own_collect_lent(self: &Checker, p: &OwnPass, params: &List(FunctionParam)) {
+    for &prm in params {
+        if !prm.is_move and !prm.is_variadic {
+            p.lent.push(self.node_of(prm.span))
+        }
+    }
 }
 
 fn own_deinit(p: &OwnPass) {
@@ -8380,6 +8524,16 @@ fn own_deinit(p: &OwnPass) {
     p.escaped.deinit()
     p.continued.deinit()
     p.seen.deinit()
+    p.lent.deinit()
+}
+
+fn own_is_lent(p: &OwnPass, decl: NodeId) bool {
+    for d in p.lent {
+        if d == decl {
+            return true
+        }
+    }
+    return false
 }
 
 // ── the moved set ────────────────────────────────────────────────────
@@ -8512,21 +8666,32 @@ fn own_is_copyable(self: &Checker, span: SourceSpan) bool {
     }
 }
 
-// ── copy sites ───────────────────────────────────────────────────────
+// ── copy and ownership sites ─────────────────────────────────────────
+
+fn own_blame(self: &Checker, span: SourceSpan, sb: &StringBuilder) {
+    const t = own_type(self, span)
+    t match {
+        Some(ty) => append_copy_blame(self, self.engine.resolve(ty), sb)
+        None => {}
+    }
+}
+
+fn own_is_ref(self: &Checker, span: SourceSpan) bool {
+    const t = own_type(self, span)
+    if t.is_none() {
+        return false
+    }
+    return ty_node(self, self.engine.resolve(t.unwrap())) match {
+        NRef(_) => true
+        _ => false
+    }
+}
 
 // A copy is reading an lvalue into a second location: the original keeps its storage and the result
 // gets its own, so both end up responsible for one resource. Only the lvalue forms funnel here,
-// which is why an rvalue argument needs no `move`.
-fn own_copy_site(self: &Checker, p: &OwnPass, span: SourceSpan, slot: OwnSlot, name: String) {
-    if !slot.value and !slot.consumes {
-        return
-    }
-    const copyable = own_is_copyable(self, span)
-    if copyable and !slot.consumes {
-        return
-    }
-    const node = self.node_of(span)
-    if !own_claim(p, node) {
+// which is why an rvalue needs no `move`.
+fn own_copy_site(self: &Checker, p: &OwnPass, span: SourceSpan, name: String) {
+    if !own_claim(p, self.node_of(span)) {
         return
     }
     let sb = string_builder(160, self.allocator)
@@ -8535,36 +8700,85 @@ fn own_copy_site(self: &Checker, p: &OwnPass, span: SourceSpan, slot: OwnSlot, n
     } else {
         sb.append("this value cannot be copied here - write `move` to transfer it")
     }
-    const t = own_type(self, span)
-    t match {
-        Some(ty) => append_copy_blame(self, self.engine.resolve(ty), &sb)
+    own_blame(self, span, &sb)
+    own_report(self, span, E_COPY_NEEDS_MOVE, sb.to_string())
+}
+
+// A parameter without `move` is read access (rule 3): writing, sharing, binding, returning or
+// moving it needs a copy or ownership, which a non-copyable type does not give.
+fn own_lent_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr, what: String) {
+    if !own_claim(p, self.node_of(id.span)) {
+        return
+    }
+    let sb = string_builder(160, self.allocator)
+    sb.append($"`{id.name}` is not owned here: {what}; declare `{id.name}: move ")
+    own_type(self, id.span) match {
+        Some(ty) => format_with_names(&self.engine.interner, self.engine.zonk(ty), &sb,
+            Some(&self.nominals))
         None => {}
     }
-    own_report(self, span, E_COPY_NEEDS_MOVE, sb.to_string())
+    sb.append("` to own it")
+    own_taker_note(p, &sb)
+    own_report(self, id.span, E_NOT_OWNED, sb.to_string())
+}
+
+// Names the function value a lent value was handed to, so a callback that takes ownership reads as
+// the cause when the error surfaces inside a combinator's body.
+fn own_taker_note(p: &OwnPass, sb: &StringBuilder) {
+    if p.taker.len > 0 {
+        sb.append($"; `{p.taker}` takes ownership of its argument")
+    }
+}
+
+// A non-copyable temporary where nothing takes ownership is never released (rule 8).
+fn own_temporary(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) {
+    if own_needs_value(slot) or slot.owner {
+        return
+    }
+    const temporary = e.* match {
+        Call(_) => true
+        Try(_) => true
+        StructLit(_) => true
+        ArrayLit(_) => true
+        TupleLit(_) => true
+        _ => false
+    }
+    const span = expr_span(e)
+    if !temporary or own_is_copyable(self, span) or !own_claim(p, self.node_of(span)) {
+        return
+    }
+    let sb = string_builder(160, self.allocator)
+    sb.append("this value reaches no owner and is never released - bind it to a variable")
+    own_blame(self, span, &sb)
+    own_report(self, span, E_RVALUE_NO_OWNER, sb.to_string())
 }
 
 // ── expressions ──────────────────────────────────────────────────────
 
 fn own_expr(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) {
+    own_temporary(self, p, e, slot)
     e.* match {
         Identifier(id) => own_ident(self, p, &id, slot)
         Move(m) => own_move(self, p, &m, slot)
         MemberAccess(ma) => {
             own_expr(self, p, ma.receiver, own_read())
             if !own_rvalue_name(self, self.node_of(ma.span)) {
-                own_copy_site(self, p, ma.span, slot, "")
+                own_place_site(self, p, e, slot)
             }
         }
         Index(ix) => {
             own_expr(self, p, ix.receiver, own_read())
             own_expr(self, p, ix.index, own_read())
-            own_copy_site(self, p, ix.span, slot, "")
+            own_place_site(self, p, e, slot)
         }
         Dereference(d) => {
             own_expr(self, p, d.operand, own_read())
-            own_copy_site(self, p, d.span, slot, "")
+            own_place_site(self, p, e, slot)
         }
-        AddressOf(a) => own_expr(self, p, a.operand, own_read())
+        AddressOf(a) => {
+            own_share(self, p, a.operand)
+            own_expr(self, p, a.operand, own_read())
+        }
         NullPropagation(np) => own_expr(self, p, np.receiver, own_read())
         Call(c) => own_call(self, p, &c)
         StructLit(sl) => own_struct_lit(self, p, &sl)
@@ -8582,10 +8796,10 @@ fn own_expr(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) {
         Unary(u) => own_expr(self, p, u.operand, own_read())
         Cast(c) => own_expr(self, p, c.operand, own_read())
         Coalesce(c) => {
-            own_expr(self, p, c.lhs, own_read())
-            own_expr(self, p, c.rhs, own_read())
+            own_expr(self, p, c.lhs, own_owning())
+            own_expr(self, p, c.rhs, slot)
         }
-        Try(t) => own_expr(self, p, t.operand, own_read())
+        Try(t) => own_protocol(self, p, t.span, t.operand)
         Range(r) => {
             r.start match { Some(s) => own_expr(self, p, s, own_read()), None => {} }
             r.end match { Some(x) => own_expr(self, p, x, own_read()), None => {} }
@@ -8607,10 +8821,19 @@ fn own_ident(self: &Checker, p: &OwnPass, id: &IdentifierExpr, slot: OwnSlot) {
         }
         return
     }
-    if own_rvalue_name(self, node) {
+    if !own_needs_value(slot) or own_rvalue_name(self, node) or own_is_copyable(self, id.span) {
         return
     }
-    own_copy_site(self, p, id.span, slot, id.name)
+    if d.is_some() and own_is_lent(p, d.unwrap()) {
+        own_lent_error(self, p, id, "a parameter without `move` can only be read")
+        return
+    }
+    const takes = slot.consumes or slot.returns
+    if takes and d.is_some() {
+        own_mark(p, d.unwrap())
+        return
+    }
+    own_copy_site(self, p, id.span, id.name)
 }
 
 // A name whose value is built where it stands rather than read out of storage: a nullary variant
@@ -8629,26 +8852,152 @@ fn own_rvalue_name(self: &Checker, node: NodeId) bool {
     }
 }
 
+// A field, an element or a dereference used by value. Into a `move` parameter the value has to
+// leave its place: an element stays in its container and a pointee with its owner (E2125), and a
+// field leaves only a base the function owns.
+fn own_place_site(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) {
+    const span = expr_span(e)
+    if !own_needs_value(slot) or own_is_copyable(self, span) {
+        return
+    }
+    if !slot.consumes {
+        own_copy_site(self, p, span, "")
+        return
+    }
+    e.* match {
+        MemberAccess(ma) => own_field_move(self, p, &ma)
+        Index(_) => own_no_place(self, p, span,
+            "an element stays in its container - take it out with `pop`, `remove` or a drain")
+        _ => own_no_place(self, p, span, "the value behind a reference stays with its owner")
+    }
+}
+
+fn own_no_place(self: &Checker, p: &OwnPass, span: SourceSpan, why: String) {
+    if !own_claim(p, self.node_of(span)) {
+        return
+    }
+    let sb = string_builder(160, self.allocator)
+    sb.append($"cannot take ownership of this value: {why}")
+    own_taker_note(p, &sb)
+    own_report(self, span, E_MOVE_NOT_LVALUE, sb.to_string())
+}
+
+// Moving a field out takes the rights of writing one (E2127) and a base the function owns: a value
+// reached through a reference, or a parameter without `move`, keeps its fields.
+fn own_field_move(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr) {
+    const node = self.node_of(ma.span)
+    const elsewhere = field_owner_elsewhere(self, ma)
+    if elsewhere.is_some() {
+        const o = elsewhere.unwrap()
+        if own_claim(p, node) {
+            own_report(self, ma.span, E_PARTIAL_MOVE,
+                $"cannot move field `{ma.member}` out of `{o.fqn}` from outside its defining module `{o.module}`")
+        }
+        return
+    }
+    if own_owned_base(self, p, ma.receiver) or !own_claim(p, node) {
+        return
+    }
+    let sb = string_builder(160, self.allocator)
+    sb.append($"field `{ma.member}` cannot be moved out: its base is not owned here - a value reached through a reference, or a parameter without `move`, keeps its fields")
+    own_taker_note(p, &sb)
+    own_report(self, ma.span, E_NOT_OWNED, sb.to_string())
+}
+
+// Whether `e` names storage the function owns: a local, or a `move` parameter, and the fields of
+// either, reached without passing through a reference.
+fn own_owned_base(self: &Checker, p: &OwnPass, e: &Expr) bool {
+    if own_is_ref(self, expr_span(e)) {
+        return false
+    }
+    return e.* match {
+        Identifier(id) => own_owned_decl(self, p, &id)
+        MemberAccess(inner) => own_owned_base(self, p, inner.receiver)
+        _ => false
+    }
+}
+
+fn own_owned_decl(self: &Checker, p: &OwnPass, id: &IdentifierExpr) bool {
+    const d = own_local_decl(self, self.node_of(id.span))
+    return d.is_some() and !own_is_lent(p, d.unwrap())
+}
+
+// The lent parameter at the root of a place reached without a reference, when its type is
+// non-copyable: writing or sharing any part of it needs ownership.
+fn own_lent_root(self: &Checker, p: &OwnPass, e: &Expr) IdentifierExpr? {
+    return e.* match {
+        Identifier(id) => own_lent_ident(self, p, &id)
+        MemberAccess(ma) => own_lent_below(self, p, ma.receiver)
+        Index(ix) => own_lent_below(self, p, ix.receiver)
+        _ => null
+    }
+}
+
+fn own_lent_below(self: &Checker, p: &OwnPass, receiver: &Expr) IdentifierExpr? {
+    if own_is_ref(self, expr_span(receiver)) {
+        return null
+    }
+    return own_lent_root(self, p, receiver)
+}
+
+fn own_lent_ident(self: &Checker, p: &OwnPass, id: &IdentifierExpr) IdentifierExpr? {
+    const d = own_local_decl(self, self.node_of(id.span))
+    const lent = d.is_some() and own_is_lent(p, d.unwrap())
+    if !lent or own_is_copyable(self, id.span) {
+        return null
+    }
+    return Some(id.*)
+}
+
+// `&place`, or a receiver adapted to `&T`: the callee may write through it.
+fn own_share(self: &Checker, p: &OwnPass, e: &Expr) {
+    own_lent_root(self, p, e) match {
+        Some(id) => own_lent_error(self, p, &id, "sharing it needs ownership")
+        None => {}
+    }
+}
+
 // `move` marks the binding under it dead from here on. A dereference, an index and a field each
 // mark nothing: a reference carries no ownership, and inside the declaring module a partial move
-// leaves the base usable (E2127 refuses it elsewhere).
+// leaves the base usable (E2127 refuses it elsewhere). Argument position never reaches here: the
+// checker refuses `move` there (E2129) and the call walks the operand as if unmarked.
 fn own_move(self: &Checker, p: &OwnPass, m: &MoveExpr, slot: OwnSlot) {
     own_expr(self, p, m.operand, own_read())
-    const consumes = slot.consumes or (slot.value and !own_is_copyable(self, expr_span(m.operand)))
-    if !consumes {
+    const takes = slot.value or slot.returns
+    if !takes or own_is_copyable(self, expr_span(m.operand)) {
         own_warn_no_consume(self, p, m.span)
         return
     }
     m.operand.* match {
-        Identifier(id) => {
-            const d = own_local_decl(self, self.node_of(id.span))
-            d match {
-                Some(dd) => own_mark(p, dd)
-                None => {}
-            }
-        }
+        Identifier(id) => own_move_binding(self, p, &id, m.span, slot)
         _ => {}
     }
+}
+
+fn own_move_binding(self: &Checker, p: &OwnPass, id: &IdentifierExpr, move_span: SourceSpan,
+    slot: OwnSlot) {
+    const d = own_local_decl(self, self.node_of(id.span))
+    if d.is_none() {
+        return
+    }
+    if own_is_lent(p, d.unwrap()) {
+        own_lent_error(self, p, id, "a parameter without `move` can only be read")
+        return
+    }
+    own_mark(p, d.unwrap())
+    if slot.returns {
+        own_note_redundant(self, p, move_span, id.name)
+    }
+}
+
+// `return move x`: a returned binding can only move. A note, not a warning - the marker is
+// harmless.
+fn own_note_redundant(self: &Checker, p: &OwnPass, span: SourceSpan, name: String) {
+    if self.spec_depth > 0 or !own_claim(p, self.node_of(span)) {
+        return
+    }
+    push_diag_i(self, span, I_REDUNDANT_MOVE,
+        $"redundant `move`: returning `{name}` already moves it")
 }
 
 // A `move` at a site that does not consume does nothing. It is a warning rather than an error so a
@@ -8708,66 +9057,381 @@ fn own_interp(self: &Checker, p: &OwnPass, interp: &InterpolatedStringExpr) {
     }
 }
 
-// The receiver is read, never consumed: a by-value receiver of a non-copyable type has no receiver
-// form at all (E2128), so every call that reaches here borrows its receiver or copies a copyable
-// one.
+// ── calls ────────────────────────────────────────────────────────────
+
+// How a call's arguments map onto its parameters' modes.
+type OwnCallee = struct {
+    // The declared function's parameters, for their `move` and `&`.
+    decl: &DeclParams?
+    // A function value's type, for its `move` bits.
+    fn_ty: NFuncNode?
+    // Parameters ahead of the first written argument: a UFCS receiver or an `op_call` value.
+    shift: usize
+    ufcs: bool
+    // A variant constructor: its payloads are by-value destinations, like struct literal fields.
+    payload: bool
+    // The function value's name, for `OwnPass.taker`.
+    name: String
+}
+
+type OwnMode = struct {
+    moves: bool
+    is_ref: bool
+}
+
+// One argument of a call, for the move-and-lend check (rule 9).
+type OwnUse = struct {
+    expr: &Expr
+    kind: u8
+}
+
+const USE_READ: u8 = 0
+const USE_SHARE: u8 = 1
+const USE_MOVE: u8 = 2
+
+// Each argument flows into its parameter (RFC-033): a `move` parameter takes ownership, any other
+// reads. The receiver follows the first parameter.
 fn own_call(self: &Checker, p: &OwnPass, c: &CallExpr) {
-    let first = 0usize
+    const callee = own_callee(self, c)
+    let uses: List(OwnUse) = list(0, self.allocator)
+    defer uses.deinit()
     c.callee.* match {
         MemberAccess(ma) => {
-            own_expr(self, p, ma.receiver, own_read())
-            first = 1usize
+            if callee.ufcs {
+                const r = own_strip_move(ma.receiver)
+                uses.push(OwnUse { expr = r, kind = own_receiver(self, p, &callee, r) })
+            } else {
+                own_expr(self, p, c.callee, own_read())
+            }
         }
         Identifier(_) => {}
         _ => own_expr(self, p, c.callee, own_read())
     }
-    let i = first
+    let i = callee.shift
     for &arg in c.args {
         arg.* match {
             Positional(e) => {
-                own_expr(self, p, e, .{ value = true, consumes = own_param_moves(self, c.span, i,
-                        "") })
+                own_arg(self, p, &callee, e, i, "", &uses)
                 i = i + 1
             }
-            Named(n) => own_expr(self, p, n.value, .{ value = true, consumes = own_param_moves(self,
-                    c.span, 0usize, n.name) })
+            Named(n) => own_arg(self, p, &callee, n.value, 0usize, n.name, &uses)
+        }
+    }
+    own_overlaps(self, p, &uses)
+}
+
+fn own_callee(self: &Checker, c: &CallExpr) OwnCallee {
+    const node = self.node_of(c.span)
+    let out = OwnCallee {
+        decl = null,
+        fn_ty = null,
+        shift = 0usize,
+        ufcs = false,
+        payload = false,
+        name = "",
+    }
+    const target = self.results.resolved_targets.get(node)
+    const fid: u32? = target match {
+        Some(t) => t match {
+            RtFunction(f) => Some(f)
+            RtSpecialized(sid) => Some(self.specs.get(sid).function_id)
+            _ => null
+        }
+        None => null
+    }
+    if fid.is_some() {
+        out.decl = self.fn_decl_params.get_ref(fid.unwrap())
+        out.ufcs = c.callee.* match { MemberAccess(_) => true, _ => false }
+        const callee_is_receiver = self.results.receiver_derefs.get(node).is_some()
+        if out.ufcs or callee_is_receiver {
+            out.shift = 1usize
+        }
+        return out
+    }
+    out.payload = target match {
+        Some(t) => t match { RtEnumVariant(_, _) => true, _ => false }
+        None => false
+    }
+    const callee_ty = own_type(self, expr_span(c.callee))
+    if out.payload or callee_ty.is_none() {
+        return out
+    }
+    out.fn_ty = ty_node(self, self.engine.resolve(callee_ty.unwrap())) match {
+        NFunc(f) => Some(f)
+        _ => null
+    }
+    out.name = c.callee.* match {
+        Identifier(id) => id.name
+        MemberAccess(ma) => ma.member
+        _ => ""
+    }
+    return out
+}
+
+fn own_param_mode(self: &Checker, callee: &OwnCallee, idx: usize, name: String) OwnMode {
+    let mode = OwnMode { moves = false, is_ref = false }
+    if callee.decl.is_some() {
+        const decl = &callee.decl.unwrap().params
+        const at = own_param_index(decl, idx, name)
+        if at < decl.len {
+            mode.moves = decl[at].is_move
+            mode.is_ref = decl[at].type_expr.* match { Reference(_) => true, _ => false }
+        }
+        return mode
+    }
+    if callee.fn_ty.is_some() {
+        const f = callee.fn_ty.unwrap()
+        if idx < f.params.len {
+            mode.moves = moves_at(&f, idx)
+            const pt = self.engine.resolve(self.engine.interner.child_at(f.params, idx))
+            mode.is_ref = ty_node(self, pt) match { NRef(_) => true, _ => false }
+        }
+    }
+    return mode
+}
+
+// The declared position of positional argument `idx`, or of the parameter called `name`; past the
+// end when there is none.
+fn own_param_index(decl: &List(FunctionParam), idx: usize, name: String) usize {
+    if name.len == 0 {
+        return idx
+    }
+    for i in 0..decl.len {
+        if decl[i].name == name {
+            return i
+        }
+    }
+    return decl.len
+}
+
+// The receiver flows into the first parameter; returns how it reached it, for rule 9.
+fn own_receiver(self: &Checker, p: &OwnPass, callee: &OwnCallee, r: &Expr) u8 {
+    const mode = own_param_mode(self, callee, 0usize, "")
+    if mode.moves {
+        own_take(self, p, callee, r)
+        return USE_MOVE
+    }
+    const adapted = mode.is_ref and !own_is_ref(self, expr_span(r))
+    if adapted {
+        own_share(self, p, r)
+    }
+    own_expr(self, p, r, own_read())
+    return if adapted { USE_SHARE } else { USE_READ }
+}
+
+// The operand of a form that desugars to a protocol call - `for x in e` to `e.iter()`, `e?` to
+// `op_try(e)` - flows into that call's first parameter like any receiver. The pick is recorded on
+// `node_span`; with none (a checker error already reported) the operand is read.
+fn own_protocol(self: &Checker, p: &OwnPass, node_span: SourceSpan, operand: &Expr) {
+    const op = self.results.resolved_ops.get(self.node_of(node_span))
+    if op.is_none() {
+        own_expr(self, p, operand, own_read())
+        return
+    }
+    const callee = OwnCallee {
+        decl = self.fn_decl_params.get_ref(op.unwrap().function_id),
+        fn_ty = null,
+        shift = 1usize,
+        ufcs = true,
+        payload = false,
+        name = "",
+    }
+    const _kind = own_receiver(self, p, &callee, operand)
+}
+
+fn own_arg(self: &Checker, p: &OwnPass, callee: &OwnCallee, arg: &Expr, idx: usize, name: String,
+    uses: &List(OwnUse)) {
+    if callee.payload {
+        own_expr(self, p, arg, own_value())
+        return
+    }
+    const e = own_strip_move(arg)
+    const mode = own_param_mode(self, callee, idx, name)
+    if mode.moves {
+        own_take(self, p, callee, e)
+        uses.push(OwnUse { expr = e, kind = USE_MOVE })
+        return
+    }
+    own_expr(self, p, e, own_read())
+    const shares = e.* match { AddressOf(_) => true, _ => false }
+    uses.push(OwnUse { expr = e, kind = if shares { USE_SHARE } else { USE_READ } })
+}
+
+fn own_take(self: &Checker, p: &OwnPass, callee: &OwnCallee, e: &Expr) {
+    const was = p.taker
+    p.taker = callee.name
+    own_expr(self, p, e, own_consuming())
+    p.taker = was
+}
+
+// The operand of a `move` the checker already refused in argument position (E2129).
+fn own_strip_move(e: &Expr) &Expr {
+    return e.* match {
+        Move(m) => m.operand
+        _ => e
+    }
+}
+
+// Rule 9: a call that takes ownership of a place cannot also read or share it, nor may it share a
+// place another argument reads, when the overlap holds owned state - the callee would release or
+// grow what it is also reading. Two moves of one binding are liveness's (E2123).
+fn own_overlaps(self: &Checker, p: &OwnPass, uses: &List(OwnUse)) {
+    if uses.len < 2 {
+        return
+    }
+    for i in 0..uses.len {
+        for j in 0..uses.len {
+            if own_pair_reported_from(&uses[i], &uses[j], i, j) {
+                own_overlap(self, p, &uses[i], &uses[j])
+            }
         }
     }
 }
 
-fn own_param_moves(self: &Checker, call_span: SourceSpan, idx: usize, name: String) bool {
-    const t = self.results.resolved_targets.get(self.node_of(call_span))
+// Whether the pair (a, b) is checked from `a`'s side: `a` takes ownership or shares, and each
+// unordered pair is checked once.
+fn own_pair_reported_from(a: &OwnUse, b: &OwnUse, i: usize, j: usize) bool {
+    if i == j or a.kind == USE_READ {
+        return false
+    }
+    if a.kind == USE_MOVE {
+        return b.kind != USE_MOVE
+    }
+    return b.kind == USE_READ or (b.kind == USE_SHARE and i < j)
+}
+
+fn own_overlap(self: &Checker, p: &OwnPass, a: &OwnUse, b: &OwnUse) {
+    let ha: List(OwnHop) = list(2, self.allocator)
+    defer ha.deinit()
+    let hb: List(OwnHop) = list(2, self.allocator)
+    defer hb.deinit()
+    const ra = own_place(self, a.expr, &ha)
+    const rb = own_place(self, b.expr, &hb)
+    if ra.is_none() or rb.is_none() or ra.unwrap() != rb.unwrap() {
+        return
+    }
+    const common = if ha.len < hb.len { ha.len } else { hb.len }
+    for k in 0..common {
+        if ha[k].field != hb[k].field {
+            return
+        }
+    }
+    const a_longer = ha.len >= hb.len
+    const longer = if a_longer { &ha } else { &hb }
+    const longer_expr = own_place_expr(if a_longer { a.expr } else { b.expr })
+    let owned = !own_is_copyable(self, expr_span(longer_expr))
+    for k in common..longer.len {
+        if longer[k].owned {
+            owned = true
+        }
+    }
+    const span = expr_span(a.expr)
+    if !owned or !own_claim(p, self.node_of(span)) {
+        return
+    }
+    const how = if a.kind == USE_MOVE { "takes ownership of" } else { "shares" }
+    own_report(self, span, E_MOVE_AND_LEND,
+        $"this call {how} a value another argument also reaches: the overlap holds owned state")
+}
+
+// One step below a place's root binding. `field` is "" for an element.
+type OwnHop = struct {
+    field: String
+    // The step lands in storage the value owns: an `owned` field, or an element of a container.
+    owned: bool
+}
+
+// The local binding a place starts from, with the steps below it pushed onto `hops` root first.
+// Null for anything reached through a reference, which aliases rather than owns.
+fn own_place(self: &Checker, e: &Expr, hops: &List(OwnHop)) NodeId? {
+    return e.* match {
+        Identifier(id) => own_place_root(self, &id)
+        AddressOf(a) => own_place(self, a.operand, hops)
+        MemberAccess(ma) => own_place_step(self, ma.receiver, hops, OwnHop {
+            field = ma.member,
+            owned = own_field_owned(self, &ma),
+        })
+        Index(ix) => own_place_step(self, ix.receiver, hops, OwnHop {
+            field = "",
+            owned = !own_is_array(self, ix.receiver),
+        })
+        _ => null
+    }
+}
+
+fn own_place_root(self: &Checker, id: &IdentifierExpr) NodeId? {
+    if own_is_ref(self, id.span) {
+        return null
+    }
+    return own_local_decl(self, self.node_of(id.span))
+}
+
+fn own_place_step(self: &Checker, receiver: &Expr, hops: &List(OwnHop), hop: OwnHop) NodeId? {
+    if own_is_ref(self, expr_span(receiver)) {
+        return null
+    }
+    const root = own_place(self, receiver, hops)
+    hops.push(hop)
+    return root
+}
+
+fn own_place_expr(e: &Expr) &Expr {
+    return e.* match {
+        AddressOf(a) => a.operand
+        _ => e
+    }
+}
+
+fn own_is_array(self: &Checker, e: &Expr) bool {
+    const t = own_type(self, expr_span(e))
     if t.is_none() {
         return false
     }
-    const fid = t.unwrap() match {
-        RtFunction(f) => f
-        _ => return false
+    return ty_node(self, self.engine.resolve(t.unwrap())) match {
+        NArray(_) => true
+        _ => false
     }
-    const dp = self.fn_decl_params.get_ref(fid)
-    if dp.is_none() {
+}
+
+// Whether the field `ma` reads is declared `owned` on its struct.
+fn own_field_owned(self: &Checker, ma: &MemberAccessExpr) bool {
+    const recv = own_type(self, expr_span(ma.receiver))
+    if recv.is_none() {
         return false
     }
-    const decl = &dp.unwrap().params
-    if name.len > 0 {
-        for i in 0..decl.len {
-            if decl[i].name == name {
-                return decl[i].is_move
-            }
+    const nid = ty_node(self, self.engine.resolve(recv.unwrap())) match {
+        NNominal(nn) => Some(nn.id)
+        _ => null
+    }
+    if nid.is_none() {
+        return false
+    }
+    return self.nominals.get(nid.unwrap()).* match {
+        NomStruct(sd) => struct_field_owned(&sd, ma.member)
+        _ => false
+    }
+}
+
+fn struct_field_owned(sd: &StructDef, name: String) bool {
+    for &f in sd.fields {
+        if f.name == name {
+            return f.owned
         }
-        return false
     }
-    if idx >= decl.len {
-        return false
-    }
-    return decl[idx].is_move
+    return false
 }
 
 fn own_assign(self: &Checker, p: &OwnPass, a: &AssignmentExpr) {
     own_expr(self, p, a.rhs, own_value())
     a.lhs.* match {
         Identifier(id) => own_assign_binding(self, p, &id, a.span)
-        _ => own_expr(self, p, a.lhs, own_read())
+        _ => {
+            own_lent_root(self, p, a.lhs) match {
+                Some(id) => own_lent_error(self, p, &id, "writing it needs a copy")
+                None => {}
+            }
+            own_expr(self, p, a.lhs, own_read())
+        }
     }
 }
 
@@ -8780,6 +9444,10 @@ fn own_assign_binding(self: &Checker, p: &OwnPass, id: &IdentifierExpr, span: So
         return
     }
     const dd = d.unwrap()
+    if own_lent_ident(self, p, id).is_some() {
+        own_lent_error(self, p, id, "writing it needs a copy")
+        return
+    }
     if own_is_moved(p, dd) {
         own_unmark(p, dd)
         return
@@ -8792,11 +9460,7 @@ fn own_assign_binding(self: &Checker, p: &OwnPass, id: &IdentifierExpr, span: So
     }
     let sb = string_builder(160, self.allocator)
     sb.append($"`{id.name}` is live - assigning over it leaks the value it holds")
-    const t = own_type(self, id.span)
-    t match {
-        Some(ty) => append_copy_blame(self, self.engine.resolve(ty), &sb)
-        None => {}
-    }
+    own_blame(self, id.span, &sb)
     own_report(self, span, E_ASSIGN_OVER_LIVE, sb.to_string())
 }
 
@@ -8859,7 +9523,7 @@ fn own_stmt(self: &Checker, p: &OwnPass, st: &Stmt) {
         Break(_) => own_escape(self, p, true)
         Continue(_) => own_escape(self, p, false)
         For(fs) => {
-            own_expr(self, p, fs.iterable, own_read())
+            own_protocol(self, p, fs.body.span, fs.iterable)
             own_loop(self, p, fs.body)
         }
         While(ws) => {
@@ -8884,7 +9548,7 @@ fn own_let(self: &Checker, p: &OwnPass, ls: &LetStmt) {
 // The value is evaluated first, then the active defers fire, then control transfers (spec 4.1).
 fn own_return(self: &Checker, p: &OwnPass, rs: &ReturnStmt) {
     rs.value match {
-        Some(e) => own_expr(self, p, e, own_value())
+        Some(e) => own_expr(self, p, e, own_returning())
         None => {}
     }
     own_fire_defers(self, p, 1usize)
@@ -8989,7 +9653,7 @@ fn own_if(self: &Checker, p: &OwnPass, ife: &IfExpr, slot: OwnSlot) {
 }
 
 fn own_match(self: &Checker, p: &OwnPass, m: &MatchExpr, slot: OwnSlot) {
-    own_expr(self, p, m.scrutinee, own_read())
+    own_expr(self, p, m.scrutinee, own_owning())
     let entry = own_snapshot(self, &p.moved)
     defer entry.deinit()
     // Seeded empty, not from `entry`: an arm that reinitializes a moved binding leaves it live, and

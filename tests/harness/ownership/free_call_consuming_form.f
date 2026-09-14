@@ -9,17 +9,17 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
-fn deinit(self: FileHandle) {}
+fn deinit(self: move FileHandle) {}
 
-// The one spelling a consuming call has.
+// The free-function form takes ownership as the receiver form does.
 pub fn main() i32 {
     let h = open(3)
-    let n = close(move h)
+    let n = close(h)
     let g = open(4)
-    deinit(move g)
+    deinit(g)
     return n
 }

@@ -325,11 +325,10 @@ fn source_root(project_dir: String, source_glob: String, allocator: &Allocator?)
 
 // Read a whole file as text, or null when it cannot be opened or read.
 pub fn read_text(path: String) OwnedString? {
-    let r = open_file(path, FileMode.Read)
-    if r.is_err() {
-        return null
+    let f = open_file(path, FileMode.Read) match {
+        Ok(v) => move v
+        Err(_) => return null
     }
-    let f = unwrap(move r)
     let rd = read_all(&f)
     close_file(&f)
     if rd.is_err() {

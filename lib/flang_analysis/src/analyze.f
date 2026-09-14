@@ -735,11 +735,10 @@ pub fn write_generated(self: &AnalyzedProject) usize {
     for &e in self.generated.emitted {
         const path = generated_path(e.origin_path)
         defer path.deinit()
-        let opened = open_file(path.as_view(), FileMode.Write)
-        if opened.is_err() {
-            continue
+        let f = open_file(path.as_view(), FileMode.Write) match {
+            Ok(v) => move v
+            Err(_) => continue
         }
-        let f = unwrap(move opened)
         const w = f.write(e.text.as_view())
         const _c = close_file(&f)
         if w.is_ok() {

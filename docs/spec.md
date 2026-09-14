@@ -320,6 +320,14 @@ This is transparent — source code reads as pass-by-value, but large structs av
 
 The elision is observable: the address of a read-only parameter equals the caller's. Section 5.4 closes the only way that guarantee could be defeated.
 
+**Parameter modes (RFC-033).** A function states ownership in its signature, never at its call sites:
+
+- `x: &T` shares `x` with the function.
+- `x: move T` moves ownership into the function. A non-copyable binding passed to it is dead after the call; a copyable one is copied. `move &T` is an error (E2130).
+- `x: T` reads. A copyable `x` may be copied and written (the function's own copy). A non-copyable `x` may be read and passed on to another `T` parameter; writing, sharing, binding, returning or moving it is refused (E2131).
+
+The receiver follows the first parameter. A call site carries no ownership marker (`f(move x)` is E2129). A non-copyable temporary must reach an owner: one passed to a `T` parameter, a read-only receiver or an operator, read for a field, or discarded, is E2132. A call cannot move or share a place that another of its arguments reaches through owned state (E2133). A function type carries its parameters' modes: `fn(T)` and `fn(move T)` are distinct types.
+
 ### 3.3 Return Values
 
 | Return type                    | Mechanism                                                                                               |
@@ -379,7 +387,7 @@ outer.mid.arr[0] = 1     // store discarded
 
 ### 3.5 Scope and Lifetime
 
-Variables are valid from declaration to end of enclosing block. No move semantics, no consume semantics. Accessing a variable always succeeds if in scope (C-like).
+Variables are valid from declaration to end of enclosing block. A binding of a copyable type is always usable while in scope (C-like). A binding of a non-copyable type (RFC-028) is live or moved: passing it to a `move` parameter, returning it, or `let b = move a` moves it, using it afterwards is E2123, and assigning to it makes it live again (assigning over a live one is E2126).
 
 ### 3.6 Safety Model
 
@@ -687,7 +695,7 @@ Any function with first parameter `T` or `&T` can be called as `value.func(args)
 
 **That rewrite is the only implicit reference in the language.** A free call passing `x` where the parameter is `&x` is an error, not an auto-reference; a reference is never implicitly dereferenced to a value; and the coercion ladder (§9.2) is closed to user types. The one user-defined adaptation, `op_deref` (§7.1), turns a reference into another reference and nothing else. Keeping both directions out is what keeps this from becoming C++'s implicit conversions.
 
-**Exception: the receiver never consumes.** A function whose first parameter is a `T` that is *not copyable* (RFC-028) has no receiver form at all — `h.close()` is E2128, whatever the receiver is. A consuming call spells its transfer one way everywhere, `move` in an argument of a plain call, so the free-function form `close(move h)` is the only spelling, and `(move h).close()` is refused for the position rather than for the `move`. Nothing changes for a copyable type: `s.trim()`, `opt.map(f)` and `c.is_digit()` keep their by-value receivers, because a copy of a copyable value is unchecked and the receiver is therefore not a consuming site. A read-only function on a non-copyable type must take `&T` to stay reachable as a method.
+**The receiver follows the first parameter** (§3.2). `h.close()` with `close(self: move FileHandle)` moves `h`; `xs.len()` with `len(self: List(T))` reads. A `move self` parameter of a non-copyable type is not reachable through a `&T` receiver or an `op_deref` hop (E2128): the value behind the reference stays with its owner.
 
 ### 7.3 Lambdas
 

@@ -9,11 +9,11 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
-fn deinit(self: FileHandle) {}
+fn deinit(self: move FileHandle) {}
 
 fn peek(h: &FileHandle) i32 {
     return h.fd
@@ -22,6 +22,6 @@ fn peek(h: &FileHandle) i32 {
 // The return expression BORROWS, so the deferred move is still valid.
 pub fn main() i32 {
     let h = open(3)
-    defer deinit(move h)
+    defer h.deinit()
     return peek(&h)
 }

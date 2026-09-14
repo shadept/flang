@@ -37,7 +37,7 @@ listed here, it does not exist in FLang.
 | `&T?` | Nullable reference (`Option(&T)`) |
 | `(A, B)` | Tuple (sugar for `{ _0: A, _1: B }`) |
 | `()` | Unit |
-| `fn(T1, T2) R` | Function type |
+| `fn(T1, T2) R` | Function type; `fn(move T) R` takes ownership of its argument |
 | `Type(T)` | Runtime type descriptor |
 
 ## Literals
@@ -88,7 +88,10 @@ const X = 42             // immutable
 fn add(a: i32, b: i32) i32 { return a + b }
 pub fn main() i32 { return 0 }              // pub = visible outside file
 fn greet(name: String, times: i32 = 1) {}   // default parameter
+fn close(h: move File) {}                   // takes ownership: `h.close()` moves `h`
 ```
+
+**Parameter modes (RFC-033):** `x: T` reads, `x: &T` shares, `x: move T` takes ownership. The call site carries no marker: `close(move h)` is E2129.
 
 **Named arguments:** `sub(b = 3, a = 10)` — positional args first, then named.
 

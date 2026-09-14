@@ -9,7 +9,7 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
@@ -23,7 +23,7 @@ pub fn main() i32 {
             Some(v) => move v
             None => open(0)
         }
-        total = total + close(move f)
+        total = total + f.close()
         i = i + 1
     }
     return total

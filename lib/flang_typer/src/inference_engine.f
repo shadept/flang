@@ -287,8 +287,8 @@ pub fn mk_array(self: &Engine, elem: Ty, length: usize) Ty {
     return self.interner.array_of(elem, length)
 }
 
-pub fn mk_func(self: &Engine, params: List(Ty), ret: Ty) Ty {
-    const t = self.interner.func_of(&params, ret)
+pub fn mk_func(self: &Engine, params: List(Ty), ret: Ty, moves: usize = 0usize) Ty {
+    const t = self.interner.func_of(&params, moves, ret)
     params.deinit()
     return t
 }
@@ -359,7 +359,7 @@ fn zonk_span(self: &Engine, span: ChildSpan) List(Ty) {
 fn zonk_func(self: &Engine, f: &NFuncNode) Ty {
     let ps = zonk_span(self, f.params)
     defer ps.deinit()
-    return self.interner.func_of(&ps, self.zonk(f.ret))
+    return self.interner.func_of(&ps, f.moves, self.zonk(f.ret))
 }
 
 fn zonk_tuple(self: &Engine, span: ChildSpan) Ty {
@@ -884,6 +884,9 @@ fn unify_func(self: &Engine, fa: &NFuncNode, fb: &NFuncNode, a: Ty, b: Ty) Unify
             expected = fb.params.len,
             actual = fa.params.len,
         })
+    }
+    if fa.moves != fb.moves {
+        return UnifyOutcome.UniMismatch(Mismatch { actual = a, expected = b })
     }
     for i in 0..fa.params.len {
         let pa = self.interner.child_at(fa.params, i)

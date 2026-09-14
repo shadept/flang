@@ -10,14 +10,14 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
-fn deinit(self: FileHandle) {}
+fn deinit(self: move FileHandle) {}
 
 pub fn main() i32 {
     let h = open(3)
-    deinit(move h)
+    h.deinit()
     return h.fd                    // error E2123
 }

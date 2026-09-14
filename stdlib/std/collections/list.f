@@ -736,7 +736,7 @@ pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
 
     // Appends `value`, growing when full. Panics when the allocation fails.
     pub fn push(self: &#(Self)($T), value: T) {
-        self.__storage.push(move value, self.allocator)
+        self.__storage.push(value, self.allocator)
     }
 
     // Appends every element of `xs`, in order. `xs` must not alias the list's own storage.
@@ -747,7 +747,7 @@ pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
     // Inserts `value` at `index`, shifting everything at and after it one slot toward the end.
     // `index == len` appends. Panics past the end.
     pub fn insert(self: &#(Self)($T), index: usize, value: T) {
-        self.__storage.insert(index, move value, self.allocator)
+        self.__storage.insert(index, value, self.allocator)
     }
 
     // Returns a new list of `f(x)` for every element, in order.

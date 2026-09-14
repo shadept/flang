@@ -184,6 +184,27 @@ they fire, on every path that exits: falling off the block, `return`,
 outermost open instantiation, so a copy rejected inside a generic body
 names the caller's line.
 
+Each expression is walked with the slot it flows into (`OwnSlot`, RFC-033):
+a read, a by-value destination, a `move` parameter, the function's result,
+or a `match` scrutinee. Sugar is walked as its desugar: a `for` iterable and
+a `?` operand flow into the recorded `iter` / `op_try` pick's first
+parameter (`own_protocol`), and `a ?? b` is a match on `a` whose fallback
+takes the expression's own slot. A call
+reads its parameters' modes off the callee - the declared parameters for a
+function, the `move` mask on the `NFunc` type for a function value - and
+the receiver follows the first parameter. By-value parameters declared
+without `move` are collected as lent, and anything that needs ownership of
+one is E2131. A non-copyable temporary in a read slot is E2132. After the
+arguments, `own_overlaps` compares their places (root binding plus field
+and element steps) for E2133. Two checks need no walk and live in the
+checker: `move` in argument position (E2129, `report_argument_moves`) and
+a `move self` receiver matched through a reference or `op_deref` hop
+(E2128, `check_consuming_receiver`).
+
+A function type's parameter modes are part of its identity: `NFuncNode.moves`
+is a bitmask keyed into the interner, so `fn(T)` and `fn(move T)` never
+unify.
+
 **Self-host side tables.** The self-hosted checker has no mutable AST
 fields, so every semantic decision lands in `InferenceResults`, keyed by
 node id (a span fingerprint). Beyond node types, resolved targets and

@@ -12,17 +12,17 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
-fn checked(h: FileHandle) Result(i32, i32) {
+fn checked(h: move FileHandle) Result(i32, i32) {
     return Ok(h.fd)
 }
 
 fn run() Result(i32, i32) {
     let h = open(3)
-    let n = checked(move h)?
+    let n = checked(h)?
     return Ok(h.fd + n)            // error E2123
 }
 

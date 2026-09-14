@@ -27,5 +27,5 @@ fn take_table(t: move Table) i32 {
 pub fn main() i32 {
     let v: Viewer
     let t: Table
-    return take_viewer(v) + take_table(move t)
+    return take_viewer(v) + take_table(t)
 }

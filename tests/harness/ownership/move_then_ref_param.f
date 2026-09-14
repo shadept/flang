@@ -10,7 +10,7 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
@@ -20,6 +20,6 @@ fn peek(h: &FileHandle) i32 {
 
 pub fn main() i32 {
     let h = open(3)
-    close(move h)
+    h.close()
     return peek(&h)                // error E2123
 }

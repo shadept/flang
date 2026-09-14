@@ -84,9 +84,11 @@ branches.
 8. **A non-copyable rvalue must reach an owner.** A temporary that lands where nothing takes
    ownership - a `T` parameter, a read-only receiver, an operator operand, a field read, a discarded
    result - is never released. That is an error.
-9. **A place cannot be moved and lent in the same call.** Arguments evaluate left to right, but the
-   call receives them together: a binding, or any place overlapping it, passed to a `move T`
-   parameter and also to a `T` or `&T` parameter of the same call is an error.
+9. **A place cannot be moved or shared while the same call reads it.** Arguments evaluate left to
+   right, but the call receives them together: a place passed to a `move T` or `&T` parameter, and
+   an overlapping place passed to any other parameter of the same call, is an error when the overlap
+   holds owned state - the argument is non-copyable, or reached through an `owned` field or a
+   container element.
 
 ```flang
 fn push(self: &List($T), value: move T)
@@ -225,12 +227,14 @@ h(x, x)             // error: `x` is lent to `a` and moved into `b`
 j(&x, x)            // error: same
 k(x.path, x)        // error: `x.path` overlaps `x`
 h(y, x)             // fine: distinct bindings
+xs.concat(xs)       // error: one owned buffer, shared and read
+g(xs[0], &xs)       // error: the element lives in the buffer `g` may grow
+take(r.hits, r)     // fine: `hits` is plain data, the argument is a copy
 ```
 
-This is the one aliasing case that is an ownership question: the function would own and release a
-value it is also reading. Other aliasing is not. `g(xs[0], &xs)` lets `g` read an element while it
-may grow the list, exactly as a `const T&` into a `std::vector` does in C++. It stays the
-programmer's responsibility (§3.6).
+The function would own, release or grow a value it is also reading. What stays the programmer's
+responsibility (§3.6) is aliasing with no owned state in the overlap, and aliasing through a
+reference, which the check does not follow.
 
 ## Owning rvalues
 
@@ -295,7 +299,7 @@ value (`find`, `get`, `min`), which keep their `_ref` twins.
   `move` until evaluated.
 - **Closures that own their captures**, and storing or consuming a closure.
 - **Returned borrows.** Accessors and iterators keep `&T` and `for &x`.
-- **Aliasing that is not ownership.** `g(xs[0], &xs)`, `xs.push(xs[0])` for a copyable `T`.
+- **Aliasing through a reference**, and aliasing with no owned state in the overlap.
 - **Dangling shared captures.** A closure outliving a name it shares; the same hazard as a returned
   `&local`.
 - **`p.* = v` through `&T`** bypasses scoped mutability and overwrites a live owner without E2126.
@@ -315,6 +319,25 @@ promote, then use.
    `move &T` error; `move` in argument position is an error; the receiver follows the picked
    overload's first parameter; rule 8 on non-copyable rvalues; rule 9 on overlapping arguments; the
    diagnostic for a lent-to-owning callback names the argument.
+
+   Done. Codes: E2129 (`move` in argument position), E2130 (`move &T`), E2131 (rule 3, and a field
+   moved out of a base the function does not own), E2132 (rule 8), E2133 (rule 9); E2128 narrowed
+   to a `move self` reached through a reference or hop. Decided along the way:
+   - `return h` of a binding moves with no marker; `return move h` is accepted with an info note
+     (I2001).
+   - Into a `move` parameter, an element (`xs[i]`) and a dereference (`p.*`) are E2125; a field
+     moves only out of a local or a `move` parameter, in the declaring module.
+   - Rule 9 fires when the overlapping argument is non-copyable, or reached through an `owned` field
+     or a container element, and one side moves or shares: `take(h.fd, h)` with `owned fd`,
+     `xs.concat(xs)`, `g(xs[0], &xs)`. `take(h.id, h)` with a plain `id` compiles. This narrows
+     "aliasing that is not ownership" below.
+   - Function types carry parameter modes: `fn(T)` and `fn(move T)` are distinct, parsed in type
+     position and on lambda parameters.
+   - Variant payloads (`Some(move v)`) are not argument position and keep `move`.
+   - Sugar is checked as its desugar: `for x in e` as `e.iter()`, `e?` as `op_try(e)`, `a ?? b` as
+     `a match { Some(v) => v, None => b }`. A `match` scrutinee owns a temporary.
+
+   Gaps are recorded in `docs/known-issues.md` ("RFC-033 Ownership Gaps After the Checker Step").
 2. **Lowering.** A non-copyable parameter never gets a copy-on-write shadow (rule 3 forbids the
    write, `move T` owns the value); `move T` of a copyable type lowers as `T`.
 3. **Closures.** Captures by usage, `op_call(self: &Closure)`, retire E2112.

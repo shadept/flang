@@ -12,13 +12,13 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
 let calls: i32 = 0
 
-fn deinit(self: FileHandle) {
+fn deinit(self: move FileHandle) {
     calls = calls + 1
 }
 

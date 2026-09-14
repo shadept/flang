@@ -9,14 +9,14 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
 // Assignment over a MOVED binding reinitializes it and makes it live again.
 pub fn main() i32 {
     let h = open(4)
-    close(move h)
+    h.close()
     h = open(3)
     return h.fd
 }

@@ -13,6 +13,7 @@ FLang uses a custom sequential numbering system organized by compiler phase:
 - **E3XXX**: Code generation errors (FIR lowering, C code generation)
 - **W1XXX**: Code quality warnings (unused variables, dead code)
 - **W2XXX**: Semantic analysis warnings (deprecation, suspicious patterns)
+- **I2XXX**: Semantic analysis notes (valid source with a redundant part)
 
 Within each category, error codes are assigned sequentially starting from E0001, E1001, E2001, E3001, etc. This ensures
 no gaps and no bias in numbering.
@@ -3017,6 +3018,12 @@ Report the issue with sample code that reproduces the error.
 | **E2117** | Directives        | #if condition is not a bool                  |
 | **E2118** | Directives        | Invalid operand in #if condition             |
 | **E2122** | Type Checking     | Integer cast to a reference                  |
+| **E2128** | Ownership         | `move self` receiver reached through a reference |
+| **E2129** | Ownership         | `move` in argument position                  |
+| **E2130** | Ownership         | `move` on a reference parameter              |
+| **E2131** | Ownership         | Use needs ownership the function does not have |
+| **E2132** | Ownership         | Non-copyable temporary reaches no owner      |
+| **E2133** | Ownership         | Call moves or shares a place it also reads   |
 
 ### E2115: Unsupported Pattern Form
 
@@ -3759,19 +3766,20 @@ can be moved twice by one.
 #### Example
 
 ```flang
+fn close(h: move FileHandle) i32
+
 let h = open("a")
-close(move h)
+h.close()
 return h.fd                     // error[E2123]: `h` was moved and cannot be used
 
-if c { close(move h2) }
+if c { h2.close() }
 h2.fd                           // error[E2123]: moved on one path
 ```
 
 #### Solution
 
-Move once. Where two consumers each need the value, give each its own; where one needs to read after
-the other consumes, read first - arguments evaluate left to right, so `f(h.fd, move h)` compiles and
-`f(move h, h.fd)` does not.
+Move once. Where two consumers each need the value, give each its own. A call that both moves a
+place and reads it is E2133.
 
 ---
 
@@ -3784,11 +3792,12 @@ the other consumes, read first - arguments evaluate left to right, so `f(h.fd, m
 
 A copy is reading an lvalue into a second location: the original keeps its storage and the result
 gets its own, so for a non-copyable type both are responsible for one resource. The lvalue sites are
-a rebinding, a by-value argument, a by-value return of a local, a struct-literal field and an
-element store. Writing `move` says the use is a transfer.
+a rebinding, a struct-literal field, a variant payload, an element store, and a return of a field,
+element or dereference. Writing `move` says the use is a transfer.
 
-An rvalue is never a copy - it has no storage of its own, so nothing is duplicated when it is bound,
-passed or stored, and `close(open("f"))` needs no `move`.
+Arguments are not among them: a parameter declares whether it takes ownership (RFC-033), and a
+returned binding can only move. An rvalue is never a copy - it has no storage of its own, so nothing
+is duplicated when it is bound or stored.
 
 The message names the derivation chain, because virality is unreadable without it: a type several
 hops from any `owned` still refuses to be copied.
@@ -3819,17 +3828,27 @@ reached through a `&T` parameter.
 target (spec 3.4.1). An expression with no storage of its own leaves nothing behind to mark moved,
 so there is nothing for the keyword to say.
 
+The same code covers a place that cannot give its value to a `move` parameter (RFC-033): an element
+stays in its container, and the value behind a reference stays with its owner, so the callee would
+be a second owner. Inside a generic body - a combinator calling back a function that takes
+ownership - the error is reported at the instantiation and names the callback parameter.
+
 #### Example
 
 ```flang
 let n = move open(3)            // error[E2125]: a call result has no place to move from
 let m = move 3                  // error[E2125]
 let g = move h                  // ok
+
+fn close(h: move FileHandle) i32
+close(xs[0])                    // error[E2125]: the element stays in `xs`
+close(p.*)                      // error[E2125]: `p` is a reference
 ```
 
 #### Solution
 
-Drop the `move`. A temporary is already a transfer.
+Drop the `move`: a temporary is already a transfer. Take an element out of its container with
+`pop`, `remove` or a drain.
 
 ---
 
@@ -3848,7 +3867,7 @@ it held is leaked. Assignment over a *moved* binding reinitializes it, and is fi
 ```flang
 let h = open("a")
 h = open("b")                   // error[E2126]: `h` is live
-close(move h)
+h.close()                       // close(h: move FileHandle)
 h = open("b")                   // ok: reinitializes a moved binding
 ```
 
@@ -3868,7 +3887,8 @@ Consume the old value first.
 Moving a field takes the same rights as writing one: the module that declares a type owns its
 invariants (spec 8, E2114). Inside that module a partial move is unchecked - the base is not marked
 and stays usable, which is what lets a type disassemble itself in its own `deinit`. Outside it, the
-move is refused, so a consuming library cannot take a resource out of someone else's value.
+move is refused, so a consuming library cannot take a resource out of someone else's value. The rule
+covers `move base.field` and a field passed to a `move` parameter alike.
 
 #### Example
 
@@ -3883,35 +3903,188 @@ Ask the declaring module for a function that takes the value apart.
 
 ---
 
-### E2128: A Consuming Call in Receiver Position
+### E2128: A `move self` Receiver Reached Through a Reference
 
 **Category**: Semantic Analysis
 **Severity**: Error
 
 #### Description
 
-A by-value receiver of a non-copyable type is not reachable through UFCS (spec 7.2). A consuming
-call spells its transfer one way everywhere - `move` in an argument of a plain call - and the
-parenthesised receiver form does not exist. The test is the callee's first parameter and nothing
-else, so a temporary in receiver position is refused on the same grounds; admitting it would make
-the rule "no consuming receiver unless the receiver happens to be one".
-
-Nothing changes for a copyable type: a copy of a copyable value is unchecked, so its by-value
-receiver is not a consuming site.
+The receiver follows the picked overload's first parameter (RFC-033): `h.close()` with
+`close(self: move FileHandle)` moves `h`. A receiver reached through a `&T` value or an `op_deref`
+hop has no value of its own to give - the pointee stays with its owner - so a `move self` parameter
+of a non-copyable type is not reachable that way.
 
 #### Example
 
 ```flang
-h.close()                       // error[E2128]
-(move h).close()                // error[E2128]: the receiver position, still
-open("f").close()               // error[E2128]: an rvalue receiver, still
-close(move h)                   // ok
+fn close(self: move FileHandle) i32
+
+h.close()                       // ok: `h` is moved
+let p = &h
+p.close()                       // error[E2128]
+rc.close()                      // error[E2128]: through `op_deref`
 ```
 
 #### Solution
 
-Write the free-function form. A read-only function on a non-copyable type takes `&T` instead, which
-keeps its receiver form.
+Call it on the owning binding, or take the value out of the wrapper first.
+
+---
+
+### E2129: `move` in Argument Position
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+A function states ownership in its signature (RFC-033): `x: move T` takes ownership, `x: T` reads,
+`x: &T` shares. The call site carries no marker, in argument or receiver position. Variant payloads
+are not arguments and keep `move`, like struct literal fields.
+
+#### Example
+
+```flang
+fn close(h: move FileHandle) i32
+
+close(move h)                   // error[E2129]
+(move h).close()                // error[E2129]
+h.close()                       // ok: `h` is moved
+Some(move h)                    // ok: a variant payload
+```
+
+#### Solution
+
+Remove the `move`. If the call should take ownership, declare the parameter `move`.
+
+---
+
+### E2130: `move` on a Reference Parameter
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+A reference is copyable; owning it says nothing about the value it refers to. Reported on function
+declarations, lambdas and function types. Also reported on a `move` past the 64th parameter, which
+a function type's mode mask cannot carry.
+
+#### Example
+
+```flang
+fn keep(h: move &FileHandle)    // error[E2130]
+```
+
+#### Solution
+
+Take `h: move FileHandle` to own the value, or `h: &FileHandle` to share it.
+
+---
+
+### E2131: Use That Needs Ownership the Function Does Not Have
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+A by-value parameter without `move` is read access (RFC-033 rule 3). A copyable one follows the
+copy rules of its type. A non-copyable one may be read and passed on to another `T` parameter;
+anything that needs a copy or ownership - writing it or a field of it, sharing it with `&` or an
+auto-referenced receiver, binding, returning or moving it - is refused.
+
+A field moved into a `move` parameter needs an owned base: a local or a `move` parameter. A value
+reached through a reference, or a parameter without `move`, keeps its fields.
+
+#### Example
+
+```flang
+fn keep(s: &Server, r: Route) {
+    s.routes.push(r)            // error[E2131]: `r` is not owned here
+}
+
+fn reset(r: Route) {
+    r.hits = 0                  // error[E2131]: writing it needs a copy
+}
+
+fn steal(s: &Session) i32 {
+    return close(s.conn)        // error[E2131]: `s` is reached through a reference
+}
+```
+
+#### Solution
+
+Declare the parameter `move T` to own the value, or `&T` to write the caller's.
+
+---
+
+### E2132: A Non-Copyable Temporary Reaches No Owner
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+A temporary that lands where nothing takes ownership is never released (RFC-033 rule 8): a `T`
+parameter, a read-only receiver, an operator operand, a field read, a discarded result. A `move`
+parameter, a binding, a `return`, a struct literal field and a `match` scrutinee each take it.
+Sugar is checked as what it desugars to: `for x in e` is `e.iter()`, `e?` is `op_try(e)`, and
+`a ?? b` is `a match { Some(v) => v, None => b }`, so `b` goes where the result goes.
+
+Leaking is not wrong in itself, and the intended default is a warning a build can promote. The
+diagnostic system has no per-diagnostic severity control yet, so it is an error until it does.
+
+#### Example
+
+```flang
+route_count(make_server())      // error[E2132]
+make_server()                   // error[E2132]: discarded
+open("f").is_ok()               // error[E2132]: read-only receiver
+make_a() == make_b()            // error[E2132]: operands are read
+```
+
+#### Solution
+
+Bind it, and release the binding:
+
+```flang
+let s = make_server()
+defer s.deinit()
+route_count(s)
+```
+
+---
+
+### E2133: A Call Moves or Shares a Place It Also Reads
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+Arguments evaluate left to right, but the call receives them together (RFC-033 rule 9). A place
+passed to a `move` parameter, or shared with `&`, cannot also reach the call through another
+argument when the overlap holds owned state: the argument itself is non-copyable, or the path to it
+passes through an `owned` field or a container element. The callee would release or grow what it
+is also reading. Two moves of one binding are E2123.
+
+#### Example
+
+```flang
+fn take(n: i32, h: move FileHandle) i32
+fn concat(self: &Bag, other: Bag)
+
+take(h.fd, h)                   // error[E2133]: `fd` is `owned`
+take(h.id, h)                   // ok: `id` is plain data
+xs.concat(xs)                   // error[E2133]: one buffer shared and read
+g(xs[0], &xs)                   // error[E2133]: the element lives in `xs`
+```
+
+#### Solution
+
+Read what the call needs into a local first, or pass distinct values.
 
 ---
 
@@ -4150,9 +4323,9 @@ codes may be listed: `#allow(W2004, W1002)`.
 
 #### Description
 
-A site consumes when its destination is a by-value slot of a non-copyable type, or a parameter
-declared `move`. Written anywhere else the keyword does nothing. It is a warning rather than an
-error so a `move` that outlives its type becoming copyable does not break the build.
+A binding, struct literal field or element store consumes a place of a non-copyable type. Written
+over a copyable one the keyword does nothing. It is a warning rather than an error so a `move` that
+outlives its type becoming copyable does not break the build.
 
 A type parameter is the exception: in a generic body `move value` where `value: T` is written once
 and serves every instantiation, so it is diagnosed against the type as written.
@@ -4162,15 +4335,34 @@ and serves every instantiation, so it is diagnosed against the type as written.
 ```flang
 let n = 3
 let m = move n                  // warning[W2005]: `i32` is copyable
-
-fn consume(t: move Token) i32   // a `move` parameter consumes a copyable type ...
-let t = Token { id = 3 }
-consume(move t)                 // ... so its call sites are required to say so
 ```
 
 #### Solution
 
-Drop the `move`, or declare the parameter `move` if the slot is meant to consume.
+Drop the `move`.
+
+---
+
+### I2001: Redundant `move` on a Returned Binding
+
+**Category**: Semantic Analysis
+**Severity**: Info
+
+#### Description
+
+A returned binding can only move, so `return move h` says what `return h` already does. A note
+rather than a warning: the marker is harmless. Not reported inside generic bodies.
+
+#### Example
+
+```flang
+let h = open("f")
+return move h                   // info[I2001]
+```
+
+#### Solution
+
+Write `return h`.
 
 ---
 

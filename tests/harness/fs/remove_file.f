@@ -10,11 +10,10 @@ import std.result
 // remove_file reports FileError: unlinking is something you do to a file, so the directory-shaped
 // failures are not in its error type at all.
 fn write_fixture(path: String) bool {
-    const opened = open_file(path, FileMode.Write)
-    if opened.is_err() {
-        return false
+    let f = open_file(path, FileMode.Write) match {
+        Ok(v) => move v
+        Err(_) => return false
     }
-    let f = unwrap(move opened)
     const w = write(&f, "doomed")
     const c = close_file(&f)
     return w.is_ok() and c.is_ok()

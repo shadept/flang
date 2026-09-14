@@ -16,7 +16,7 @@ pub fn main() i32 {
     let h = Handle { fd = 40i32 }
 
     // by-value argument
-    let a: i32 = take(move h)
+    let a: i32 = take(h)
 
     // rebinding
     let h2 = Handle { fd = 1i32 }

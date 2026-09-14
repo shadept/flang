@@ -9,11 +9,11 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
-fn deinit(self: FileHandle) {}
+fn deinit(self: move FileHandle) {}
 
 // A defer fires at the end of ITS block, so the move is confined there.
 // A call directly before a bare block parses as a generic struct construction
@@ -21,8 +21,8 @@ fn deinit(self: FileHandle) {}
 pub fn main() i32 {
     {
         let inner = open(4)
-        defer deinit(move inner)
+        defer inner.deinit()
     }
     let outer = open(3)
-    return close(move outer)
+    return outer.close()
 }

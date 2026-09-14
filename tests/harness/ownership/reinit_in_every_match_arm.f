@@ -9,7 +9,7 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
@@ -17,7 +17,7 @@ fn close(h: FileHandle) i32 {
 // state the arms ran from would carry the move past the arms that undid it.
 pub fn main() i32 {
     let h = open(1)
-    close(move h)
+    h.close()
     let k: i32 = 0
     k match {
         0i32 => {
@@ -27,5 +27,5 @@ pub fn main() i32 {
             h = open(4)
         }
     }
-    return close(move h)
+    return h.close()
 }

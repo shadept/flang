@@ -10,14 +10,14 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
-fn close(h: FileHandle) i32 {
+fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
-fn deinit(self: FileHandle) {}
+fn deinit(self: move FileHandle) {}
 
 pub fn main() i32 {
     let h = open(3)
-    defer deinit(move h)
-    return close(move h)           // error E2123: `h` is moved twice
+    defer h.deinit()
+    return h.close()               // error E2123: `h` is moved twice
 }
