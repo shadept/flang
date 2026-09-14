@@ -1,7 +1,7 @@
 //! TEST: container_element_deinit_runs
 //! EXIT: 2
-//! SKIP: RFC-028 step 7 - the blanket `deinit(&$T)` wins over the element's own
 
+import std.allocator
 import std.collections.list
 
 type FileHandle = struct {
@@ -18,11 +18,11 @@ fn close(h: FileHandle) i32 {
 
 let calls: i32 = 0
 
-fn deinit(self: FileHandle) {
+fn deinit(self: FileHandle, allocator: &Allocator) {
     calls = calls + 1
 }
 
-// The element loop deinits each live element through a pointer.
+// A container instantiated here reaches the element's private `deinit`.
 pub fn main() i32 {
     let xs: List(FileHandle) = list(2)
     xs.push(open(3))

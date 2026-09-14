@@ -1322,7 +1322,7 @@ fn report_unify(self: &Checker, outcome: &UnifyOutcome, code: String, span: Sour
 
 pub fn current_visibility(self: &Checker) Visibility {
     return self.current_module match {
-        Some(m) => visibility(Some(m), base_visible_set(self, m))
+        Some(m) => visibility(Some(m), base_visible_set(self, m), set(self.allocator))
         None => open(self.allocator)
     }
 }
@@ -1354,14 +1354,16 @@ fn fn_visibility(self: &Checker) Visibility {
             // Built locally before wrapping - growing a set through a returned struct's field is
             // the two-field-hop hazard.
             let fresh = base_visible_set(self, m)
+            let callers: Set(String) = set(self.allocator)
             for c in self.spec_callers {
                 fresh.add(c)
+                callers.add(c)
                 self.visible_by_module.get_ref(c) match {
                     Some(src) => copy_set_into(&fresh, src)
                     None => {}
                 }
             }
-            visibility(Some(m), move fresh)
+            visibility(Some(m), move fresh, move callers)
         }
         None => open(self.allocator)
     }

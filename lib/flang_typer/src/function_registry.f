@@ -327,7 +327,7 @@ fn visibility_for(f: &FunctionScheme, vis: &Visibility) bool {
                 return true
             }
             if !f.is_pub {
-                return false
+                return vis.callers.contains(m)
             }
             return vis.visible.contains(m)
         }
@@ -358,7 +358,8 @@ test "a retired entry stops resolving until it is registered again" {
     const a = reg.register(probe_scheme("f", "m"))
     reg.retire_module("m")
     let scope: Set(String) = set()
-    let vis = visibility(Some("m"), move scope)
+    let callers: Set(String) = set()
+    let vis = visibility(Some("m"), move scope, move callers)
     defer vis.deinit()
     let missing = reg.lookup("f", &vis) match {
         FnLookMissing => true
