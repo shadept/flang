@@ -42,4 +42,5 @@ Type: language, compiler, stdlib, tooling.
 | [029](029-checking-uninstantiated-generic-bodies.md) | Checking uninstantiated generic bodies | compiler | deferred | 2026-09-01 |  |
 | [030](030-reference-form-operator-dispatch.md) | Reference-form operator dispatch | language | draft | 2026-09-01 |  |
 | [031](031-owned-generic-consolidation.md) | `Owned(T)`, one ownership wrapper | stdlib | draft | 2026-09-01 |  |
+| [033](033-parameter-declared-ownership.md) | Parameter-declared ownership | language | draft | 2026-09-14 |  |
 | [099](099-stack-only-types-and-bindings.md) | `#stack` types and stack-only bindings | language | deferred | 2026-08-27 |  |
