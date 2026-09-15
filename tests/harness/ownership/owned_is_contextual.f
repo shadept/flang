@@ -2,7 +2,7 @@
 //! EXIT: 7
 
 // `owned` is a modifier when an identifier follows and a field name when a colon does. Both
-// readings appear here; the modifier changes no behaviour until RFC-028 enforcement lands.
+// readings appear here.
 
 type Handle = struct {
     owned fd: i32

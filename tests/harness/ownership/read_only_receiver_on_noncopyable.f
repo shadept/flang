@@ -15,8 +15,8 @@ fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
-// A read-only method reaches a non-copyable receiver only through `&T`, which is
-// what keeps `is_some` callable here.
+// A read-only method on a non-copyable receiver: `is_some` takes `&self`, and the binding stays
+// live.
 pub fn main() i32 {
     let o: FileHandle? = Some(open(3))
     if !o.is_some() {

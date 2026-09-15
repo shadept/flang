@@ -12,8 +12,7 @@ fn open(n: i32) FileHandle {
 }
 
 // `None` builds its value where it stands rather than reading it out of storage, so binding it is
-// not a copy however non-copyable the enum's other variants are. `is_some` reaches a non-copyable
-// receiver because it takes one by reference.
+// not a copy however non-copyable the enum's other variants are.
 pub fn main() i32 {
     let empty: FileHandle? = None
     if empty.is_some() {

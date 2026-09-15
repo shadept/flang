@@ -349,6 +349,11 @@ promote, then use.
    written but not moved out, E2131), and building a closure reads its captures (E2123).
 4. **Harness.** Rewrite `tests/harness/ownership/*` call sites; add tests for rule 3, rule 5, the
    lent-to-owning callback, owning rvalues, move-and-lend in one call, and closure captures. `move_param_on_copyable.f` flips to a copy.
+
+   Done: written test-first with steps 1-3, plus rule 9 through a container element, named arguments
+   into `move` parameters, variant payloads keeping `move`, and rule 5 on function types and
+   lambdas. `for_ref_loop` stays skipped until step 6, `container_element_deinit_runs` until
+   RFC-028 step 7.
 5. **Promote.**
 6. **Stdlib.** Adopt `owned` buffers with `move` on every consuming parameter (`deinit`, `push`,
    `insert`, `set`, `unwrap`, `expect`, `map`, `close`); drop the callback gates.

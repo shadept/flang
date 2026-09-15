@@ -13,7 +13,7 @@ fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
-// A call result has no place to move from, so no `move` is required.
+// A temporary goes straight to the `move` parameter.
 pub fn main() i32 {
     return close(open(3))
 }

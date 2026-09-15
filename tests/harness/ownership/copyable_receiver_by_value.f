@@ -4,8 +4,8 @@
 import std.char
 import std.string
 
-// A copy of a copyable value is unchecked, so a by-value receiver is not a
-// consuming site and the value-mode UFCS chains keep working.
+// A by-value receiver reads, and a copyable value copies freely, so value-mode UFCS chains keep
+// working.
 pub fn main() i32 {
     let s = "  ab  "
     let t = s.trim()

@@ -1,8 +1,8 @@
 //! TEST: move_parses_and_emits_nothing
 //! EXIT: 42
 
-// `move` is transparent until RFC-028 enforcement lands: it marks a transfer and emits no code, so
-// every position that accepts an lvalue accepts it and the value is unchanged.
+// `move` emits no code: in every position that still takes it, over any place form, the value is
+// unchanged.
 
 type Handle = struct {
     fd: i32
@@ -15,7 +15,7 @@ fn take(h: Handle) i32 {
 pub fn main() i32 {
     let h = Handle { fd = 40i32 }
 
-    // by-value argument
+    // an argument carries no marker
     let a: i32 = take(h)
 
     // rebinding
