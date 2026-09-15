@@ -390,7 +390,7 @@ outer.mid.arr[0] = 1     // store discarded
 
 ### 3.5 Scope and Lifetime
 
-Variables are valid from declaration to end of enclosing block. A binding of a copyable type is always usable while in scope (C-like). A binding of a non-copyable type (RFC-028) is live or moved: passing it to a `move` parameter, returning it, or `let b = move a` moves it, using it afterwards is E2123, and assigning to it makes it live again (assigning over a live one is E2126).
+Variables are valid from declaration to end of enclosing block. A binding of a copyable type is always usable while in scope (C-like). A binding of a non-copyable type (RFC-028) is live or moved: passing it to a `move` parameter, returning it, or `let b = move a` moves it, using it afterwards is E2123, and assigning to it makes it live again (assigning over a live one is E2126). The same holds per field: moving a field out of a binding the function owns leaves the binding incomplete, so using the field or anything enclosing it is E2123 until the field is assigned; siblings stay usable.
 
 ### 3.6 Safety Model
 

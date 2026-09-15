@@ -520,7 +520,7 @@ the stdlib frame as a note.
 ## Out of scope
 
 - Tracking which fields of a base have been moved. Inside the declaring module a
-  partial move is unchecked; outside it is refused.
+  partial move is unchecked; outside it is refused. (Since tracked by RFC-033 rule 10.)
 - Use-after-deinit, double-release, leak detection, escape analysis.
 - Aliasing: a `&` taken before a move is not tracked.
 - `arena.reset()` — accepted as unchecked.

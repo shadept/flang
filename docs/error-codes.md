@@ -3893,10 +3893,11 @@ Consume the old value first.
 #### Description
 
 Moving a field takes the same rights as writing one: the module that declares a type owns its
-invariants (spec 8, E2114). Inside that module a partial move is unchecked - the base is not marked
-and stays usable, which is what lets a type disassemble itself in its own `deinit`. Outside it, the
-move is refused, so a consuming library cannot take a resource out of someone else's value. The rule
-covers `move base.field` and a field passed to a `move` parameter alike.
+invariants (spec 8, E2114). Inside that module a field of a binding the function owns may move
+out, which is what lets a type disassemble itself in its own `deinit`; the base is then incomplete
+until the field is assigned (E2123). Outside it, the move is refused, so a consuming library cannot
+take a resource out of someone else's value. The rule covers `move base.field` and a field passed
+to a `move` parameter alike.
 
 #### Example
 

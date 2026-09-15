@@ -8432,6 +8432,9 @@ fn zonk_specializations(self: &Checker) {
 // most, and a branch merge is a copy of the whole thing.
 type MovedRec = struct {
     decl: NodeId
+    // "" for the whole binding, else the moved field's path below it (`log`, `a.log`). A view into
+    // `OwnPass.paths`.
+    path: String
 }
 
 // One registered `defer`, with the scope depth its body runs at the end of.
@@ -8481,6 +8484,8 @@ fn own_needs_value(slot: OwnSlot) bool {
 // The walk's state. `moved` is the lattice; everything else is control-flow bookkeeping.
 type OwnPass = struct {
     moved: List(MovedRec)
+    // Storage for the field paths `moved` refers to.
+    paths: List(OwnedString)
     defers: List(DeferRec)
     // Moved sets carried out of the innermost loop, by `break` and by `continue` respectively. A
     // break feeds the loop's exit; a continue feeds the next iteration's entry.
@@ -8534,6 +8539,7 @@ fn own_run(self: &Checker, body: &BlockExpr, lent: List(NodeId), captured: List(
     returns: bool) {
     let p = OwnPass {
         moved = list(0, self.allocator),
+        paths = list(0, self.allocator),
         defers = list(0, self.allocator),
         escaped = list(0, self.allocator),
         continued = list(0, self.allocator),
@@ -8570,7 +8576,7 @@ fn own_lambda(self: &Checker, p: &OwnPass, lam: &LambdaExpr) {
     }
     const captures = &info.unwrap().captures
     for &cap in captures {
-        if own_is_moved(p, cap.decl) and own_claim(p, self.node_of(lam.body.span)) {
+        if own_has_moves(p, cap.decl) and own_claim(p, self.node_of(lam.body.span)) {
             own_report(self, lam.span, E_USE_AFTER_MOVE,
                 $"`{cap.name}` was moved and cannot be captured")
         }
@@ -8594,6 +8600,10 @@ fn own_lambda(self: &Checker, p: &OwnPass, lam: &LambdaExpr) {
 
 fn own_deinit(p: &OwnPass) {
     p.moved.deinit()
+    for &s in p.paths {
+        s.deinit()
+    }
+    p.paths.deinit()
     p.defers.deinit()
     p.escaped.deinit()
     p.continued.deinit()
@@ -8621,9 +8631,20 @@ fn own_list_has(xs: &List(NodeId), decl: NodeId) bool {
 
 // ── the moved set ────────────────────────────────────────────────────
 
+// Whether the whole binding is moved.
 fn own_is_moved(p: &OwnPass, decl: NodeId) bool {
-    for i in 0..p.moved.len {
-        if p.moved[i].decl == decl {
+    for &m in p.moved {
+        if m.decl == decl and m.path.len == 0 {
+            return true
+        }
+    }
+    return false
+}
+
+// Whether any part of the binding is moved, whole or a field.
+fn own_has_moves(p: &OwnPass, decl: NodeId) bool {
+    for &m in p.moved {
+        if m.decl == decl {
             return true
         }
     }
@@ -8631,21 +8652,77 @@ fn own_is_moved(p: &OwnPass, decl: NodeId) bool {
 }
 
 fn own_mark(p: &OwnPass, decl: NodeId) {
-    if !own_is_moved(p, decl) {
-        p.moved.push(MovedRec { decl = decl })
-    }
+    own_unmark(p, decl)
+    p.moved.push(MovedRec { decl = decl, path = "" })
 }
 
+// Records a field moved out of `decl`. A move above it already covers it; moves below it are
+// subsumed.
+fn own_mark_field(self: &Checker, p: &OwnPass, decl: NodeId, path: String) {
+    if own_moved_above(p, decl, path).is_some() {
+        return
+    }
+    own_unmark_field(p, decl, path)
+    let stored = from_view(path, self.allocator)
+    p.moved.push(MovedRec { decl = decl, path = stored.as_view() })
+    p.paths.push(stored)
+}
+
+// Makes the whole binding live: every move recorded under it is gone.
 fn own_unmark(p: &OwnPass, decl: NodeId) {
     let i = 0
     while i < p.moved.len {
         if p.moved[i].decl == decl {
             p.moved[i] = p.moved[p.moved.len - 1]
             let _r = p.moved.pop()
-            return
+            continue
         }
         i = i + 1
     }
+}
+
+// Makes the field at `path`, and everything below it, live again.
+fn own_unmark_field(p: &OwnPass, decl: NodeId, path: String) {
+    let i = 0
+    while i < p.moved.len {
+        if p.moved[i].decl == decl and path_within(p.moved[i].path, path) {
+            p.moved[i] = p.moved[p.moved.len - 1]
+            let _r = p.moved.pop()
+            continue
+        }
+        i = i + 1
+    }
+}
+
+// The recorded move at or above `path` - the whole binding, the field itself or an enclosing one.
+fn own_moved_above(p: &OwnPass, decl: NodeId, path: String) String? {
+    for &m in p.moved {
+        if m.decl == decl and path_within(path, m.path) {
+            return Some(m.path)
+        }
+    }
+    return null
+}
+
+// The recorded move strictly below `path`, which leaves the place at `path` incomplete.
+fn own_moved_below(p: &OwnPass, decl: NodeId, path: String) String? {
+    for &m in p.moved {
+        if m.decl == decl and m.path.len > path.len and path_within(m.path, path) {
+            return Some(m.path)
+        }
+    }
+    return null
+}
+
+// Whether field path `inner` is `outer` or lies below it. "" is the whole binding.
+fn path_within(inner: String, outer: String) bool {
+    if outer.len == 0 {
+        return true
+    }
+    if !inner.starts_with(outer) {
+        return false
+    }
+    return inner.len == outer.len or inner[outer.len] == '.'
 }
 
 // A pattern's bindings are declared where the pattern matches, so entering an arm makes them live
@@ -8696,7 +8773,7 @@ fn own_merge(dst: &List(MovedRec), src: &List(MovedRec)) {
     for i in 0..src.len {
         let found = false
         for j in 0..dst.len {
-            if dst[j].decl == src[i].decl {
+            if dst[j].decl == src[i].decl and dst[j].path == src[i].path {
                 found = true
             }
         }
@@ -8856,7 +8933,7 @@ fn own_expr(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) {
         Identifier(id) => own_ident(self, p, &id, slot)
         Move(m) => own_move(self, p, &m, slot)
         MemberAccess(ma) => {
-            own_expr(self, p, ma.receiver, own_read())
+            own_member_use(self, p, &ma)
             if !own_rvalue_name(self, self.node_of(ma.span)) {
                 own_place_site(self, p, e, slot)
             }
@@ -8911,10 +8988,8 @@ fn own_expr(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) {
 fn own_ident(self: &Checker, p: &OwnPass, id: &IdentifierExpr, slot: OwnSlot) {
     const node = self.node_of(id.span)
     const d = own_local_decl(self, node)
-    if d.is_some() and own_is_moved(p, d.unwrap()) {
-        if own_claim(p, node) {
-            own_report(self, id.span, E_USE_AFTER_MOVE, $"`{id.name}` was moved and cannot be used")
-        }
+    if d.is_some() and own_has_moves(p, d.unwrap()) {
+        own_moved_use(self, p, d.unwrap(), id.name, "", id.span)
         return
     }
     if !own_needs_value(slot) or own_rvalue_name(self, node) or own_is_copyable(self, id.span) {
@@ -8934,6 +9009,82 @@ fn own_ident(self: &Checker, p: &OwnPass, id: &IdentifierExpr, slot: OwnSlot) {
         return
     }
     own_copy_site(self, p, id.span, id.name)
+}
+
+// Reports a use of the place `name.path` (`path` "" for the binding itself) when a move recorded on
+// the binding reaches it: the place or an enclosing one was moved, or a field below it was moved
+// out and left it incomplete.
+fn own_moved_use(self: &Checker, p: &OwnPass, decl: NodeId, name: String, path: String,
+    span: SourceSpan) {
+    const node = self.node_of(span)
+    const above = own_moved_above(p, decl, path)
+    if above.is_some() {
+        if own_claim(p, node) {
+            const shown = place_text(name, path)
+            defer shown.deinit()
+            own_report(self, span, E_USE_AFTER_MOVE,
+                $"`{shown.as_view()}` was moved and cannot be used")
+        }
+        return
+    }
+    const below = own_moved_below(p, decl, path)
+    if below.is_none() or !own_claim(p, node) {
+        return
+    }
+    const shown = place_text(name, path)
+    defer shown.deinit()
+    const field = if path.len == 0 { below.unwrap() } else { below.unwrap()[path.len + 1..] }
+    own_report(self, span, E_USE_AFTER_MOVE,
+        $"`{shown.as_view()}` is incomplete: field `{field}` was moved out - assign it before using `{shown.as_view()}`")
+}
+
+fn place_text(name: String, path: String) OwnedString {
+    if path.len == 0 {
+        return from_view(name)
+    }
+    return $"{name}.{path}"
+}
+
+// A field chain over a binding the function owns: its uses meet the field-level moved set. Any
+// other member access reads its receiver as usual.
+fn own_member_use(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr) {
+    const root = own_chain_root(self, ma.receiver)
+    if root.is_none() {
+        own_expr(self, p, ma.receiver, own_read())
+        return
+    }
+    const id = root.unwrap()
+    const d = own_local_decl(self, self.node_of(id.span))
+    if d.is_none() or !own_has_moves(p, d.unwrap()) {
+        return
+    }
+    const path = member_path(ma)
+    defer path.deinit()
+    own_moved_use(self, p, d.unwrap(), id.name, path.as_view(), ma.span)
+}
+
+// The identifier a chain of field accesses starts from, when no step goes through a reference.
+fn own_chain_root(self: &Checker, e: &Expr) IdentifierExpr? {
+    if own_is_ref(self, expr_span(e)) {
+        return null
+    }
+    return e.* match {
+        Identifier(id) => Some(id)
+        MemberAccess(inner) => own_chain_root(self, inner.receiver)
+        _ => null
+    }
+}
+
+// `a.b.c` below its root identifier: "b.c".
+fn member_path(ma: &MemberAccessExpr) OwnedString {
+    return ma.receiver.* match {
+        MemberAccess(inner) => {
+            const head = member_path(&inner)
+            defer head.deinit()
+            $"{head.as_view()}.{ma.member}"
+        }
+        _ => from_view(ma.member)
+    }
 }
 
 // A name whose value is built where it stands rather than read out of storage: a nullary variant
@@ -8995,13 +9146,32 @@ fn own_field_move(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr) {
         }
         return
     }
-    if own_owned_base(self, p, ma.receiver) or !own_claim(p, node) {
+    if own_owned_base(self, p, ma.receiver) {
+        own_mark_member(self, p, ma)
+        return
+    }
+    if !own_claim(p, node) {
         return
     }
     let sb = string_builder(160, self.allocator)
     sb.append($"field `{ma.member}` cannot be moved out: its base is not owned here - a value reached through a reference, or a parameter without `move`, keeps its fields")
     own_taker_note(p, &sb)
     own_report(self, ma.span, E_NOT_OWNED, sb.to_string())
+}
+
+// Records the field `ma` names as moved out of its root binding.
+fn own_mark_member(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr) {
+    const root = own_chain_root(self, ma.receiver)
+    if root.is_none() {
+        return
+    }
+    const d = own_local_decl(self, self.node_of(root.unwrap().span))
+    if d.is_none() {
+        return
+    }
+    const path = member_path(ma)
+    defer path.deinit()
+    own_mark_field(self, p, d.unwrap(), path.as_view())
 }
 
 // Whether `e` names storage the function owns: a local, or a `move` parameter, and the fields of
@@ -9057,10 +9227,10 @@ fn own_share(self: &Checker, p: &OwnPass, e: &Expr) {
     }
 }
 
-// `move` marks the binding under it dead from here on. A dereference, an index and a field each
-// mark nothing: a reference carries no ownership, and inside the declaring module a partial move
-// leaves the base usable (E2127 refuses it elsewhere). Argument position never reaches here: the
-// checker refuses `move` there (E2129) and the call walks the operand as if unmarked.
+// `move` marks the binding under it dead from here on, and a field of a binding the function owns
+// moved out of it. A dereference, an index, and a field reached through a reference mark nothing: a
+// reference carries no ownership. Argument position never reaches here: the checker refuses `move`
+// there (E2129) and the call walks the operand as if unmarked.
 fn own_move(self: &Checker, p: &OwnPass, m: &MoveExpr, slot: OwnSlot) {
     own_expr(self, p, m.operand, own_read())
     const takes = slot.value or slot.returns
@@ -9070,6 +9240,11 @@ fn own_move(self: &Checker, p: &OwnPass, m: &MoveExpr, slot: OwnSlot) {
     }
     m.operand.* match {
         Identifier(id) => own_move_binding(self, p, &id, m.span, slot)
+        MemberAccess(ma) => {
+            if own_owned_base(self, p, ma.receiver) {
+                own_mark_member(self, p, &ma)
+            }
+        }
         _ => {}
     }
 }
@@ -9527,16 +9702,85 @@ fn struct_field_owned(sd: &StructDef, name: String) bool {
 
 fn own_assign(self: &Checker, p: &OwnPass, a: &AssignmentExpr) {
     own_expr(self, p, a.rhs, own_value())
+    own_lent_root(self, p, a.lhs) match {
+        Some(id) => {
+            own_lent_error(self, p, &id, "writing it needs a copy")
+            return
+        }
+        None => {}
+    }
     a.lhs.* match {
         Identifier(id) => own_assign_binding(self, p, &id, a.span)
-        _ => {
-            own_lent_root(self, p, a.lhs) match {
-                Some(id) => own_lent_error(self, p, &id, "writing it needs a copy")
-                None => {}
-            }
-            own_expr(self, p, a.lhs, own_read())
+        MemberAccess(ma) => own_assign_field(self, p, &ma, a.span)
+        _ => own_expr(self, p, a.lhs, own_read())
+    }
+}
+
+// Assigning a field of a binding the function owns reinitializes it when it was moved out, and
+// leaks the old value when it is live. A field reached through a reference is only written.
+fn own_assign_field(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr, span: SourceSpan) {
+    const root = own_chain_root(self, ma.receiver)
+    const d = root match {
+        Some(id) => own_local_decl(self, self.node_of(id.span))
+        None => null
+    }
+    if d.is_none() or !own_owned_base(self, p, ma.receiver) {
+        own_expr(self, p, ma.receiver, own_read())
+        return
+    }
+    const path = member_path(ma)
+    defer path.deinit()
+    const released = own_released(self, p, d.unwrap(), path.as_view(), own_type(self, ma.span))
+    own_unmark_field(p, d.unwrap(), path.as_view())
+    if released or own_is_copyable(self, ma.span) or !own_claim(p, self.node_of(ma.span)) {
+        return
+    }
+    const shown = place_text(root.unwrap().name, path.as_view())
+    defer shown.deinit()
+    let sb = string_builder(160, self.allocator)
+    sb.append($"`{shown.as_view()}` is live - assigning over it leaks the value it holds")
+    own_blame(self, ma.span, &sb)
+    own_report(self, span, E_ASSIGN_OVER_LIVE, sb.to_string())
+}
+
+// Whether nothing the place `path` holds is still owned there: the place was moved, or every
+// non-copyable field below it was.
+fn own_released(self: &Checker, p: &OwnPass, decl: NodeId, path: String, ty: Ty?) bool {
+    if own_moved_above(p, decl, path).is_some() {
+        return true
+    }
+    if ty.is_none() {
+        return false
+    }
+    const t = self.engine.resolve(ty.unwrap())
+    if self.engine.is_copyable(t) {
+        return true
+    }
+    if own_moved_below(p, decl, path).is_none() {
+        return false
+    }
+    const nid = ty_node(self, t) match {
+        NNominal(nn) => Some(nn.id)
+        _ => null
+    }
+    if nid.is_none() {
+        return false
+    }
+    const sd = self.nominals.get(nid.unwrap()).* match {
+        NomStruct(s) => Some(s)
+        _ => null
+    }
+    if sd.is_none() {
+        return false
+    }
+    for &f in sd.unwrap().fields {
+        const sub = if path.len == 0 { from_view(f.name) } else { $"{path}.{f.name}" }
+        defer sub.deinit()
+        if !own_released(self, p, decl, sub.as_view(), struct_field_lookup(self, t, f.name)) {
+            return false
         }
     }
+    return true
 }
 
 // Assignment over a live binding overwrites what it holds and leaks it; over a moved one it
@@ -9548,11 +9792,7 @@ fn own_assign_binding(self: &Checker, p: &OwnPass, id: &IdentifierExpr, span: So
         return
     }
     const dd = d.unwrap()
-    if own_lent_ident(self, p, id).is_some() {
-        own_lent_error(self, p, id, "writing it needs a copy")
-        return
-    }
-    if own_is_moved(p, dd) {
+    if own_released(self, p, dd, "", own_type(self, id.span)) {
         own_unmark(p, dd)
         return
     }

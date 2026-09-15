@@ -89,6 +89,11 @@ branches.
    an overlapping place passed to any other parameter of the same call, is an error when the overlap
    holds owned state - the argument is non-copyable, or reached through an `owned` field or a
    container element.
+10. **A base with a field moved out is incomplete until the field is assigned.** Moving a field out
+    of a binding the function owns marks that field. Using the field, anything below it, or anything
+    that encloses it - the binding itself, an enclosing field - is E2123; siblings stay usable.
+    Assigning the field makes it live again; assigning it while live leaks what it holds (E2126);
+    assigning the whole binding is allowed once every non-copyable field has left it.
 
 ```flang
 fn push(self: &List($T), value: move T)
@@ -130,6 +135,30 @@ fn bump(n: i32) i32 {
     return n
 }
 ```
+
+## Moving a field out
+
+Rule 10 closes the lane RFC-028 left unchecked, where a partial move marked nothing:
+
+```flang
+fn shutdown(self: move Server) Server {
+    self.log.close()
+    return self                     // error E2123: `self` is incomplete: field `log` was moved out
+}
+
+fn rotate(self: move Server) Server {
+    self.log.close()
+    self.log = open_log()           // the base is whole again
+    return self
+}
+```
+
+A field reached through a reference is not tracked: `slot.key = move old.key` in a container's
+own storage stays the element-store form containers use. A `deinit(self: move T)` that moves every
+field out and never uses `self` whole needs nothing further.
+
+When a field has no value to put back, the field is optional, a null object stands in for it, or
+the function consumes its owner and returns a different type.
 
 ## Scoped mutability
 

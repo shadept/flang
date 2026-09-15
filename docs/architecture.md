@@ -170,8 +170,9 @@ second time to decide liveness for non-copyable values (RFC-028). It is a
 separate walk because it needs facts inference produces - every node's
 type and every call's target - and because it visits a loop body twice
 where inference visits it once. It is an abstract interpretation over the
-AST rather than a built CFG: the lattice is the set of moved bindings,
-keyed by the declaration node a name resolves to; branches take the union
+AST rather than a built CFG: the lattice is the set of moved places, a
+declaration node plus a field path ("" for the whole binding, `a.log` for a
+field moved out of it, RFC-033 rule 10); branches take the union
 of the paths that reach the merge, and a loop takes the union of its entry
 with what its back edge carries, silently, before the reporting pass runs
 from that state. A binding declared inside the body is live again at the

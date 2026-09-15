@@ -16,8 +16,8 @@ type Session = struct {
     log: Inner
 }
 
-// Two fields whose type is non-copyable, disassembled by the type's own deinit.
-// Nothing marks the base, so the second move is fine.
+// Two fields whose type is non-copyable, disassembled by the type's own deinit. Each move marks only
+// its own field, so the second is fine, and `self` is never used whole afterwards.
 fn deinit(self: move Session) {
     self.conn.deinit()
     self.log.deinit()
