@@ -1,10 +1,9 @@
-//! TEST: op_deref_beats_catch_all
+//! TEST: op_deref_catch_all_as_written_wins
 //! EXIT: 0
 
-// An overload that names the `op_deref` target's type is more specific than an unconstrained `$I`
-// catch-all, even though only the catch-all matches the wrapper directly. `w.which()` must reach
-// `which(&Inner)` through the peel rather than stop at `which($I)`; today the peel only runs when
-// direct resolution fails, and the catch-all makes it succeed (docs/known-issues.md).
+// `op_deref` is a fallback: a catch-all that accepts the wrapper as written takes the call, and the
+// overload naming the inner type is reached only when nothing matches the receiver itself. UFCS
+// does not change which overload wins; `w.which()` resolves as `which(w)` or `which(&w)` would.
 
 type Inner = struct {
     value: i64
@@ -33,16 +32,16 @@ fn which(x: $I) i64 { return 2 }
 
 pub fn main() i32 {
     let w = Wrap { pad = 0, inner = Inner { value = 3 } }
-    if w.which() != 1 {
+    if w.which() != 2 {
         return 1
     }
 
     let b: Box(Inner) = Box(Inner) { pad = 0, inner = Inner { value = 3 } }
-    if b.which() != 1 {
+    if b.which() != 2 {
         return 2
     }
 
-    // The catch-all still wins when nothing peels to `Inner`.
+    // And on a plain value.
     if which(3i64) != 2 {
         return 3
     }

@@ -1,5 +1,6 @@
 //! TEST: stdlib_iter_adapters_own
 //! EXIT: 6
+//! SKIP: std.collections.iter is disabled until RFC-019 contracts constrain `$I`
 
 import std.collections.iter
 

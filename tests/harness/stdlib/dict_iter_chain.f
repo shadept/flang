@@ -1,5 +1,6 @@
 //! TEST: stdlib_dict_iter_chain
 //! EXIT: 0
+//! SKIP: std.collections.iter is disabled until RFC-019 contracts constrain `$I`
 
 // Cross-module combinator chains: Dict's keys()/values() iterators driven through std.iter's
 // adapters and consumers, with capturing closures and unannotated lambda parameters throughout.

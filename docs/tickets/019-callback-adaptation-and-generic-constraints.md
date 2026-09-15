@@ -133,6 +133,14 @@ variable is a working feature, not a defect.
 `I: Iterator($T)` would let the type be named rather than reconstructed. That
 is an expressiveness argument, not a correctness one.
 
+### 2.3a `std.iter` is disabled until `$I` can be bounded
+
+Since 2026-09-15 a UFCS receiver ranks in tiers (spec 7.1): an overload taking it as written wins
+over one needing `&x` or an `op_deref` hop. `std.iter`'s `any(it: $I, pred: $F)` then captures
+`d.any(f)` on a `Dict`, which no ranking key can undo without making the dot change overload
+resolution. The module is commented out until `where I: Iterator` can say which receivers it
+takes.
+
 ### 2.4 Side effect worth having
 
 `scheme_specificity` calls itself "a tuned heuristic standing in for a real

@@ -488,7 +488,7 @@ pub fn op_eq(a: OwnedString, b: OwnedString) bool {
     return op_eq(a.as_view(), b.as_view())
 }
 
-pub fn hash(s: &OwnedString) usize {
+pub fn hash(s: OwnedString) usize {
     return hash(s.as_view())
 }
 

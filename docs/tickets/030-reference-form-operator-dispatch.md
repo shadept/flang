@@ -70,8 +70,9 @@ yet, which is the only reason it has not fired.
 The fix for the hole is to reject the by-value operator. That leaves the
 non-copyable type with no way to declare `==` at all, because an
 `op_eq(&T, &T)` is unreachable from `a == b`. RFC-028 step 1 records this as
-the blocker on `OwnedString.op_eq`, and RFC-031 depends on it for every
-`Dict(OwnedString, V)` in tree.
+the blocker on `OwnedString.op_eq`. RFC-033 removes the need: an operand is a
+`T` parameter, which reads, so `op_eq(a: T, b: T)` works for a non-copyable
+`T`; RFC-031 now reaches `String`'s `op_eq` through `op_deref` instead.
 
 ## Design
 

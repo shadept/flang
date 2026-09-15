@@ -453,8 +453,9 @@ promote, then use.
      parameters is E2135. The body rule needs to know which types came from a type parameter, and
      an instantiation binds `T` straight to its concrete type, so it lands with RFC-029's rigid
      check of generic bodies, after 6c. The stdlib takes the bound after the next promote.
-   - **6c, with step 7.** Owned buffers, `deinit(self: move T)`, `clone`, drains. This branch has no
-     callback gates to drop.
+   - **6c, with step 7.** Owned buffers, `deinit(self: move T)`, `clone`, drains, one type at a
+     time and green at each. `OwnedString` follows RFC-031 (an `owned view: String` read through
+     `op_deref`). This branch has no callback gates to drop.
 7. **Compiler libraries.** Sweep `lib/*`, `tools/*`, `compiler/`.
 8. **Docs.** Spec §3.2, §3.6, §4.1, §7.2, §7.3 and the stdlib callback convention; RFC-028 and
    RFC-030 status and cross-references.

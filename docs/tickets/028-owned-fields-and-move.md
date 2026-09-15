@@ -593,9 +593,9 @@ the stdlib frame as a note.
 6. **Annotate leaf resource types** — `File.fd`, `OwnedString.ptr`. `List` and
    `Dict` last.
 
-   `OwnedString` is where RFC-031 takes over: rather than annotating `ptr` on a
-   standalone struct, `OwnedString` becomes `Owned(String)` and the bit derives
-   from the wrapper. `List` and `Dict` move-awareness stays here and gates it,
+   `OwnedString` is where RFC-031 takes over: `OwnedString` holds an
+   `owned view: String` and reads through `op_deref` (RFC-031, rewritten
+   2026-09-15; its earlier draft proposed a generic `Owned(String)`). `List` and `Dict` move-awareness stays here and gates it,
    because a non-copyable key or element is `E2124` at the container's own
    stores either way.
 

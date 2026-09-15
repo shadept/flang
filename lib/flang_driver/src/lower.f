@@ -6305,18 +6305,16 @@ fn lower_operator_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &Binar
     if g.params.len != 2 {
         return unlowerable(ctx)
     }
-    let lty = node_ty(ctx, expr_span(b.lhs))
-    let rty = node_ty(ctx, expr_span(b.rhs))
-    if !repr_compatible(ctx, &lty, &g.params[0]) {
-        return unlowerable(ctx)
-    }
-    if !repr_compatible(ctx, &rty, &g.params[1]) {
-        return unlowerable(ctx)
+    let chain = ctx_receiver_deref(ctx, node_id_of(b.span))
+    const hops = (op.lhs_hops + op.rhs_hops) as usize
+    if hops > 0 and (chain.is_none() or chain.unwrap().len != hops) {
+        return unlowerable_why(ctx, "operator operand hops without their chain")
     }
 
     let args: List(Operand) = list(3, ctx.allocator)
-    args.push(lower_expr(ctx, bb, env, b.lhs))
-    args.push(lower_expr(ctx, bb, env, b.rhs))
+    args.push(lower_operand(ctx, bb, env, b.lhs, chain, 0usize, op.lhs_hops as usize, &g.params[0]))
+    args.push(lower_operand(ctx, bb, env, b.rhs, chain, op.lhs_hops as usize, op.rhs_hops as usize,
+            &g.params[1]))
     let res = emit_call(ctx, bb, sym.unwrap(), &g, args)
 
     if op.cmp_derived_op.is_some() {
@@ -6352,6 +6350,24 @@ fn lower_operator_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &Binar
         return bb.icmp_eq(IrType.I8, res, Operand.IntConst(0))
     }
     return res
+}
+
+// One operand of a binary operator call: as written, or through the `count` `op_deref` hops
+// starting at `first` in the operator node's chain.
+fn lower_operand(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, e: &Expr,
+    chain: &List(ResolvedTarget)?, first: usize, count: usize, want: &Ty) Operand {
+    if count == 0 {
+        if !repr_compatible(ctx, &node_ty(ctx, expr_span(e)), want) {
+            return unlowerable(ctx)
+        }
+        return lower_expr(ctx, bb, env, e)
+    }
+    let hops: List(ResolvedTarget) = list(count, ctx.allocator)
+    defer hops.deinit()
+    for i in first..first + count {
+        hops.push(chain.unwrap()[i])
+    }
+    return lower_deref_receiver(ctx, bb, env, e, &hops, want)
 }
 
 fn variant_index_of(def: &EnumDef, name: String) usize? {

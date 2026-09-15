@@ -57,6 +57,10 @@ pub type ResolvedOperator = struct {
     // When the picked operator function is generic, the specialization the call site instantiated
     // (M10). Lowering calls the specialization's symbol; `function_id` then names the template.
     spec_id: SpecId?
+    // A binary operator's operands reached through `op_deref`: how many hops each side took. The
+    // hops sit on the operator node's deref chain, the left operand's first.
+    lhs_hops: u32
+    rhs_hops: u32
 }
 
 pub type BinaryOpDerived = enum {
@@ -468,6 +472,8 @@ pub fn with_spec(op: &ResolvedOperator, spec_id: SpecId) ResolvedOperator {
         cmp_derived_op = op.cmp_derived_op,
         is_ref_form = op.is_ref_form,
         spec_id = Some(spec_id),
+        lhs_hops = op.lhs_hops,
+        rhs_hops = op.rhs_hops,
     }
 }
 

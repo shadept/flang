@@ -40,6 +40,43 @@ out of a lent scrutinee as lent.
 
 ---
 
+### `std.collections.iter` Is Disabled
+
+**Status:** Open
+**Affected:** `stdlib/std/collections/iter.f`, `stdlib/std/prelude.f`, `stdlib/std/collections.f`
+
+Every function in `std.iter` takes an unconstrained `it: $I`. Under receiver tiers (spec.md §7.1)
+such a catch-all takes any receiver as written: `xs.last()` on a `List` resolved to
+`last(it: move $I)` and failed inside it, and `d.any(f)` on a `Dict` handed `f` one entry instead
+of `(key, value)`. The module is commented out and no longer re-exported by the prelude.
+`stdlib/dict_iter_chain.f` and `ownership/stdlib_iter_adapters_own.f` are skipped.
+
+**Solution:** RFC-019 contracts, restoring the module with `where I: Iterator` signatures.
+
+---
+
+### RFC-020 Argument Coercion Is Not Implemented in the Self-Hosted Compiler
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (`resolve_overload`), `docs/tickets/020-op-deref-argument-coercion.md`
+
+RFC-020 is marked implemented, but a reference argument does not reach its parameter through
+`op_deref`:
+
+```flang
+fn read_x(p: &Point) i32
+let b = Box { inner = Point { x = 7 } }     // op_deref(&Box) &Point
+read_x(&b)                                   // error E2011: no matching overload
+```
+
+The receiver, field, index, `for` and operator positions peel; argument positions do not. Most
+likely the rule lived in the retired reference compiler and was never ported.
+
+**Solution:** walk each reference-typed argument's `op_deref` chain at an argument mismatch, per
+the ticket's rule, recording per-argument hops for lowering.
+
+---
+
 ### `unused.f` Cannot Be Formatted
 
 **Status:** Open
@@ -433,10 +470,11 @@ resolutions deletes them.
 ~~The retry also never ran when a catch-all overload matched the wrapper directly: with std.iter
 imported, `d.any(f)` on a `Dict` resolved to `any(it: $I, pred: $F)` and handed `f` one `Entry`
 instead of `(key, value)`, and `xs.last()` on a `List` walked the iterator instead of reading the
-slice.~~ Resolved 2026-09-07: for UFCS calls the peeled receivers are shapes in the one overload
-ranking (`RecvAlt`, spec.md §7), so an overload naming the wrapped type outranks a bare `$I`.
-Pinned by the `ranking:` tests in `checker.f`, `op_deref/op_deref_beats_catch_all.f`,
-`op_deref/op_deref_beats_iter_catch_all.f` and `generics/overload_structural_specificity.f`. The one index form that does go through the
+slice.~~ Resolved 2026-09-07 by ranking peeled receivers with the rest; reverted 2026-09-15. The
+receiver now ranks in tiers (spec.md §7.1): a catch-all taking the receiver as written wins, as
+the free call would. The std.iter cases are gone with std.iter itself (see "`std.collections.iter`
+Is Disabled"). Pinned by the `ranking:` tests in `checker.f` and
+`op_deref/op_deref_catch_all_as_written_wins.f`. The one index form that does go through the
 hops is the `len` an open range `xs[a..]` synthesises for its end: `check_index` records the chain
 on the range node (`member_deref_retry_at`) and `lower_partial_range_arg` follows it.
 
