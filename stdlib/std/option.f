@@ -33,25 +33,25 @@ pub fn is_none(self: &Option($T)) bool {
     }
 }
 
-pub fn expect(self: Option($T), msg: String) T {
+pub fn expect(self: move Option($T), msg: String) T {
     return self match {
-        Some(v) => move v
+        Some(v) => v
         None => panic(msg)
     }
 }
 
 // Unwrap the Some payload, panicking on None. Use `unwrap_or` / `match` when None is reachable;
 // reserve `unwrap` for invariants you've already checked (e.g. inside an `if x.is_some()` branch).
-pub fn unwrap(self: Option($T)) T {
+pub fn unwrap(self: move Option($T)) T {
     return self match {
-        Some(v) => move v
+        Some(v) => v
         None => panic("called `unwrap` on a `None` value")
     }
 }
 
 // The payload, or `fallback`. The argument is evaluated whether or not the option is empty;
 // `unwrap_or_else` defers it to the empty case.
-pub fn unwrap_or(self: Option($T), fallback: T) T {
+pub fn unwrap_or(self: move Option($T), fallback: move T) T {
     return self match {
         Some(v) => v
         None => fallback
@@ -59,7 +59,7 @@ pub fn unwrap_or(self: Option($T), fallback: T) T {
 }
 
 // The payload, or the result of calling `make`. `make` runs only when the option is empty.
-pub fn unwrap_or_else(self: Option($T), make: $F) T {
+pub fn unwrap_or_else(self: move Option($T), make: $F) T {
     return self match {
         Some(v) => v
         None => make()
@@ -69,7 +69,7 @@ pub fn unwrap_or_else(self: Option($T), make: $F) T {
 // Apply `f` to a present value, leaving `None` untouched. Use it to transform what an optional
 // holds without unwrapping and re-wrapping; `f` never runs on `None`. When `f` itself returns an
 // `Option`, use `flat_map` so the result does not nest.
-pub fn map(self: Option($T), f: $F) Option($U) {
+pub fn map(self: move Option($T), f: $F) Option($U) {
     return self match {
         Some(v) => Some(f(v))
         None => None
@@ -79,7 +79,7 @@ pub fn map(self: Option($T), f: $F) Option($U) {
 // `map` for a function that itself yields an `Option`, flattening the result. Chains a fallible
 // step onto a fallible one: passing such a function to `map` would give `Option(Option(U))`,
 // whereas this stays one level deep. `None` short-circuits and `f` never runs.
-pub fn flat_map(self: Option($T), f: $F) Option($U) {
+pub fn flat_map(self: move Option($T), f: $F) Option($U) {
     return self match {
         Some(v) => f(v)
         None => None
@@ -92,7 +92,7 @@ pub fn flat_map(self: Option($T), f: $F) Option($U) {
 //
 // Chains where each step is a separate reason to give up read as one expression rather than a stack
 // of early returns.
-pub fn filter(self: Option($T), pred: $F) Option(T) {
+pub fn filter(self: move Option($T), pred: $F) Option(T) {
     return self match {
         Some(v) => if pred(v) { self } else { None }
         None => None
@@ -101,7 +101,7 @@ pub fn filter(self: Option($T), pred: $F) Option(T) {
 
 // Null-coalescing operator: Option(T) ?? T -> T
 // Returns the inner value if present, otherwise returns the fallback value.
-pub fn op_coalesce(opt: Option($T), fallback: T) T {
+pub fn op_coalesce(opt: move Option($T), fallback: move T) T {
     return opt match {
         Some(v) => v
         None => fallback
@@ -110,7 +110,7 @@ pub fn op_coalesce(opt: Option($T), fallback: T) T {
 
 // Null-coalescing operator: Option(T) ?? Option(T) -> Option(T) Returns the first option if it has
 // a value, otherwise returns the second.
-pub fn op_coalesce(first: Option($T), second: Option(T)) Option(T) {
+pub fn op_coalesce(first: move Option($T), second: move Option(T)) Option(T) {
     return first match {
         Some(_) => first
         None => second

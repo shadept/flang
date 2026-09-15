@@ -86,12 +86,12 @@ pub fn op_index(s: $T[], range: Range(usize)) T[] {
 }
 
 // Sets the element at `index` to `value`. Panics if `index >= s.len`.
-pub fn op_set_index(s: &Slice($T), index: usize, value: T) {
+pub fn op_set_index(s: &Slice($T), index: usize, value: move T) {
     if index >= s.len {
         panic("index out of bounds")
     }
     const slot = s.ptr + index
-    slot.* = value
+    slot.* = move value
 }
 
 // Returns the first element, or null when empty.
@@ -354,7 +354,7 @@ pub fn each(s: $T[], f: $F) {
 }
 
 // Combines left to right: `f(f(f(init, x0), x1), x2)`.
-pub fn fold(s: $T[], init: $A, f: $F) A {
+pub fn fold(s: $T[], init: move $A, f: $F) A {
     let acc = init
     for i in 0..s.len {
         acc = f(acc, s[i])
@@ -363,7 +363,7 @@ pub fn fold(s: $T[], init: $A, f: $F) A {
 }
 
 // Combines right to left: `f(x0, f(x1, f(x2, init)))`. The accumulator is `f`'s second argument.
-pub fn fold_right(s: $T[], init: $A, f: $F) A {
+pub fn fold_right(s: $T[], init: move $A, f: $F) A {
     let acc = init
     let i = s.len
     while i > 0 {

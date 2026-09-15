@@ -12,7 +12,7 @@ pub type Result = enum(T, E) {
 
 // `?` on Result(T, E) works inside any fn returning Result(U, E): success type can differ, error
 // type must match.
-pub fn op_try(self: Result($T, $E)) TryResult(T, Result($U, E)) {
+pub fn op_try(self: move Result($T, $E)) TryResult(T, Result($U, E)) {
     return self match {
         Ok(v) => TryResult.Continue(move v)
         Err(e) => TryResult.Return(Err(move e))
@@ -35,7 +35,7 @@ pub fn is_err(self: &Result($T, $E)) bool {
     }
 }
 
-pub fn ok(self: Result($T, $E)) T? {
+pub fn ok(self: move Result($T, $E)) T? {
     return self match {
         Ok(v) => Some(move v)
         Err(_) => None
@@ -43,7 +43,7 @@ pub fn ok(self: Result($T, $E)) T? {
 }
 
 // The error as an optional, mirroring `ok`.
-pub fn err(self: Result($T, $E)) E? {
+pub fn err(self: move Result($T, $E)) E? {
     return self match {
         Ok(_) => None
         Err(e) => Some(move e)
@@ -53,10 +53,10 @@ pub fn err(self: Result($T, $E)) E? {
 // Apply `f` to an Ok value, leaving `Err` untouched. Transforms what a result holds without
 // unwrapping and re-wrapping; `f` never runs on `Err`. When `f` itself returns a Result, use
 // `and_then` so the result does not nest.
-pub fn map(self: Result($T, $E), f: $F) Result($U, E) {
+pub fn map(self: move Result($T, $E), f: $F) Result($U, E) {
     return self match {
         Ok(v) => Ok(f(v))
-        Err(e) => Err(e)
+        Err(e) => Err(move e)
     }
 }
 
@@ -67,9 +67,9 @@ pub fn map(self: Result($T, $E), f: $F) Result($U, E) {
 //
 // which is the whole point - `?` requires the error types to match, and without `map_err` every
 // call site has to spell out an is_err / unwrap_err / re-wrap dance instead.
-pub fn map_err(self: Result($T, $E), f: $F) Result(T, $U) {
+pub fn map_err(self: move Result($T, $E), f: $F) Result(T, $U) {
     return self match {
-        Ok(v) => Ok(v)
+        Ok(v) => Ok(move v)
         Err(e) => Err(f(e))
     }
 }
@@ -77,37 +77,37 @@ pub fn map_err(self: Result($T, $E), f: $F) Result(T, $U) {
 // `map` for a function that itself yields a Result, flattening the result. Chains a fallible step
 // onto a fallible one; passing such a function to `map` would give `Result(Result(U, E), E)`. `Err`
 // short-circuits and `f` never runs.
-pub fn and_then(self: Result($T, $E), f: $F) Result($U, E) {
+pub fn and_then(self: move Result($T, $E), f: $F) Result($U, E) {
     return self match {
         Ok(v) => f(v)
-        Err(e) => Err(e)
+        Err(e) => Err(move e)
     }
 }
 
-pub fn except(self: Result($T, $E), msg: String) T {
+pub fn except(self: move Result($T, $E), msg: String) T {
     return self match {
-        Ok(value) => move value
+        Ok(value) => value
         Err(_) => panic(msg)
     }
 }
 
-pub fn expect_err(self: Result($T, $E), msg: String) E {
+pub fn expect_err(self: move Result($T, $E), msg: String) E {
     return self match {
         Ok(_) => panic(msg)
-        Err(error) => move error
+        Err(error) => error
     }
 }
 
 // Unwrap the Ok value, panic if Err
-pub fn unwrap(self: Result($T, $E)) T {
+pub fn unwrap(self: move Result($T, $E)) T {
     return self match {
-        Ok(value) => move value
+        Ok(value) => value
         Err(_) => panic("called unwrap on an Err value")
     }
 }
 
 // Unwrap the Ok value, or return a default if Err
-pub fn unwrap_or(self: Result($T, $E), default: T) T {
+pub fn unwrap_or(self: move Result($T, $E), default: move T) T {
     return self match {
         Ok(value) => value
         Err(_) => default
@@ -115,10 +115,10 @@ pub fn unwrap_or(self: Result($T, $E), default: T) T {
 }
 
 // Unwrap the Err value, panic if Ok
-pub fn unwrap_err(self: Result($T, $E)) E {
+pub fn unwrap_err(self: move Result($T, $E)) E {
     return self match {
         Ok(_) => panic("called unwrap_err on an Ok value")
-        Err(error) => move error
+        Err(error) => error
     }
 }
 
@@ -170,13 +170,13 @@ test "unwrap_or returns default on Err" {
 
 test "unwrap returns value on Ok" {
     let r: Result(i32, i32) = Result.Ok(123)
-    let value = unwrap(r)
+    let value = r.unwrap()
     assert_eq(value, 123, "unwrap on Ok should return the value")
 }
 
 test "unwrap_err returns error on Err" {
     let r: Result(i32, i32) = Result.Err(404)
-    let err = unwrap_err(r)
+    let err = r.unwrap_err()
     assert_eq(err, 404, "unwrap_err on Err should return the error")
 }
 

@@ -26,7 +26,7 @@ pub fn print(value: &$T) {
 }
 
 // Writes the string and frees it, so `print($"...")` needs no temporary.
-pub fn print(value: OwnedString) {
+pub fn print(value: move OwnedString) {
     defer value.deinit()
     print(value.as_view())
 }
@@ -51,7 +51,7 @@ pub fn println(value: &$T) {
 }
 
 // Writes the string and a newline, then frees it.
-pub fn println(value: OwnedString) {
+pub fn println(value: move OwnedString) {
     defer value.deinit()
     println(value.as_view())
 }

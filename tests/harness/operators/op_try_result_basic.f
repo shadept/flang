@@ -17,15 +17,15 @@ fn sum_two(a: i32, b: i32) Result(i32, i32) {
 pub fn main() i32 {
     let r1 = sum_two(3, 4)
     if r1.is_err() { return 1 }
-    if unwrap(r1) != 7 { return 2 }
+    if r1.unwrap() != 7 { return 2 }
 
     let r2 = sum_two(3, -5)
     if r2.is_ok() { return 3 }
-    if unwrap_err(r2) != -5 { return 4 }
+    if r2.unwrap_err() != -5 { return 4 }
 
     let r3 = sum_two(-1, 4)
     if r3.is_ok() { return 5 }
-    if unwrap_err(r3) != -1 { return 6 }
+    if r3.unwrap_err() != -1 { return 6 }
 
     return 0
 }

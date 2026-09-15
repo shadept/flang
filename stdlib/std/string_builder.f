@@ -205,13 +205,13 @@ pub fn format(self: StringBuilder, w: Writer, spec: String) {
 
 // Consumes `s`: the bytes are copied in and the buffer freed, so a temporary - an interpolation, a
 // `to_string()` result - passes straight in without leaking. Append `x.as_view()` to keep `x`.
-pub fn append(sb: &StringBuilder, s: OwnedString) {
+pub fn append(sb: &StringBuilder, s: move OwnedString) {
     s.format(sb.writer(), "")
     s.deinit()
 }
 
 // Consumes `s`, as the unspecced overload does.
-pub fn append(sb: &StringBuilder, s: OwnedString, spec: String) {
+pub fn append(sb: &StringBuilder, s: move OwnedString, spec: String) {
     s.format(sb.writer(), spec)
     s.deinit()
 }

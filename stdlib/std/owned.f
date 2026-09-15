@@ -17,12 +17,12 @@ pub type Owned = struct(T) {
 }
 
 // Cleanup defaults to T.deinit. Works for any T with deinit(&T) in scope.
-pub fn owned(value: $T) Owned(T) {
+pub fn owned(value: move $T) Owned(T) {
     return owned(value, deinit)
 }
 
-pub fn owned(value: $T, cleanup: fn(&T) void) Owned(T) {
-    let some: T? = Some(value)
+pub fn owned(value: move $T, cleanup: fn(&T) void) Owned(T) {
+    let some: T? = Some(move value)
     return .{ __value = some, __cleanup = cleanup }
 }
 

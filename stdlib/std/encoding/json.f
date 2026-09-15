@@ -138,7 +138,7 @@ pub fn json_get_ref(self: &Dict(OwnedString, JsonValue), key: String) &JsonValue
     return self.get_ref(key)
 }
 
-pub fn json_set(self: &Dict(OwnedString, JsonValue), key: String, value: JsonValue) {
+pub fn json_set(self: &Dict(OwnedString, JsonValue), key: String, value: move JsonValue) {
     self.set(key, value)
 }
 

@@ -67,9 +67,9 @@ pub fn multimap(allocator: &Allocator) MultiMap($K, $V) {
 // - `key`: stored on first sight; a later `add` of an equal key reuses the stored one, so an owned
 //   key passed again is the caller's to deinit.
 // - `value`: owned by the map from here; deinited by `remove_key` or `deinit`.
-pub fn add(self: &MultiMap($K, $V), key: K, value: V) {
+pub fn add(self: &MultiMap($K, $V), key: move K, value: move V) {
     const idx = self.pool.len as u32
-    self.pool.push(Slot(V) { value = value, next = NONE }, self.allocator)
+    self.pool.push(Slot(V) { value = move value, next = NONE }, self.allocator)
     const chain = self.chains.get_or_insert_with(key, fn() { Chain { first = NONE, last = NONE,
             count = 0u32 } }, self.allocator)
     if chain.last == NONE {

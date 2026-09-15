@@ -233,7 +233,7 @@ pub const stderr = File {
 test "open_file on a missing path reports NotFound, not IOError" {
     const r = open_file("definitely_not_here.txt", FileMode.Read)
     assert_true(r.is_err(), "open fails")
-    assert_true(unwrap_err(r) match { NotFound => true, _ => false }, "errno reaches the caller")
+    assert_true(r.unwrap_err() match { NotFound => true, _ => false }, "errno reaches the caller")
 }
 
 test "write, read back, and remove a file" {
@@ -241,13 +241,13 @@ test "write, read back, and remove a file" {
 
     const opened = open_file(p, FileMode.Write)
     assert_true(opened.is_ok(), "open for write")
-    let w = unwrap(opened)
+    let w = opened.unwrap()
     assert_true(write(&w, "hello flang").is_ok(), "write")
     assert_true(close_file(&w).is_ok(), "close after write")
 
     const reopened = open_file(p, FileMode.Read)
     assert_true(reopened.is_ok(), "open for read")
-    let r = unwrap(reopened)
+    let r = reopened.unwrap()
     const text = read_all(&r)
     assert_true(text.is_ok(), "read_all")
     let owned_text = text.unwrap()
@@ -262,18 +262,15 @@ test "write, read back, and remove a file" {
 test "write truncates an existing file" {
     const p = "build/file_test_trunc.tmp"
 
-    const a_opened = open_file(p, FileMode.Write)
-    let a = unwrap(a_opened)
+    let a = open_file(p, FileMode.Write).unwrap()
     assert_true(write(&a, "long original contents").is_ok(), "first write")
     assert_true(close_file(&a).is_ok(), "close")
 
-    const b_opened = open_file(p, FileMode.Write)
-    let b = unwrap(b_opened)
+    let b = open_file(p, FileMode.Write).unwrap()
     assert_true(write(&b, "short").is_ok(), "second write")
     assert_true(close_file(&b).is_ok(), "close")
 
-    const c_opened = open_file(p, FileMode.Read)
-    let c = unwrap(c_opened)
+    let c = open_file(p, FileMode.Read).unwrap()
     const text = read_all(&c).unwrap()
     assert_eq(text.as_view(), "short", "old tail is gone")
     text.deinit()
@@ -284,18 +281,15 @@ test "write truncates an existing file" {
 test "append adds to the end instead of truncating" {
     const p = "build/file_test_append.tmp"
 
-    const a_opened = open_file(p, FileMode.Write)
-    let a = unwrap(a_opened)
+    let a = open_file(p, FileMode.Write).unwrap()
     assert_true(write(&a, "one").is_ok(), "write")
     assert_true(close_file(&a).is_ok(), "close")
 
-    const b_opened = open_file(p, FileMode.Append)
-    let b = unwrap(b_opened)
+    let b = open_file(p, FileMode.Append).unwrap()
     assert_true(write(&b, "-two").is_ok(), "append")
     assert_true(close_file(&b).is_ok(), "close")
 
-    const c_opened = open_file(p, FileMode.Read)
-    let c = unwrap(c_opened)
+    let c = open_file(p, FileMode.Read).unwrap()
     const text = read_all(&c).unwrap()
     assert_eq(text.as_view(), "one-two", "appended")
     text.deinit()

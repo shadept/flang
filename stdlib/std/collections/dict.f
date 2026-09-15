@@ -200,7 +200,10 @@ fn ensure_capacity(self: &UnmanagedDict($K, $V), allocator: &Allocator) {
         for i in 0..old_cap {
             const old_entry: &Entry(K, V) = old_entries + i
             if old_entry.hash >= 2 {
-                const _placed = self.place(old_entry.hash, old_entry.key, old_entry.value)
+                // The old buffer is freed without deinit, so its entries are handed over as stored.
+                const slot = self.claim_slot(old_entry.hash)
+                slot.key = move old_entry.key
+                slot.value = move old_entry.value
             }
         }
         allocator.free(slice_from_raw_parts(old_entries, old_cap))
@@ -209,7 +212,16 @@ fn ensure_capacity(self: &UnmanagedDict($K, $V), allocator: &Allocator) {
 
 // Store a key known to be absent in the first tombstone or empty slot on its probe sequence. The
 // table must have room (`ensure_capacity`).
-fn place(self: &UnmanagedDict($K, $V), h: usize, key: K, value: V) &Entry(K, V) {
+fn place(self: &UnmanagedDict($K, $V), h: usize, key: move K, value: move V) &Entry(K, V) {
+    const entry = self.claim_slot(h)
+    entry.key = move key
+    entry.value = move value
+    return entry
+}
+
+// Claims the first tombstone or empty slot on `h`'s probe sequence for a key known to be absent:
+// the slot is counted and hashed, and its key and value are the caller's to store.
+fn claim_slot(self: &UnmanagedDict($K, $V), h: usize) &Entry(K, V) {
     for i in 0..self.cap {
         const entry: &Entry(K, V) = self.entries + probe_slot(h, i, self.cap)
         if entry.hash == HASH_EMPTY or entry.hash == HASH_DEAD {
@@ -217,8 +229,6 @@ fn place(self: &UnmanagedDict($K, $V), h: usize, key: K, value: V) &Entry(K, V) 
                 self.dead = self.dead - 1
             }
             entry.hash = h
-            entry.key = key
-            entry.value = value
             self.length = self.length + 1
             return entry
         }
@@ -232,7 +242,7 @@ fn place(self: &UnmanagedDict($K, $V), h: usize, key: K, value: V) &Entry(K, V) 
 // A present key keeps its entry untouched, and `key` and `value` stay the caller's to deinit; an
 // inserted pair is owned by the dict from here. One probe either way, so a membership-then-insert
 // check is `if d.add(k, v, alloc) { ... }`. Panics when the table cannot grow.
-pub fn add(self: &UnmanagedDict($K, $V), key: K, value: V, allocator: &Allocator) bool {
+pub fn add(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: &Allocator) bool {
     if self.find_entry(key).is_some() {
         return false
     }
@@ -243,7 +253,7 @@ pub fn add(self: &UnmanagedDict($K, $V), key: K, value: V, allocator: &Allocator
 
 // String-key `add` for `UnmanagedDict(OwnedString, V)`: `key` is a borrowed view, copied into an
 // owned key only when it is inserted.
-pub fn add(self: &UnmanagedDict(OwnedString, $V), key: String, value: V,
+pub fn add(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V,
     allocator: &Allocator) bool {
     const fake = fake_owned(key)
     if self.find_entry(fake).is_some() {
@@ -262,7 +272,7 @@ pub fn add(self: &UnmanagedDict(OwnedString, $V), key: String, value: V,
 //
 // The reference is valid until the next insert, which may move the table. Panics when the table
 // cannot grow.
-pub fn get_or_insert_with(self: &UnmanagedDict($K, $V), key: K, make: $F,
+pub fn get_or_insert_with(self: &UnmanagedDict($K, $V), key: move K, make: $F,
     allocator: &Allocator) &V {
     const found = self.find_entry(key)
     if found.is_some() {
@@ -276,12 +286,12 @@ pub fn get_or_insert_with(self: &UnmanagedDict($K, $V), key: K, make: $F,
 
 // Insert or update a key-value pair. On an update the old value is deinited, and so is `key`, since
 // the entry keeps the one it already has. Panics when the allocation fails.
-pub fn set(self: &UnmanagedDict($K, $V), key: K, value: V, allocator: &Allocator) {
+pub fn set(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: &Allocator) {
     const existing = self.get_ref(key)
     if existing.is_some() {
         const slot = existing.unwrap()
         slot.deinit()
-        slot.* = value
+        slot.* = move value
         key.deinit()
         return
     }
@@ -291,13 +301,14 @@ pub fn set(self: &UnmanagedDict($K, $V), key: K, value: V, allocator: &Allocator
 
 // String-key insert for `UnmanagedDict(OwnedString, V)`: the key is a borrowed view, copied into an
 // owned key only when it is new to the table.
-pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: V, allocator: &Allocator) {
+pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V,
+    allocator: &Allocator) {
     const fake = fake_owned(key)
     const existing = self.find_entry(fake)
     if existing.is_some() {
         const entry = existing.unwrap()
         entry.value.deinit()
-        entry.value = value
+        entry.value = move value
         return
     }
     self.ensure_capacity(allocator)
@@ -469,7 +480,7 @@ pub fn contains(self: &UnmanagedDict(OwnedString, $V), key: String) bool {
 }
 
 // The value for `key`, or `fallback` when absent.
-pub fn get_or(self: &UnmanagedDict($K, $V), key: K, fallback: V) V {
+pub fn get_or(self: &UnmanagedDict($K, $V), key: K, fallback: move V) V {
     let v = self.get(key)
     if v.is_some() {
         return v.unwrap()
@@ -651,36 +662,36 @@ pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) Unm
 
 #define(managed_dict, Self: Ident) {
     // Insert or update a key-value pair. Panics when the allocation fails.
-    pub fn set(self: &#(Self)($K, $V), key: K, value: V) {
+    pub fn set(self: &#(Self)($K, $V), key: move K, value: move V) {
         self.__storage.set(key, value, self.allocator)
     }
 
     // String-key insert for a `(OwnedString, V)` carrier: `key` is a borrowed view, copied into an
     // owned key only when it is new to the table.
-    pub fn set(self: &#(Self)(OwnedString, $V), key: String, value: V) {
+    pub fn set(self: &#(Self)(OwnedString, $V), key: String, value: move V) {
         self.__storage.set(key, value, self.allocator)
     }
 
     // `d[key] = value`: insert or update. Panics when the allocation fails.
-    pub fn op_set_index(self: &#(Self)($K, $V), key: K, value: V) {
+    pub fn op_set_index(self: &#(Self)($K, $V), key: move K, value: move V) {
         self.__storage.set(key, value, self.allocator)
     }
 
     // Inserts `key` with `value` unless the key is present, and returns whether it was inserted. A
     // present key keeps its entry, and `key` and `value` stay the caller's.
-    pub fn add(self: &#(Self)($K, $V), key: K, value: V) bool {
+    pub fn add(self: &#(Self)($K, $V), key: move K, value: move V) bool {
         return self.__storage.add(key, value, self.allocator)
     }
 
     // String-key `add` for a `(OwnedString, V)` carrier: `key` is copied into an owned key only
     // when it is inserted.
-    pub fn add(self: &#(Self)(OwnedString, $V), key: String, value: V) bool {
+    pub fn add(self: &#(Self)(OwnedString, $V), key: String, value: move V) bool {
         return self.__storage.add(key, value, self.allocator)
     }
 
     // Returns a reference to the value for `key`, inserting `make()` under it first when the key is
     // absent. `make` runs only on a miss. The reference is valid until the next insert.
-    pub fn get_or_insert_with(self: &#(Self)($K, $V), key: K, make: $F) &V {
+    pub fn get_or_insert_with(self: &#(Self)($K, $V), key: move K, make: $F) &V {
         return self.__storage.get_or_insert_with(key, make, self.allocator)
     }
 

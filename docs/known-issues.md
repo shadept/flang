@@ -27,17 +27,16 @@ yet:
   { Some(v) => move v, ... } }` compiles for a non-copyable payload: `v` is an ordinary binding, so
   the payload leaves a value the function only reads and the caller keeps a second owner. Rule 3
   holds for the parameter's own name, not for names bound out of it.
-- **The stdlib still reads where it should take.** `push`, `insert`, `unwrap`, `expect` and the rest
-  take `T`, not `move T`, until plan step 6 (after the promote, since the seed requires `move` at a
-  `move` parameter's call sites). So `List(<non-copyable>)` is E2131 at the instantiation, and
-  `unwrap(open_file(...))` is E2132. `for_ref_loop` is skipped on it. Compiler and tool sources take
-  a `File` out of its `Result` with `match`, which both the seed and the current compiler accept.
+- **The stdlib's own types are still copyable.** Consuming parameters take `move T` (plan step 6a),
+  but `List`, `Dict`, `OwnedString` and the rest own their buffers only from step 6b, and `deinit`
+  and `close_file` still take `&self` until then. Compiler and tool sources still take a `File` out
+  of its `Result` with the `match` form step 1 needed; step 7 returns them to `unwrap`.
 - **Unannotated callbacks never take ownership.** A lambda's unannotated parameter, and a call
   through a function variable whose type is still open, infer `fn(T)`; a slot typed `fn(move T)`
   does not unify with it. Write `fn(v: move T)`.
 
-**Solution:** plan steps 3 (closures) and 6 (stdlib); the pattern-binding case needs the pass to
-treat names bound out of a lent scrutinee as lent.
+**Solution:** plan steps 6b and 7; the pattern-binding case needs the pass to treat names bound
+out of a lent scrutinee as lent.
 
 ---
 

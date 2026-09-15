@@ -56,7 +56,7 @@ pub fn set(allocator: &Allocator? = null) Set($T) {
 // A present value is left as it is, and the `value` passed stays the caller's to deinit; an added
 // one is owned by the set. One probe either way, so a visited check is `if seen.add(x, alloc) { ...
 // }`. Panics when the table cannot grow.
-pub fn add(self: &UnmanagedSet($T), value: T, allocator: &Allocator) bool {
+pub fn add(self: &UnmanagedSet($T), value: move T, allocator: &Allocator) bool {
     return self.__inner.add(value, 1u8, allocator)
 }
 
@@ -197,7 +197,7 @@ pub fn next(it: &SetIterator($T)) T? {
 
 // Adds `value` unless it is present, and returns whether it was added. A present value is left as
 // it is, and the `value` passed stays the caller's. Panics when the table cannot grow.
-pub fn add(self: &Set($T), value: T) bool {
+pub fn add(self: &Set($T), value: move T) bool {
     return self.__storage.add(value, self.allocator)
 }
 

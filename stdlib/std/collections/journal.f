@@ -74,7 +74,7 @@ pub fn depth(self: &Journal($T)) usize {
 //
 // - `entry`: whatever `rollback`'s callback needs to undo the mutation, typically the key and the
 //   value it replaced. The journal owns it from here and deinits it with the log.
-pub fn record(self: &Journal($T), entry: T) {
+pub fn record(self: &Journal($T), entry: move T) {
     if self.marks.len == 0 {
         return
     }

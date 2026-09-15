@@ -21,11 +21,11 @@ type RcInner = struct(T) {
 }
 
 // Create a new Rc wrapping the given value. Allocates an RcInner on the heap.
-pub fn rc(value: $T, allocator: &Allocator? = null) Rc(T) {
+pub fn rc(value: move $T, allocator: &Allocator? = null) Rc(T) {
     const alloc = allocator.or_global()
     const inner = alloc.new(RcInner(T))
     inner.ref_count = 1
-    inner.value = value
+    inner.value = move value
     return .{ __inner = Some(inner), __allocator = allocator }
 }
 
@@ -197,11 +197,11 @@ pub type Arc = struct(T) {
 }
 
 // Create a new Arc wrapping the given value.
-pub fn arc(value: $T, allocator: &Allocator? = null) Arc(T) {
+pub fn arc(value: move $T, allocator: &Allocator? = null) Arc(T) {
     const alloc = allocator.or_global()
     const inner = alloc.new(RcInner(T))
     inner.ref_count = 1
-    inner.value = value
+    inner.value = move value
     return .{ __inner = Some(inner), __allocator = allocator }
 }
 

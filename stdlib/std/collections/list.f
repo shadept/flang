@@ -242,7 +242,7 @@ pub fn reserve(s: &UnmanagedList($T), capacity: usize, allocator: &Allocator) {
 }
 
 // Appends `value`, growing when full. Panics when the allocation fails.
-pub fn push(s: &UnmanagedList($T), value: T, allocator: &Allocator) {
+pub fn push(s: &UnmanagedList($T), value: move T, allocator: &Allocator) {
     s.reserve(s.len + 1, allocator)
     s.len = s.len + 1
     let data = s.as_slice()
@@ -264,7 +264,7 @@ pub fn push_all(s: &UnmanagedList($T), xs: T[], allocator: &Allocator) {
 
 // Inserts `value` at `index`, shifting everything at and after it one slot toward the end. `index
 // == len` appends. O(len - index). Panics past the end or when the allocation fails.
-pub fn insert(s: &UnmanagedList($T), index: usize, value: T, allocator: &Allocator) {
+pub fn insert(s: &UnmanagedList($T), index: usize, value: move T, allocator: &Allocator) {
     if index > s.len {
         panic("insert(List(T), index): index out of bounds")
     }
@@ -345,7 +345,7 @@ pub fn pop(list: &UnmanagedList($T)) T? {
 // Set the element at the given index.
 // Panics if index is out of bounds.
 #deprecated("Prefer index syntax: list[idx] = value")
-pub fn set(list: &UnmanagedList($T), index: usize, value: T) {
+pub fn set(list: &UnmanagedList($T), index: usize, value: move T) {
     if index >= list.len {
         panic("List: index out of bounds")
     }
@@ -553,12 +553,12 @@ pub fn max_by(self: &UnmanagedList($T), key: $F) T? {
 }
 
 // Combines left to right: `f(f(f(init, x0), x1), x2)`.
-pub fn fold(self: &UnmanagedList($T), init: $A, f: $F) A {
+pub fn fold(self: &UnmanagedList($T), init: move $A, f: $F) A {
     return self.as_slice().fold(init, f)
 }
 
 // Combines right to left: `f(x0, f(x1, f(x2, init)))`. The accumulator is `f`'s second argument.
-pub fn fold_right(self: &UnmanagedList($T), init: $A, f: $F) A {
+pub fn fold_right(self: &UnmanagedList($T), init: move $A, f: $F) A {
     return self.as_slice().fold_right(init, f)
 }
 
@@ -735,7 +735,7 @@ pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
     }
 
     // Appends `value`, growing when full. Panics when the allocation fails.
-    pub fn push(self: &#(Self)($T), value: T) {
+    pub fn push(self: &#(Self)($T), value: move T) {
         self.__storage.push(value, self.allocator)
     }
 
@@ -746,7 +746,7 @@ pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
 
     // Inserts `value` at `index`, shifting everything at and after it one slot toward the end.
     // `index == len` appends. Panics past the end.
-    pub fn insert(self: &#(Self)($T), index: usize, value: T) {
+    pub fn insert(self: &#(Self)($T), index: usize, value: move T) {
         self.__storage.insert(index, value, self.allocator)
     }
 

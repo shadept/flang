@@ -102,22 +102,22 @@ fn reserve(self: &UnmanagedDeque($T), required: usize, allocator: &Allocator) {
 
 // Appends `value` at the back, growing when full. The deque owns it from here. Panics when the
 // allocation fails.
-pub fn push_back(self: &UnmanagedDeque($T), value: T, allocator: &Allocator) {
+pub fn push_back(self: &UnmanagedDeque($T), value: move T, allocator: &Allocator) {
     self.reserve(self.len + 1, allocator)
     const tail = (self.head + self.len) % self.cap
     const slot: &T = self.ptr + tail
-    slot.* = value
+    slot.* = move value
     self.len = self.len + 1
 }
 
 // Prepends `value` at the front, growing when full. The deque owns it from here. Panics when the
 // allocation fails.
-pub fn push_front(self: &UnmanagedDeque($T), value: T, allocator: &Allocator) {
+pub fn push_front(self: &UnmanagedDeque($T), value: move T, allocator: &Allocator) {
     self.reserve(self.len + 1, allocator)
     // Wrap backwards. Adding cap-1 then mod cap avoids underflow on usize.
     self.head = (self.head + self.cap - 1) % self.cap
     const slot: &T = self.ptr + self.head
-    slot.* = value
+    slot.* = move value
     self.len = self.len + 1
 }
 
@@ -233,13 +233,13 @@ pub fn next(it: &DequeIterator($T)) T? {
 
 // Appends `value` at the back, growing when full. The deque owns it from here. Panics when the
 // allocation fails.
-pub fn push_back(self: &Deque($T), value: T) {
+pub fn push_back(self: &Deque($T), value: move T) {
     self.__storage.push_back(value, self.allocator)
 }
 
 // Prepends `value` at the front, growing when full. The deque owns it from here. Panics when the
 // allocation fails.
-pub fn push_front(self: &Deque($T), value: T) {
+pub fn push_front(self: &Deque($T), value: move T) {
     self.__storage.push_front(value, self.allocator)
 }
 

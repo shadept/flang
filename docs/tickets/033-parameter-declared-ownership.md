@@ -357,6 +357,17 @@ promote, then use.
 5. **Promote.**
 6. **Stdlib.** Adopt `owned` buffers with `move` on every consuming parameter (`deinit`, `push`,
    `insert`, `set`, `unwrap`, `expect`, `map`, `close`); drop the callback gates.
+
+   Split in two, because owned buffers break the compiler's build until step 7 sweeps it:
+   - **6a, done.** `move` on every by-value parameter that stores its argument or takes it apart:
+     container inserts, `Option`/`Result` members and `op_try`, iterator adapters and consumers
+     (an adapter's own `iter` takes `move self`), `rc`/`arc`/`owned`, and the `OwnedString`
+     consumers. Stores inside those bodies write `move`; the dict rehash hands entries to the
+     new buffer with the same element-store `move`, since the old buffer is freed without deinit.
+     `deinit` and `close_file` keep `&self`: on a copyable type a `move self` that disarms its
+     argument would only write the callee's copy.
+   - **6b, with step 7.** Owned buffers, `deinit(self: move T)`, `clone`, drains. This branch has no
+     callback gates to drop.
 7. **Compiler libraries.** Sweep `lib/*`, `tools/*`, `compiler/`.
 8. **Docs.** Spec §3.2, §3.6, §4.1, §7.2, §7.3 and the stdlib callback convention; RFC-028 and
    RFC-030 status and cross-references.

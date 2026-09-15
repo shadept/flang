@@ -1,6 +1,5 @@
 //! TEST: for_ref_loop
 //! EXIT: 3
-//! SKIP: RFC-033 step 6 - `List.push` takes `value: move T`
 
 import std.collections.list
 

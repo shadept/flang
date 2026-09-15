@@ -36,8 +36,8 @@ type FilterIter = struct(I, F) {
     f: F
 }
 
-pub fn iter(self: &FilterIter($I, $F)) FilterIter(I, F) {
-    return self.*
+pub fn iter(self: move FilterIter($I, $F)) FilterIter(I, F) {
+    return self
 }
 
 pub fn next(self: &FilterIter($I, $F)) $T? {
@@ -53,8 +53,8 @@ pub fn next(self: &FilterIter($I, $F)) $T? {
     }
 }
 
-pub fn filter(it: $I, f: $F) FilterIter(I, F) {
-    return .{ it = it, f = f }
+pub fn filter(it: move $I, f: move $F) FilterIter(I, F) {
+    return .{ it = move it, f = move f }
 }
 
 // =============================================================================
@@ -66,8 +66,8 @@ type MapIter = struct(I, F) {
     f: F
 }
 
-pub fn iter(self: &MapIter($I, $F)) MapIter(I, F) {
-    return self.*
+pub fn iter(self: move MapIter($I, $F)) MapIter(I, F) {
+    return self
 }
 
 pub fn next(self: &MapIter($I, $F)) $U? {
@@ -78,8 +78,8 @@ pub fn next(self: &MapIter($I, $F)) $U? {
     return Some(self.f(v.unwrap()))
 }
 
-pub fn map(it: $I, f: $F) MapIter(I, F) {
-    return .{ it = it, f = f }
+pub fn map(it: move $I, f: move $F) MapIter(I, F) {
+    return .{ it = move it, f = move f }
 }
 
 // =============================================================================
@@ -91,8 +91,8 @@ type EnumerateIter = struct(I) {
     idx: usize
 }
 
-pub fn iter(self: &EnumerateIter($I)) EnumerateIter(I) {
-    return self.*
+pub fn iter(self: move EnumerateIter($I)) EnumerateIter(I) {
+    return self
 }
 
 pub fn next(self: &EnumerateIter($I)) (usize, $T)? {
@@ -105,8 +105,8 @@ pub fn next(self: &EnumerateIter($I)) (usize, $T)? {
     return Some((i, v.unwrap()))
 }
 
-pub fn enumerate(it: $I) EnumerateIter(I) {
-    return .{ it = it, idx = 0 }
+pub fn enumerate(it: move $I) EnumerateIter(I) {
+    return .{ it = move it, idx = 0 }
 }
 
 // =============================================================================
@@ -118,8 +118,8 @@ type TakeIter = struct(I) {
     left: usize
 }
 
-pub fn iter(self: &TakeIter($I)) TakeIter(I) {
-    return self.*
+pub fn iter(self: move TakeIter($I)) TakeIter(I) {
+    return self
 }
 
 pub fn next(self: &TakeIter($I)) $T? {
@@ -131,8 +131,8 @@ pub fn next(self: &TakeIter($I)) $T? {
 }
 
 // At most the first `n` elements.
-pub fn take(it: $I, n: usize) TakeIter(I) {
-    return .{ it = it, left = n }
+pub fn take(it: move $I, n: usize) TakeIter(I) {
+    return .{ it = move it, left = n }
 }
 
 type SkipIter = struct(I) {
@@ -140,8 +140,8 @@ type SkipIter = struct(I) {
     pending: usize
 }
 
-pub fn iter(self: &SkipIter($I)) SkipIter(I) {
-    return self.*
+pub fn iter(self: move SkipIter($I)) SkipIter(I) {
+    return self
 }
 
 pub fn next(self: &SkipIter($I)) $T? {
@@ -156,8 +156,8 @@ pub fn next(self: &SkipIter($I)) $T? {
 }
 
 // Everything after the first `n` elements.
-pub fn skip(it: $I, n: usize) SkipIter(I) {
-    return .{ it = it, pending = n }
+pub fn skip(it: move $I, n: usize) SkipIter(I) {
+    return .{ it = move it, pending = n }
 }
 
 // =============================================================================
@@ -170,8 +170,8 @@ type TakeWhileIter = struct(I, F) {
     done: bool
 }
 
-pub fn iter(self: &TakeWhileIter($I, $F)) TakeWhileIter(I, F) {
-    return self.*
+pub fn iter(self: move TakeWhileIter($I, $F)) TakeWhileIter(I, F) {
+    return self
 }
 
 pub fn next(self: &TakeWhileIter($I, $F)) $T? {
@@ -193,8 +193,8 @@ pub fn next(self: &TakeWhileIter($I, $F)) $T? {
 }
 
 // Elements until the first one `f` rejects; nothing after it.
-pub fn take_while(it: $I, f: $F) TakeWhileIter(I, F) {
-    return .{ it = it, f = f, done = false }
+pub fn take_while(it: move $I, f: move $F) TakeWhileIter(I, F) {
+    return .{ it = move it, f = move f, done = false }
 }
 
 type SkipWhileIter = struct(I, F) {
@@ -203,8 +203,8 @@ type SkipWhileIter = struct(I, F) {
     skipping: bool
 }
 
-pub fn iter(self: &SkipWhileIter($I, $F)) SkipWhileIter(I, F) {
-    return self.*
+pub fn iter(self: move SkipWhileIter($I, $F)) SkipWhileIter(I, F) {
+    return self
 }
 
 pub fn next(self: &SkipWhileIter($I, $F)) $T? {
@@ -226,8 +226,8 @@ pub fn next(self: &SkipWhileIter($I, $F)) $T? {
 }
 
 // Drops the leading run `f` accepts; yields everything from the first rejected element on.
-pub fn skip_while(it: $I, f: $F) SkipWhileIter(I, F) {
-    return .{ it = it, f = f, skipping = true }
+pub fn skip_while(it: move $I, f: move $F) SkipWhileIter(I, F) {
+    return .{ it = move it, f = move f, skipping = true }
 }
 
 // =============================================================================
@@ -239,8 +239,8 @@ type ZipIter = struct(I, J) {
     b: J
 }
 
-pub fn iter(self: &ZipIter($I, $J)) ZipIter(I, J) {
-    return self.*
+pub fn iter(self: move ZipIter($I, $J)) ZipIter(I, J) {
+    return self
 }
 
 // Stops at the shorter side. When `a` yields and `b` is exhausted, that
@@ -257,8 +257,8 @@ pub fn next(self: &ZipIter($I, $J)) ($A, $B)? {
     return Some((a.unwrap(), b.unwrap()))
 }
 
-pub fn zip(a: $I, b: $J) ZipIter(I, J) {
-    return .{ a = a, b = b }
+pub fn zip(a: move $I, b: move $J) ZipIter(I, J) {
+    return .{ a = move a, b = move b }
 }
 
 type ChainIter = struct(I, J) {
@@ -267,8 +267,8 @@ type ChainIter = struct(I, J) {
     on_b: bool
 }
 
-pub fn iter(self: &ChainIter($I, $J)) ChainIter(I, J) {
-    return self.*
+pub fn iter(self: move ChainIter($I, $J)) ChainIter(I, J) {
+    return self
 }
 
 pub fn next(self: &ChainIter($I, $J)) $T? {
@@ -285,8 +285,8 @@ pub fn next(self: &ChainIter($I, $J)) $T? {
 // All of `a`, then all of `b`. The iterator TYPES may differ (chain a FilterIter with a plain
 // SliceIterator); only the element type they yield
 // must agree — `next` unifies the two.
-pub fn chain(a: $I, b: $J) ChainIter(I, J) {
-    return .{ a = a, b = b, on_b = false }
+pub fn chain(a: move $I, b: move $J) ChainIter(I, J) {
+    return .{ a = move a, b = move b, on_b = false }
 }
 
 type ZipLongestIter = struct(I, J, A, B) {
@@ -296,8 +296,8 @@ type ZipLongestIter = struct(I, J, A, B) {
     fill_b: B
 }
 
-pub fn iter(self: &ZipLongestIter($I, $J, $A, $B)) ZipLongestIter(I, J, A, B) {
-    return self.*
+pub fn iter(self: move ZipLongestIter($I, $J, $A, $B)) ZipLongestIter(I, J, A, B) {
+    return self
 }
 
 pub fn next(self: &ZipLongestIter($I, $J, $A, $B)) (A, B)? {
@@ -317,8 +317,9 @@ pub fn next(self: &ZipLongestIter($I, $J, $A, $B)) (A, B)? {
 
 // Like `zip`, but runs to the LONGER side, substituting `fill_a` / `fill_b` for the exhausted
 // iterator's elements.
-pub fn zip_longest(a: $I, b: $J, fill_a: $A, fill_b: $B) ZipLongestIter(I, J, A, B) {
-    return .{ a = a, b = b, fill_a = fill_a, fill_b = fill_b }
+pub fn zip_longest(a: move $I, b: move $J, fill_a: move $A, fill_b: move $B) ZipLongestIter(I, J, A,
+    B) {
+    return .{ a = move a, b = move b, fill_a = move fill_a, fill_b = move fill_b }
 }
 
 // =============================================================================
@@ -330,8 +331,8 @@ type CycleIter = struct(I) {
     it: I
 }
 
-pub fn iter(self: &CycleIter($I)) CycleIter(I) {
-    return self.*
+pub fn iter(self: move CycleIter($I)) CycleIter(I) {
+    return self
 }
 
 pub fn next(self: &CycleIter($I)) $T? {
@@ -346,7 +347,7 @@ pub fn next(self: &CycleIter($I)) $T? {
 // Repeats the sequence forever: after the last element, the first again. Infinite unless the source
 // is empty; pair it with `take`. The source must be restartable by copy, which every iterator over
 // a container is.
-pub fn cycle(it: $I) CycleIter(I) {
+pub fn cycle(it: move $I) CycleIter(I) {
     return .{ start = it, it = it }
 }
 
@@ -359,8 +360,8 @@ type StepByIter = struct(I) {
     step: usize
 }
 
-pub fn iter(self: &StepByIter($I)) StepByIter(I) {
-    return self.*
+pub fn iter(self: move StepByIter($I)) StepByIter(I) {
+    return self
 }
 
 pub fn next(self: &StepByIter($I)) $T? {
@@ -377,11 +378,11 @@ pub fn next(self: &StepByIter($I)) $T? {
 }
 
 // Every `step`th element, starting with the first. Panics when `step` is 0.
-pub fn step_by(it: $I, step: usize) StepByIter(I) {
+pub fn step_by(it: move $I, step: usize) StepByIter(I) {
     if step == 0 {
         panic("step_by: step must be at least 1")
     }
-    return .{ it = it, step = step }
+    return .{ it = move it, step = step }
 }
 
 // =============================================================================
@@ -394,8 +395,8 @@ type PeekableIter = struct(I, T) {
     ahead: T?
 }
 
-pub fn iter(self: &PeekableIter($I, $T)) PeekableIter(I, T) {
-    return self.*
+pub fn iter(self: move PeekableIter($I, $T)) PeekableIter(I, T) {
+    return self
 }
 
 pub fn next(self: &PeekableIter($I, $T)) T? {
@@ -410,11 +411,11 @@ pub fn peek(self: &PeekableIter($I, $T)) T? {
 }
 
 // An iterator that can look one element ahead (`peek`). Pulls the first element on construction.
-pub fn peekable(it: $I) PeekableIter(I, $T) {
+pub fn peekable(it: move $I) PeekableIter(I, $T) {
     // Pulled before the literal: its fields evaluate in order, and `it = it` would copy the
     // iterator before `next` advanced it.
     const first = it.next()
-    return .{ it = it, ahead = first }
+    return .{ it = move it, ahead = first }
 }
 
 // =============================================================================
@@ -426,8 +427,8 @@ type TapIter = struct(I, F) {
     f: F
 }
 
-pub fn iter(self: &TapIter($I, $F)) TapIter(I, F) {
-    return self.*
+pub fn iter(self: move TapIter($I, $F)) TapIter(I, F) {
+    return self
 }
 
 pub fn next(self: &TapIter($I, $F)) $T? {
@@ -440,8 +441,8 @@ pub fn next(self: &TapIter($I, $F)) $T? {
 
 // Calls `f` on every element as it passes through, yielding the element unchanged: a look at what
 // an adapter chain produces without breaking the chain.
-pub fn tap(it: $I, f: $F) TapIter(I, F) {
-    return .{ it = it, f = f }
+pub fn tap(it: move $I, f: move $F) TapIter(I, F) {
+    return .{ it = move it, f = move f }
 }
 
 // =============================================================================
@@ -454,8 +455,8 @@ type ScanIter = struct(I, A, F) {
     f: F
 }
 
-pub fn iter(self: &ScanIter($I, $A, $F)) ScanIter(I, A, F) {
-    return self.*
+pub fn iter(self: move ScanIter($I, $A, $F)) ScanIter(I, A, F) {
+    return self
 }
 
 pub fn next(self: &ScanIter($I, $A, $F)) A? {
@@ -469,8 +470,8 @@ pub fn next(self: &ScanIter($I, $A, $F)) A? {
 
 // A running fold: yields `f(acc, x)` for every element, starting from `init`, so the last value is
 // what `fold` would return. `init` itself is not yielded.
-pub fn scan(it: $I, init: $A, f: $F) ScanIter(I, A, F) {
-    return .{ it = it, acc = init, f = f }
+pub fn scan(it: move $I, init: move $A, f: move $F) ScanIter(I, A, F) {
+    return .{ it = move it, acc = move init, f = move f }
 }
 
 // =============================================================================
@@ -483,8 +484,8 @@ type UniqIter = struct(I, T) {
     ahead: T?
 }
 
-pub fn iter(self: &UniqIter($I, $T)) UniqIter(I, T) {
-    return self.*
+pub fn iter(self: move UniqIter($I, $T)) UniqIter(I, T) {
+    return self
 }
 
 pub fn next(self: &UniqIter($I, $T)) T? {
@@ -507,9 +508,9 @@ pub fn next(self: &UniqIter($I, $T)) T? {
 
 // Collapses runs of consecutive `==` duplicates to one element, `sort | uniq` style; sort first for
 // whole-sequence uniqueness. Pulls the first element on construction.
-pub fn uniq(it: $I) UniqIter(I, $T) {
+pub fn uniq(it: move $I) UniqIter(I, $T) {
     const first = it.next()
-    return .{ it = it, ahead = first }
+    return .{ it = move it, ahead = first }
 }
 
 // =============================================================================
@@ -521,8 +522,8 @@ type OnceIter = struct(T) {
     done: bool
 }
 
-pub fn iter(self: &OnceIter($T)) OnceIter(T) {
-    return self.*
+pub fn iter(self: move OnceIter($T)) OnceIter(T) {
+    return self
 }
 
 pub fn next(self: &OnceIter($T)) T? {
@@ -534,16 +535,16 @@ pub fn next(self: &OnceIter($T)) T? {
 }
 
 // An iterator over exactly one element.
-pub fn once(value: $T) OnceIter(T) {
-    return .{ value = value, done = false }
+pub fn once(value: move $T) OnceIter(T) {
+    return .{ value = move value, done = false }
 }
 
 type RepeatIter = struct(T) {
     value: T
 }
 
-pub fn iter(self: &RepeatIter($T)) RepeatIter(T) {
-    return self.*
+pub fn iter(self: move RepeatIter($T)) RepeatIter(T) {
+    return self
 }
 
 pub fn next(self: &RepeatIter($T)) T? {
@@ -551,8 +552,8 @@ pub fn next(self: &RepeatIter($T)) T? {
 }
 
 // An iterator that yields `value` forever. Pair it with `take` or `zip`.
-pub fn repeat(value: $T) RepeatIter(T) {
-    return .{ value = value }
+pub fn repeat(value: move $T) RepeatIter(T) {
+    return .{ value = move value }
 }
 
 // =============================================================================
@@ -560,8 +561,8 @@ pub fn repeat(value: $T) RepeatIter(T) {
 // =============================================================================
 
 // Combine left to right: `f(f(f(init, x0), x1), x2)`.
-pub fn fold(it: $I, init: $A, f: $F) A {
-    let acc = init
+pub fn fold(it: move $I, init: move $A, f: move $F) A {
+    let acc = move init
     for item in it {
         acc = f(acc, item)
     }
@@ -569,7 +570,7 @@ pub fn fold(it: $I, init: $A, f: $F) A {
 }
 
 // Fold seeded with the first element; null when empty.
-pub fn reduce(it: $I, f: $F) $A? {
+pub fn reduce(it: move $I, f: move $F) $A? {
     return it.next() match {
         Some(first) => Some(fold(it, first, f))
         None => null
@@ -577,14 +578,14 @@ pub fn reduce(it: $I, f: $F) $A? {
 }
 
 // Call `f` on every element, in order.
-pub fn each(it: $I, f: $F) {
+pub fn each(it: move $I, f: move $F) {
     for item in it {
         f(item)
     }
 }
 
 // Number of elements. Consumes the iterator.
-pub fn count(it: $I) usize {
+pub fn count(it: move $I) usize {
     let n: usize = 0
     for item in it {
         n = n + 1
@@ -593,7 +594,7 @@ pub fn count(it: $I) usize {
 }
 
 // Number of elements `pred` accepts.
-pub fn count(it: $I, pred: $F) usize {
+pub fn count(it: move $I, pred: $F) usize {
     let n: usize = 0
     for item in it {
         if pred(item) {
@@ -604,7 +605,7 @@ pub fn count(it: $I, pred: $F) usize {
 }
 
 // Whether any element satisfies `pred`. False for an empty iterator. Stops at the first match.
-pub fn any(it: $I, pred: $F) bool {
+pub fn any(it: move $I, pred: $F) bool {
     for item in it {
         if pred(item) {
             return true
@@ -615,7 +616,7 @@ pub fn any(it: $I, pred: $F) bool {
 
 // Whether every element satisfies `pred`. True for an empty iterator. Stops at the first
 // counterexample.
-pub fn all(it: $I, pred: $F) bool {
+pub fn all(it: move $I, pred: $F) bool {
     for item in it {
         let ok: bool = pred(item)
         if !ok {
@@ -626,7 +627,7 @@ pub fn all(it: $I, pred: $F) bool {
 }
 
 // First element satisfying `pred`, or null.
-pub fn find(it: $I, pred: $F) $T? {
+pub fn find(it: move $I, pred: $F) $T? {
     for item in it {
         if pred(item) {
             return Some(item)
@@ -636,7 +637,7 @@ pub fn find(it: $I, pred: $F) $T? {
 }
 
 // 0-based position of the first element satisfying `pred`, or null.
-pub fn position(it: $I, pred: $F) usize? {
+pub fn position(it: move $I, pred: $F) usize? {
     let i: usize = 0
     for item in it {
         if pred(item) {
@@ -648,7 +649,7 @@ pub fn position(it: $I, pred: $F) usize? {
 }
 
 // Final element, or null when empty.
-pub fn last(it: $I) $T? {
+pub fn last(it: move $I) $T? {
     let result = it.next()
     if result.is_none() {
         return null
@@ -662,7 +663,7 @@ pub fn last(it: $I) $T? {
 
 // Returns the element at position `n`, counting from 0, or null when the sequence is shorter.
 // Consumes everything up to and including it.
-pub fn nth(it: $I, n: usize) $T? {
+pub fn nth(it: move $I, n: usize) $T? {
     for _k in 0..n {
         if it.next().is_none() {
             return null
@@ -673,7 +674,7 @@ pub fn nth(it: $I, n: usize) $T? {
 
 // Smallest element by `<`, or null when empty. Requires an ordered element type (primitive or
 // `op_cmp`).
-pub fn min(it: $I) $T? {
+pub fn min(it: move $I) $T? {
     let first = it.next()
     if first.is_none() {
         return null
@@ -688,7 +689,7 @@ pub fn min(it: $I) $T? {
 }
 
 // Largest element by `<`, or null when empty.
-pub fn max(it: $I) $T? {
+pub fn max(it: move $I) $T? {
     let first = it.next()
     if first.is_none() {
         return null
@@ -703,7 +704,7 @@ pub fn max(it: $I) $T? {
 }
 
 // Element with the smallest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn min_by(it: $I, key: $F) $T? {
+pub fn min_by(it: move $I, key: $F) $T? {
     let first = it.next()
     if first.is_none() {
         return null
@@ -721,7 +722,7 @@ pub fn min_by(it: $I, key: $F) $T? {
 }
 
 // Element with the largest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn max_by(it: $I, key: $F) $T? {
+pub fn max_by(it: move $I, key: $F) $T? {
     let first = it.next()
     if first.is_none() {
         return null
