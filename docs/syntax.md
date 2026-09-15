@@ -20,7 +20,7 @@ listed here, it does not exist in FLang.
 | No `mut` keyword | `let` is already mutable | `let mut` |
 | No `impl` blocks | UFCS resolves methods from free functions | `impl Type { }` |
 | No traits | `#interface` / `#implement` source generators | `trait Foo { }` |
-| Closures by value only | Lambdas capture by value (RFC-014); no `move`/`&local` syntax | `move`, capture-by-ref |
+| Closures capture by reference | Every captured name is a reference to the enclosing binding (RFC-033); no capture-list syntax | `move` closures, capture lists |
 | No `elif`/`else if` | Chain `else if` (two keywords) | `elif` |
 
 ## Types
@@ -101,7 +101,7 @@ fn close(h: move File) {}                   // takes ownership: `h.close()` move
 
 **Foreign:** `#foreign fn malloc(size: usize) &u8?` — no body, C calling convention, not mangled.
 
-**Lambda:** `fn(x: i32, y: i32) i32 { x + y }` — no name after `fn`. Captures enclosing names by value (RFC-014); each capture is read-only inside the body. Capturing lambdas synthesise an anonymous callable type and cannot decay into a bare `fn(...) Ret` slot — pass them through a generic parameter (`fn apply(f: $F, ...)`) instead. Parameter types inferred when context available.
+**Lambda:** `fn(x: i32, y: i32) i32 { x + y }` — no name after `fn`. Captures enclosing names by reference (RFC-033): the body reads and writes the enclosing bindings. Capturing lambdas synthesise an anonymous callable type and cannot decay into a bare `fn(...) Ret` slot — pass them through a generic parameter (`fn apply(f: $F, ...)`) instead. Parameter types inferred when context available.
 
 ## Type Aliases
 

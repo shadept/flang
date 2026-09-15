@@ -346,8 +346,7 @@ pub fn max_by(s: $T[], key: $F) T? {
 // Traversal and folds
 // =============================================================================
 
-// Calls `f` on every element, in order. To accumulate, use `fold`; to mutate outer state from a
-// closure, capture a reference and write through it.
+// Calls `f` on every element, in order. To accumulate, use `fold`, or assign a captured name.
 pub fn each(s: $T[], f: $F) {
     for i in 0..s.len {
         f(s[i])

@@ -2,7 +2,7 @@
 //! EXIT: 60
 
 // Struct-wrapped closures from one lambda site share a nominal, so they are a homogeneous element
-// type. Each push copies its own captured snapshot.
+// type. Each captures `scale` by reference, and `scale` outlives the list.
 
 import std.collections.list
 
@@ -15,14 +15,12 @@ fn thunk(f: $F) Thunk(F) {
 }
 
 pub fn main() i32 {
+    let scale = 20i32
     let xs = list(3)
     defer xs.deinit()
-
-    for i in 0..3usize {
-        const n = i as i32 + 1
-        xs.push(thunk(fn() i32 { n * 10 }))
+    for _i in 0..3usize {
+        xs.push(thunk(fn() i32 { scale }))
     }
-
     let total = 0i32
     for j in 0..xs.len {
         total = total + xs[j].f()

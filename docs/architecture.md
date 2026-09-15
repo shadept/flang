@@ -189,7 +189,10 @@ a read, a by-value destination, a `move` parameter, the function's result,
 or a `match` scrutinee. Sugar is walked as its desugar: a `for` iterable and
 a `?` operand flow into the recorded `iter` / `op_try` pick's first
 parameter (`own_protocol`), and `a ?? b` is a match on `a` whose fallback
-takes the expression's own slot. A call
+takes the expression's own slot. A lambda literal reads its captures and
+runs a pass of its own over its body (`own_lambda`): a capture of a name
+the enclosing body only reads stays lent, any other is `captured` and may
+not be moved out (E2131). A call
 reads its parameters' modes off the callee - the declared parameters for a
 function, the `move` mask on the `NFunc` type for a function value - and
 the receiver follows the first parameter. By-value parameters declared

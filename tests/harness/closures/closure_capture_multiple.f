@@ -1,7 +1,7 @@
 //! TEST: closure_capture_multiple
 //! EXIT: 23
 
-// Two locals captured by value. Capture set is { a, b }; both surface as
+// Two locals captured by reference. Capture set is { a, b }; both surface as
 // fields on the synthesized closure struct.
 
 pub fn main() i32 {

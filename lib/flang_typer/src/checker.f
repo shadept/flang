@@ -3929,23 +3929,6 @@ fn bind_pattern_var(self: &Checker, name: String, ty: Ty, span: SourceSpan) {
 // the function instead of writing somewhere arbitrary, so the failure is loud but the diagnostic is
 // not precise.
 fn check_assignment(self: &Checker, a: &AssignmentExpr) Ty {
-    // RFC-014: captures are by value and read-only. Assigning to one would only mutate the
-    // closure's own copy - reject it (E2112). Writing *through* a captured reference (`p.* = v`)
-    // stays legal.
-    if self.lambda_frames.len > 0 {
-        let target = a.lhs.* match { Identifier(id) => Some(id.name), _ => null }
-        if target.is_some() {
-            let nm = target.unwrap()
-            let d = self.env.lookup_depth(nm)
-            if d.is_some() {
-                let innermost = &self.lambda_frames[self.lambda_frames.len - 1]
-                if d.unwrap() < innermost.boundary {
-                    push_diag_e(self, a.span, E_ASSIGN_CAPTURE,
-                        $"cannot assign to captured variable `{nm}` (closures capture by value; this would only mutate the closure's own copy, not the outer scope)")
-                }
-            }
-        }
-    }
     // `base[key] = value` may dispatch to a user `op_set_index` (Dict sugar, RFC-021's expander
     // uses it). Places win - builtin bases and `op_index_ref` picks keep the ordinary place-store
     // path.
@@ -5072,9 +5055,9 @@ fn nominal_with_fresh_args(self: &Checker, id: NominalId) Ty {
 // each with its own symbol.
 // ─────────────────────────────────────────────────────────────────────
 
-// A name read that crosses a lambda boundary is a by-value capture: record it on every crossed
-// frame, innermost included, so a nested closure's transitive captures are visible to the E2113
-// check.
+// A name read that crosses a lambda boundary is a capture by reference: record it on every crossed
+// frame, innermost included, so each enclosing closure's environment carries what a nested one
+// takes from it.
 fn note_capture(self: &Checker, name: String, binding: &Binding) {
     let d = self.env.lookup_depth(name)
     if d.is_none() {
@@ -5089,7 +5072,7 @@ fn note_capture(self: &Checker, name: String, binding: &Binding) {
             continue
         }
         let ty = self.engine.specialize(&binding.scheme)
-        fr.captures.push(CaptureRec { name = name, ty = ty })
+        fr.captures.push(CaptureRec { name = name, decl = binding.decl, ty = ty })
     }
 }
 
@@ -5157,23 +5140,6 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     self.env.pop_scope()
     let frame = self.lambda_frames.pop().unwrap()
 
-    // E2113: a name this closure captures that an enclosing open closure ALSO captures would need
-    // transitive-capture lowering.
-    if frame.captures.len > 0 and self.lambda_frames.len > 0 {
-        for i in 0..frame.captures.len {
-            let nm = frame.captures[i].name
-            for &outer in self.lambda_frames {
-                if captures_contain(outer, nm) {
-                    push_diag_e(self, lam.span, E_NESTED_CAPTURE,
-                        $"nested capturing closures are not yet supported: `{nm}` is captured by both this closure and an enclosing closure")
-                    frame.captures.deinit()
-                    params.deinit()
-                    return self.engine.fresh_var()
-                }
-            }
-        }
-    }
-
     let node = self.node_of(lam.span)
     let lid = self.next_lambda
     self.next_lambda = lid + 1u32
@@ -5194,15 +5160,15 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
         return self.engine.mk_func(fn_params, ret, moves)
     }
 
-    // Capturing closure: synthesize the environment struct (fields = the captures, by value) and
-    // record how to call it. The literal's type is the anonymous nominal - it can never unify with
-    // a bare fn type (E2111); it travels through generic `$F` slots instead.
+    // Capturing closure: synthesize the environment struct (one `&T` field per capture, RFC-033)
+    // and record how to call it. The literal's type is the anonymous nominal - it can never unify
+    // with a bare fn type (E2111); it travels through generic `$F` slots instead.
     let module_name = self.current_module.unwrap_or("__synthetic")
     let fields: List(Field) = list(frame.captures.len, self.allocator)
     for i in 0..frame.captures.len {
         fields.push(Field {
             name = frame.captures[i].name,
-            ty = frame.captures[i].ty,
+            ty = self.engine.mk_ref(frame.captures[i].ty),
             decl_span = none_span(),
             owned = false,
         })
@@ -8201,6 +8167,7 @@ fn zonk_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
     for i in 0..info.captures.len {
         caps.push(CaptureRec {
             name = info.captures[i].name,
+            decl = info.captures[i].decl,
             ty = self.engine.zonk(info.captures[i].ty),
         })
     }
@@ -8472,8 +8439,12 @@ type OwnPass = struct {
     // diagnostic rather than one per path.
     seen: Set(NodeId)
     // By-value parameters declared without `move`, by declaration node: the function reads them and
-    // owns nothing (rule 3).
+    // owns nothing (rule 3). In a lambda body, also the captures of names lent to the enclosing
+    // body.
     lent: List(NodeId)
+    // A lambda body's other captures: references to bindings the enclosing body owns, which the
+    // lambda may read and write but not take the value out of.
+    captured: List(NodeId)
     // The function value a `move` argument is being handed to, "" for a declared function.
     taker: String
 }
@@ -8487,6 +8458,17 @@ type OwnPass = struct {
 // `params` are the body's parameters, null for a `test {}` block; `returns` says whether the body's
 // trailing expression is the function's value.
 fn own_check_body(self: &Checker, body: &BlockExpr, params: &List(FunctionParam)?, returns: bool) {
+    let lent: List(NodeId) = list(0, self.allocator)
+    params match {
+        Some(ps) => own_collect_lent(self, &lent, ps)
+        None => {}
+    }
+    own_run(self, body, lent, list(0, self.allocator), returns)
+}
+
+// One body's pass. Takes ownership of `lent` and `captured`.
+fn own_run(self: &Checker, body: &BlockExpr, lent: List(NodeId), captured: List(NodeId),
+    returns: bool) {
     let p = OwnPass {
         moved = list(0, self.allocator),
         defers = list(0, self.allocator),
@@ -8499,23 +8481,52 @@ fn own_check_body(self: &Checker, body: &BlockExpr, params: &List(FunctionParam)
         report = true,
         firing = false,
         seen = set(self.allocator),
-        lent = list(0, self.allocator),
+        lent = lent,
+        captured = captured,
         taker = "",
     }
     defer own_deinit(&p)
-    params match {
-        Some(ps) => own_collect_lent(self, &p, ps)
-        None => {}
-    }
     own_block(self, &p, body, if returns { own_returning() } else { own_read() })
 }
 
-fn own_collect_lent(self: &Checker, p: &OwnPass, params: &List(FunctionParam)) {
+fn own_collect_lent(self: &Checker, lent: &List(NodeId), params: &List(FunctionParam)) {
     for &prm in params {
         if !prm.is_move and !prm.is_variadic {
-            p.lent.push(self.node_of(prm.span))
+            lent.push(self.node_of(prm.span))
         }
     }
+}
+
+// A lambda literal reads every name it captures where it is built. Its body is a body of its own:
+// parameters by mode, captures as references - a capture of a name the enclosing body only reads
+// stays read-only. Checked once, on the reporting walk, however often the literal is revisited.
+fn own_lambda(self: &Checker, p: &OwnPass, lam: &LambdaExpr) {
+    const info = self.results.lambdas.get_ref(self.node_of(lam.span))
+    if info.is_none() {
+        return
+    }
+    const captures = &info.unwrap().captures
+    for &cap in captures {
+        if own_is_moved(p, cap.decl) and own_claim(p, self.node_of(lam.body.span)) {
+            own_report(self, lam.span, E_USE_AFTER_MOVE,
+                $"`{cap.name}` was moved and cannot be captured")
+        }
+    }
+    if !own_claim(p, self.node_of(lam.span)) {
+        return
+    }
+    let lent: List(NodeId) = list(captures.len, self.allocator)
+    let captured: List(NodeId) = list(captures.len, self.allocator)
+    own_collect_lent(self, &lent, &lam.params)
+    for &cap in captures {
+        if own_is_lent(p, cap.decl) {
+            lent.push(cap.decl)
+        } else {
+            captured.push(cap.decl)
+        }
+    }
+    const ret = self.engine.resolve(info.unwrap().ret)
+    own_run(self, lam.body, lent, captured, ret != TY_VOID and ret != TY_NEVER)
 }
 
 fn own_deinit(p: &OwnPass) {
@@ -8525,10 +8536,19 @@ fn own_deinit(p: &OwnPass) {
     p.continued.deinit()
     p.seen.deinit()
     p.lent.deinit()
+    p.captured.deinit()
 }
 
 fn own_is_lent(p: &OwnPass, decl: NodeId) bool {
-    for d in p.lent {
+    return own_list_has(&p.lent, decl)
+}
+
+fn own_is_captured(p: &OwnPass, decl: NodeId) bool {
+    return own_list_has(&p.captured, decl)
+}
+
+fn own_list_has(xs: &List(NodeId), decl: NodeId) bool {
+    for d in xs {
         if d == decl {
             return true
         }
@@ -8722,6 +8742,18 @@ fn own_lent_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr, what: String
     own_report(self, id.span, E_NOT_OWNED, sb.to_string())
 }
 
+// A capture refers to the enclosing body's binding, which keeps its value.
+fn own_captured_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr) {
+    if !own_claim(p, self.node_of(id.span)) {
+        return
+    }
+    let sb = string_builder(160, self.allocator)
+    sb.append($"`{id.name}` is captured by reference: the closure cannot take its value out of the enclosing binding")
+    own_taker_note(p, &sb)
+    own_blame(self, id.span, &sb)
+    own_report(self, id.span, E_NOT_OWNED, sb.to_string())
+}
+
 // Names the function value a lent value was handed to, so a callback that takes ownership reads as
 // the cause when the error surfaces inside a combinator's body.
 fn own_taker_note(p: &OwnPass, sb: &StringBuilder) {
@@ -8805,6 +8837,7 @@ fn own_expr(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) {
             r.end match { Some(x) => own_expr(self, p, x, own_read()), None => {} }
         }
         InterpolatedString(istr) => own_interp(self, p, &istr)
+        Lambda(lam) => own_lambda(self, p, &lam)
         Block(b) => own_block(self, p, &b, slot)
         If(ife) => own_if(self, p, &ife, slot)
         Match(m) => own_match(self, p, &m, slot)
@@ -8826,6 +8859,10 @@ fn own_ident(self: &Checker, p: &OwnPass, id: &IdentifierExpr, slot: OwnSlot) {
     }
     if d.is_some() and own_is_lent(p, d.unwrap()) {
         own_lent_error(self, p, id, "a parameter without `move` can only be read")
+        return
+    }
+    if d.is_some() and own_is_captured(p, d.unwrap()) {
+        own_captured_error(self, p, id)
         return
     }
     const takes = slot.consumes or slot.returns
@@ -8919,7 +8956,7 @@ fn own_owned_base(self: &Checker, p: &OwnPass, e: &Expr) bool {
 
 fn own_owned_decl(self: &Checker, p: &OwnPass, id: &IdentifierExpr) bool {
     const d = own_local_decl(self, self.node_of(id.span))
-    return d.is_some() and !own_is_lent(p, d.unwrap())
+    return d.is_some() and !own_is_lent(p, d.unwrap()) and !own_is_captured(p, d.unwrap())
 }
 
 // The lent parameter at the root of a place reached without a reference, when its type is
@@ -8982,6 +9019,10 @@ fn own_move_binding(self: &Checker, p: &OwnPass, id: &IdentifierExpr, move_span:
     }
     if own_is_lent(p, d.unwrap()) {
         own_lent_error(self, p, id, "a parameter without `move` can only be read")
+        return
+    }
+    if own_is_captured(p, d.unwrap()) {
+        own_captured_error(self, p, id)
         return
     }
     own_mark(p, d.unwrap())
@@ -12337,16 +12378,16 @@ test "unannotated lambda params pin through a generic callable slot" {
     res.deinit()
 }
 
-test "assigning to a captured variable is E2112" {
-    let errs = count_check_errors(["fn take(f: $F) i32 { return f(1) }\nfn main() i32 { let k = 1\n return take(fn(v: i32) i32 { k = 2\n v }) }\n"],
+test "a closure may assign a captured name (RFC-033)" {
+    let errs = count_check_errors(["fn take(f: $F) i32 { return f(1) }\nfn main() i32 { let k: i32 = 1\n return take(fn(v: i32) i32 { k = 2\n return v }) + k }\n"],
         ["m"])
-    assert_true(errs > 0, "capture assignment reports")
+    assert_eq(errs, 0 as usize, "captures are by reference")
 }
 
-test "nested transitive captures are E2113" {
-    let errs = count_check_errors(["fn take(f: $F) i32 { return f(1) }\nfn main() i32 { let a = 1\n return take(fn(x: i32) i32 { let g = fn(y: i32) i32 { y + a }\n g(x) + a }) }\n"],
+test "a nested closure captures through the enclosing one (RFC-033)" {
+    let errs = count_check_errors(["fn take(f: $F) i32 { return f(1) }\nfn main() i32 { let a: i32 = 1\n return take(fn(x: i32) i32 { let g = fn(y: i32) i32 { return y + a }\n return g(x) + a }) }\n"],
         ["m"])
-    assert_true(errs > 0, "shared capture across nested closures reports")
+    assert_eq(errs, 0 as usize, "transitive captures check")
 }
 
 test "a capturing closure cannot fill a bare fn slot (E2111 hint)" {

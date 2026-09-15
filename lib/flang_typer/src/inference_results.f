@@ -68,10 +68,12 @@ pub type BinaryOpDerived = enum {
     BodGe
 }
 
-// One by-value capture of a checked lambda (RFC-014): the outer local's name and its (eventually
-// zonked) type.
+// One capture of a checked lambda: the outer binding's name, its declaration node and its
+// (eventually zonked) type. Captures are by reference (RFC-033); `ty` is the binding's type, the
+// closure struct's field holds `&ty`.
 pub type CaptureRec = struct {
     name: String
+    decl: NodeId
     ty: Ty
 }
 

@@ -200,12 +200,9 @@ the argument through the instantiation site, not inside `each`. A `fn(v: move i3
 over `i32` compiles, by the same copy rule that makes `let b = xs[0]` work for `i32` and fail for
 `Route`.
 
-A capturing closure is a synthesized struct with `op_call(self: &__Closure_N, ...)`. Captures follow
-what the body does with each name:
-
-- assigned: shared, so the write reaches the outer binding;
-- read: copied when the type copies, shared otherwise;
-- moved out: an error.
+A capturing closure is a synthesized struct with `op_call(self: &__Closure_N, ...)`. Every capture
+is by reference: reads see the binding's current value, writes reach it, and moving a capture out
+is an error.
 
 ```flang
 let c: usize = 0
@@ -213,7 +210,8 @@ values.each(fn(v) { c = c + 1 })
 println(c)                  // the element count
 ```
 
-This retires E2112. A closure that outlives a shared capture dangles, under the same rules as a
+This retires E2112 and E2113: a nested closure takes its captures from the enclosing closure's
+environment. A closure that outlives a captured binding dangles, under the same rules as a
 returned `&local`.
 
 ## Moving and lending in one call
@@ -300,7 +298,7 @@ value (`find`, `get`, `min`), which keep their `_ref` twins.
 - **Closures that own their captures**, and storing or consuming a closure.
 - **Returned borrows.** Accessors and iterators keep `&T` and `for &x`.
 - **Aliasing through a reference**, and aliasing with no owned state in the overlap.
-- **Dangling shared captures.** A closure outliving a name it shares; the same hazard as a returned
+- **Dangling captures.** A closure outliving a name it captures; the same hazard as a returned
   `&local`.
 - **`p.* = v` through `&T`** bypasses scoped mutability and overwrites a live owner without E2126.
   Separate known issue.
@@ -344,6 +342,11 @@ promote, then use.
    Done. `lower_function` skips the prologue copy on the copyable bit; a copyable `move` parameter
    already went through the ordinary escape analysis.
 3. **Closures.** Captures by usage, `op_call(self: &Closure)`, retire E2112.
+
+   Done, with every capture by reference instead of by usage: the environment holds one `&T` per
+   captured binding. E2112 and E2113 are retired. Lambda bodies get their own ownership pass
+   (parameters by mode; a capture of a lent name stays lent, any other capture may be read and
+   written but not moved out, E2131), and building a closure reads its captures (E2123).
 4. **Harness.** Rewrite `tests/harness/ownership/*` call sites; add tests for rule 3, rule 5, the
    lent-to-owning callback, owning rvalues, move-and-lend in one call, and closure captures. `move_param_on_copyable.f` flips to a copy.
 5. **Promote.**

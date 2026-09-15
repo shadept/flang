@@ -1651,7 +1651,8 @@ fn bind_closure_captures(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &Lower
     let st = target.unwrap()
     for i in 0..c.captures.len {
         let cap = &c.captures[i]
-        let addr = bb.gep(self_val, Operand.IntConst(st.layout.offsets[i] as i64))
+        let field = bb.gep(self_val, Operand.IntConst(st.layout.offsets[i] as i64))
+        let addr = bb.load(IrType.Ptr, field)
         if is_by_ref(ctx, &cap.ty) {
             env.bind_aggregate(cap.name, addr, cap.ty)
         } else {
@@ -1742,8 +1743,7 @@ fn lower_function_body(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, sym: S
         }
     }
     param_ops.deinit()
-    // Captured names bind to fields of the closure env - reads project through the caller's struct
-    // (captures are read-only, E2112, so aliasing it is safe; no copy).
+    // Captured names bind to the bindings the closure env points at (RFC-033).
     if closure.is_some() {
         let c = closure.unwrap()
         bind_closure_captures(ctx, &cur, &env, &c, self_op.unwrap())
@@ -2559,9 +2559,8 @@ fn range_cond(bb: &BlockBuilder, ir: IrType, sg: bool, inclusive: bool, iv: Oper
 // named arguments), or when the callee's signature was outside the lowerable subset - in that case
 // there is no definition in the module to link against. `fn(params) { body }` at its literal site
 // (RFC-014). Non-capturing: the value is the synthesized function's address. Capturing: build the
-// env struct in a slot from the current values of the captured locals (by value - later mutation of
-// the outer local is invisible inside). Either way the body's emission is enqueued for the
-// post-walk drain.
+// env struct in a slot holding the address of each captured binding (RFC-033), so reads and writes
+// on either side see one value. Either way the body's emission is enqueued for the post-walk drain.
 fn lower_lambda(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lam: &LambdaExpr) Operand {
     let info_opt = ctx_lambda(ctx, node_id_of(lam.span))
     if info_opt.is_none() {
@@ -2590,13 +2589,12 @@ fn lower_lambda(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lam: &LambdaExpr) 
     bb.memset(slot, Operand.IntConst(0), Operand.IntConst(st.layout.size as i64))
     for i in 0..info.captures.len {
         let cap = &info.captures[i]
-        let v = read_binding(ctx, bb, env, cap.name, &cap.ty)
-        let fp = bb.gep(slot, Operand.IntConst(st.layout.offsets[i] as i64))
-        if is_by_ref(ctx, &cap.ty) {
-            bb.memcpy(fp, v, Operand.IntConst(lay_of(ctx, cap.ty).size as i64))
-        } else {
-            bb.store(ir_of(ctx, cap.ty), v, fp)
+        let found = env.get(cap.name)
+        if found.is_none() {
+            return unlowerable_about(ctx, "unbound capture", cap.name)
         }
+        let fp = bb.gep(slot, Operand.IntConst(st.layout.offsets[i] as i64))
+        bb.store(IrType.Ptr, found.unwrap().addr, fp)
     }
     return slot
 }

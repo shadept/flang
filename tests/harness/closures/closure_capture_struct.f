@@ -1,8 +1,7 @@
 //! TEST: closure_capture_struct
 //! EXIT: 30
 
-// Struct captured by value. Mutating the original after the lambda literal is
-// built must not affect the closure's snapshot.
+// Struct captured by reference: the closure reads the fields of the outer `p`.
 
 type Point = struct { x: i32, y: i32 }
 

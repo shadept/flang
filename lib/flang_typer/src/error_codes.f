@@ -36,12 +36,10 @@ pub const E_NOT_INDEXABLE: String = "E2028"
 pub const E_TRY_OUTSIDE_FN: String = "E2090"
 pub const E_NO_OP_TRY: String = "E2092"
 
-// RFC-014 closures. Same codes as the reference: a capturing closure has an anonymous nominal type
-// and cannot decay to a bare `fn` pointer (E2111); captures are by value and read-only (E2112);
-// transitive captures across nested closures are not supported yet (E2113).
+// RFC-014 closures: a capturing closure has an anonymous nominal type and cannot decay to a bare
+// `fn` pointer. E2112 and E2113 are retired: captures are by reference (RFC-033), so a capture may
+// be assigned, and a nested closure takes its capture from the enclosing environment.
 pub const E_CLOSURE_TO_FN: String = "E2111"
-pub const E_ASSIGN_CAPTURE: String = "E2112"
-pub const E_NESTED_CAPTURE: String = "E2113"
 
 // Duplicate declarations the reference rejects at their declaration site: a struct field name twice
 // (E2076), an enum tag value twice (E2048), a `let`/`const`/global re-declared in the same scope
