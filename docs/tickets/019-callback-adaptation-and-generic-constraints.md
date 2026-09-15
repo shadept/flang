@@ -68,11 +68,13 @@ diagnosis (the bound provides the context).
 Contracts, not traits. Every protocol in the language is already
 function-existence — `iter`/`next`, `op_eq`, `op_deref`, `op_call` — so a
 bound names that requirement rather than introducing a new kind of entity.
-Rust's `Fn`/`FnMut`/`FnOnce` split does not carry over: it encodes move
-semantics and `&mut` aliasing, and FLang closures capture by value with
-read-only captures (E2112), so every one of them is `Fn`. The split becomes
-relevant only if `&local` capture-by-reference lands, and then as a property
-of the capture mode.
+Rust's `Fn`/`FnMut`/`FnOnce` split does not carry over either. FLang closures
+capture by reference (RFC-033) and are called through
+`op_call(self: &__Closure_N, ...)`: a write in the body lands in the captured
+binding, not in the closure, so there is one call kind whether the body writes
+or not. A closure never owns its captures. The `FnOnce` question comes back
+only with closures that do (RFC-033, out of scope), and then as a property of
+the capture mode.
 
 Inline form, the primitive:
 
@@ -165,6 +167,34 @@ bounds instead of a count of concrete type constructors.
   itself callable. Decide deliberately whether bounds outrank an unconstrained
   concrete parameter, and treat
   `tests/harness/option/unwrap_or_overload_pick.f` as the guard.
+
+### 2.6 First slice: the `copyable` bound (RFC-033)
+
+RFC-033 makes a type that mentions a type parameter non-copyable inside a
+generic body, so a body is checked against the worst case whatever it is
+instantiated with. A function that copies `T` on purpose says so:
+
+```
+pub fn max(s: $T[]) T? where T: copyable
+```
+
+`copyable` is the one bound that is not a function the type provides: it is
+RFC-028's derived bit. It lands before the rest of this section because
+RFC-033 needs it for the copy-returning stdlib functions (`get`, `first`,
+`min`, `max`, `fill`, ...).
+
+It is the easy case for the two properties of 2.2. It binds nothing, so there
+is nothing to pin; and it is discharged at the call site, where the failure
+names the type and the derivation chain (`FileHandle` is not copyable: field
+`fd` is `owned`) instead of surfacing inside the body at instantiation. Inside
+the body, `T` copies.
+
+Open, beyond 2.5:
+
+- Whether `copyable` is a reserved bound name or an ordinary contract the
+  prelude defines by a built-in predicate.
+- Whether a bounded overload outranks an unbounded one of the same shape - the
+  2.4 ranking question, arriving with the first bound.
 
 ## 3. Higher-kinded type parameters
 

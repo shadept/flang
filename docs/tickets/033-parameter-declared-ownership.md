@@ -214,6 +214,54 @@ This retires E2112 and E2113: a nested closure takes its captures from the enclo
 environment. A closure that outlives a captured binding dangles, under the same rules as a
 returned `&local`.
 
+## Generic bodies
+
+A generic body is valid for every instantiation or for none. Inside it, a type that mentions one of
+the function's type parameters is non-copyable - `T`, `Box(T)`, `List(T)` - because nothing says it
+copies. A type that mentions none (`Point`, `i32`) keeps its own bit.
+
+```flang
+type Box = struct(T) { value: T }
+
+fn foo(self: move Box($T)) T {
+    let a = self.value              // error E2124: `Box(T)` copies only when `T` does
+    return self.value
+}
+```
+
+Without the rule this body compiles for `Box(i32)`, and fails at the first instantiation with a
+non-copyable `T`, reported on that caller's line: the author never sees it. With the rule it fails
+at any instantiation, and with RFC-029 without one.
+
+A function that copies `T` on purpose says so with a bound (RFC-019 §2.6):
+
+```flang
+pub fn max(s: $T[]) T? where T: copyable
+
+max([1, 2, 3, 4])                   // fine
+max(handles)                        // error: `max` requires `T: copyable`
+                                    //   `FileHandle` is not copyable: field `fd` is `owned`
+```
+
+Inside `max`, `T` copies. The active branch of `#if type_info(T).copyable` counts the same way, so
+behaviour that really differs per element type (clone versus copy, the `deinit` cascade) needs no
+bound.
+
+The functions that return or store an element by copy take the bound: slice `get`, `first`, `last`,
+`find`, `min`, `max`, `min_by`, `max_by`, `fill`, `filled_list`, dict `get` and `get_or`, and their
+kind. An element leaves a container for any `T` through a `_ref` twin, a reference-returning
+variant, or `pop`, `remove` and a drain.
+
+Open:
+
+- **Implementation.** At an instantiation the ownership pass sees substituted types, and `Box(i32)`
+  does not record that `i32` came from `T`. Either the template's types reach the pass, or the pass
+  runs with a non-copyable stand-in for each type parameter.
+- **Error code** for an unsatisfied bound, and which candidate it names when several overloads
+  compete.
+- **Specificity.** Whether a bounded overload outranks an unbounded one of the same shape
+  (RFC-019 §2.5).
+
 ## Moving and lending in one call
 
 ```flang
@@ -274,9 +322,10 @@ ownership, and every call site of them is shorter.
 - **Leaks.** Readers now take `T`, so rule 8 fires on chains RFC-028 leaked silently
   (`make().len()`).
 
-Unchanged in both: a generic body can be valid for one `T` and not another (`push(v)` then reading
-`v`: fine for `i32`, E2123 for `Route`), reported at instantiation until RFC-029; and element
-accessors that return by value keep `_ref` twins.
+Unchanged in both until the generic-bodies rule lands: a generic body can be valid for one `T` and
+not another (`push(v)` then reading `v`: fine for `i32`, E2123 for `Route`), reported at
+instantiation. The rule makes it invalid for every `T` unless a `where T: copyable` bound says
+otherwise. Element accessors that return by value keep `_ref` twins.
 
 ## Operators
 
@@ -366,7 +415,9 @@ promote, then use.
      new buffer with the same element-store `move`, since the old buffer is freed without deinit.
      `deinit` and `close_file` keep `&self`: on a copyable type a `move self` that disarms its
      argument would only write the callee's copy.
-   - **6b, with step 7.** Owned buffers, `deinit(self: move T)`, `clone`, drains. This branch has no
+   - **6b. Generic bodies.** The rule and `where T: copyable` (the first slice of RFC-019 §2); the
+     copy-returning functions take the bound. Before owned buffers, which rewrite those bodies.
+   - **6c, with step 7.** Owned buffers, `deinit(self: move T)`, `clone`, drains. This branch has no
      callback gates to drop.
 7. **Compiler libraries.** Sweep `lib/*`, `tools/*`, `compiler/`.
 8. **Docs.** Spec §3.2, §3.6, §4.1, §7.2, §7.3 and the stdlib callback convention; RFC-028 and

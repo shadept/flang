@@ -2,7 +2,7 @@
 status: deferred
 type: compiler
 created: 2026-09-01
-relates: [RFC-022, RFC-023]
+relates: [RFC-022, RFC-023, RFC-033]
 ---
 
 # RFC-029: Checking uninstantiated generic bodies
@@ -53,8 +53,12 @@ What that catches:
   below)
 - unknown free identifiers, unreachable code, malformed control flow
 - arity and argument types against a known non-generic callee
-- the whole ownership pass (RFC-028): `move` on a non-lvalue, assignment over a
-  live binding, use after move. None of it needs to know what `T` is.
+- the whole ownership pass (RFC-028, RFC-033): `move` on a non-lvalue,
+  assignment over a live binding, use after move, copies. Copyability is the one
+  fact that depends on `T`, and RFC-033 settles it without the instantiation: a
+  type that mentions a type parameter is non-copyable unless a
+  `where T: copyable` bound or the active branch of `#if type_info(T).copyable`
+  says otherwise. A rigid `$T` is therefore non-copyable here too.
 
 What it can never catch, by construction: anything dispatched on `T` - a member
 call, an operator, a UFCS pick. Those need the instantiation and stay where they
