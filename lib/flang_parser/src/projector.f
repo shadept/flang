@@ -320,8 +320,52 @@ fn project_function(self: &Projector, cst: CstNode) FunctionDecl {
         name = self.function_name(cst),
         params = params,
         return_type = self.boxed_opt(return_type),
+        bounds = self.project_bounds(cst),
         body = self.boxed_opt(body),
     }
+}
+
+// The `where` clause's `param : bound` token triples, in order. The declaration's own tokens are
+// `fn`, the name, the parentheses and the clause, so the first `where` identifier after `)` opens
+// it.
+fn project_bounds(self: &Projector, cst: CstNode) List(TypeBound) {
+    let out: List(TypeBound) = list(0, Some(self.alloc))
+    let saw_close = false
+    let in_where = false
+    let param: Token? = null
+    for i in 0..cst.child_count() {
+        const tok = cst.child(i) match {
+            TokenChild(t) => t
+            NodeChild(_) => continue
+        }
+        if tok.kind == TokenKind.CloseParenthesis {
+            saw_close = true
+            continue
+        }
+        if !in_where {
+            in_where = saw_close and tok.kind == TokenKind.Identifier and tok.text == "where"
+            continue
+        }
+        if tok.kind != TokenKind.Identifier {
+            continue
+        }
+        param match {
+            Some(p) => {
+                out.push(TypeBound {
+                    span = .{
+                        file_id = self.file_id,
+                        start = p.offset,
+                        length = tok.offset + tok.text.len - p.offset,
+                    },
+                    param = p.text,
+                    bound = tok.text,
+                })
+                param = null
+            }
+            None => param = Some(tok.*)
+        }
+    }
+    return out
 }
 
 // Identifier between `fn` and `(`. We pick the first identifier token after `fn`; before `fn`, the

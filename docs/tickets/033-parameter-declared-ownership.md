@@ -417,6 +417,13 @@ promote, then use.
      argument would only write the callee's copy.
    - **6b. Generic bodies.** The rule and `where T: copyable` (the first slice of RFC-019 §2); the
      copy-returning functions take the bound. Before owned buffers, which rewrite those bodies.
+
+     Split again. The bound is done: `where T: copyable` parses after the parameters and return
+     type, is checked at each call that binds `T` (E2134, with the derivation chain, the body not
+     instantiated), and a bound that is not `copyable` or not on one of the function's own type
+     parameters is E2135. The body rule needs to know which types came from a type parameter, and
+     an instantiation binds `T` straight to its concrete type, so it lands with RFC-029's rigid
+     check of generic bodies, after 6c. The stdlib takes the bound after the next promote.
    - **6c, with step 7.** Owned buffers, `deinit(self: move T)`, `clone`, drains. This branch has no
      callback gates to drop.
 7. **Compiler libraries.** Sweep `lib/*`, `tools/*`, `compiler/`.

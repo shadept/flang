@@ -543,6 +543,7 @@ fn probe_spec(function_id: u32, name: String) Specialization {
         name = name,
         params = no_decl_params,
         return_type = null,
+        bounds = list(0),
         body = null,
     }
     let it = type_interner()

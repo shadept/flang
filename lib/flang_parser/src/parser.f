@@ -579,8 +579,8 @@ fn parse_function_with_directives(self: &Parser, leading: List(CstNodeId)) CstNo
     return self.finish(b)
 }
 
-// Function body builder - fills `b` with: [pub] fn name(params) ret_type? { body } or [pub] fn
-// name(params) ret_type (no body, for `#foreign`).
+// Function body builder - fills `b` with: [pub] fn name(params) ret_type? where? { body } or [pub]
+// fn name(params) ret_type (no body, for `#foreign`).
 fn parse_function_into(self: &Parser, b: &NodeBuilder) {
     if self.current_kind() == TokenKind.Pub {
         self.eat_into(b)
@@ -592,9 +592,12 @@ fn parse_function_into(self: &Parser, b: &NodeBuilder) {
         self.record_expected(TokenKind.Identifier, "E1002")
     }
     self.parse_function_params(b)
-    if self.can_start_type(self.current_kind()) {
+    if self.can_start_type(self.current_kind()) and !self.at_where_clause() {
         const t = self.parse_type()
         self.push_node_into(b, t)
+    }
+    if self.at_where_clause() {
+        self.parse_where_into(b)
     }
     if self.current_kind() == TokenKind.OpenBrace {
         const body = self.parse_block_expr()
@@ -602,6 +605,27 @@ fn parse_function_into(self: &Parser, b: &NodeBuilder) {
     }
     // No body? Foreign functions go without one - that's fine, we just stop here. Anything else (a
     // stray statement) bubbles up to the top-level error recovery.
+}
+
+// `where` is contextual: a bound list starts with `where Name :`, so a type named `where` still
+// parses as a return type.
+fn at_where_clause(self: &Parser) bool {
+    return self.current_kind() == TokenKind.Identifier and self.current().text == "where"
+        and self.peek_kind(1) == TokenKind.Identifier and self.peek_kind(2) == TokenKind.Colon
+}
+
+// `where T: copyable, U: copyable` - tokens only, read back by the projector.
+fn parse_where_into(self: &Parser, b: &NodeBuilder) {
+    self.eat_into(b)
+    loop {
+        self.expect_into(b, TokenKind.Identifier, "E1002")
+        self.expect_into(b, TokenKind.Colon, "E1002")
+        self.expect_into(b, TokenKind.Identifier, "E1002")
+        if self.current_kind() != TokenKind.Comma {
+            break
+        }
+        self.eat_into(b)
+    }
 }
 
 fn parse_function_params(self: &Parser, b: &NodeBuilder) {

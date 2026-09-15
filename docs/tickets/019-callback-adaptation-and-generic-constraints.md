@@ -170,6 +170,9 @@ bounds instead of a count of concrete type constructors.
 
 ### 2.6 First slice: the `copyable` bound (RFC-033)
 
+Landed 2026-09-15: parsed as a contextual `where` clause, checked at each call
+that binds the parameter (E2134), malformed entries E2135.
+
 RFC-033 makes a type that mentions a type parameter non-copyable inside a
 generic body, so a body is checked against the worst case whatever it is
 instantiated with. A function that copies `T` on purpose says so:

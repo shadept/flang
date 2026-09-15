@@ -99,6 +99,8 @@ fn close(h: move File) {}                   // takes ownership: `h.close()` move
 
 **Generic:** `$T` introduces, `T` refers. Example: `fn identity(x: $T) T { return x }`
 
+**Bounds:** `fn max(s: $T[]) T? where T: copyable` - the only bound is `copyable`; `where` is contextual.
+
 **Foreign:** `#foreign fn malloc(size: usize) &u8?` — no body, C calling convention, not mangled.
 
 **Lambda:** `fn(x: i32, y: i32) i32 { x + y }` — no name after `fn`. Captures enclosing names by reference (RFC-033): the body reads and writes the enclosing bindings. Capturing lambdas synthesise an anonymous callable type and cannot decay into a bare `fn(...) Ret` slot — pass them through a generic parameter (`fn apply(f: $F, ...)`) instead. Parameter types inferred when context available.

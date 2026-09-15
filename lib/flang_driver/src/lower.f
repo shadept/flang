@@ -1622,6 +1622,7 @@ fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
         name = pl.info.symbol.as_view(),
         params = pl.lam.params,
         return_type = pl.lam.return_type,
+        bounds = list(0, ctx.allocator),
         body = Some(pl.lam.body),
     }
     let sig_params: List(Ty) = list(pl.info.params.len, ctx.allocator)

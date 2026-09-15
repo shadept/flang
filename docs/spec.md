@@ -79,6 +79,8 @@ Inference is multi-phase: constraints flow bidirectionally from return positions
 
 A type parameter in scope **shadows** any nominal of the same name: inside `fn wrap(e: $E) Result(T, E)`, `E` is the parameter even if a type named `E` is visible.
 
+**Bounds.** A `where` clause after the parameters (and return type) constrains a function's type parameters: `fn max(s: $T[]) T? where T: copyable`. `copyable` is the only bound (RFC-019 §2.6): the argument's type must be copyable (RFC-028's derived bit). It is checked at each call that binds `T`, reported there with the derivation chain (E2134), and the body is not instantiated for a call that fails it. A bound that names something other than one of the function's own type parameters, or a bound other than `copyable`, is E2135. `where` is contextual: it opens a clause only as `where Name :`.
+
 #### 2.3.0 Monomorphization
 
 Generic functions are **monomorphized at their call sites**:

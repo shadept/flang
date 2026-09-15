@@ -2140,6 +2140,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
         Some(old) => old.tps.deinit()
         None => {}
     }
+    check_bound_decls(self, &fd.bounds, &self.sig_tps)
     if scheme.quantified.len() > 0 {
         self.templates.set(id, GenericTemplate {
             decl = fd.*,
@@ -2545,6 +2546,64 @@ fn drain_pending_specs(self: &Checker, report: bool = true) {
     queue.deinit()
 }
 
+// `copyable` is the only bound, and it constrains one of the signature's own `$T`s.
+fn check_bound_decls(self: &Checker, bounds: &List(TypeBound), tps: &List(SigTypeParam)) {
+    for &b in bounds {
+        if b.bound != BOUND_COPYABLE {
+            push_diag_e(self, b.span, E_BAD_BOUND,
+                $"unknown bound `{b.bound}` - the only bound is `{BOUND_COPYABLE}`")
+            continue
+        }
+        if sig_tp_var(tps, b.param).is_none() {
+            push_diag_e(self, b.span, E_BAD_BOUND,
+                $"`{b.param}` is not a type parameter of this function")
+        }
+    }
+}
+
+const BOUND_COPYABLE: String = "copyable"
+
+fn sig_tp_var(tps: &List(SigTypeParam), name: String) VarId? {
+    for &tp in tps {
+        if tp.name == name {
+            return Some(tp.var_id)
+        }
+    }
+    return null
+}
+
+// A call's `where T: copyable` bounds against the types it bound, reported at the call that chose
+// them - the outermost open instantiation when the call sits in a generic body. False when one
+// fails: the body is not instantiated for a call the signature rejects.
+fn check_call_bounds(self: &Checker, p: &PendingSpec) bool {
+    const template = self.templates.get_ref(p.function_id)
+    if template.is_none() {
+        return true
+    }
+    let ok = true
+    const decl = &template.unwrap().decl
+    for &b in decl.bounds {
+        const vid = sig_tp_var(&template.unwrap().tps, b.param)
+        if vid.is_none() or b.bound != BOUND_COPYABLE {
+            continue
+        }
+        const bound = p.tp_binds.get(vid.unwrap())
+        if bound.is_none() {
+            continue
+        }
+        const ty = self.engine.resolve(self.engine.zonk(bound.unwrap()))
+        if self.engine.is_copyable(ty) {
+            continue
+        }
+        ok = false
+        let sb = string_builder(160, self.allocator)
+        sb.append($"`{decl.name}` requires `{b.param}: copyable`")
+        append_copy_blame(self, ty, &sb)
+        own_report(self, p.span, E_BOUND_UNSATISFIED, sb.to_string())
+    }
+    return ok
+}
+
 fn report_uninferable_spec(self: &Checker, p: &PendingSpec) {
     self.slot_uninferable = self.slot_uninferable + 1
     let name = self.templates.get(p.function_id).unwrap().decl.name
@@ -2560,6 +2619,10 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
         params.push(self.engine.zonk(p.inst_params[i]))
     }
     let ret = self.engine.zonk(p.inst_ret)
+    if !check_call_bounds(self, p) {
+        params.deinit()
+        return
+    }
     if self.slot_log_on and self.spec_depth == 0 and !p.from_parked {
         log_pick(self, p, &params, ret)
     }

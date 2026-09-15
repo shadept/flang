@@ -139,6 +139,11 @@ pub const E_NOT_OWNED: String = "E2131"
 pub const E_RVALUE_NO_OWNER: String = "E2132"
 // One call both moves a place and lends or shares a place overlapping it with owned state.
 pub const E_MOVE_AND_LEND: String = "E2133"
+// A call binds a type parameter to a type its `where` bound rejects: `where T: copyable` with a
+// non-copyable argument (RFC-019 §2.6).
+pub const E_BOUND_UNSATISFIED: String = "E2134"
+// A `where` entry that is not a known bound on one of the function's own type parameters.
+pub const E_BAD_BOUND: String = "E2135"
 
 // A `let`/`const` re-declared in the SAME scope. Cross-scope shadowing stays silent; this only
 // fires when the earlier binding becomes unreachable in the same block (reference parity: a warning

@@ -3024,6 +3024,8 @@ Report the issue with sample code that reproduces the error.
 | **E2131** | Ownership         | Use needs ownership the function does not have |
 | **E2132** | Ownership         | Non-copyable temporary reaches no owner      |
 | **E2133** | Ownership         | Call moves or shares a place it also reads   |
+| **E2134** | Type Checking     | `where` bound not satisfied                  |
+| **E2135** | Type Checking     | Malformed `where` bound                      |
 
 ### E2115: Unsupported Pattern Form
 
@@ -3441,6 +3443,55 @@ Either remove the capture (pass `k` as an extra argument), make the higher-order
 ```flang
 fn apply(f: $F, x: i32) i32 { return f(x) }   // generic over the closure type
 ```
+
+---
+
+### E2134: A `where` Bound Is Not Satisfied
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A call binds a type parameter to a type its `where` bound rejects. `where T: copyable` requires the
+argument's type to be copyable. The error names the derivation chain and sits on the call that
+chose the type: the outermost instantiation's call when the call is inside another generic body.
+The function's body is not instantiated for that call.
+
+#### Example
+
+```flang
+fn twice(x: $T) T where T: copyable
+
+twice(handle)       // error[E2134]: `twice` requires `T: copyable`; `FileHandle` is not copyable: field `fd` is `owned`
+```
+
+#### Solution
+
+Pass a copyable value, or use a function that takes the value by reference or by `move`.
+
+---
+
+### E2135: Malformed `where` Bound
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A `where` entry names a bound other than `copyable`, or constrains a name that is not one of the
+function's own type parameters.
+
+#### Example
+
+```flang
+fn pick(x: $T) T where T: sortable      // error[E2135]: unknown bound
+fn pick(x: $T) T where U: copyable      // error[E2135]: `U` is not a type parameter
+```
+
+#### Solution
+
+Bind the parameter with `$U` in the signature, and use `copyable`.
 
 ---
 

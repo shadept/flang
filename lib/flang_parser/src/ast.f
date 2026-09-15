@@ -139,8 +139,9 @@ pub type ImportDecl = struct {
     path: List(String)
 }
 
-// `[pub] [directives] fn name(params) ret? { body }` `body` is None for `#foreign fn` declarations
-// (no `{ ... }`). `return_type` is None for void-returning functions (no type after `)`).
+// `[pub] [directives] fn name(params) ret? where? { body }` `body` is None for `#foreign fn`
+// declarations (no `{ ... }`). `return_type` is None for void-returning functions (no type after
+// `)`).
 pub type FunctionDecl = struct {
     span: SourceSpan
     is_pub: bool
@@ -148,7 +149,15 @@ pub type FunctionDecl = struct {
     name: String
     params: List(FunctionParam)
     return_type: &TypeExpr?
+    bounds: List(TypeBound)
     body: &BlockExpr?
+}
+
+// One `param: bound` entry of a `where` clause (RFC-019 §2.6). `copyable` is the only bound so far.
+pub type TypeBound = struct {
+    span: SourceSpan
+    param: String
+    bound: String
 }
 
 // One parameter slot. `is_variadic` is true for the trailing `..xs: T` form. `default_value`
