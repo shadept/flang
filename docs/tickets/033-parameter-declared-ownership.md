@@ -157,8 +157,9 @@ A field reached through a reference is not tracked: `slot.key = move old.key` in
 own storage stays the element-store form containers use. A `deinit(self: move T)` that moves every
 field out and never uses `self` whole needs nothing further.
 
-**What `move` may take** (2026-09-16). A binding, a field path, or an element or dereference reached
-through a field of a type the module declares; anything else is E2125. Taking out of one's own
+**What `move` may take** (2026-09-16). A binding, a field path, the value in a `&move` slot, or an
+element or dereference reached through a field of a type the module declares; anything else is
+E2125. Taking out of one's own
 storage is the read side of the element store above, and the gate is the same scoped-mutability
 right. Without it, `fn take(slot: &$T) T { return move slot.* }` in any module would turn a lent
 reference into ownership, which is how the first cut of the container sweep smuggled elements out.
@@ -167,6 +168,30 @@ The chain is read syntactically, so a container writes `move (self.entries + i).
 
 When a field has no value to put back, the field is optional, a null object stands in for it, or
 the function consumes its owner and returns a different type.
+
+## `&move T`, the slot mode
+
+A fourth mode, added 2026-09-16. `x: &move T` is `&T` plus the right to take the value out, against
+the obligation to put one back before the function returns (E2137). The caller keeps the slot; what
+is in it may differ afterwards.
+
+It exists because nothing else can write `swap`: exchanging two owning values needs each value to
+leave its storage, and `&T` shares without granting that. The first cut used a byte-level
+`memswap`, which is the escape hatch this mode removes.
+
+Restrictions, because a call site cannot see that its value is being replaced:
+
+- **Declarable in `core` alone** (E2136). Every other module reaches it through `core.slice`'s
+  `swap` and `replace`. Calling is unrestricted.
+- **Parameter position only** - never a field, a return type or a binding's type - so the right to
+  empty a slot cannot outlive the call that granted it, which matters in a language with no
+  lifetimes.
+- **No `take(slot) T`.** It would have to refill with a zeroed stand-in, and for `FileHandle { owned
+  fd: i32 }` that is fd 0, standard input. `replace` makes the caller name what goes back.
+
+What it does not claim is exclusivity: a second alias reading the slot inside the emptied window
+sees dead bytes, and FLang does not track aliasing (§3.6). Rule 9 covers the case that matters,
+`swap(&h, &h)`, since both arguments are claims on one place.
 
 ## Scoped mutability
 
@@ -467,8 +492,8 @@ promote, then use.
 
      `OwnedString` landed 2026-09-16, and with it what an owning element needs from the containers:
      a `List` and `Dict` drain, a dict that lends its entries (`for e in d` binds `&Entry`), a set
-     that keeps by-value iteration and adds `iter_ref` for owning elements, `swap` exchanging bytes
-     through `memswap` when `T` owns, and sorts that compare an owning element by reference. The
+     that keeps by-value iteration and adds `iter_ref` for owning elements, `swap` through `&move`
+     slots, and sorts that compare an owning element by reference. The
      `move` gate above landed with them. `List` and `Dict` buffers are not `owned` yet - that turns
      every container into a non-copyable type, and it is the next type in this list rather than part
      of `OwnedString`.
@@ -484,7 +509,7 @@ From `client_ownership_semantics`, not tied to either semantics:
   functions reachable from a container instantiated in the same module.
 - The `#error` directive (inside `f4125bc`).
 - A `for` loop releasing a non-copyable iterator state on every exit (inside `4657526`).
-- Stdlib: `swap` and `memswap`; `swap_remove`, `remove_at`, `take_all`, `drain`, `drain_rev` on
+- Stdlib: `swap_remove`, `remove_at`, `take_all`, `drain`, `drain_rev` on
   lists; `drain` on dict, set, deque and stack; `find_ref`, `iter_rev_ref`; `peek_front_ref`;
   `iter_ref` on sets; `clear` on set and stack; `remove` on set; `clone` on list, dict and
   `OwnedString`; `retain` on `Rc`, `Arc` and lists; `stdlib/README.md`.

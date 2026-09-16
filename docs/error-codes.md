@@ -3026,6 +3026,8 @@ Report the issue with sample code that reproduces the error.
 | **E2133** | Ownership         | Call moves or shares a place it also reads   |
 | **E2134** | Type Checking     | `where` bound not satisfied                  |
 | **E2135** | Type Checking     | Malformed `where` bound                      |
+| **E2136** | Semantic Analysis | `&move` parameter outside `core`             |
+| **E2137** | Semantic Analysis | A `&move` slot is left empty                 |
 
 ### E2115: Unsupported Pattern Form
 
@@ -3492,6 +3494,68 @@ fn pick(x: $T) T where U: copyable      // error[E2135]: `U` is not a type param
 #### Solution
 
 Bind the parameter with `$U` in the signature, and use `copyable`.
+
+---
+
+### E2136: A `&move` Parameter Outside `core`
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+`&move T` is the only parameter mode that empties storage the caller keeps: the callee may take the
+value out, and must leave one behind (E2137). Because a caller cannot see at the call site that its
+value is about to be replaced, the mode is declared in the core library alone, and every other
+module reaches it through `core.slice`'s `swap` and `replace`. Calling such a function is
+unrestricted.
+
+#### Example
+
+```flang
+fn steal(slot: &move Handle) Handle {   // error[E2136] outside `core`
+    return move slot.*
+}
+
+swap(&a, &b)                            // fine anywhere: core declares the slots
+const old = replace(&h, Handle { fd = 3 })
+```
+
+#### Solution
+
+Use `swap` or `replace`. A container that hands its own elements over does not need this mode: the
+module that declares the storage may already take out of it (E2125).
+
+---
+
+### E2137: A `&move` Slot Is Left Empty
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+Taking the value out of a `&move` slot leaves it empty, and the caller still holds it. Every path
+that leaves the function has to put a value back.
+
+#### Example
+
+```flang
+pub fn take(a: &move $T) T {
+    return move a.*             // error[E2137]: nothing was put back
+}
+
+pub fn replace(slot: &move $T, value: move T) T {
+    let old = move slot.*
+    slot.* = move value         // refilled on the only exit
+    return old
+}
+```
+
+#### Solution
+
+Assign through the slot before returning, on every path. A function that has nothing to put back
+takes `move T` instead and leaves the caller's binding dead.
 
 ---
 

@@ -265,29 +265,15 @@ container's `drain` instead, and the gaps that follow are accepted rather than c
 - **Iterators that own** (`WalkIter`, `GlobIter`, `Dir`) are released by hand: `for e in
   walk_dir(p)?` leaks the walk's stack and its OS handles.
 
+Sorting and reversing owning elements do work: `swap` takes `&move` slots (spec 3.2), so an owning
+element moves between two places with no copy.
+
 Closing these is one decision and two rules: an iterator's own `iter` consumes (`move self`), and a
 `for` loop releases a non-copyable iterator state on every exit path - the shape RFC-032 took on
 `client_ownership_semantics`. Deferred until a concrete need makes the design decidable, notably
 what a terminal that relocates owning elements (`files.filter(p).drain()`) looks like: draining is a
 write to the source's storage, so only a selection chain over one container can offer it, and only
 through the container's own module.
-
----
-
-### Rule 9 Refuses `swap`, So Owning Elements Cannot Be Sorted Or Reversed
-
-**Status:** Open
-**Affected:** `stdlib/core/slice.f` (`swap`), `stdlib/std/sort.f`, `lib/flang_analysis/src/unused.f`
-
-`swap(&s[j], &s[j - 1])` is two shares of places that overlap through owned state, which rule 9
-refuses (E2133). Sorting or reversing a list of owning elements is built on exactly that, so
-`unused.f` sorts a `List(usize)` of indices instead, comparing through one shared list plus two
-copyable indices, since `cmp_site(&missed[a], &missed[b])` is two overlapping shares as well.
-
-Neither side of a `swap` moves: the same set of owners exists before and after, and the callee
-cannot release either. The candidates are narrowing rule 9 to fire only when one side MOVES (which
-also re-admits `xs.concat(xs)`, aliasing that spec 3.6 leaves to the programmer), or leaving the
-rule and giving `swap` a raw-bytes form the check cannot see.
 
 ---
 

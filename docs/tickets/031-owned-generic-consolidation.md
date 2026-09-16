@@ -1,7 +1,8 @@
 ---
-status: draft
+status: implemented
 type: stdlib
 created: 2026-09-01
+implemented: 2026-09-16
 requires: [RFC-033]
 relates: [RFC-028, RFC-019, RFC-016]
 ---
@@ -167,9 +168,10 @@ the builder empty so a plain `defer sb.deinit()` is correct, and one moves the b
    - 5d. `owned view`: non-copyable, `deinit(self: move OwnedString)` plus the element form,
      `clone`, and the ~40 types holding one. Done, with what an owning element needs from the
      containers: `List`/`Dict` drains, a dict that lends its entries, a set that keeps by-value
-     iteration and gains `iter_ref`, `memswap`-based `swap`, and sorts that compare by reference.
+     iteration and gains `iter_ref`, `swap` through `&move` slots, and sorts that compare by
+     reference.
      RFC-033's `move` gate landed here too: taking out of a reference is the declaring module's
-     right, not everyone's. Open: sorting an owning element is blocked on rule 9 (known-issues).
+     right, not everyone's.
 
 ## Tests
 
@@ -186,14 +188,20 @@ the builder empty so a plain `defer sb.deinit()` is correct, and one moves the b
 `tests/harness/op_deref/`: operator dispatch through a hop; a concrete overload through a hop
 loses to a catch-all as written.
 
-## Open questions
+## Settled while implementing
 
-1. **Interpolating a named `OwnedString`.** `$"{s}"` reaches `String`'s `format` through the hop,
-   but the hole resolves `append(sb, move OwnedString)`, which consumes `s`. Copyability hides it
-   today; under 5d it is E2123 on the next use. Either the desugar reads the view for a place and
-   consumes only a temporary, or `append` reads and temporaries are released by the desugar.
-2. **`List.to_owned_slice`.** Returns a `(T[], &Allocator)` tuple the caller frees by hand. Not
-   this RFC's: the `List` increment of RFC-033 step 6c replaces it with drains and `take_all`.
+1. **Interpolating a named `OwnedString`.** A hole that names a place is read - the desugar emits
+   `place.format(sb.writer(), spec)` - and only a temporary goes to the consuming `append`. Without
+   it `$"{s}"` would kill `s`.
+2. **Ranking.** Answered by receiver tiers rather than by a hop-versus-catch-all tie-break: an
+   overload taking the receiver as written wins, so `OwnedString` declares its own `hash`.
+3. **Arguments.** RFC-020 landed with it, so `lexer(source, alloc)` takes an `OwnedString` where a
+   `String` is wanted; the owner decays to the view it holds.
+
+## Still open elsewhere
+
+- **`List.to_owned_slice`** returns a `(T[], &Allocator)` tuple the caller frees by hand. The `List`
+  increment of RFC-033 step 6c replaces it with the drains this RFC added and `take_all`.
 
 ## Out of scope
 

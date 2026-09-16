@@ -377,17 +377,21 @@ pub fn fold_right(s: $T[], init: move $A, f: $F) A {
 // In-place mutation
 // =============================================================================
 
-// Swaps the values at two mutable references.
-pub fn swap(a: &$T, b: &T) {
-    #if type_info(T).copyable {
-        let tmp = a.*
-        a.* = b.*
-        b.* = tmp
-    } else {
-        // No value is read into a second location: a three-assignment swap would make two owners of
-        // one resource.
-        memswap(a as &u8, b as &u8, size_of(T))
-    }
+// Exchanges the values in two slots. `&move` says the values leave their storage, so an owning `T`
+// swaps with no copy and no second owner; the caller keeps both slots, each holding the other's
+// value.
+pub fn swap(a: &move $T, b: &move T) {
+    let tmp = move a.*
+    a.* = move b.*
+    b.* = move tmp
+}
+
+// Puts `value` into the slot and hands back what was there. The caller names what goes in, so an
+// owning type is never left holding a zeroed stand-in.
+pub fn replace(slot: &move $T, value: move T) T {
+    let old = move slot.*
+    slot.* = move value
+    return old
 }
 
 // Fills every element of the slice with `value`.
@@ -598,7 +602,3 @@ test "min, max and the folds over a slice" {
 
 // Copies `len` bytes from `src` to `dst`. Handles overlapping regions safely.
 #foreign fn memmove(dst: &u8, src: &u8, len: usize)
-
-// Exchanges the `len` bytes at `a` with the `len` bytes at `b`. The regions must not overlap
-// (`slice.c`).
-#foreign fn memswap(a: &u8, b: &u8, len: usize)

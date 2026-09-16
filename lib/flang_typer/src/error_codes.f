@@ -145,6 +145,13 @@ pub const E_BOUND_UNSATISFIED: String = "E2134"
 // A `where` entry that is not a known bound on one of the function's own type parameters.
 pub const E_BAD_BOUND: String = "E2135"
 
+// A `&move T` parameter outside `core`: the one mode that takes a value out of storage its caller
+// keeps is the core library's alone (RFC-033).
+pub const E_SLOT_OUTSIDE_CORE: String = "E2136"
+
+// A `&move T` slot left empty: the value was taken out and none put back.
+pub const E_SLOT_NOT_REFILLED: String = "E2137"
+
 // A `let`/`const` re-declared in the SAME scope. Cross-scope shadowing stays silent; this only
 // fires when the earlier binding becomes unreachable in the same block (reference parity: a warning
 // locally, an error at module scope, where it is E2005).

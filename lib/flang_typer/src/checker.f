@@ -1155,7 +1155,34 @@ fn resolve_function(self: &Checker, f: &FunctionType) Ty {
 }
 
 // Parameter `i`'s bit in a function type's `move` mask: zero unless it is declared `move`. A `move`
-// over a reference (rule 5) or past what the mask carries is E2130 and contributes nothing.
+// over a reference (rule 5) or past what the mask carries is E2130 and contributes nothing. `&move
+// T` says the callee may take the value out of the caller's slot, so long as it leaves one behind.
+// It is the only mode that empties storage its caller keeps, so it is declared in `core` alone and
+// everything else reaches it through `swap` and `replace`.
+fn check_slot_param(self: &Checker, p: &FunctionParam) {
+    if !p.is_slot {
+        return
+    }
+    const is_ref = p.type_expr.* match { Reference(_) => true, _ => false }
+    if !is_ref {
+        return
+    }
+    if in_core_module(self) {
+        return
+    }
+    push_diag_e(self, p.span, E_SLOT_OUTSIDE_CORE,
+        from_view("`&move` parameters are declared in the core library only - `core.slice`'s `swap` and `replace` are how a value leaves a slot its caller keeps"))
+}
+
+// Whether the module being checked is part of the core library.
+fn in_core_module(self: &Checker) bool {
+    if self.current_module.is_none() {
+        return false
+    }
+    const m = self.current_module.unwrap()
+    return m == "core" or m.starts_with("core.")
+}
+
 fn move_bit_of(self: &Checker, i: usize, declared: bool, ty: Ty, span: SourceSpan) usize {
     if !declared {
         return 0usize
@@ -2066,6 +2093,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     let moves = 0usize
     for &p in fd.params {
         const pt = param_ty(self, p)
+        check_slot_param(self, p)
         moves = moves | move_bit_of(self, params.len, p.is_move, pt, p.span)
         // A default value is checked against its parameter HERE, at the declaration, so the
         // diagnostic names the parameter (E2070) rather than surfacing at some unrelated call site.
@@ -8776,6 +8804,9 @@ type OwnPass = struct {
     // A lambda body's other captures: references to bindings the enclosing body owns, which the
     // lambda may read and write but not take the value out of.
     captured: List(NodeId)
+    // `&move T` parameters, by declaration node: the body may take the value out of each, and must
+    // leave one behind before it returns (RFC-033).
+    slots: List(NodeId)
     // The function value a `move` argument is being handed to, "" for a declared function.
     taker: String
 }
@@ -8790,16 +8821,51 @@ type OwnPass = struct {
 // trailing expression is the function's value.
 fn own_check_body(self: &Checker, body: &BlockExpr, params: &List(FunctionParam)?, returns: bool) {
     let lent: List(NodeId) = list(0, self.allocator)
+    let slots: List(NodeId) = list(0, self.allocator)
     params match {
-        Some(ps) => own_collect_lent(self, &lent, ps)
+        Some(ps) => {
+            own_collect_lent(self, &lent, ps)
+            own_collect_slots(self, &slots, ps)
+        }
         None => {}
     }
-    own_run(self, body, lent, list(0, self.allocator), returns)
+    own_run(self, body, lent, list(0, self.allocator), returns, slots)
+}
+
+fn own_collect_slots(self: &Checker, slots: &List(NodeId), params: &List(FunctionParam)) {
+    for &prm in params {
+        if prm.is_slot {
+            slots.push(self.node_of(prm.span))
+        }
+    }
+}
+
+fn own_is_slot(p: &OwnPass, decl: NodeId) bool {
+    return own_list_has(&p.slots, decl)
+}
+
+// The slot parameter a place is reached through, when the place is a dereference of one: `slot.*`
+// and nothing else names the value a `&move` parameter points at.
+fn own_slot_root(self: &Checker, p: &OwnPass, e: &Expr) NodeId? {
+    const inner = e.* match {
+        Dereference(d) => d.operand
+        _ => return null
+    }
+    const id = inner.* match {
+        Identifier(x) => x
+        _ => return null
+    }
+    const d = own_local_decl(self, self.node_of(id.span))
+    if d.is_none() or !own_is_slot(p, d.unwrap()) {
+        return null
+    }
+    return d
 }
 
 // One body's pass. Takes ownership of `lent` and `captured`.
 fn own_run(self: &Checker, body: &BlockExpr, lent: List(NodeId), captured: List(NodeId),
-    returns: bool) {
+    returns: bool, slots: List(NodeId) = list(0, null)) {
+    // `slots` is moved into the pass below; its span is the body's, for the exit check.
     let p = OwnPass {
         moved = list(0, self.allocator),
         paths = list(0, self.allocator),
@@ -8815,10 +8881,14 @@ fn own_run(self: &Checker, body: &BlockExpr, lent: List(NodeId), captured: List(
         seen = set(self.allocator),
         lent = lent,
         captured = captured,
+        slots = slots,
         taker = "",
     }
     defer own_deinit(&p)
     own_block(self, &p, body, if returns { own_returning() } else { own_read() })
+    if !p.diverged {
+        own_check_slots_filled(self, &p, body.span)
+    }
 }
 
 fn own_collect_lent(self: &Checker, lent: &List(NodeId), params: &List(FunctionParam)) {
@@ -8858,7 +8928,8 @@ fn own_lambda(self: &Checker, p: &OwnPass, lam: &LambdaExpr) {
         }
     }
     const ret = self.engine.resolve(info.unwrap().ret)
-    own_run(self, lam.body, lent, captured, ret != TY_VOID and ret != TY_NEVER)
+    own_run(self, lam.body, lent, captured, ret != TY_VOID and ret != TY_NEVER, list(0,
+            self.allocator))
 }
 
 fn own_deinit(p: &OwnPass) {
@@ -8873,6 +8944,7 @@ fn own_deinit(p: &OwnPass) {
     p.seen.deinit()
     p.lent.deinit()
     p.captured.deinit()
+    p.slots.deinit()
 }
 
 fn own_is_lent(p: &OwnPass, decl: NodeId) bool {
@@ -9549,6 +9621,15 @@ fn own_move(self: &Checker, p: &OwnPass, m: &MoveExpr, slot: OwnSlot) {
 // lets it store into them - and nobody else may, or a lent reference would be a way to take
 // ownership of what it points at (E2125).
 fn own_move_storage(self: &Checker, p: &OwnPass, e: &Expr, why: String) {
+    // `slot.*` of a `&move` parameter: the value leaves, and the slot is empty until it is refilled
+    // (E2137 at the exit that finds it still empty).
+    own_slot_root(self, p, e) match {
+        Some(d) => {
+            own_mark(p, d)
+            return
+        }
+        None => {}
+    }
     if own_through_owned_field(self, e) {
         return
     }
@@ -9709,6 +9790,9 @@ type OwnCallee = struct {
 type OwnMode = struct {
     moves: bool
     is_ref: bool
+    // `&move T`: the callee may take the value out of the slot (RFC-033). The caller keeps the
+    // slot.
+    takes: bool
 }
 
 // One argument of a call, for the move-and-lend check (rule 9).
@@ -9801,13 +9885,14 @@ fn own_callee(self: &Checker, c: &CallExpr) OwnCallee {
 }
 
 fn own_param_mode(self: &Checker, callee: &OwnCallee, idx: usize, name: String) OwnMode {
-    let mode = OwnMode { moves = false, is_ref = false }
+    let mode = OwnMode { moves = false, is_ref = false, takes = false }
     if callee.decl.is_some() {
         const decl = &callee.decl.unwrap().params
         const at = own_param_index(decl, idx, name)
         if at < decl.len {
             mode.moves = decl[at].is_move
             mode.is_ref = decl[at].type_expr.* match { Reference(_) => true, _ => false }
+            mode.takes = decl[at].is_slot and mode.is_ref
         }
         return mode
     }
@@ -9944,7 +10029,7 @@ fn own_overlap(self: &Checker, p: &OwnPass, a: &OwnUse, b: &OwnUse) {
     }
     const common = if ha.len < hb.len { ha.len } else { hb.len }
     for k in 0..common {
-        if ha[k].field != hb[k].field {
+        if ha[k].field != hb[k].field or !own_same_step(&ha[k], &hb[k]) {
             return
         }
     }
@@ -9971,6 +10056,8 @@ type OwnHop = struct {
     field: String
     // The step lands in storage the value owns: an `owned` field, or an element of a container.
     owned: bool
+    // An element step's index, for telling one element of a container from another.
+    index: &Expr?
 }
 
 // The local binding a place starts from, with the steps below it pushed onto `hops` root first.
@@ -9982,12 +10069,50 @@ fn own_place(self: &Checker, e: &Expr, hops: &List(OwnHop)) NodeId? {
         MemberAccess(ma) => own_place_step(self, ma.receiver, hops, OwnHop {
             field = ma.member,
             owned = own_field_owned(self, &ma),
+            index = null,
         })
         Index(ix) => own_place_step(self, ix.receiver, hops, OwnHop {
             field = "",
             owned = !own_is_array(self, ix.receiver),
+            index = Some(ix.index),
         })
         _ => null
+    }
+}
+
+// Whether two steps land in the same storage. Field steps are compared by name, element steps by
+// the index as written: `s[i]` and `s[i]` are one place, `s[j]` and `s[j - 1]` are two, and an
+// index this cannot read is taken as a different one - which leaves aliasing where spec 3.6 leaves
+// it, rather than refusing an exchange of two elements.
+fn own_same_step(a: &OwnHop, b: &OwnHop) bool {
+    if a.index.is_none() and b.index.is_none() {
+        return true
+    }
+    if a.index.is_none() or b.index.is_none() {
+        return false
+    }
+    return own_same_index(a.index.unwrap(), b.index.unwrap())
+}
+
+fn own_same_index(a: &Expr, b: &Expr) bool {
+    return a.* match {
+        Identifier(x) => b.* match {
+            Identifier(y) => x.name == y.name
+            _ => false
+        }
+        Lit(x) => b.* match {
+            Lit(y) => literal_text(&x) == literal_text(&y) and literal_text(&x).len > 0
+            _ => false
+        }
+        _ => false
+    }
+}
+
+// An integer literal's text, "" for every other literal - enough to tell `xs[0]` from `xs[1]`.
+fn literal_text(l: &LiteralExpr) String {
+    return l.value match {
+        Int(i) => i.text
+        _ => ""
     }
 }
 
@@ -10065,7 +10190,17 @@ fn own_assign(self: &Checker, p: &OwnPass, a: &AssignmentExpr) {
     a.lhs.* match {
         Identifier(id) => own_assign_binding(self, p, &id, a.span)
         MemberAccess(ma) => own_assign_field(self, p, &ma, a.span)
+        Dereference(_) => own_assign_deref(self, p, a.lhs)
         _ => own_expr(self, p, a.lhs, own_read())
+    }
+}
+
+// `slot.* = value` puts a value back into a `&move` parameter, which is what the take obliges. Any
+// other dereference target is an ordinary write through a reference.
+fn own_assign_deref(self: &Checker, p: &OwnPass, lhs: &Expr) {
+    own_slot_root(self, p, lhs) match {
+        Some(d) => own_unmark(p, d)
+        None => own_expr(self, p, lhs, own_read())
     }
 }
 
@@ -10243,12 +10378,28 @@ fn own_let(self: &Checker, p: &OwnPass, ls: &LetStmt) {
 }
 
 // The value is evaluated first, then the active defers fire, then control transfers (spec 4.1).
+// Every `&move` slot the body took from has to hold a value again at this exit.
+fn own_check_slots_filled(self: &Checker, p: &OwnPass, span: SourceSpan) {
+    for d in p.slots {
+        if !own_has_moves(p, d) {
+            continue
+        }
+        if !own_claim(p, self.node_of(span)) {
+            return
+        }
+        push_diag_e(self, span, E_SLOT_NOT_REFILLED,
+            from_view("a `&move` slot is left empty: the value was taken out and none put back - assign through it before returning"))
+        return
+    }
+}
+
 fn own_return(self: &Checker, p: &OwnPass, rs: &ReturnStmt) {
     rs.value match {
         Some(e) => own_expr(self, p, e, own_returning())
         None => {}
     }
     own_fire_defers(self, p, 1usize)
+    own_check_slots_filled(self, p, rs.span)
     p.diverged = true
 }
 
@@ -13076,6 +13227,37 @@ test "a closure may assign a captured name (RFC-033)" {
     let errs = count_check_errors(["fn take(f: $F) i32 { return f(1) }\nfn main() i32 { let k: i32 = 1\n return take(fn(v: i32) i32 { k = 2\n return v }) + k }\n"],
         ["m"])
     assert_eq(errs, 0 as usize, "captures are by reference")
+}
+
+// `&move` slots (RFC-033). Declarable in `core` alone, so these check through a core-named module.
+
+test "a core module may take from a slot when it refills it" {
+    let errs = count_check_errors(["type H = struct { owned fd: i32 }
+pub fn exchange(a: &move H, b: &move H) { let tmp = move a.*
+ a.* = move b.*
+ b.* = move tmp }
+"],
+        ["core.slots"])
+    assert_eq(errs, 0 as usize, "the take is paired with a refill on the only exit")
+}
+
+test "a slot left empty is refused" {
+    let errs = count_check_errors(["type H = struct { owned fd: i32 }
+pub fn take(a: &move H) H { return move a.* }
+"],
+        ["core.slots"])
+    assert_true(errs > 0, "the value left and none was put back (E2137)")
+}
+
+test "a slot emptied on one branch only is refused" {
+    let errs = count_check_errors(["type H = struct { owned fd: i32 }
+pub fn maybe(a: &move H, b: move H, c: bool) H { let tmp = move a.*
+ if c { a.* = move b
+ return tmp }
+ return tmp }
+"],
+        ["core.slots"])
+    assert_true(errs > 0, "the branch that returns without refilling is reported")
 }
 
 test "a nested closure captures through the enclosing one (RFC-033)" {

@@ -174,6 +174,9 @@ pub type FunctionParam = struct {
     // `x: move T` - the function takes ownership of its argument (RFC-033). Without it a by-value
     // slot only reads.
     is_move: bool
+    // `x: &move T` - a slot the function may take the value out of, on the obligation of leaving
+    // one behind. Declared in `core` alone.
+    is_slot: bool
 }
 
 // `[pub] [directives] type Name = TypeExpr`

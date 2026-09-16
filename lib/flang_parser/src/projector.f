@@ -396,6 +396,9 @@ fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
     let default_value: Expr? = null
     let is_variadic = has_token(cst, TokenKind.DotDot)
     let is_move = has_token(cst, TokenKind.Move)
+    // `&move T` keeps its `move` inside the reference type, so it reads as a slot rather than as an
+    // owning by-value parameter.
+    let is_slot = false
     let saw_colon = false
     let saw_equals = false
     let type_seen = false
@@ -416,6 +419,9 @@ fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
                 if saw_equals and default_value.is_none() {
                     default_value = Some(self.project_expr(child))
                 } else if !type_seen and is_type_kind(child.kind) {
+                    if child.kind == NodeKind.ReferenceType and has_token(child, TokenKind.Move) {
+                        is_slot = true
+                    }
                     type_expr = self.project_type_expr(child)
                     type_seen = true
                 }
@@ -429,6 +435,7 @@ fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
         default_value = self.boxed_opt(default_value),
         is_variadic = is_variadic,
         is_move = is_move,
+        is_slot = is_slot,
     }
 }
 
@@ -2557,6 +2564,7 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
                         default_value = null,
                         is_variadic = false,
                         is_move = pending_move,
+                        is_slot = false,
                     })
                     pending_active = false
                     pending_move = false
@@ -2580,6 +2588,7 @@ fn make_lambda_param(self: &Projector, name: String, span: SourceSpan) FunctionP
         default_value = null,
         is_variadic = false,
         is_move = false,
+        is_slot = false,
     }
 }
 

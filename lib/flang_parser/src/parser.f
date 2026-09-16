@@ -1946,6 +1946,11 @@ fn parse_prefix_type(self: &Parser) CstNodeId {
     if self.current_kind() == TokenKind.Ampersand {
         let b = self.open(NodeKind.ReferenceType)
         self.eat_into(&b)
+        // `&move T` - a slot the callee may take from, declared in `core` alone (RFC-033). The
+        // `move` rides on the reference node; the type itself is `&T`.
+        if self.current_kind() == TokenKind.Move {
+            self.eat_into(&b)
+        }
         const inner = self.parse_prefix_type()
         self.push_node_into(&b, inner)
         return self.finish(b)
