@@ -270,20 +270,25 @@ pub fn insert(s: &UnmanagedList($T), index: usize, value: move T, allocator: &Al
     }
     s.reserve(s.len + 1, allocator)
     s.len = s.len + 1
-    let data = s.as_slice()
+    // Shifted through the list's own buffer: an element leaves its slot only inside this module.
     let i = s.len - 1
     while i > index {
-        data[i] = move data[i - 1]
+        let dst: &T = s.ptr + i
+        dst.* = move (s.ptr + (i - 1)).*
         i = i - 1
     }
-    data[index] = move value
+    let at: &T = s.ptr + index
+    at.* = move value
 }
 
 // Deinits every live element, frees the buffer and resets to empty, so a second call is a no-op.
 pub fn deinit(s: &UnmanagedList($T), allocator: &Allocator) {
     if s.cap > 0 {
         for i in 0..s.len {
-            release_slot(s.get_ref(i).unwrap())
+            // Taken out of the list's own buffer, which this module declares `owned`: the slot is
+            // about to be freed and nothing reads it again.
+            let v = move (s.ptr + i).*
+            v.deinit()
         }
         allocator.free(slice_from_raw_parts(s.ptr, s.cap))
     }
@@ -335,8 +340,9 @@ pub fn pop(list: &UnmanagedList($T)) T? {
     }
 
     list.len = list.len - 1
-    let last: &T = list.ptr + list.len
-    return Some(last.*)
+    // The slot is past the end now: its value is the caller's.
+    const v = move (list.ptr + list.len).*
+    return Some(move v)
 }
 
 // Set the element at the given index.
@@ -712,6 +718,62 @@ pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
         }
     }
     return out
+}
+
+// =============================================================================
+// Drain
+// =============================================================================
+
+// Hands the list's elements over, one at a time. The list reads as empty while a drain is live, and
+// what the drain does not take goes back when it is released.
+pub type Drain = struct(T) {
+    __list: &UnmanagedList(T)
+    taken: usize
+    count: usize
+    // Which end the next element comes from. The back is the order `pop` yields, which is what a
+    // stack drains in; the front is the list's own order.
+    from_back: bool
+}
+
+// Takes the list's elements: it reads as empty until the drain is released.
+pub fn drain(self: &UnmanagedList($T)) Drain(T) {
+    let out: Drain(T) = .{ __list = self, taken = 0, count = self.len, from_back = false }
+    self.len = 0
+    return out
+}
+
+// Takes the list's elements last to first, the order `pop` yields them in. The untaken ones are
+// already at the front, so releasing this drain moves nothing.
+pub fn drain_rev(self: &UnmanagedList($T)) Drain(T) {
+    let out: Drain(T) = .{ __list = self, taken = 0, count = self.len, from_back = true }
+    self.len = 0
+    return out
+}
+
+// A drain is its own iterable: `for x in xs.drain()`.
+pub fn iter(self: &Drain($T)) Drain(T) {
+    return self.*
+}
+
+// Moves the next element out of the list, from the end this drain takes from, or null when every
+// one has been taken.
+pub fn next(self: &Drain($T)) T? {
+    if self.taken >= self.count {
+        return null
+    }
+    const at = if self.from_back { self.count - 1 - self.taken } else { self.taken }
+    self.taken = self.taken + 1
+    const v = move (self.__list.ptr + at).*
+    return Some(move v)
+}
+
+// Returns the untaken elements to the front of the list and restores its length as their count.
+pub fn deinit(self: &Drain($T)) {
+    const left = self.count - self.taken
+    if left > 0 and self.taken > 0 and !self.from_back {
+        memmove(self.__list.ptr as &u8, (self.__list.ptr + self.taken) as &u8, left * size_of(T))
+    }
+    self.__list.len = left
 }
 
 // =============================================================================

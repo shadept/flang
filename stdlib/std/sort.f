@@ -5,6 +5,9 @@
 //     pub fn <algo>(s: $T[])                           -- uses op_cmp
 //     pub fn <algo>(s: $T[], cmp: $F)  -- custom comparator: any callable fn(T, T) Ord
 //
+// The comparator takes elements by value when `T` is copyable and by reference, fn(&T, &T) Ord,
+// when it is not. The comparator-less forms call op_cmp the same way.
+//
 // `sort` aliases `powersort` (stable, O(n log n), fast on partially sorted input). Direct algorithm
 // calls remain available when a specific behavior is desired:
 //
@@ -13,6 +16,7 @@
 //     powersort       -- stable, O(n log n); near-optimal merge policy on natural runs.
 
 import std.allocator
+import std.mem
 import std.option
 import std.test
 
@@ -25,11 +29,33 @@ import std.test
 const INSERTION_CUTOFF: usize = 24
 
 // =============================================================================
+// Element access
+// =============================================================================
+
+fn _order(a: &$T, b: &T, cmp: $F) Ord {
+    let o = Ord.Equal
+    #if type_info(T).copyable {
+        o = cmp(a.*, b.*)
+    } else {
+        o = cmp(a, b)
+    }
+    return o
+}
+
+fn _move_to(dst: &$T, src: &T) {
+    memcpy(dst as &u8, src as &u8, size_of(T))
+}
+
+// =============================================================================
 // Insertion sort
 // =============================================================================
 
 pub fn insertion_sort(s: $T[]) {
-    _insertion_sort_range(s, 0, s.len, fn(a: T, b: T) Ord { return op_cmp(a, b) })
+    #if type_info(T).copyable {
+        _insertion_sort_range(s, 0, s.len, fn(a: T, b: T) Ord { return op_cmp(a, b) })
+    } else {
+        _insertion_sort_range(s, 0, s.len, fn(a: &T, b: &T) Ord { return op_cmp(a, b) })
+    }
 }
 
 pub fn insertion_sort(s: $T[], cmp: $F) {
@@ -43,14 +69,25 @@ fn _insertion_sort_range(s: $T[], lo: usize, hi: usize, cmp: $F) {
     if hi - lo < 2 {
         return
     }
-    for i in (lo + 1)..hi {
-        const cur = s[i]
-        let j = i
-        while j > lo and cmp(cur, s[j - 1]) == Ord.Less {
-            s[j] = s[j - 1]
-            j = j - 1
+    #if type_info(T).copyable {
+        for i in (lo + 1)..hi {
+            const cur = s[i]
+            let j = i
+            while j > lo and cmp(cur, s[j - 1]) == Ord.Less {
+                s[j] = s[j - 1]
+                j = j - 1
+            }
+            s[j] = cur
         }
-        s[j] = cur
+    } else {
+        // An owning element cannot be held in a temporary, so it walks down by swaps.
+        for i in (lo + 1)..hi {
+            let j = i
+            while j > lo and cmp(&s[j], &s[j - 1]) == Ord.Less {
+                swap(&s[j], &s[j - 1])
+                j = j - 1
+            }
+        }
     }
 }
 
@@ -59,7 +96,11 @@ fn _insertion_sort_range(s: $T[], lo: usize, hi: usize, cmp: $F) {
 // =============================================================================
 
 pub fn quicksort(s: $T[]) {
-    _quicksort_range(s, 0, s.len, fn(a: T, b: T) Ord { return op_cmp(a, b) })
+    #if type_info(T).copyable {
+        _quicksort_range(s, 0, s.len, fn(a: T, b: T) Ord { return op_cmp(a, b) })
+    } else {
+        _quicksort_range(s, 0, s.len, fn(a: &T, b: &T) Ord { return op_cmp(a, b) })
+    }
 }
 
 pub fn quicksort(s: $T[], cmp: $F) {
@@ -104,7 +145,8 @@ fn _partition(s: $T[], lo: usize, hi: usize, cmp: $F) usize {
     // the partition window.
     const pivot_slot = last - 1
     swap(&s[mid], &s[pivot_slot])
-    const pivot = s[pivot_slot]
+    // The scans and swaps below never touch `pivot_slot`, so the pivot is read in place.
+    const pivot = &s[pivot_slot]
 
     let i = lo
     let j = pivot_slot
@@ -112,11 +154,11 @@ fn _partition(s: $T[], lo: usize, hi: usize, cmp: $F) usize {
         // Scan up from the left past elements strictly less than pivot. Stops at pivot_slot at the
         // latest (s[pivot_slot] == pivot).
         i = i + 1
-        while cmp(s[i], pivot) == Ord.Less { i = i + 1 }
+        while _order(&s[i], pivot, cmp) == Ord.Less { i = i + 1 }
         // Scan down from the right past elements strictly greater than pivot. Stops at `lo` at the
         // latest (s[lo] <= pivot from median-of-three).
         j = j - 1
-        while cmp(s[j], pivot) == Ord.Greater { j = j - 1 }
+        while _order(&s[j], pivot, cmp) == Ord.Greater { j = j - 1 }
         if i >= j {
             break
         }
@@ -131,13 +173,13 @@ fn _partition(s: $T[], lo: usize, hi: usize, cmp: $F) usize {
 // Sorts s[a], s[b], s[c] in ascending order under cmp. Three comparisons, up to three swaps -
 // classical 3-element insertion sort.
 fn _sort3(s: $T[], a: usize, b: usize, c: usize, cmp: $F) {
-    if cmp(s[b], s[a]) == Ord.Less {
+    if _order(&s[b], &s[a], cmp) == Ord.Less {
         swap(&s[a], &s[b])
     }
-    if cmp(s[c], s[b]) == Ord.Less {
+    if _order(&s[c], &s[b], cmp) == Ord.Less {
         swap(&s[b], &s[c])
     }
-    if cmp(s[b], s[a]) == Ord.Less {
+    if _order(&s[b], &s[a], cmp) == Ord.Less {
         swap(&s[a], &s[b])
     }
 }
@@ -161,7 +203,11 @@ fn _sort3(s: $T[], a: usize, b: usize, c: usize, cmp: $F) {
 // Optimally Adapt to Existing Runs" (ESA 2018).
 
 pub fn powersort(s: $T[]) {
-    _powersort_impl(s, fn(a: T, b: T) Ord { return op_cmp(a, b) })
+    #if type_info(T).copyable {
+        _powersort_impl(s, fn(a: T, b: T) Ord { return op_cmp(a, b) })
+    } else {
+        _powersort_impl(s, fn(a: &T, b: &T) Ord { return op_cmp(a, b) })
+    }
 }
 
 pub fn powersort(s: $T[], cmp: $F) {
@@ -266,13 +312,13 @@ fn _next_run(s: $T[], lo: usize, hi: usize, cmp: $F) usize {
         return hi
     }
     let end = lo + 1
-    if cmp(s[end], s[lo]) == Ord.Less {
+    if _order(&s[end], &s[lo], cmp) == Ord.Less {
         // Strictly descending - scan, then reverse in place.
-        while end < hi and cmp(s[end], s[end - 1]) == Ord.Less { end = end + 1 }
+        while end < hi and _order(&s[end], &s[end - 1], cmp) == Ord.Less { end = end + 1 }
         _reverse_range(s, lo, end)
     } else {
         // Non-descending.
-        while end < hi and cmp(s[end], s[end - 1]) != Ord.Greater { end = end + 1 }
+        while end < hi and _order(&s[end], &s[end - 1], cmp) != Ord.Greater { end = end + 1 }
     }
     // Force every run to at least INSERTION_CUTOFF elements. The existing run is already sorted, so
     // insertion sort just folds in the tail efficiently.
@@ -333,34 +379,31 @@ fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: $F) {
         return
     }
 
-    // Copy the left half into scratch and stream results back into s. The right half stays put - we
-    // only race to overwrite it once its elements have been consumed, and that pointer (r) never
-    // lags behind the write head (w).
-    for i in lo..mid { scratch[i] = s[i] }
+    // Move the left half into scratch and stream results back into s. Elements move as bytes, so an
+    // owning one is never duplicated: each has exactly one live slot once the merge ends. The right
+    // half stays put - we only race to overwrite it once its elements have been consumed, and that
+    // pointer (r) never lags behind the write head (w).
+    memcpy(&scratch[lo] as &u8, &s[lo] as &u8, (mid - lo) * size_of(T))
 
     let l = lo
     let r = mid
     let w = lo
     while l < mid and r < hi {
-        const lv = scratch[l]
-        const rv = s[r]
         // `!= Less` (i.e. left <= right) keeps the merge stable: equal keys from the left half
         // always go first.
-        if cmp(rv, lv) == Ord.Less {
-            s[w] = rv
+        if _order(&s[r], &scratch[l], cmp) == Ord.Less {
+            _move_to(&s[w], &s[r])
             r = r + 1
         } else {
-            s[w] = lv
+            _move_to(&s[w], &scratch[l])
             l = l + 1
         }
         w = w + 1
     }
 
-    // Drain any leftover left half. A leftover right half is already in place.
-    while l < mid {
-        s[w] = scratch[l]
-        l = l + 1
-        w = w + 1
+    // Move any leftover left half. A leftover right half is already in place.
+    if l < mid {
+        memcpy(&s[w] as &u8, &scratch[l] as &u8, (mid - l) * size_of(T))
     }
 }
 
@@ -572,6 +615,19 @@ test "sort with custom cmp" {
     sort(s, sort_test_desc_i32)
     assert_eq(s[0], 5i32, "descending first")
     assert_eq(s[4], 1i32, "descending last")
+}
+
+type SortTestOwned = struct {
+    key: i32
+    owned tag: i32
+}
+
+fn sort_test_owned(key: i32, tag: i32) SortTestOwned {
+    return .{ key = key, tag = tag }
+}
+
+fn op_cmp(a: &SortTestOwned, b: &SortTestOwned) Ord {
+    return op_cmp(a.key, b.key)
 }
 
 // Sorts `s` in place by `key(x)` ascending, keeping the order of equal keys.

@@ -169,6 +169,8 @@ Three types with explicit ownership. All share layout `{ ptr: &u8, len: usize }`
 
 **String** — non-owning view. No `deinit`. Used for literals, parameters, temporary references. Same binary layout as `u8[]`.
 
+**Container iteration and ownership.** The iterator protocol is defined for copyable elements; an owning element type moves through a container's `drain` (`for x in xs.drain()` hands each element over, and the untaken tail stays in the container). A dict lends each entry (`for e in d` binds `&Entry`), since an entry may hold owning keys or values; a set iterates by value and adds `iter_ref`, the split `List` already has. `swap` exchanges two values in place - through a temporary for a copyable `T`, through `memswap` for an owning one - and the sorts compare an owning element by reference (`fn(&T, &T) Ord`). What is deliberately not settled yet: the loop does not own its iterator, and an iterator's own `iter` copies rather than consumes, so iterating an owning state is the container's business rather than the protocol's (docs/known-issues.md).
+
 **OwnedString** — owns its buffer: `struct { view: String, allocator: &Allocator? }`. Must be freed via `deinit()`. Follows allocator pattern. Produced by `StringBuilder.to_string()`, `from_view()`. Every `String` read reaches `view` through `op_deref` (`s.len`, `s.starts_with(p)`, `s == t`); `hash` is declared, since the catch-all `hash($T)` would take it as written. A dict or set keyed by `OwnedString` is looked up by `String` (RFC-031).
 
 **StringBuilder** — owning, mutable, growable buffer. `append()` adds content. `to_string()` transfers buffer to OwnedString (move semantics — builder resets). `as_view()` returns non-owning String view.
@@ -328,6 +330,8 @@ The elision is observable: the address of a read-only parameter equals the calle
 - `x: &T` shares `x` with the function.
 - `x: move T` moves ownership into the function. A non-copyable binding passed to it is dead after the call; a copyable one is copied. `move &T` is an error (E2130).
 - `x: T` reads. A copyable `x` may be copied and written (the function's own copy). A non-copyable `x` may be read and passed on to another `T` parameter; writing, sharing, binding, returning or moving it is refused (E2131).
+
+**What `move` may take.** A binding, a field path, or - only inside the module that declares the field it is reached through - an element or a dereference (E2125 otherwise). The last case is the scoped-mutability right a type's own module already has over its storage: `std.collections.list` takes an element back out of `s.ptr` the same way it stores one into it, and no other module can, or a lent reference would be a way to take ownership of what it points at. The chain is read where the `move` is written, so a local reference binding (`let at = s.ptr + i` then `move at.*`) loses the provenance and is refused; write `move (s.ptr + i).*`.
 
 The receiver follows the first parameter. A call site carries no ownership marker (`f(move x)` is E2129). A non-copyable temporary must reach an owner: one passed to a `T` parameter, a read-only receiver or an operator, read for a field, or discarded, is E2132. A call cannot move or share a place that another of its arguments reaches through owned state (E2133). A function type carries its parameters' modes: `fn(T)` and `fn(move T)` are distinct types.
 

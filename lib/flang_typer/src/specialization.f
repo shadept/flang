@@ -578,7 +578,8 @@ pub fn rekey(self: &SpecializationRegistry, id: SpecId, new_key: move OwnedStrin
     }
     let s = self.specs.get_ref(id).unwrap()
     let _old = self.by_key.remove(s.key.view)
-    s.key.deinit()
+    let old_key = move s.key
+    old_key.deinit()
     s.key = move new_key
     self.by_key.set(s.key.view, id)
     return true

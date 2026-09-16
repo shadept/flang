@@ -57,7 +57,7 @@ pub fn contains(self: &FqnMap($V), fqn: String) bool {
 // Registers `value` under `fqn`, replacing a value already there. Takes ownership of `fqn`: the
 // name is copied into the pool and `fqn` is freed, whether or not it was already interned. Panics
 // when the pool or the table cannot grow.
-pub fn register(self: &FqnMap($V), fqn: OwnedString, value: V) {
+pub fn register(self: &FqnMap($V), fqn: move OwnedString, value: V) {
     const id = self.names.intern(fqn.view)
     fqn.deinit()
     self.entries.set(id, value, self.allocator)

@@ -439,7 +439,7 @@ pub fn next(self: &Lines) String? {
 // The owning counterpart to [core.string.String]: `view` is the text, and every `String` read
 // reaches it through `op_deref`.
 pub type OwnedString = struct {
-    view: String
+    owned view: String
     allocator: &Allocator?
 }
 

@@ -320,8 +320,14 @@ fn encode_diag(e: &Encoder, idx: &LineIndex, text: String, d: &Diagnostic, enc: 
 // ---- Diagnostics publishing ----
 
 // One publishDiagnostics notification for `uri`. A diagnostic without a location (none_span keeps
-// start = 0) lands at the top of the file rather than being hidden.
-fn publish_file_diags(self: &LspServer, uri: String, text: String, diags: &List(Diagnostic)) {
+// start = 0) lands at the top of the file rather than being hidden. Replaces the hover label,
+// releasing what it held: assigning over a live binding leaks it (E2126).
+fn set_hover_label(slot: &Option(OwnedString), text: move OwnedString) {
+    slot.deinit()
+    slot.* = Some(move text)
+}
+
+fn publish_file_diags(self: &LspServer, uri: String, text: String, diags: &List(&Diagnostic)) {
     // ponytail: rebuilds a LineIndex per call, so one analysis costs one full scan of every
     // project-origin file (125 of them for the compiler) just to publish diagnostics. `Document`
     // already caches an index for OPEN buffers and invalidates it on change (documents.f), but
@@ -342,7 +348,7 @@ fn publish_file_diags(self: &LspServer, uri: String, text: String, diags: &List(
     e.key("diagnostics")
     e.begin_seq(diags.len)
     for &d in diags {
-        encode_diag(&e, &idx, text, d, self.encoding)
+        encode_diag(&e, &idx, text, d.*, self.encoding)
     }
     e.end_seq()
     e.end_map()
@@ -357,7 +363,12 @@ fn publish_syntax_diags(self: &LspServer, uri: String) {
         return
     }
     let parsed = parse_doc(doc.unwrap().text.view)
-    self.publish_file_diags(uri, doc.unwrap().text.view, &parsed.diagnostics)
+    let lent: List(&Diagnostic) = list(parsed.diagnostics.len)
+    defer lent.deinit()
+    for &d in parsed.diagnostics {
+        lent.push(d)
+    }
+    self.publish_file_diags(uri, doc.unwrap().text.view, &lent)
     parsed.deinit()
 }
 
@@ -380,11 +391,11 @@ fn publish_project(self: &LspServer, pi: ProjectId) {
         if fid >= unit.project_origin.len or !unit.project_origin[fid] {
             continue
         }
-        let file_diags: List(Diagnostic) = list(0)
+        // Lent for the publish: the unit keeps every diagnostic it holds.
+        let file_diags: List(&Diagnostic) = list(0)
         for &d in unit.diagnostics {
             if d.span.file_id == fid as i32 {
-                // shallow copy: Diagnostic owns nothing that a List teardown frees
-                file_diags.push(d.*)
+                file_diags.push(d)
             }
         }
         const u = self.uri_for_path(unit.file_paths[fid].view)
@@ -1320,9 +1331,10 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         let ref = imp.unwrap()
         defer ref.deinit()
         const target = file_id_of_fqn(unit, ref.path.view)
-        let doc: OwnedString? = null
-        if target.is_some() {
-            doc = module_doc(unit.sources[target.unwrap() as usize].view)
+        const doc: OwnedString? = if target.is_some() {
+            module_doc(unit.sources[target.unwrap() as usize].view)
+        } else {
+            null
         }
         self.respond_hover(msg, $"import {ref.path.view}", doc, text, ref.span)
         return
@@ -1374,7 +1386,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
             if dspan.is_some() and self.location_span_ok(pi, dspan.unwrap()) {
                 const l = self.decl_label(pi, dspan.unwrap())
                 if l.is_some() {
-                    label = Some(from_view(l.unwrap()))
+                    set_hover_label(&label, from_view(l.unwrap()))
                     doc_span = dspan
                 }
             }
@@ -1401,13 +1413,13 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
                 }
             }
             if intro.is_some() {
-                label = Some($"{intro.unwrap()} {wname}: {rendered.view}")
+                set_hover_label(&label, $"{intro.unwrap()} {wname}: {rendered.view}")
                 rendered.deinit()
             } else if th.unwrap().span.length == wname.len {
-                label = Some($"{wname}: {rendered.view}")
+                set_hover_label(&label, $"{wname}: {rendered.view}")
                 rendered.deinit()
             } else {
-                label = Some(move rendered)
+                set_hover_label(&label, rendered)
             }
         }
     }
@@ -1423,7 +1435,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         if fh.is_some() {
             const vars = type_param_names(&unit.checker)
             const rendered = render_ty(result, fh.unwrap().ty, Some(vars))
-            label = Some($"field {wname}: {rendered.view}")
+            set_hover_label(&label, $"field {wname}: {rendered.view}")
             rendered.deinit()
             doc_span = Some(fh.unwrap().decl_span)
         }
@@ -1449,7 +1461,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
                 continue
             }
             const slice = text[a.start..(a.start + a.length)]
-            label = Some($"{b.intro} {wname}: {slice}")
+            set_hover_label(&label, $"{b.intro} {wname}: {slice}")
             break
         }
         binders.deinit()
@@ -1463,10 +1475,11 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         const wend = wstart + wname.len
         const call_shaped = wend < text.len and text[wend] == '('
         if !is_member or call_shaped {
-            const rh = self.registry_hover(pi, wname)
+            let rh = self.registry_hover(pi, wname)
             if rh.is_some() {
-                label = Some(move rh.unwrap().label)
-                doc_span = rh.unwrap().sole
+                let hover = rh.unwrap()
+                doc_span = hover.sole
+                set_hover_label(&label, hover.label)
             }
         }
     }
@@ -1499,11 +1512,12 @@ fn respond_hover(self: &LspServer, msg: &RpcMessage, label: move OwnedString,
     md.append(label.view)
     md.append("\n```")
     if doc.is_some() {
-        const prose = doc_markdown(doc.unwrap().view)
+        const text_doc = doc.unwrap()
+        const prose = doc_markdown(text_doc.view)
         md.append("\n\n")
         md.append(prose.view)
         prose.deinit()
-        doc.unwrap().deinit()
+        text_doc.deinit()
     }
     e.encode_str(md.as_view())
     md.deinit()

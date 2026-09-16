@@ -245,19 +245,16 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
 
     // 2. Pick a place for the .c file. emit_c_path wins if set; otherwise
     //    we drop it next to the output executable with a ".c" extension.
-    let c_path_owned: OwnedString
-    let keep_c = options.keep_temps
-    options.emit_c_path match {
-        Some(p) => {
-            c_path_owned = from_view(p, alloc)
-            keep_c = true
-        }
+    let keep_c = options.keep_temps or options.emit_c_path.is_some()
+    // Built once: assigning a second buffer over a live one would leak the first (E2126).
+    const c_path_owned = options.emit_c_path match {
+        Some(p) => from_view(p, alloc)
         None => {
             let p = path(options.output_path, alloc)
             defer p.deinit()
             let q = p.with_extension("c")
             defer q.deinit()
-            c_path_owned = from_view(q.as_view(), alloc)
+            from_view(q.as_view(), alloc)
         }
     }
 
@@ -341,12 +338,13 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
 
     // 6. Build the result. Retain the c_source_path if requested.
     let exe_path = linked_artifact_path(options.output_path, alloc)
-    let c_kept: OwnedString? = null
-    if keep_c {
-        c_kept = Some(move c_path_owned)
+    // Bound once: the kept path moves into the result, and the dropped one is released here.
+    const c_kept: OwnedString? = if keep_c {
+        Some(move c_path_owned)
     } else {
         remove_file_quiet(c_path_owned.view)
         c_path_owned.deinit()
+        null
     }
     return Ok(BuildResult {
         executable_path = move exe_path,
@@ -1893,9 +1891,10 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
     sdk_include_root.append("\\Include")
     nul_term(&sdk_include_root)
 
-    let sdk_ver_opt: OwnedString? = null
-    if dir_exists(sdk_include_root.as_view()) {
-        sdk_ver_opt = newest_subdir(sdk_include_root.as_view(), allocator)
+    const sdk_ver_opt: OwnedString? = if dir_exists(sdk_include_root.as_view()) {
+        newest_subdir(sdk_include_root.as_view(), allocator)
+    } else {
+        null
     }
 
     let include_paths = string_builder(256, allocator)
@@ -2067,18 +2066,18 @@ fn newest_subdir(parent: String, allocator: &Allocator?) OwnedString? {
         if !is_dir_entry {
             continue
         }
-        best match {
-            Some(b) => {
-                if e.name > b.view {
-                    let bb = move b
-                    bb.deinit()
-                    best = Some(from_view(e.name, allocator))
-                }
-            }
-            None => {
-                best = Some(from_view(e.name, allocator))
-            }
+        // The binding is released and dead before it takes the new name: assigning over a live one
+        // would leak what it holds (E2126).
+        const keeps = best match {
+            Some(b) => e.name <= b.view
+            None => false
         }
+        if keeps {
+            continue
+        }
+        let previous = move best
+        previous.deinit()
+        best = Some(from_view(e.name, allocator))
     }
     return best
 }

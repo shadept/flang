@@ -90,7 +90,12 @@ pub fn set_comptime(self: &ResolveCtx, c: ComptimeCtx) {
 pub fn deinit(self: move ResolveCtx) {
     self.project_name.deinit()
     self.project_source_root.deinit()
-    for &d in self.deps {
+    loop {
+        const next = self.deps.pop()
+        if next.is_none() {
+            break
+        }
+        const d = next.unwrap()
         d.name.deinit()
         d.root.deinit()
     }

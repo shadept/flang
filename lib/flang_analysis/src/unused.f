@@ -575,10 +575,18 @@ pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &L
             }
         }
     }
-    missed.sort(cmp_site)
+    // The order is sorted through an index list: `ImportSite` owns its name, and sorting the sites
+    // themselves would swap owning elements (see docs/known-issues.md).
+    let order: List(usize) = list(missed.len, allocator)
+    defer order.deinit()
+    for i in 0..missed.len {
+        order.push(i)
+    }
+    order.sort(fn(a: usize, b: usize) Ord { return cmp_site_at(&missed, a, b) })
 
     let out: List(Diagnostic) = list(missed.len, allocator)
-    for &m in missed {
+    for at in order {
+        const m = &missed[at]
         out.push(Diagnostic {
             severity = Severity.Warning,
             code = W_UNUSED_IMPORT,
@@ -807,11 +815,15 @@ fn contains_index(xs: &List(usize), v: usize) bool {
     return false
 }
 
-fn cmp_site(a: ImportSite, b: ImportSite) Ord {
-    if a.span.file_id != b.span.file_id {
-        return op_cmp(a.span.file_id, b.span.file_id)
+// Two sites of one list, by index: passing both as references would be two shares overlapping
+// through the list's owned state (E2133).
+fn cmp_site_at(sites: &List(ImportSite), a: usize, b: usize) Ord {
+    const fa = sites[a].span.file_id
+    const fb = sites[b].span.file_id
+    if fa != fb {
+        return op_cmp(fa, fb)
     }
-    return op_cmp(a.span.start, b.span.start)
+    return op_cmp(sites[a].span.start, sites[b].span.start)
 }
 
 // Tests

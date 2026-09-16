@@ -148,8 +148,10 @@ test "posix uri keeps its leading slash" {
 }
 
 test "non-file schemes are rejected" {
-    assert_true(uri_to_path("untitled:Untitled-1").is_none(), "untitled")
-    assert_true(uri_to_path("flang-generated:///x.f").is_none(), "custom scheme")
+    const untitled = uri_to_path("untitled:Untitled-1")
+    assert_true(untitled.is_none(), "untitled")
+    const generated = uri_to_path("flang-generated:///x.f")
+    assert_true(generated.is_none(), "custom scheme")
 }
 
 test "path round-trips through a uri" {

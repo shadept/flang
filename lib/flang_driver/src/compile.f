@@ -143,15 +143,15 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     // Profiling (RFC-025): instrument after every other FIR transform, then link the probe runtime.
     // The runtime's companion `.c` is already in `runtime_c` when the project imports `std.profile`
     // - don't add it twice. `prof_blob` backs the name-table global; it must outlive `compile()`.
-    let prof_blob: OwnedString? = null
-    profile_runtime match {
+    const prof_blob: OwnedString? = profile_runtime match {
         Some(rt) => {
-            prof_blob = Some(instrument_profile(&m, profile_all, allocator))
+            const blob = instrument_profile(&m, profile_all, allocator)
             if !contains_path(&runtime_c, rt) {
                 let _p = opts.add_c_file(rt)
             }
+            Some(move blob)
         }
-        None => {}
+        None => null
     }
 
     let r = compile(&m, &opts)

@@ -182,10 +182,35 @@ pub fn iter(it: &SetIterator($T)) SetIterator(T) {
     return it.*
 }
 
-// Advances and returns the next element, or null after the last.
+// Advances and returns the next element, or null after the last. By value, so an owning element
+// type iterates through `iter_ref` instead - a copy of one would own it twice.
 pub fn next(it: &SetIterator($T)) T? {
     return it.__inner.next() match {
         Some(entry) => Some(entry.key)
+        None => None
+    }
+}
+
+// Iterator over a set's elements, each lent, in unspecified order. What an owning element type
+// iterates through.
+pub type SetRefIterator = struct(T) {
+    __inner: DictIterator(T, u8)
+}
+
+// Iterates the elements by reference, in unspecified order.
+pub fn iter_ref(self: &UnmanagedSet($T)) SetRefIterator(T) {
+    return .{ __inner = self.__inner.iter() }
+}
+
+// An iterator is its own iterable.
+pub fn iter(it: &SetRefIterator($T)) SetRefIterator(T) {
+    return it.*
+}
+
+// Advances and returns a reference to the next element, or null after the last.
+pub fn next(it: &SetRefIterator($T)) &T? {
+    return it.__inner.next() match {
+        Some(entry) => Some(&entry.key)
         None => None
     }
 }

@@ -157,6 +157,14 @@ A field reached through a reference is not tracked: `slot.key = move old.key` in
 own storage stays the element-store form containers use. A `deinit(self: move T)` that moves every
 field out and never uses `self` whole needs nothing further.
 
+**What `move` may take** (2026-09-16). A binding, a field path, or an element or dereference reached
+through a field of a type the module declares; anything else is E2125. Taking out of one's own
+storage is the read side of the element store above, and the gate is the same scoped-mutability
+right. Without it, `fn take(slot: &$T) T { return move slot.* }` in any module would turn a lent
+reference into ownership, which is how the first cut of the container sweep smuggled elements out.
+The chain is read syntactically, so a container writes `move (self.entries + i).key`, not a local
+`&Entry` binding first.
+
 When a field has no value to put back, the field is optional, a null object stands in for it, or
 the function consumes its owner and returns a different type.
 
@@ -456,6 +464,14 @@ promote, then use.
    - **6c, with step 7.** Owned buffers, `deinit(self: move T)`, `clone`, drains, one type at a
      time and green at each. `OwnedString` follows RFC-031 (an `owned view: String` read through
      `op_deref`). This branch has no callback gates to drop.
+
+     `OwnedString` landed 2026-09-16, and with it what an owning element needs from the containers:
+     a `List` and `Dict` drain, a dict that lends its entries (`for e in d` binds `&Entry`), a set
+     that keeps by-value iteration and adds `iter_ref` for owning elements, `swap` exchanging bytes
+     through `memswap` when `T` owns, and sorts that compare an owning element by reference. The
+     `move` gate above landed with them. `List` and `Dict` buffers are not `owned` yet - that turns
+     every container into a non-copyable type, and it is the next type in this list rather than part
+     of `OwnedString`.
 7. **Compiler libraries.** Sweep `lib/*`, `tools/*`, `compiler/`.
 8. **Docs.** Spec §3.2, §3.6, §4.1, §7.2, §7.3 and the stdlib callback convention; RFC-028 and
    RFC-030 status and cross-references.

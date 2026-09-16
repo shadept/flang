@@ -185,8 +185,13 @@ type Doomed = struct {
 }
 
 fn free_doomed(items: &List(Doomed)) {
-    for item in items.iter_ref() {
-        release_slot(&item.path)
+    loop {
+        const next = items.pop()
+        if next.is_none() {
+            break
+        }
+        const item = next.unwrap()
+        item.path.deinit()
     }
     items.deinit()
 }

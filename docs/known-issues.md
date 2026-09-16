@@ -248,6 +248,70 @@ message.
 
 ---
 
+### Iterators Are For Copyable Elements
+
+**Status:** Open by decision (2026-09-16)
+**Affected:** `stdlib/core/slice.f`, `stdlib/std/collections/*`, `stdlib/std/iter.f`
+
+The iterator protocol is defined for copyable elements. An owning element type moves through a
+container's `drain` instead, and the gaps that follow are accepted rather than closed:
+
+- **The loop does not own its iterator.** A `break` part way through a drain leaves the untaken
+  tail in the list with the length the drain set, and nothing releases the drain. Every drain in the
+  tree runs to completion.
+- **`iter` on an iterator copies it.** The protocol's `iter(self: &It) It` returns `self.*`, so
+  `let i = xs.iter()` followed by two loops iterates twice from the start, and a copied drain would
+  take from one buffer twice.
+- **Iterators that own** (`WalkIter`, `GlobIter`, `Dir`) are released by hand: `for e in
+  walk_dir(p)?` leaks the walk's stack and its OS handles.
+
+Closing these is one decision and two rules: an iterator's own `iter` consumes (`move self`), and a
+`for` loop releases a non-copyable iterator state on every exit path - the shape RFC-032 took on
+`client_ownership_semantics`. Deferred until a concrete need makes the design decidable, notably
+what a terminal that relocates owning elements (`files.filter(p).drain()`) looks like: draining is a
+write to the source's storage, so only a selection chain over one container can offer it, and only
+through the container's own module.
+
+---
+
+### Rule 9 Refuses `swap`, So Owning Elements Cannot Be Sorted Or Reversed
+
+**Status:** Open
+**Affected:** `stdlib/core/slice.f` (`swap`), `stdlib/std/sort.f`, `lib/flang_analysis/src/unused.f`
+
+`swap(&s[j], &s[j - 1])` is two shares of places that overlap through owned state, which rule 9
+refuses (E2133). Sorting or reversing a list of owning elements is built on exactly that, so
+`unused.f` sorts a `List(usize)` of indices instead, comparing through one shared list plus two
+copyable indices, since `cmp_site(&missed[a], &missed[b])` is two overlapping shares as well.
+
+Neither side of a `swap` moves: the same set of owners exists before and after, and the callee
+cannot release either. The candidates are narrowing rule 9 to fire only when one side MOVES (which
+also re-admits `xs.concat(xs)`, aliasing that spec 3.6 leaves to the programmer), or leaving the
+rule and giving `swap` a raw-bytes form the check cannot see.
+
+---
+
+### A Statement Opening With `(` Is Swallowed Into the Line Above
+
+**Status:** Open
+**Affected:** `lib/flang_parser/src/parser.f`
+
+A statement that starts with `(` continues the previous expression as a call, so the binding the
+previous line declared never appears:
+
+```flang
+const from = i - 1
+(s.ptr + i).* = move (s.ptr + from).*    // error[E2004]: unknown identifier `from`
+```
+
+The parser reads `1(s.ptr + i)`. Newlines end statements everywhere else, so this is the one place a
+line break does not. Found writing `List.insert`'s element shift (`stdlib/std/collections/list.f`),
+which now binds `let dst: &T = s.ptr + i` and assigns through it.
+
+**Solution:** a call's `(` must be on the callee's line, as an index's `[` already is.
+
+---
+
 ### The Blanket `deinit(&$T)` Silently Wins Over an Element's Own
 
 **Status:** Open
@@ -270,6 +334,10 @@ the emitted C with `flang test -k`, or reproduce with
 `flang test --stats` from `lib/flang_lsp`. Importing `flang_parser.token` at the leaking
 call site does not change it, nor does importing it in `flang_analysis`'s `analyze.f`, so the
 deciding site is unidentified and plain visibility does not explain it.
+
+RFC-033's `move` gate (2026-09-16) closes the neighbouring hole rather than this one: a container
+now takes an element out of its own storage, and a `release_slot(slot: &$T)` helper that any module
+could call on any reference is E2125. The blanket still answers `elem.deinit()` on a reference.
 
 The blanket cannot simply be deleted: `List(T).deinit` resolves `elem.deinit()` while `T` is still
 a free variable, when the TEMPLATE body is checked and no instantiation exists, so the blanket is

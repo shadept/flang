@@ -41,7 +41,8 @@ pub fn instrument_profile(m: &IrModule, all: bool = false,
         if !all and is_stdlib_symbol(f.name) {
             continue
         }
-        m.displays.get(f.name) match {
+        // Lent, not taken: the display name stays the module's.
+        m.displays.get_ref(f.name) match {
             Some(d) => names.append(d.view)
             None => names.append(f.name)
         }

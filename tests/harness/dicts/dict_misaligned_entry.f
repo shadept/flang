@@ -105,7 +105,7 @@ pub fn main() i32 {
         if d.len() != 8 {
             return 11
         }
-        const v = d.get(5u32)
+        const v = d.get_ref(5u32)
         if v.is_none() {
             return 12
         }

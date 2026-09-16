@@ -379,9 +379,15 @@ pub fn fold_right(s: $T[], init: move $A, f: $F) A {
 
 // Swaps the values at two mutable references.
 pub fn swap(a: &$T, b: &T) {
-    let tmp = a.*
-    a.* = b.*
-    b.* = tmp
+    #if type_info(T).copyable {
+        let tmp = a.*
+        a.* = b.*
+        b.* = tmp
+    } else {
+        // No value is read into a second location: a three-assignment swap would make two owners of
+        // one resource.
+        memswap(a as &u8, b as &u8, size_of(T))
+    }
 }
 
 // Fills every element of the slice with `value`.
@@ -592,3 +598,7 @@ test "min, max and the folds over a slice" {
 
 // Copies `len` bytes from `src` to `dst`. Handles overlapping regions safely.
 #foreign fn memmove(dst: &u8, src: &u8, len: usize)
+
+// Exchanges the `len` bytes at `a` with the `len` bytes at `b`. The regions must not overlap
+// (`slice.c`).
+#foreign fn memswap(a: &u8, b: &u8, len: usize)

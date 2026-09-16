@@ -193,7 +193,8 @@ type ConstInfo = struct {
 // types.
 type PendingLambda = struct {
     lam: LambdaExpr
-    info: LambdaInfo
+    // Lent by the result tables, which outlive the drain: the info stays theirs.
+    info: &LambdaInfo
     overlay: &InferenceResults?
 }
 
@@ -2570,7 +2571,7 @@ fn lower_lambda(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lam: &LambdaExpr) 
     let info = info_opt.unwrap()
     ctx.pending_lambdas.push(PendingLambda {
         lam = lam.*,
-        info = move info.*,
+        info = info,
         overlay = ctx.overlay,
     })
     if info.captures.len == 0 {

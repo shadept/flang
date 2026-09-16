@@ -280,11 +280,14 @@ pub fn get_or_insert_with(self: &UnmanagedDict($K, $V), key: move K, make: $F,
 // Insert or update a key-value pair. On an update the old value is deinited, and so is `key`, since
 // the entry keeps the one it already has. Panics when the allocation fails.
 pub fn set(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: &Allocator) {
-    const existing = self.get_ref(key)
+    const existing = self.find_entry(key)
     if existing.is_some() {
-        const slot = existing.unwrap()
-        release_slot(slot)
-        slot.* = move value
+        // Through the entry, not a bare `&V`: taking out of this module's own `Entry` is what the
+        // scoped-mutability rule allows (E2125).
+        const entry = existing.unwrap()
+        let old = move entry.value
+        old.deinit()
+        entry.value = move value
         key.deinit()
         return
     }
@@ -299,7 +302,8 @@ pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V,
     const existing = self.find_entry(key)
     if existing.is_some() {
         const entry = existing.unwrap()
-        release_slot(&entry.value)
+        let old = move entry.value
+        old.deinit()
         entry.value = move value
         return
     }
@@ -352,11 +356,12 @@ fn take_entry(self: &UnmanagedDict($K, $V), found: &Entry(K, V)?) V? {
     }
     const entry = found.unwrap()
     const val: V = move entry.value
-    release_slot(&entry.key)
+    let k = move entry.key
+    k.deinit()
     entry.hash = HASH_DEAD
     self.length = self.length - 1
     self.dead = self.dead + 1
-    return Some(val)
+    return Some(move val)
 }
 
 // Removes every entry, deiniting each key and value. The table is kept for reuse.
@@ -374,8 +379,10 @@ fn deinit_entries(self: &UnmanagedDict($K, $V)) {
     for i in 0..self.cap {
         const entry: &Entry(K, V) = self.entries + i
         if entry.hash >= 2 {
-            release_slot(&entry.key)
-            release_slot(&entry.value)
+            let k = move entry.key
+            k.deinit()
+            let v = move entry.value
+            v.deinit()
         }
     }
 }
@@ -577,6 +584,51 @@ pub fn next(it: &DictIterator($K, $V)) &Entry(K, V)? {
     }
     it.current = it.dict.cap
     return null
+}
+
+// Hands every entry over, one at a time, emptying the dict as it goes. The table itself is kept and
+// still has to be freed (`deinit`); a drain that stops early leaves the untaken entries in place.
+pub type DictDrain = struct(K, V) {
+    __dict: &UnmanagedDict(K, V)
+    current: usize
+    taken: usize
+    count: usize
+}
+
+// Starts a drain. The dict reads as empty while it runs; `deinit` puts back what was not taken.
+pub fn drain(self: &UnmanagedDict($K, $V)) DictDrain(K, V) {
+    let out: DictDrain(K, V) = .{ __dict = self, current = 0, taken = 0, count = self.length }
+    self.length = 0
+    return out
+}
+
+// A drain is its own iterable: `for (k, v) in d.drain()`.
+pub fn iter(self: &DictDrain($K, $V)) DictDrain(K, V) {
+    return self.*
+}
+
+// Moves the next key and value out of the dict, in table order, or null when every entry has been
+// taken. The slot it came from is left as a tombstone.
+pub fn next(self: &DictDrain($K, $V)) (K, V)? {
+    for idx in self.current..self.__dict.cap {
+        const entry: &Entry(K, V) = self.__dict.entries + idx
+        if entry.hash >= 2 {
+            self.current = idx + 1
+            self.taken = self.taken + 1
+            entry.hash = HASH_DEAD
+            const k = move entry.key
+            const v = move entry.value
+            return Some((k, v))
+        }
+    }
+    self.current = self.__dict.cap
+    return null
+}
+
+// Puts the count back: what the drain did not take is still in the table.
+pub fn deinit(self: &DictDrain($K, $V)) {
+    self.__dict.length = self.count - self.taken
+    self.__dict.dead = self.__dict.dead + self.taken
 }
 
 // Iterator over a dict's keys, in unspecified order.

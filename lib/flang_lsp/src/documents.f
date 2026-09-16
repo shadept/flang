@@ -65,7 +65,8 @@ pub fn change(self: &DocumentStore, uri: String, version: i64, text: String) {
         return
     }
     let doc = existing.unwrap()
-    doc.text.deinit()
+    let old_text = move doc.text
+    old_text.deinit()
     doc.index.deinit()
     doc.text = from_view(text)
     doc.index = line_index(doc.text.view)

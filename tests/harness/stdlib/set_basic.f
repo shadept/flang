@@ -47,7 +47,7 @@ pub fn main() i32 {
     }
 
     // iter - verify exactly the remaining element is yielded.
-    let it = s.iter()
+    let it = s.iter_ref()
     let first = it.next()
     if first.is_none() {
         return 11
@@ -55,7 +55,8 @@ pub fn main() i32 {
     if first.unwrap().view != "world" {
         return 12
     }
-    if it.next().is_some() {
+    const second = it.next()
+    if second.is_some() {
         return 13
     }
 

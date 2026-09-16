@@ -132,8 +132,10 @@ test "call_site_at finds the callee and counts top-level commas" {
 
 test "call_site_at outside any call answers null" {
     const src = "let r = done()"
-    assert_true(call_site_at(src, src.len).is_none(), "balanced text, no open call")
-    assert_true(call_site_at("x + y", 3).is_none(), "no parentheses at all")
+    const balanced = call_site_at(src, src.len)
+    assert_true(balanced.is_none(), "balanced text, no open call")
+    const no_parens = call_site_at("x + y", 3)
+    assert_true(no_parens.is_none(), "no parentheses at all")
 }
 
 test "call_site_at handles ufcs receivers" {

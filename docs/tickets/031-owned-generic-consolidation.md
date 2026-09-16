@@ -164,8 +164,12 @@ the builder empty so a plain `defer sb.deinit()` is correct, and one moves the b
      overloads deleted. The `K` overloads stay, so a literal probe still types from the key. Done.
    - 5c. `as_view`, `format`, `op_eq`, `bytes`, `chars` and `#string_reader(OwnedString)` deleted;
      call sites read `.view`. Done.
-   - 5d. `owned view`: non-copyable, `deinit(self: move OwnedString)`, `clone`, and the types
-     holding one.
+   - 5d. `owned view`: non-copyable, `deinit(self: move OwnedString)` plus the element form,
+     `clone`, and the ~40 types holding one. Done, with what an owning element needs from the
+     containers: `List`/`Dict` drains, a dict that lends its entries, a set that keeps by-value
+     iteration and gains `iter_ref`, `memswap`-based `swap`, and sorts that compare by reference.
+     RFC-033's `move` gate landed here too: taking out of a reference is the declaring module's
+     right, not everyone's. Open: sorting an owning element is blocked on rule 9 (known-issues).
 
 ## Tests
 

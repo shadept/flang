@@ -18,7 +18,7 @@ pub fn main() i32 {
         return 1
     }
 
-    const v = d.get("hello")
+    const v = d.get_ref("hello")
     if v.is_none() {
         return 2
     }

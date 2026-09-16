@@ -3841,6 +3841,13 @@ stays in its container, and the value behind a reference stays with its owner, s
 be a second owner. Inside a generic body - a combinator calling back a function that takes
 ownership - the error is reported at the instantiation and names the callback parameter.
 
+`move` itself takes a binding, a field path, or - inside the module that declares the field it is
+reached through - an element or a dereference. That is the scoped-mutability right a container
+already has over its own storage (spec 3.4.1): `std.collections.list` takes an element out of
+`s.ptr`, and nobody else can, or a lent reference would be a way to take ownership of what it points
+at. The chain has to be written out at the move: a local reference binding loses the provenance the
+rule reads.
+
 #### Example
 
 ```flang
@@ -3851,6 +3858,10 @@ let g = move h                  // ok
 fn close(h: move FileHandle) i32
 close(xs[0])                    // error[E2125]: the element stays in `xs`
 close(p.*)                      // error[E2125]: `p` is a reference
+
+fn steal(h: &Handle) { let taken = move h.* }   // error[E2125]: not this module's storage
+// in the module declaring `Slots { slots: &Handle }`:
+fn take_at(self: &Slots, i: usize) Handle { return move (self.slots + i).* }   // ok
 ```
 
 #### Solution

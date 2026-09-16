@@ -4,6 +4,7 @@ import std.allocator
 import std.collections.dict
 import std.collections.list
 import std.collections.set
+import std.option
 import std.string
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -498,7 +499,12 @@ pub fn module(allocator: &Allocator? = null) IrModule {
 }
 
 pub fn deinit(self: move IrModule) {
-    for &t in self.tests {
+    loop {
+        const next = self.tests.pop()
+        if next.is_none() {
+            break
+        }
+        const t = next.unwrap()
         t.label.deinit()
         t.symbol.deinit()
     }
@@ -538,13 +544,13 @@ pub fn add_test(self: &IrModule, label: move OwnedString, symbol: move OwnedStri
 // fixpoint: a block whose function was dropped must leave the runner's table with it.
 pub fn retain_defined_tests(self: &IrModule, dropped: &Set(String)) {
     let kept: List(TestCase) = list(self.tests.len, self.tests.allocator)
-    for &t in self.tests {
+    for t in self.tests.drain() {
         if dropped.contains(t.symbol.view) {
             t.label.deinit()
             t.symbol.deinit()
             continue
         }
-        kept.push(t.*)
+        kept.push(t)
     }
     self.tests.deinit()
     self.tests = kept

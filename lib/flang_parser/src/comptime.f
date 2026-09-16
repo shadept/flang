@@ -232,6 +232,12 @@ pub fn ct_eval_condition(env: &CtEnv, cond: &Expr) Result(bool, CtError) {
     }
 }
 
+// The message, handed over; `self` is dead. A diagnostic built elsewhere takes the buffer rather
+// than copying it, and a field move is the defining module's to make (RFC-028).
+pub fn take_message(self: move CtError) OwnedString {
+    return move self.message
+}
+
 fn ct_err(code: String, message: move OwnedString, span: SourceSpan) Result(CtValue, CtError) {
     return Err(CtError { code = code, message = move message, span = span })
 }

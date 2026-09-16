@@ -277,8 +277,8 @@ pub fn build_indexes(unit: &AnalyzedProject, allocator: &Allocator? = null) List
 // Tests
 
 test "project_dir_for walks up and misses cleanly" {
-    assert_true(project_dir_for("no/such/dir/deep/x.f").is_none(),
-        "no manifest anywhere above a made-up path")
+    const missing = project_dir_for("no/such/dir/deep/x.f")
+    assert_true(missing.is_none(), "no manifest anywhere above a made-up path")
 }
 
 test "project_of_path prefers the longest matching root" {

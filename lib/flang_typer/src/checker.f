@@ -5407,7 +5407,7 @@ fn check_if_directive_stmt(self: &Checker, ifd: &IfDirectiveStmt) bool {
             return diverges
         }
         Invalid(err) => {
-            push_diag_e(self, err.span, err.code, err.message)
+            push_diag_e(self, err.span, err.code, take_message(err))
             return false
         }
     }
@@ -8509,7 +8509,7 @@ fn zonk_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
         ret = ret,
         captures = caps,
         closure_id = info.closure_id,
-        symbol = info.symbol,
+        symbol = from_view(info.symbol.view),
     }
 }
 
@@ -8521,11 +8521,9 @@ fn zonk_lambda_table(self: &Checker) {
     }
     let zl: Dict(NodeId, LambdaInfo) = dict(self.allocator)
     for e in self.results.lambdas {
-        // Annotated: the self-hosted checker types for-over-iterator variables as unconstrained
-        // vars (protocol resolution is post-M10), so the entry needs the pin.
-        let info: LambdaInfo = e.value
-        let key: NodeId = e.key
-        zl.set(key, zonk_lambda_info(self, &info))
+        // The entry is lent: `zonk_lambda_info` copies the symbol buffer it carries over, and the
+        // old table is abandoned to the allocator whole.
+        zl.set(e.key, zonk_lambda_info(self, &e.value))
     }
     self.results.replace_lambdas(zl)
 }
@@ -8539,9 +8537,9 @@ fn zonk_closures(self: &Checker) {
     }
     let zc: Dict(NominalId, ClosureSig) = dict(self.allocator)
     for e in self.closures {
-        // Annotated pins for the self-hosted checker (see zonk_lambda_table).
-        let cs: ClosureSig = e.value
-        let key: NominalId = e.key
+        // Lent, like the lambda table: the zonked copy takes its own symbol buffer.
+        const key: NominalId = e.key
+        const cs: &ClosureSig = &e.value
         let ps: List(Ty) = list(cs.params.len, self.allocator)
         for i in 0..cs.params.len {
             ps.push(self.engine.zonk(cs.params[i]))
@@ -8549,7 +8547,7 @@ fn zonk_closures(self: &Checker) {
         zc.set(key, ClosureSig {
             params = ps,
             ret = self.engine.zonk(cs.ret),
-            symbol = cs.symbol,
+            symbol = from_view(cs.symbol.view),
             lambda_node = cs.lambda_node,
         })
 
@@ -8577,7 +8575,7 @@ fn zonk_closures(self: &Checker) {
                     is_simd = sd.is_simd,
                     is_foreign = sd.is_foreign,
                 }
-                self.nominals.put(e.key, NominalDef.NomStruct(updated))
+                self.nominals.put(key, NominalDef.NomStruct(updated))
             }
             _ => {}
         }
@@ -8933,7 +8931,31 @@ fn own_mark_field(self: &Checker, p: &OwnPass, decl: NodeId, path: String) {
     p.paths.push(stored)
 }
 
-// Makes the whole binding live: every move recorded under it is gone.
+// Makes the whole binding live: every move recorded under it is gone. The `for` variable starts
+// each iteration live.
+fn own_fresh_var(p: &OwnPass, var_decl: NodeId?) {
+    if var_decl.is_some() {
+        own_unmark(p, var_decl.unwrap())
+    }
+}
+
+// Drops the `for` variable from a carried state: it does not outlive the iteration that moved it.
+fn own_drop_decl(state: &List(MovedRec), var_decl: NodeId?) {
+    if var_decl.is_none() {
+        return
+    }
+    const decl = var_decl.unwrap()
+    let i = 0
+    while i < state.len {
+        if state[i].decl == decl {
+            state[i] = state[state.len - 1]
+            let _r = state.pop()
+            continue
+        }
+        i = i + 1
+    }
+}
+
 fn own_unmark(p: &OwnPass, decl: NodeId) {
     let i = 0
     while i < p.moved.len {
@@ -9507,10 +9529,77 @@ fn own_move(self: &Checker, p: &OwnPass, m: &MoveExpr, slot: OwnSlot) {
         MemberAccess(ma) => {
             if own_owned_base(self, p, ma.receiver) {
                 own_mark_member(self, p, &ma)
+                return
+            }
+            if !own_through_owned_field(self, m.operand) {
+                own_no_place(self, p, expr_span(m.operand),
+                    "a field reached through a reference stays with its owner")
             }
         }
+        Index(_) => own_move_storage(self, p, m.operand,
+            "an element stays in its container - take it out with `pop`, `remove` or a drain")
+        Dereference(_) => own_move_storage(self, p, m.operand,
+            "the value behind a reference stays with its owner")
         _ => {}
     }
+}
+
+// `move` through an element or a dereference: storage the checker cannot see the end of. The module
+// that declares a type may take out of its own fields - the scoped-mutability right that already
+// lets it store into them - and nobody else may, or a lent reference would be a way to take
+// ownership of what it points at (E2125).
+fn own_move_storage(self: &Checker, p: &OwnPass, e: &Expr, why: String) {
+    if own_through_owned_field(self, e) {
+        return
+    }
+    own_no_place(self, p, expr_span(e), why)
+}
+
+// Whether the place `e` names is reached through a field of a type this module declares. Follows
+// the base chain a container writes: `(self.entries + i).key`, `self.ptr[i]`, `(p + n).*`.
+fn own_through_owned_field(self: &Checker, e: &Expr) bool {
+    return e.* match {
+        MemberAccess(ma) => own_owned_field_here(self, &ma) or own_through_owned_field(self,
+            ma.receiver)
+        Index(ix) => own_through_owned_field(self, ix.receiver)
+        Dereference(d) => own_through_owned_field(self, d.operand)
+        Binary(b) => own_through_owned_field(self, b.lhs) or own_through_owned_field(self, b.rhs)
+        Cast(c) => own_through_owned_field(self, c.operand)
+        _ => false
+    }
+}
+
+// A field of a type declared in the module being checked.
+fn own_owned_field_here(self: &Checker, ma: &MemberAccessExpr) bool {
+    return field_owner_elsewhere(self, ma).is_none() and own_field_of_nominal(self, ma)
+}
+
+// Whether `ma` reads a declared field rather than a method or an `op_deref` hop.
+fn own_field_of_nominal(self: &Checker, ma: &MemberAccessExpr) bool {
+    const recv = own_type(self, expr_span(ma.receiver))
+    if recv.is_none() {
+        return false
+    }
+    const nid = ty_node(self, peel_refs(self, recv.unwrap())) match {
+        NNominal(nn) => Some(nn.id)
+        _ => null
+    }
+    if nid.is_none() {
+        return false
+    }
+    return self.nominals.get(nid.unwrap()).* match {
+        NomStruct(sd) => struct_has_field(&sd, ma.member)
+        _ => false
+    }
+}
+
+fn struct_has_field(sd: &StructDef, name: String) bool {
+    for &f in sd.fields {
+        if f.name == name {
+            return true
+        }
+    }
+    return false
 }
 
 fn own_move_binding(self: &Checker, p: &OwnPass, id: &IdentifierExpr, move_span: SourceSpan,
@@ -10132,7 +10221,7 @@ fn own_stmt(self: &Checker, p: &OwnPass, st: &Stmt) {
         Continue(_) => own_escape(self, p, false)
         For(fs) => {
             own_protocol(self, p, fs.body.span, fs.iterable)
-            own_loop(self, p, fs.body)
+            own_loop(self, p, fs.body, Some(self.node_of(fs.var_span)))
         }
         While(ws) => {
             own_expr(self, p, ws.condition, own_read())
@@ -10180,8 +10269,10 @@ fn own_escape(self: &Checker, p: &OwnPass, is_break: bool) {
 // The body runs an unknown number of times, so whatever it moves is moved on entry to the next
 // iteration. The first pass is silent and only settles what the back edge carries; the second
 // reports from that, which is a superset of the entry state, so a first-iteration error is reported
-// too. Paths that left through `break` do not feed the back edge - they feed the exit.
-fn own_loop(self: &Checker, p: &OwnPass, body: &BlockExpr) {
+// too. Paths that left through `break` do not feed the back edge - they feed the exit. `var_decl`
+// is a `for` variable: it is bound anew on every iteration, so a body that moves it leaves nothing
+// moved for the next one, nor on the way out.
+fn own_loop(self: &Checker, p: &OwnPass, body: &BlockExpr, var_decl: NodeId? = null) {
     const was_in = p.in_loop
     const was_scope = p.loop_scope
     const was_div = p.diverged
@@ -10200,6 +10291,7 @@ fn own_loop(self: &Checker, p: &OwnPass, body: &BlockExpr) {
     const was_report = p.report
     p.report = false
     p.diverged = false
+    own_fresh_var(p, var_decl)
     own_block(self, p, body, own_read())
     let back = own_snapshot(self, &entry)
     defer back.deinit()
@@ -10207,12 +10299,14 @@ fn own_loop(self: &Checker, p: &OwnPass, body: &BlockExpr) {
         own_merge(&back, &p.moved)
     }
     own_merge(&back, &p.continued)
+    own_drop_decl(&back, var_decl)
 
     p.report = was_report
     p.escaped.clear()
     p.continued.clear()
     own_restore(&p.moved, &back)
     p.diverged = false
+    own_fresh_var(p, var_decl)
     own_block(self, p, body, own_read())
 
     let exit = own_snapshot(self, &entry)
@@ -10221,6 +10315,7 @@ fn own_loop(self: &Checker, p: &OwnPass, body: &BlockExpr) {
     if !p.diverged {
         own_merge(&exit, &p.moved)
     }
+    own_drop_decl(&exit, var_decl)
     own_restore(&p.moved, &exit)
 
     own_restore(&p.escaped, &outer_escaped)
@@ -12170,8 +12265,9 @@ test "a changed default value invalidates the carried slots" {
     chk.adopt_specs(take_specs(&res1))
     let old_b = mods[0]
     mods[0] = parse_src(b2, 0i32)
-    let old_src = move srcs[0]
-    srcs[0] = from_view(b2)
+    // Exchanged in place: the slot always holds a valid source and the old one leaves as a value.
+    let old_src = from_view(b2)
+    swap(&srcs[0], &old_src)
     let recollect: List(bool) = list(2)
     recollect.push(true)
     recollect.push(false)

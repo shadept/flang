@@ -76,7 +76,7 @@ pub type FnSig = struct {
 }
 
 pub fn lookup_symbol(self: &SymbolTable, fn_id: u32) String? {
-    return self.by_fn_id.get(fn_id) match {
+    return self.by_fn_id.get_ref(fn_id) match {
         Some(s) => Some(s.view)
         None => null
     }
@@ -101,7 +101,7 @@ pub fn sig_of(self: &SymbolTable, fn_id: u32) FnSig? {
 }
 
 pub fn spec_symbol(self: &SymbolTable, spec_id: u32) String? {
-    return self.by_spec_id.get(spec_id) match {
+    return self.by_spec_id.get_ref(spec_id) match {
         Some(s) => Some(s.view)
         None => null
     }

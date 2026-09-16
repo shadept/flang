@@ -128,16 +128,14 @@ pub fn analyze(source: move OwnedString, path: String, allocator: &Allocator? = 
 // Returns the survivors in order and leaves `diags` empty, its backing buffer released.
 pub fn filter_allowed(diags: &List(Diagnostic), module: &Module,
     alloc: &Allocator? = null) List(Diagnostic) {
-    const taken = diags.to_owned_slice()
-    let kept: List(Diagnostic) = list(taken.0.len, alloc)
-    for i in 0..taken.0.len {
-        if is_allowed(&taken.0[i], module) {
-            taken.0[i].deinit()
+    let kept: List(Diagnostic) = list(diags.len, alloc)
+    for d in diags.drain() {
+        if is_allowed(&d, module) {
+            d.deinit()
             continue
         }
-        kept.push(taken.0[i])
+        kept.push(d)
     }
-    taken.1.free(taken.0)
     return kept
 }
 
@@ -145,23 +143,21 @@ pub fn filter_allowed(diags: &List(Diagnostic), module: &Module,
 // file id selects.
 pub fn filter_allowed_project(diags: &List(Diagnostic), modules: &List(Module),
     alloc: &Allocator? = null) List(Diagnostic) {
-    const taken = diags.to_owned_slice()
-    let kept: List(Diagnostic) = list(taken.0.len, alloc)
-    for i in 0..taken.0.len {
+    let kept: List(Diagnostic) = list(diags.len, alloc)
+    for d in diags.drain() {
         let dropped = false
         for &m in modules {
-            if is_allowed(&taken.0[i], m) {
+            if is_allowed(&d, m) {
                 dropped = true
                 break
             }
         }
         if dropped {
-            taken.0[i].deinit()
+            d.deinit()
             continue
         }
-        kept.push(taken.0[i])
+        kept.push(d)
     }
-    taken.1.free(taken.0)
     return kept
 }
 
@@ -424,7 +420,13 @@ fn check_project(self: &AnalyzedProject, ctx: &ResolveCtx, edge_from: &List(usiz
     // The check tier is regenerated whole on every demand, so the previous run's copy goes and the
     // parse tier is replayed underneath it.
     self.diagnostics.deinit()
-    self.diagnostics = self.parse_diags.map(fn(d: Diagnostic) { clone_diag(&d) }, allocator)
+    // An owning element is lent to the copy, not handed to it: `map` would need `f` to take the
+    // diagnostic by value.
+    let replayed: List(Diagnostic) = list(self.parse_diags.len, allocator)
+    for &d in self.parse_diags {
+        replayed.push(clone_diag(d))
+    }
+    self.diagnostics = replayed
 
     self.checked = count_errors(&self.diagnostics) == 0
     if !self.checked {
@@ -610,9 +612,12 @@ pub fn reanalyze(self: &AnalyzedProject, ctx: &ResolveCtx, dirty: &Set(String),
             self.parse_diags.push(error("E0001", msg, none_span()))
             continue
         }
-        self.retired_sources.push(srcs[i])
+        // Exchanged in place: the slot keeps a valid source at every point, and the old one leaves
+        // as a value this owns.
+        let incoming = fresh.unwrap()
+        swap(&srcs[i], &incoming)
+        self.retired_sources.push(incoming)
         self.retired_modules.push(mods[i])
-        srcs[i] = fresh.unwrap()
         mods[i] = parse_to_module(srcs[i].view, i as i32, &ctx.comptime, &self.parse_diags,
             allocator)
         recollect[i] = true
@@ -673,7 +678,10 @@ pub fn analyze_source_set(srcs: List(OwnedString), fqns: &List(String),
         file_paths.push(from_view(fqns[i]))
     }
 
-    let diagnostics = parse_diags.map(fn(d: Diagnostic) { clone_diag(&d) }, allocator)
+    let diagnostics: List(Diagnostic) = list(parse_diags.len, allocator)
+    for &d in parse_diags {
+        diagnostics.push(clone_diag(d))
+    }
     let checked = count_errors(&diagnostics) == 0
     let result = empty_result(allocator)
     let generated = empty_template_output(allocator)
@@ -1166,7 +1174,8 @@ test "a path no override names falls through to the file on disk" {
     let ov: Dict(String, String) = dict()
     defer ov.deinit()
     ov.set("other.f", "fn other() i32 { return 1 }\n")
-    assert_true(read_source("no/such/file.f", Some(&ov)).is_none(),
-        "an unnamed path reads from disk, and misses")
-    assert_true(read_source("no/such/file.f", null).is_none(), "so does no override map at all")
+    const missing = read_source("no/such/file.f", Some(&ov))
+    assert_true(missing.is_none(), "an unnamed path reads from disk, and misses")
+    const no_map = read_source("no/such/file.f", null)
+    assert_true(no_map.is_none(), "so does no override map at all")
 }

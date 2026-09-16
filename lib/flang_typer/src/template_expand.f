@@ -315,9 +315,9 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
     let parse_diags: List(Diagnostic) = list(0, Some(&a))
     const nodes = parse_template_body(def.body, def.base, def.file_id, &a, &parse_diags)
     if parse_diags.len > 0 {
-        const taken = parse_diags.to_owned_slice()
-        for &d in taken.0 { chk.diagnostics.push(error(d.code, d.message, d.span)) }
-        taken.1.free(taken.0)
+        for d in parse_diags.drain() {
+            chk.diagnostics.push(d)
+        }
         return Outcome.Failed
     }
     let raw = string_builder(def.body.len, Some(&a))
@@ -366,7 +366,8 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
 
     const file_id = sources.len as i32
     sources.push(padded.to_string())
-    file_paths.push($"{generated_path(file_paths[item.module].view)}")
+    const generated = generated_path(file_paths[item.module].view)
+    file_paths.push(generated)
 
     // Parse the chunk, collect its nominals, fold it into the origin.
     let chunk_module = parse_chunk(chk, sources[sources.len - 1].view, file_id)
@@ -472,9 +473,9 @@ fn parse_chunk(chk: &Checker, text: String, file_id: i32) Module {
     const cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, file_id, chk.allocator, Some(&chk.diagnostics))
     flatten_module_decls(&module, &chk.comptime, &chk.diagnostics, chk.allocator)
-    const taken = p.diagnostics.to_owned_slice()
-    for &d in taken.0 { chk.diagnostics.push(error(d.code, d.message, d.span)) }
-    taken.1.free(taken.0)
+    for d in p.diagnostics.drain() {
+        chk.diagnostics.push(d)
+    }
     p.deinit()
     return module
 }
