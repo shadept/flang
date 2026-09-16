@@ -11,6 +11,6 @@ pub fn main() i32 {
     let b = 3i32
     let msg = $"{a}+{b}={a+b}"
     defer msg.deinit()
-    print(msg.as_view())
+    print(msg.view)
     return 0
 }

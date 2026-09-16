@@ -3,8 +3,8 @@
 // colocated-test running is wired up.
 
 import std.allocator
-import std.io.print
 import std.collections.list
+import std.io.print
 import std.option
 import std.string
 import std.string_builder

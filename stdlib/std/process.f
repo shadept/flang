@@ -137,13 +137,7 @@ pub fn args(self: &Command, items: String[]) &Command {
 pub fn cwd(self: &Command, dir: String) &Command {
     // Free a previously-set cwd before overwriting so a second call doesn't leak.
     if self.__has_cwd {
-        self.__cwd match {
-            Some(c) => {
-                let cc = c
-                cc.deinit()
-            }
-            None => {}
-        }
+        self.__cwd.deinit()
     }
     self.__cwd = Some(from_view(dir, self.__allocator))
     self.__has_cwd = true
@@ -204,14 +198,14 @@ pub fn spawn(self: &Command) Result(Child, ProcessError) {
     // Pack argv pointers as a usize array - matches char** on the C side.
     let argv_ptrs: List(usize) = list(self.__args.len, self.__allocator)
     defer argv_ptrs.deinit()
-    for a in self.__args {
-        argv_ptrs.push(a.ptr as usize)
+    for &a in self.__args {
+        argv_ptrs.push(a.view.ptr as usize)
     }
 
     let envp_ptrs: List(usize) = list(self.__env_pairs.len, self.__allocator)
     defer envp_ptrs.deinit()
-    for e in self.__env_pairs {
-        envp_ptrs.push(e.ptr as usize)
+    for &e in self.__env_pairs {
+        envp_ptrs.push(e.view.ptr as usize)
     }
 
     const prog: &u8 = self.__args[0].ptr

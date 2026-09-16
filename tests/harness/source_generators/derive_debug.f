@@ -22,7 +22,7 @@ pub fn main() i32 {
     if s.len == 0 { return 1 }
 
     // Check the output matches
-    if s.as_view() != "Pair { a = 10, b = 20, }" { return 2 }
+    if s.view != "Pair { a = 10, b = 20, }" { return 2 }
 
     sb.deinit()
     s.deinit()

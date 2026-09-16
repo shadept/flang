@@ -115,7 +115,7 @@ pub fn as_number(self: &JsonValue) f64? {
 }
 
 pub fn as_string(self: &JsonValue) String? {
-    return self.* match { Str(s) => Some(s.as_view()), else => null }
+    return self.* match { Str(s) => Some(s.view), else => null }
 }
 
 pub fn as_array(self: &JsonValue) &List(JsonValue)? {
@@ -129,10 +129,6 @@ pub fn as_object(self: &JsonValue) &Dict(OwnedString, JsonValue)? {
 // =============================================================================
 // JSON Object convenience - String-key access for Dict(OwnedString, JsonValue)
 // =============================================================================
-
-pub fn json_get(self: &Dict(OwnedString, JsonValue), key: String) JsonValue? {
-    return self.get(key)
-}
 
 pub fn json_get_ref(self: &Dict(OwnedString, JsonValue), key: String) &JsonValue? {
     return self.get_ref(key)
@@ -150,16 +146,19 @@ pub fn json_contains(self: &Dict(OwnedString, JsonValue), key: String) bool {
 // Cleanup
 // =============================================================================
 
-pub fn deinit(self: &JsonValue) {
-    self.* match {
+pub fn deinit(self: move JsonValue) {
+    self match {
         Str(s) => s.deinit()
         Array(arr) => arr.deinit()
         Object(obj) => obj.deinit()
         else => {}
     }
-    // The match arms bound payload COPIES - the stored payload still holds the freed pointers.
-    // Overwrite with Null so a second deinit is a no-op instead of a double free.
-    self.* = JsonValue.Null
+}
+
+// The element form: a container releases its elements with an allocator in hand. The value carries
+// its own.
+pub fn deinit(self: move JsonValue, allocator: &Allocator) {
+    self.deinit()
 }
 
 // =============================================================================
@@ -232,7 +231,7 @@ pub fn serialize(self: &JsonValue, enc: &Encoder) {
         Null => { enc.encode_null() }
         Bool(b) => { enc.encode_bool(b) }
         Number(n) => { enc.encode_float(n, 8) }
-        Str(s) => { enc.encode_str(s.as_view()) }
+        Str(s) => { enc.encode_str(s.view) }
         Array(arr) => {
             enc.begin_seq(arr.len)
             for i in 0..arr.len as isize {
@@ -249,7 +248,7 @@ pub fn serialize(self: &JsonValue, enc: &Encoder) {
                     Some(e) => e
                     None => break
                 }
-                enc.key(e.key.as_view())
+                enc.key(e.key.view)
                 let v = &e.value
                 v.serialize(enc)
             }
@@ -278,12 +277,12 @@ pub fn stringify_pretty(value: &JsonValue, w: Writer, indent: usize = 2) {
 }
 
 // Format protocol - compact by default, "p" for pretty.
-pub fn format(self: JsonValue, w: Writer, spec: String) {
+pub fn format(self: &JsonValue, w: Writer, spec: String) {
     if spec == "p" {
-        stringify_pretty(&self, w)
+        stringify_pretty(self, w)
     }
     else {
-        stringify(&self, w)
+        stringify(self, w)
     }
 }
 
@@ -630,7 +629,7 @@ fn scan_string_value(self: &JsonDecoder) Result(JsonValue, JsonError) {
     }
     let result = sb.to_string()
     sb.deinit()
-    return Result.Ok(JsonValue.Str(result))
+    return Result.Ok(JsonValue.Str(move result))
 }
 
 // Parse a JSON string, writing unescaped content to w. Returns false on error.

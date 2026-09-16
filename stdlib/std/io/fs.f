@@ -19,7 +19,6 @@ import std.io.internal.fs
 import std.io.print
 import std.io.types
 import std.option
-import std.owned
 import std.path
 import std.result
 import std.string
@@ -85,7 +84,7 @@ pub fn rename(from: String, to: String) Result((), FsError) {
 pub fn cwd(allocator: &Allocator? = null) Result(Path, FsError) {
     const s = raw_getcwd(allocator)?
     defer s.deinit()
-    return Ok(path(s.as_view(), allocator))
+    return Ok(path(s.view, allocator))
 }
 
 // The directory for temporary files: $TMPDIR (falling back to /tmp) on POSIX, GetTempPath on
@@ -93,7 +92,7 @@ pub fn cwd(allocator: &Allocator? = null) Result(Path, FsError) {
 pub fn temp_dir(allocator: &Allocator? = null) Result(Path, FsError) {
     const s = raw_temp_dir(allocator)?
     defer s.deinit()
-    return Ok(path(s.as_view(), allocator))
+    return Ok(path(s.view, allocator))
 }
 
 // An absolute, lexically-normalized form of `p`, joined against cwd() when relative. Does NOT
@@ -116,7 +115,7 @@ pub fn to_absolute(p: &Path, allocator: &Allocator? = null) Result(Path, FsError
 pub fn canonicalize(p: &Path, allocator: &Allocator? = null) Result(Path, FsError) {
     const s = raw_realpath(p.as_view(), allocator)?
     defer s.deinit()
-    return Ok(path(s.as_view(), allocator))
+    return Ok(path(s.view, allocator))
 }
 
 // =============================================================================
@@ -295,17 +294,13 @@ pub fn glob(pattern: String, allocator: &Allocator? = null) Result(GlobIter, FsE
         root_str = pattern[..prefix_end]
     }
 
-    // Wrap pat_buf in Owned so cleanup-on-error / transfer-on-success is symmetric with the `?`
-    // exit below.
-    let pat_buf = owned(string_builder(pattern.len + 1, allocator))
-    defer pat_buf.deinit()
-    pat_buf.append(pattern)
-
     let walk = walk_dir(root_str, allocator)?
+    let pat_buf = string_builder(pattern.len + 1, allocator)
+    pat_buf.append(pattern)
 
     return Ok(GlobIter {
         walk = walk,
-        pattern = pat_buf.transfer(),
+        pattern = pat_buf,
         done = false,
     })
 }

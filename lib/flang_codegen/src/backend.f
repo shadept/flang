@@ -241,11 +241,11 @@ pub fn set_lower_ns(self: &BuildResult, ns: u64) {
     self.lower_ns = ns
 }
 
-pub fn deinit(self: &BuildResult) {
+pub fn deinit(self: move BuildResult) {
     self.executable_path.deinit()
     self.c_source_path match {
         Some(p) => {
-            let pp = p
+            let pp = move p
             pp.deinit()
         }
         None => {}
@@ -294,7 +294,7 @@ pub type CompilerInfo = struct {
     allocator: &Allocator?
 }
 
-pub fn deinit(self: &CompilerInfo) {
+pub fn deinit(self: move CompilerInfo) {
     self.name.deinit()
     self.path.deinit()
     self.extra_env_keys.deinit()

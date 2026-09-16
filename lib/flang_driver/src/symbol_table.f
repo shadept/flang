@@ -77,7 +77,7 @@ pub type FnSig = struct {
 
 pub fn lookup_symbol(self: &SymbolTable, fn_id: u32) String? {
     return self.by_fn_id.get(fn_id) match {
-        Some(s) => Some(s.as_view())
+        Some(s) => Some(s.view)
         None => null
     }
 }
@@ -102,7 +102,7 @@ pub fn sig_of(self: &SymbolTable, fn_id: u32) FnSig? {
 
 pub fn spec_symbol(self: &SymbolTable, spec_id: u32) String? {
     return self.by_spec_id.get(spec_id) match {
-        Some(s) => Some(s.as_view())
+        Some(s) => Some(s.view)
         None => null
     }
 }
@@ -199,7 +199,7 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
         }
         let sym = mangle_spec_symbol(&result.interner, sp.module, sp.name, &s, &result.nominals,
             allocator)
-        const sym_view = sym.as_view()
+        const sym_view = sym.view
         by_spec_id.set(sp.id, sym)
         displays.set(sym_view, pretty_symbol(&result.interner, sp.module, sp.name, &s.params,
                 &result.nominals, allocator))
@@ -459,7 +459,7 @@ fn add_function_symbol(self: &SymbolBuilder, decl: &FunctionDecl, fqn: String) {
     const foreign = is_foreign_directive(&decl.directives)
     let sym = mangle_symbol(self.interner, fqn, decl.name, foreign, &s.params, self.nominals,
         self.allocator)
-    const sym_view = sym.as_view()
+    const sym_view = sym.view
     self.by_fn_id.set(fid.unwrap(), sym)
     // `main` and foreigns keep their bare, already-readable symbol.
     if !foreign and decl.name != "main" {
@@ -764,11 +764,11 @@ test "mangles symbols by module fqn, keeping main and foreigns bare" {
     defer c.deinit()
     let d = mangle_symbol(&it, "", "add", false, &none, &reg)
     defer d.deinit()
-    assert_true(a.as_view() == "flang_0typer__checker__deinit",
+    assert_true(a.view == "flang_0typer__checker__deinit",
         "dotted fqn separates, underscores escape")
-    assert_true(b.as_view() == "printf", "foreign names pass through")
-    assert_true(c.as_view() == "main", "main stays bare")
-    assert_true(d.as_view() == "add", "no fqn, bare name")
+    assert_true(b.view == "printf", "foreign names pass through")
+    assert_true(c.view == "main", "main stays bare")
+    assert_true(d.view == "add", "no fqn, bare name")
 }
 
 test "escaping keeps a dotted path distinct from an underscored name" {
@@ -786,9 +786,9 @@ test "escaping keeps a dotted path distinct from an underscored name" {
     defer dotted.deinit()
     let underscored = mangle_symbol(&it, "a", "b__c", false, &none, &reg)
     defer underscored.deinit()
-    assert_true(dotted.as_view() == "a__b__c", "dotted path uses the separator")
-    assert_true(underscored.as_view() == "a__b_0_0c", "source underscores escape")
-    assert_true(!(dotted.as_view() == underscored.as_view()), "the two no longer collide")
+    assert_true(dotted.view == "a__b__c", "dotted path uses the separator")
+    assert_true(underscored.view == "a__b_0_0c", "source underscores escape")
+    assert_true(!(dotted.view == underscored.view), "the two no longer collide")
 }
 
 test "overloads separate by parameter type, with no counter" {
@@ -812,13 +812,13 @@ test "overloads separate by parameter type, with no counter" {
     defer a.deinit()
     let b = mangle_symbol(&it, "m", "f", false, &two, &reg)
     defer b.deinit()
-    assert_true(a.as_view() == "m__f__i32", "one i32 parameter")
-    assert_true(b.as_view() == "m__f__i32__i32", "two i32 parameters")
-    assert_true(!(a.as_view() == b.as_view()), "arities separate")
+    assert_true(a.view == "m__f__i32", "one i32 parameter")
+    assert_true(b.view == "m__f__i32__i32", "two i32 parameters")
+    assert_true(!(a.view == b.view), "arities separate")
 
     // Re-mangling the same declaration yields the same symbol - the property the ordinal scheme
     // could not provide.
     let again = mangle_symbol(&it, "m", "f", false, &one, &reg)
     defer again.deinit()
-    assert_true(again.as_view() == a.as_view(), "deterministic across calls")
+    assert_true(again.view == a.view, "deterministic across calls")
 }

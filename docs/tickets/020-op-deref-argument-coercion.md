@@ -2,13 +2,15 @@
 status: implemented
 type: language
 created: 2026-08-20
-implemented: 2026-08-23
+implemented: 2026-09-16
 ---
 
 # 020 — `op_deref` argument coercion (deref chains at call sites)
 
-Status: **accepted** (2026-08-20), rule pinned 2026-09-06 to the borrow leg
-only - see "The rule". Supersedes the "deref-copy adaptation" sketch in
+Status: **implemented** in the self-hosted checker 2026-09-16, with the value
+leg restored under a copyable gate - see "The rule". The rule was pinned to the
+borrow leg on 2026-09-06 and marked implemented while only the reference
+compiler had it. Supersedes the "deref-copy adaptation" sketch in
 ticket 019 §1 as the mechanism of record.
 
 ## Summary
@@ -26,25 +28,32 @@ the spec gets simpler, not bigger.
 
 ## The rule
 
-`op_deref` turns a reference into another reference, and that is all it
-does. At an argument-unify failure, if the argument's type is settled and
-is a reference `&X`, walk `X`'s deref chain (`&X → &Y1 → &Y2 → …`, bounded
-like field resolution) and, when some `&Yk` is the parameter's type,
-insert the `op_deref` call(s). Zero copy. `List(Rc(Big))` elements flow
+At an argument-unify failure, walk the argument's deref chain (`&X → &Y1 → &Y2
+→ …`, bounded like field resolution) and take the first shape that fits: `&Yk`,
+or `Yk` by value when `Yk` is copyable. Fewest hops first; each hop costs in
+overload scoring, so an overload taking the argument as written always wins.
+`f(&w)` and `w.f()` therefore resolve identically. `List(Rc(Big))` elements flow
 into `fn(x: &Big)` callbacks for free; `Owned(F)` passes anywhere `&F` is
 expected. Every reference-typed argument position, resolved left to right.
 
 Exact unification always wins; each deref hop costs in overload scoring
 (mirror the receiver machinery's existing preference order).
 
-**Both directions across the reference boundary stay closed:**
+**The value leg, amended 2026-09-16.** A peeled `&Yk` also satisfies a
+parameter taking `Yk` by value, but only when `Yk` is copyable. This is the
+decay the wrappers exist for: `OwnedString → String`, `List(T) → T[]`, owner to
+view. `String` is a 16-byte view passed by value, so the borrow leg alone would
+have left `lexer(source, alloc)` spelling `source.view` at every call while
+`source.len` and `source.starts_with(p)` already peeled.
 
-- No value leg. A `&Yk` never satisfies a parameter that takes `Yk` by
-  value; the caller spells the copy (`p.*`). The first draft of this ticket
-  allowed it, restricted to the built-in `&T → T` case - dropped: it is an
-  implicit copy, a hidden shallow copy of shared storage out of a smart
-  pointer, and under RFC-028 a copy the compiler would have to invent a
-  `move` for. This is exactly how implicit conversions get in.
+The copyable gate is what the original objection was really about: peeling to a
+NON-copyable value would hand one resource to two owners, and that stays
+refused (E2011). Nothing is copied that a plain `let y = x.view` would not copy,
+and no `move` is invented. The receiver tier has always had both legs
+(`deref_alternatives` offers each hop by reference and by value), so arguments
+now match receivers rather than being the one position that does not.
+
+**The other direction stays closed:**
 - No auto-ref. `f(x, y)` where `f` wants `&x` is an error. The one place
   the compiler adds a reference is the UFCS sugar: `x.f(y)` is `f(x, y)`,
   else `f(&x, y)` (spec §7.2). With the borrow leg in argument position

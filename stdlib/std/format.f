@@ -1214,29 +1214,29 @@ fn rendered(template: String, a: $A, b: $B) OwnedString {
 test "bare holes take the arguments in order" {
     const s = rendered("{} and {}", "this", "that")
     defer s.deinit()
-    assert_eq(s.as_view(), "this and that", "positional")
+    assert_eq(s.view, "this and that", "positional")
 }
 
 test "an indexed hole picks its argument and leaves the counter alone" {
     const s = rendered("{1} {} {0}", "a", "b")
     defer s.deinit()
-    assert_eq(s.as_view(), "b a a", "indexed")
+    assert_eq(s.view, "b a a", "indexed")
 }
 
 test "a spec reaches the argument's format" {
     const s = rendered("{:x} {1:04}", 255i32, 7i32)
     defer s.deinit()
-    assert_eq(s.as_view(), "ff 0007", "spec")
+    assert_eq(s.view, "ff 0007", "spec")
 }
 
 test "doubled braces are literal" {
     const s = rendered("{{{}}} {{}}", 1i32, 2i32)
     defer s.deinit()
-    assert_eq(s.as_view(), "{1} {}", "escapes")
+    assert_eq(s.view, "{1} {}", "escapes")
 }
 
 test "text without holes is written whole" {
     const s = rendered("plain", 1i32, 2i32)
     defer s.deinit()
-    assert_eq(s.as_view(), "plain", "no holes")
+    assert_eq(s.view, "plain", "no holes")
 }

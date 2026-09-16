@@ -23,5 +23,5 @@ fn len_of(s: String) i32 {
 pub fn main() i32 {
     let s = make_hello()
     defer s.deinit()
-    return len_of(s.as_view())
+    return len_of(s.view)
 }

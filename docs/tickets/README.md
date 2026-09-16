@@ -22,7 +22,7 @@ Type: language, compiler, stdlib, tooling.
 | [009](009-op-try-early-return.md) | `op_try` Early-Return Operator | language | implemented | 2026-05-03 | 2026-05-03 |
 | [010](010-pattern-grammar-and-optional-flattening.md) | Pattern Grammar Extensions and `?.` Flattening | language | implemented | 2026-05-03 | 2026-05-04 |
 | [011](011-template-dsl-extensions.md) | Source Generator Template DSL Extensions | compiler | superseded | 2026-05-03 |  |
-| [012](012-owned-transfer-tracking.md) | `Owned(T)` — transfer-aware cleanup helper | stdlib | implemented | 2026-05-03 | 2026-05-03 |
+| [012](012-owned-transfer-tracking.md) | `Owned(T)` — transfer-aware cleanup helper | stdlib | superseded | 2026-05-03 | 2026-05-03 |
 | [013](013-pub-import.md) | `pub import` and non-transitive import enforcement | language | implemented | 2026-05-03 | 2026-05-03 |
 | [014](014-callable-types-and-closures.md) | `op_call` and closure literals | language | provisional | 2026-05-05 |  |
 | [015](015-fir-inliner-and-dce.md) | FIR optimization pipeline (inliner + DCE + cleanup passes) | compiler | draft | 2026-05-05 |  |

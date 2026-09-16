@@ -124,7 +124,7 @@ fn write_header(sb: &StringBuilder, d: &Diagnostic, style: &RenderStyle) {
     unpaint(sb, style)
     sb.append(": ")
     paint(sb, style, Color.Default, true)
-    sb.append(d.message.as_view())
+    sb.append(d.message.view)
     unpaint(sb, style)
     sb.append("\n")
 }
@@ -164,7 +164,7 @@ fn write_source_line(sb: &StringBuilder, source: String, idx: &LineIndex, line: 
     style: &RenderStyle) {
     const n = uint_text(line + 1)
     defer n.deinit()
-    write_gutter(sb, n.as_view(), width, style)
+    write_gutter(sb, n.view, width, style)
     sb.append(" ")
     append_expanded(sb, line_text(source, idx, line), style.tab_width)
     sb.append("\n")
@@ -199,7 +199,7 @@ fn write_carets(sb: &StringBuilder, source: String, idx: &LineIndex, d: &Diagnos
     }
     if line == end_line and d.hint.len > 0 {
         sb.append(" ")
-        sb.append(d.hint.as_view())
+        sb.append(d.hint.view)
     }
     unpaint(sb, style)
     sb.append("\n")
@@ -336,7 +336,7 @@ test "a single-line span gets carets under exactly its range" {
     defer out.deinit()
 
     const want = "error[E2002]: expected `i32`\n  --> t.f:2:9\n   |\n 1 | let a = 1\n 2 | let b = wrong\n   |         ^^^^^\n 3 | let c = 3\n   |\n"
-    assert_eq(out.as_view(), want, "the frame reproduces the reference layout")
+    assert_eq(out.view, want, "the frame reproduces the reference layout")
 }
 
 test "a hint follows the carets" {
@@ -346,7 +346,7 @@ test "a hint follows the carets" {
     const out = render_of(src, &d)
     defer out.deinit()
 
-    assert_true(contains(out.as_view(), "^^^^^ did you mean `right`?"),
+    assert_true(contains(out.view, "^^^^^ did you mean `right`?"),
         "the hint sits on the caret line")
 }
 
@@ -356,14 +356,14 @@ test "a spanless diagnostic is the header alone" {
         severity = Severity.Error,
         code = "E1000",
         message = from_view("no input files"),
-        hint = hint,
+        hint = move hint,
         span = none_span(),
     }
     defer d.deinit()
     const out = render_of("", &d)
     defer out.deinit()
 
-    assert_eq(out.as_view(), "error[E1000]: no input files\n", "nothing to point at, nothing drawn")
+    assert_eq(out.view, "error[E1000]: no input files\n", "nothing to point at, nothing drawn")
 }
 
 test "the gutter widens with the line number" {
@@ -377,11 +377,11 @@ test "the gutter widens with the line number" {
 
     let d = diag_at("E2002", "nope", 22 + 8, 5)
     defer d.deinit()
-    const out = render_of(text.as_view(), &d)
+    const out = render_of(text.view, &d)
     defer out.deinit()
 
-    assert_true(contains(out.as_view(), " 12 | let b = wrong"), "two-digit numbers get two columns")
-    assert_true(contains(out.as_view(), "    |"), "and the bare gutter matches their width")
+    assert_true(contains(out.view, " 12 | let b = wrong"), "two-digit numbers get two columns")
+    assert_true(contains(out.view, "    |"), "and the bare gutter matches their width")
 }
 
 test "carets land past an expanded tab" {
@@ -393,8 +393,8 @@ test "carets land past an expanded tab" {
 
     // The tab renders as four spaces, so the caret run starts four columns further right than the
     // byte offset would put it.
-    assert_true(contains(out.as_view(), "   |             ^^^^^"), "carets follow the expansion")
-    assert_true(contains(out.as_view(), " 1 |     let b = wrong"), "and so does the line itself")
+    assert_true(contains(out.view, "   |             ^^^^^"), "carets follow the expansion")
+    assert_true(contains(out.view, " 1 |     let b = wrong"), "and so does the line itself")
 }
 
 test "carets count a codepoint once, not its bytes" {
@@ -405,8 +405,7 @@ test "carets count a codepoint once, not its bytes" {
     const out = render_of(src, &d)
     defer out.deinit()
 
-    assert_true(contains(out.as_view(), "   |         ^^^^^"),
-        "the second line is measured on its own")
+    assert_true(contains(out.view, "   |         ^^^^^"), "the second line is measured on its own")
 }
 
 test "a multi-line span underlines every line it covers" {
@@ -416,7 +415,7 @@ test "a multi-line span underlines every line it covers" {
     const out = render_of(src, &d)
     defer out.deinit()
 
-    const view = out.as_view()
+    const view = out.view
     assert_true(contains(view, " 1 | let a = f(\n"), "the first line is shown")
     assert_true(contains(view, " 3 |   2)\n"), "and so is the last")
     assert_eq(count_bytes(view, '^') > 3, true, "each covered line carries carets")
@@ -432,7 +431,7 @@ test "color wraps the header and the carets, not the source" {
     const out = render_diagnostic("t.f", src, &idx, &d, &style)
     defer out.deinit()
 
-    const view = out.as_view()
+    const view = out.view
     assert_true(contains(view, "error[E2002]"), "the code stays contiguous under color")
     assert_true(contains(view, "let b = wrong"), "the source text is written plain")
 }

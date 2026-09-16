@@ -186,7 +186,7 @@ pub fn expand_templates(chk: &Checker, state: &TemplateState, modules: &List(Mod
     }
     let work: List(WorkItem) = list(0, chk.allocator)
     for m in 0..modules.len {
-        index_module(state, &modules[m], m, 0, paths[m], sources[m].as_view(), &work, 0)
+        index_module(state, &modules[m], m, 0, paths[m], sources[m].view, &work, 0)
     }
     if work.len == 0 {
         return
@@ -356,7 +356,7 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
 
     // Register the chunk as a padded file entry so its spans line up with the combined generated
     // text for this origin.
-    const emitted = emitted_for(state, chk.allocator, file_paths[item.module].as_view())
+    const emitted = emitted_for(state, chk.allocator, file_paths[item.module].view)
     const lines_before = emitted.lines
     let padded = string_builder(chunk.len + lines_before, chk.allocator)
     for _i in 0..lines_before { padded.append('\n') }
@@ -366,16 +366,16 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
 
     const file_id = sources.len as i32
     sources.push(padded.to_string())
-    file_paths.push($"{generated_path(file_paths[item.module].as_view())}")
+    file_paths.push($"{generated_path(file_paths[item.module].view)}")
 
     // Parse the chunk, collect its nominals, fold it into the origin.
-    let chunk_module = parse_chunk(chk, sources[sources.len - 1].as_view(), file_id)
+    let chunk_module = parse_chunk(chk, sources[sources.len - 1].view, file_id)
     collect_nominal_names(chk, &chunk_module, paths[item.module])
     let origin = &modules[item.module]
     const decl_base = origin.decls.len
     origin.append_decls(&chunk_module.decls)
     index_module(state, &chunk_module, item.module, decl_base, paths[item.module],
-        sources[sources.len - 1].as_view(), parked, item.generation + 1)
+        sources[sources.len - 1].view, parked, item.generation + 1)
     state.chunk_modules.push(chunk_module)
     return Outcome.Expanded
 }

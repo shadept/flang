@@ -16,6 +16,6 @@ fn add(a: i32, b: i32) i32 {
 pub fn main() i32 {
     let msg = $"sum={add(a=3i32, b=4i32)}"
     defer msg.deinit()
-    print(msg.as_view())
+    print(msg.view)
     return 0
 }

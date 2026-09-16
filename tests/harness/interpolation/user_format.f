@@ -24,6 +24,6 @@ pub fn main() i32 {
     let p = Point { x = 3i32, y = 4i32 }
     let msg = $"{p}"
     defer msg.deinit()
-    print(msg.as_view())
+    print(msg.view)
     return 0
 }

@@ -14,7 +14,7 @@ pub fn main() i32 {
     let name = "hi"
     let msg = $"[{name:>6}][{name:<6}][{name:.^6}][{name:1}]"
     defer msg.deinit()
-    println(msg.as_view())
+    println(msg.view)
 
     let sb = string_builder(32)
     defer sb.deinit()

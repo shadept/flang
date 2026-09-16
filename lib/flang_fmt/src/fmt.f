@@ -229,19 +229,19 @@ pub fn format_source(source: String, cfg: &FmtConfig) Result(OwnedString, FmtErr
     }
     let passes = 0usize
     while passes < 4 {
-        const pass = format_once(current.as_view(), cfg)
+        const pass = format_once(current.view, cfg)
         if pass.is_err() {
             const e = pass.unwrap_err()
             current.deinit()
             return Err(e)
         }
         let next = pass.unwrap()
-        if next.as_view() == current.as_view() {
+        if next.view == current.view {
             next.deinit()
-            return Ok(current)
+            return Ok(move current)
         }
         current.deinit()
-        current = next
+        current = move next
         passes = passes + 1
     }
     current.deinit()
@@ -263,14 +263,14 @@ fn format_once(source: String, cfg: &FmtConfig) Result(OwnedString, FmtError) {
 
     const eol = line_ending_of(source)
     const raw_owned = render_module(&cst, cfg, eol)
-    const out = normalize(raw_owned.as_view(), cfg, eol)
+    const out = normalize(raw_owned.view, cfg, eol)
     raw_owned.deinit()
 
-    if !verify_output(&p.tree.tokens, &cst, out.as_view()) {
+    if !verify_output(&p.tree.tokens, &cst, out.view) {
         out.deinit()
         return Err(FmtError.VerifyFailed)
     }
-    return Ok(out)
+    return Ok(move out)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -914,7 +914,7 @@ fn maybe_wrap(r: &Renderer, incoming: usize) bool {
     for n in 0..wp.indent {
         r.line.append_byte(' ' as u8)
     }
-    r.line.append(rest.as_view())
+    r.line.append(rest.view)
     const fresh = rest.len == 0
     rest.deinit()
 
@@ -1318,7 +1318,7 @@ fn is_comma_child(child: &CstChild) bool {
 fn normalize(rendered: String, cfg: &FmtConfig, eol: String) OwnedString {
     const reflow_width = if cfg.reflow_comments { cfg.max_width } else { 0usize }
     const reflowed = reflow_comments(rendered, reflow_width, eol)
-    const out = ensure_single_trailing_newline(reflowed.as_view(), eol)
+    const out = ensure_single_trailing_newline(reflowed.view, eol)
     reflowed.deinit()
     return out
 }
@@ -1555,7 +1555,7 @@ test "a comment with no space after the slashes is a marker and passes verbatim"
     const cfg = default_config()
     const out = format_source("//! TEST: t\n//! STDOUT: hi\n\nfn f() {}\n", &cfg).unwrap()
     defer out.deinit()
-    assert_eq(out.as_view(), "//! TEST: t\n//! STDOUT: hi\n\nfn f() {}\n", "markers untouched")
+    assert_eq(out.view, "//! TEST: t\n//! STDOUT: hi\n\nfn f() {}\n", "markers untouched")
 }
 
 test "line hygiene: trailing ws stripped, final newline added" {
@@ -1563,7 +1563,7 @@ test "line hygiene: trailing ws stripped, final newline added" {
     const r = format_source("fn main() i32 {\n    return 0  \n}", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn main() i32 {\n    return 0\n}\n", "normalized")
+    assert_true(out.view == "fn main() i32 {\n    return 0\n}\n", "normalized")
 }
 
 test "crlf files stay crlf, lf files stay lf" {
@@ -1571,12 +1571,12 @@ test "crlf files stay crlf, lf files stay lf" {
     const rc = format_source("fn a() {}\r\nfn b() {}", &cfg)
     let outc = rc.unwrap()
     defer outc.deinit()
-    assert_true(outc.as_view() == "fn a() {}\r\nfn b() {}\r\n", "crlf kept")
+    assert_true(outc.view == "fn a() {}\r\nfn b() {}\r\n", "crlf kept")
 
     const rl = format_source("fn a() {}\nfn b() {}\r\n", &cfg)
     let outl = rl.unwrap()
     defer outl.deinit()
-    assert_true(outl.as_view() == "fn a() {}\nfn b() {}\n", "first ending wins")
+    assert_true(outl.view == "fn a() {}\nfn b() {}\n", "first ending wins")
 }
 
 test "a multi-line string literal in a crlf file keeps its own endings" {
@@ -1587,7 +1587,7 @@ test "a multi-line string literal in a crlf file keeps its own endings" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "a crlf file with a multi-line literal round-trips")
+    assert_true(out.view == src, "a crlf file with a multi-line literal round-trips")
 }
 
 test "blank lines collapse to max_blank_lines" {
@@ -1595,7 +1595,7 @@ test "blank lines collapse to max_blank_lines" {
     const r = format_source("fn a() {}\n\n\n\n\nfn b() {}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn a() {}\n\nfn b() {}\n", "one blank kept")
+    assert_true(out.view == "fn a() {}\n\nfn b() {}\n", "one blank kept")
 }
 
 test "already formatted input is unchanged" {
@@ -1604,7 +1604,7 @@ test "already formatted input is unchanged" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "idempotent on clean input")
+    assert_true(out.view == src, "idempotent on clean input")
 }
 
 test "spacing normalizes around punctuation and operators" {
@@ -1612,7 +1612,7 @@ test "spacing normalizes around punctuation and operators" {
     const r = format_source("fn f(a:i32 ,b : i32) i32 {\n    return a+b\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(a: i32, b: i32) i32 {\n    return a + b\n}\n", "spaced")
+    assert_true(out.view == "fn f(a: i32, b: i32) i32 {\n    return a + b\n}\n", "spaced")
 }
 
 test "an open parenthesis glues to a name and stands off after a keyword or operator" {
@@ -1621,7 +1621,7 @@ test "an open parenthesis glues to a name and stands off after a keyword or oper
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "type Box = struct(T) { v: T }\n#allow(W2004)\nfn f(a: i32) (i32, i32) {\n    let b: Box(i32) = Box(i32) { v = a }\n    let t = (a, b.v)\n    if (a + (b.v)) > 0 {\n        return (t.0, t.1)\n    }\n    return t\n}\n",
+    assert_true(out.view == "type Box = struct(T) { v: T }\n#allow(W2004)\nfn f(a: i32) (i32, i32) {\n    let b: Box(i32) = Box(i32) { v = a }\n    let t = (a, b.v)\n    if (a + (b.v)) > 0 {\n        return (t.0, t.1)\n    }\n    return t\n}\n",
         "names, struct literals and annotations glue; tuple, grouping and keyword parens stand off")
 }
 
@@ -1630,7 +1630,7 @@ test "unary and call positions glue" {
     const r = format_source("fn f(p: bool) bool {\n    return ! g ( p )\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(p: bool) bool {\n    return !g(p)\n}\n", "glued")
+    assert_true(out.view == "fn f(p: bool) bool {\n    return !g(p)\n}\n", "glued")
 }
 
 test "indentation recomputed from nesting" {
@@ -1639,7 +1639,7 @@ test "indentation recomputed from nesting" {
         &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f() {\n    let x = 1\n    if x > 0 {\n        return\n    }\n}\n",
+    assert_true(out.view == "fn f() {\n    let x = 1\n    if x > 0 {\n        return\n    }\n}\n",
         "reindented")
 }
 
@@ -1648,7 +1648,7 @@ test "operator continuation lines join when they fit" {
     const r = format_source("fn f(a: bool, b: bool) bool {\n    return a\n    or b\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(a: bool, b: bool) bool {\n    return a or b\n}\n", "joined")
+    assert_true(out.view == "fn f(a: bool, b: bool) bool {\n    return a or b\n}\n", "joined")
 }
 
 test "group newlines join and re-wrap at width" {
@@ -1657,7 +1657,7 @@ test "group newlines join and re-wrap at width" {
     const r = format_source("fn f() {\n    ggg(aaaaaaaa,\n    bbbbbbbb,\n    cccccccc)\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f() {\n    ggg(aaaaaaaa,\n        bbbbbbbb,\n        cccccccc)\n}\n",
+    assert_true(out.view == "fn f() {\n    ggg(aaaaaaaa,\n        bbbbbbbb,\n        cccccccc)\n}\n",
         "rewrapped")
 }
 
@@ -1666,7 +1666,7 @@ test "a call split before its argument list is joined" {
     const r = format_source("fn f() i32 {\n    let b = take\n    (4)\n    return b\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f() i32 {\n    let b = take(4)\n    return b\n}\n",
+    assert_true(out.view == "fn f() i32 {\n    let b = take(4)\n    return b\n}\n",
         "the parser reads one call, so the layout shows one")
 }
 
@@ -1675,7 +1675,7 @@ test "a continuing minus is joined" {
     const r = format_source("fn f() i32 {\n    let a = one()\n    - 3\n    return a\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f() i32 {\n    let a = one() - 3\n    return a\n}\n",
+    assert_true(out.view == "fn f() i32 {\n    let a = one() - 3\n    return a\n}\n",
         "a leading `-` continues the line above and reads as a statement otherwise")
 }
 
@@ -1685,7 +1685,7 @@ test "a paren opening a statement is left alone" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "nothing precedes it that could end an expression")
+    assert_true(out.view == src, "nothing precedes it that could end an expression")
 }
 
 test "join-lines false indents the continuation instead" {
@@ -1694,7 +1694,7 @@ test "join-lines false indents the continuation instead" {
     const r = format_source("fn f() i32 {\n    let b = take\n    (4)\n    return b\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f() i32 {\n    let b = take\n        (4)\n    return b\n}\n",
+    assert_true(out.view == "fn f() i32 {\n    let b = take\n        (4)\n    return b\n}\n",
         "the break is kept, so the indent carries the parse")
 }
 
@@ -1704,7 +1704,7 @@ test "join-lines false keeps authored breaks" {
     const r = format_source("fn f(a: bool, b: bool) bool {\n    return a\n        or b\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(a: bool, b: bool) bool {\n    return a\n        or b\n}\n",
+    assert_true(out.view == "fn f(a: bool, b: bool) bool {\n    return a\n        or b\n}\n",
         "kept split")
 }
 
@@ -1714,7 +1714,7 @@ test "blank lines and comments block joining" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "comment break kept")
+    assert_true(out.view == src, "comment break kept")
 }
 
 test "statements inside a lambda argument never join" {
@@ -1723,7 +1723,7 @@ test "statements inside a lambda argument never join" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "lambda body intact")
+    assert_true(out.view == src, "lambda body intact")
 }
 
 test "trailing comment gets one space, own-line comment indents" {
@@ -1732,7 +1732,7 @@ test "trailing comment gets one space, own-line comment indents" {
         &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f() {\n    let x = 1 // note\n    // next\n    return\n}\n",
+    assert_true(out.view == "fn f() {\n    let x = 1 // note\n    // next\n    return\n}\n",
         "comments placed")
 }
 
@@ -1742,7 +1742,7 @@ test "interpolated strings keep authored spacing" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "interp untouched")
+    assert_true(out.view == src, "interp untouched")
 }
 
 test "multiline lists gain a trailing comma, single-line lists lose it" {
@@ -1752,7 +1752,7 @@ test "multiline lists gain a trailing comma, single-line lists lose it" {
         &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(a: i32, b: i32) i32 {\n    return g(\n        a,\n        b,\n    )\n}\n",
+    assert_true(out.view == "fn f(a: i32, b: i32) i32 {\n    return g(\n        a,\n        b,\n    )\n}\n",
         "trailing commas normalized")
 }
 
@@ -1763,8 +1763,7 @@ test "trailing-comma no strips multiline trailing commas" {
     const r = format_source("fn f(a: i32) i32 {\n    return g(\n        a,\n    )\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(a: i32) i32 {\n    return g(\n        a\n    )\n}\n",
-        "stripped")
+    assert_true(out.view == "fn f(a: i32) i32 {\n    return g(\n        a\n    )\n}\n", "stripped")
 }
 
 test "narrow comment prose refills to width" {
@@ -1773,7 +1772,7 @@ test "narrow comment prose refills to width" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "// aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm nnn ooo ppp qqq rrr sss ttt uuu vvv www xxx\n// yyy zzz aab aac aad aae aaf aag aah aai aaj aak aal aam aan aao\nfn f() {}\n",
+    assert_true(out.view == "// aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm nnn ooo ppp qqq rrr sss ttt uuu vvv www xxx\n// yyy zzz aab aac aad aae aaf aag aah aai aaj aak aal aam aan aao\nfn f() {}\n",
         "refilled")
 }
 
@@ -1783,7 +1782,7 @@ test "list and ruler comments are not reflowed" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "structure kept")
+    assert_true(out.view == src, "structure kept")
 }
 
 test "reflow-comments false keeps narrow prose" {
@@ -1793,7 +1792,7 @@ test "reflow-comments false keeps narrow prose" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "prose untouched")
+    assert_true(out.view == src, "prose untouched")
 }
 
 test "newline-separated match arm commas are stripped" {
@@ -1802,7 +1801,7 @@ test "newline-separated match arm commas are stripped" {
         &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(a: i32) i32 {\n    return a match {\n        1 => 2\n        else => 3\n    }\n}\n",
+    assert_true(out.view == "fn f(a: i32) i32 {\n    return a match {\n        1 => 2\n        else => 3\n    }\n}\n",
         "arm commas dropped")
 }
 
@@ -1812,7 +1811,7 @@ test "single-line bodies keep their commas" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "single-line arms unchanged")
+    assert_true(out.view == src, "single-line arms unchanged")
 }
 
 test "over-long call wraps at its last fitting comma" {
@@ -1822,7 +1821,7 @@ test "over-long call wraps at its last fitting comma" {
         &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(aaaaaaaa: i32, bbbbbbbb: i32,\n    cccccccc: i32, dddddddd: i32) i32 {\n    return 0\n}\n",
+    assert_true(out.view == "fn f(aaaaaaaa: i32, bbbbbbbb: i32,\n    cccccccc: i32, dddddddd: i32) i32 {\n    return 0\n}\n",
         "wrapped at comma")
 }
 
@@ -1833,7 +1832,7 @@ test "max-width 0 disables wrapping" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "long line kept")
+    assert_true(out.view == src, "long line kept")
 }
 
 test "builder-targeted interpolation glues to its identifier" {
@@ -1845,7 +1844,7 @@ test "builder-targeted interpolation glues to its identifier" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "target form unchanged")
+    assert_true(out.view == src, "target form unchanged")
 }
 
 test "open-started ranges keep their space" {
@@ -1859,7 +1858,7 @@ test "open-started ranges keep their space" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "prefix .. spaced, infix .. glued")
+    assert_true(out.view == src, "prefix .. spaced, infix .. glued")
 }
 
 test "generator template bodies are verbatim" {
@@ -1874,7 +1873,7 @@ test "generator template bodies are verbatim" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "splice adjacency and breaks kept")
+    assert_true(out.view == src, "splice adjacency and breaks kept")
 }
 
 test "enum discriminants keep negative literals glued" {
@@ -1887,7 +1886,7 @@ test "enum discriminants keep negative literals glued" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "-1 stays one unit")
+    assert_true(out.view == src, "-1 stays one unit")
 }
 
 test "one-element tuple commas are grammar, not style" {
@@ -1899,7 +1898,7 @@ test "one-element tuple commas are grammar, not style" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "(T,) comma kept")
+    assert_true(out.view == src, "(T,) comma kept")
 }
 
 test "semicolon chains break into one statement per line" {
@@ -1914,7 +1913,7 @@ test "semicolon chains break into one statement per line" {
         &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(sb: &StringBuilder) {
+    assert_true(out.view == "fn f(sb: &StringBuilder) {
     g() match {
         1 => {
             sb.append(\"a\")
@@ -1938,7 +1937,7 @@ test "semicolons keep leaves them alone" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "kept")
+    assert_true(out.view == src, "kept")
 }
 
 test "statement ifs go multiline, guards included" {
@@ -1952,7 +1951,7 @@ test "statement ifs go multiline, guards included" {
         &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == "fn f(x: bool) i32 {
+    assert_true(out.view == "fn f(x: bool) i32 {
     if x {
         return 1
     }
@@ -1977,7 +1976,7 @@ test "expression ifs may stay single-line" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "expr ifs untouched")
+    assert_true(out.view == src, "expr ifs untouched")
 }
 
 test "if-stmt keep preserves one-line guards" {
@@ -1991,7 +1990,7 @@ test "if-stmt keep preserves one-line guards" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "guard kept")
+    assert_true(out.view == src, "guard kept")
 }
 
 test "array types keep their semicolon" {
@@ -2003,7 +2002,7 @@ test "array types keep their semicolon" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.as_view() == src, "[T; N] untouched")
+    assert_true(out.view == src, "[T; N] untouched")
 }
 
 test "parse errors refuse to format" {

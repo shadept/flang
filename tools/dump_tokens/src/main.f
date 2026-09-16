@@ -39,7 +39,7 @@ pub fn main() i32 {
         Err(_) => {
             const msg = $"dump_tokens: cannot open {path}"
             defer msg.deinit()
-            println(msg.as_view())
+            println(msg.view)
             return 1
         }
     }
@@ -48,20 +48,20 @@ pub fn main() i32 {
     if read_result.is_err() {
         const msg = $"dump_tokens: read failed: {path}"
         defer msg.deinit()
-        println(msg.as_view())
+        println(msg.view)
         return 1
     }
     let source = read_result.unwrap()
     defer source.deinit()
 
-    let lx = lexer(source.as_view())
+    let lx = lexer(source.view)
     let tokens = lx.tokenize()
 
     const banner = $"{path}: {tokens.len} token(s)"
     defer banner.deinit()
-    println(banner.as_view())
+    println(banner.view)
 
-    const view = source.as_view()
+    const view = source.view
     const idx = line_index(view)
     defer idx.deinit()
     for i in 0..tokens.len {

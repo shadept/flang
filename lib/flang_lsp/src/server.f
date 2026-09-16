@@ -96,7 +96,7 @@ pub fn lsp_server(r: Reader, w: Writer, stdlib_path: String = "", version: Strin
     }
 }
 
-pub fn deinit(self: &LspServer) {
+pub fn deinit(self: move LspServer) {
     self.folders.deinit()
     self.version.deinit()
     self.ws.deinit()
@@ -307,12 +307,12 @@ fn encode_diag(e: &Encoder, idx: &LineIndex, text: String, d: &Diagnostic, enc: 
     e.key("source")
     e.encode_str("flang")
     e.key("message")
-    if d.hint.as_view().len > 0 {
-        const full = $"{d.message.as_view()}\n{d.hint.as_view()}"
-        e.encode_str(full.as_view())
+    if d.hint.view.len > 0 {
+        const full = $"{d.message.view}\n{d.hint.view}"
+        e.encode_str(full.view)
         full.deinit()
     } else {
-        e.encode_str(d.message.as_view())
+        e.encode_str(d.message.view)
     }
     e.end_map()
 }
@@ -356,8 +356,8 @@ fn publish_syntax_diags(self: &LspServer, uri: String) {
     if doc.is_none() {
         return
     }
-    let parsed = parse_doc(doc.unwrap().text.as_view())
-    self.publish_file_diags(uri, doc.unwrap().text.as_view(), &parsed.diagnostics)
+    let parsed = parse_doc(doc.unwrap().text.view)
+    self.publish_file_diags(uri, doc.unwrap().text.view, &parsed.diagnostics)
     parsed.deinit()
 }
 
@@ -365,8 +365,8 @@ fn publish_syntax_diags(self: &LspServer, uri: String) {
 // publish lands on the exact buffer), a freshly encoded one otherwise.
 fn uri_for_path(self: &LspServer, path: String) OwnedString {
     for entry in self.docs.docs.iter() {
-        if entry.value.path.as_view() == path {
-            return from_view(entry.key.as_view())
+        if entry.value.path.view == path {
+            return from_view(entry.key.view)
         }
     }
     return path_to_uri(path)
@@ -387,8 +387,8 @@ fn publish_project(self: &LspServer, pi: ProjectId) {
                 file_diags.push(d.*)
             }
         }
-        const u = self.uri_for_path(unit.file_paths[fid].as_view())
-        self.publish_file_diags(u.as_view(), unit.sources[fid].as_view(), &file_diags)
+        const u = self.uri_for_path(unit.file_paths[fid].view)
+        self.publish_file_diags(u.view, unit.sources[fid].view, &file_diags)
         u.deinit()
         file_diags.deinit()
     }
@@ -403,7 +403,7 @@ fn progress_begin(self: &LspServer, title: String) OwnedString {
     const token = $"flang-{self.next_id}"
 
     let params = json_object()
-    params.as_object().unwrap().json_set("token", json_string(token.as_view()))
+    params.as_object().unwrap().json_set("token", json_string(token.view))
     write_request(self.writer, self.next_id, "window/workDoneProgress/create", Some(&params))
     params.deinit()
 
@@ -414,7 +414,7 @@ fn progress_begin(self: &LspServer, title: String) OwnedString {
     envelope_notification(&e, "$/progress")
     e.begin_map(0)
     e.key("token")
-    e.encode_str(token.as_view())
+    e.encode_str(token.view)
     e.key("value")
     e.begin_map(0)
     e.key("kind")
@@ -459,11 +459,11 @@ fn send_status(self: &LspServer) {
     envelope_notification(&e, "flang/serverStatus")
     e.begin_map(0)
     e.key("version")
-    e.encode_str(self.version.as_view())
+    e.encode_str(self.version.view)
     e.key("folders")
     e.begin_seq(self.folders.len)
     for &f in self.folders {
-        e.encode_str(f.as_view())
+        e.encode_str(f.view)
     }
     e.end_seq()
     e.key("projects")
@@ -471,9 +471,9 @@ fn send_status(self: &LspServer) {
     for &p in self.ws.projects {
         e.begin_map(0)
         e.key("name")
-        e.encode_str(p.name.as_view())
+        e.encode_str(p.name.view)
         e.key("dir")
-        e.encode_str(p.dir.as_view())
+        e.encode_str(p.dir.view)
         e.key("errors")
         e.encode_uint(project_error_count(&p.unit) as u64, 8)
         e.end_map()
@@ -565,10 +565,10 @@ fn collect_folders(self: &LspServer, params: &JsonValue?) {
         return
     }
     const p = path.unwrap()
-    const cut = rfind(p.as_view(), '/')
+    const cut = rfind(p.view, '/')
     const name = cut match {
-        Some(i) => p.as_view()[(i + 1)..p.as_view().len]
-        None => p.as_view()
+        Some(i) => p.view[(i + 1)..p.view.len]
+        None => p.view
     }
     if name.len > 0 {
         self.folders.push(from_view(name))
@@ -604,7 +604,7 @@ fn initialize_result(self: &LspServer) JsonValue {
 
     let info = json_object()
     info.as_object().unwrap().json_set("name", json_string("flang-lsp"))
-    info.as_object().unwrap().json_set("version", json_string(self.version.as_view()))
+    info.as_object().unwrap().json_set("version", json_string(self.version.view))
 
     let root = json_object()
     root.as_object().unwrap().json_set("capabilities", caps)
@@ -667,8 +667,8 @@ fn on_did_open(self: &LspServer, msg: &RpcMessage) {
 
     self.publish_syntax_diags(uri.unwrap())
     const doc = self.docs.get(uri.unwrap())
-    if doc.is_some() and doc.unwrap().path.as_view().len > 0 {
-        self.ensure_project(doc.unwrap().path.as_view())
+    if doc.is_some() and doc.unwrap().path.view.len > 0 {
+        self.ensure_project(doc.unwrap().path.view)
     }
 }
 
@@ -719,10 +719,10 @@ fn on_did_save(self: &LspServer, msg: &RpcMessage) {
         return
     }
     const doc = self.docs.get(uri.unwrap())
-    if doc.is_none() or doc.unwrap().path.as_view().len == 0 {
+    if doc.is_none() or doc.unwrap().path.view.len == 0 {
         return
     }
-    const path = doc.unwrap().path.as_view()
+    const path = doc.unwrap().path.view
 
     const pi = self.ws.project_of_path(path)
     if pi.is_none() {
@@ -747,7 +747,7 @@ fn on_did_close(self: &LspServer, msg: &RpcMessage) {
 // resolve and diagnostics would be pure noise, so the server stays tier-1-only. A configured root
 // that does not exist on disk gets the same treatment, plus a one-time editor warning.
 fn can_analyze(self: &LspServer) bool {
-    const root = self.ws.stdlib_path.as_view()
+    const root = self.ws.stdlib_path.view
     if root.len == 0 {
         return false
     }
@@ -772,8 +772,8 @@ fn warn_stdlib_missing(self: &LspServer) {
     e.key("type")
     e.encode_int(2, 8) // MessageType.Warning
     e.key("message")
-    const msg = $"FLang: stdlib not found at `{self.ws.stdlib_path.as_view()}`; type checking is disabled. Set flang.stdlibPath or pass -s."
-    e.encode_str(msg.as_view())
+    const msg = $"FLang: stdlib not found at `{self.ws.stdlib_path.view}`; type checking is disabled. Set flang.stdlibPath or pass -s."
+    e.encode_str(msg.view)
     msg.deinit()
     e.end_map()
     e.end_map()
@@ -794,15 +794,15 @@ fn ensure_project(self: &LspServer, path: String) {
     }
     const d = dir.unwrap()
 
-    const base = rfind(d.as_view(), '/') match {
-        Some(i) => d.as_view()[(i + 1)..d.as_view().len]
-        None => d.as_view()
+    const base = rfind(d.view, '/') match {
+        Some(i) => d.view[(i + 1)..d.view.len]
+        None => d.view
     }
     const title = $"FLang: checking {base}"
-    const token = self.progress_begin(title.as_view())
+    const token = self.progress_begin(title.view)
     title.deinit()
-    const idx = open_project(&self.ws, d.as_view(), &self.docs)
-    self.progress_end(token.as_view())
+    const idx = open_project(&self.ws, d.view, &self.docs)
+    self.progress_end(token.view)
     token.deinit()
     d.deinit()
 
@@ -822,11 +822,11 @@ fn recheck_project(self: &LspServer, pi: ProjectId, dirty_path: String) {
 }
 
 fn recheck_with(self: &LspServer, pi: ProjectId, dirty: &Set(String)) {
-    const title = $"FLang: checking {self.ws.projects[pi].name.as_view()}"
-    const token = self.progress_begin(title.as_view())
+    const title = $"FLang: checking {self.ws.projects[pi].name.view}"
+    const token = self.progress_begin(title.view)
     title.deinit()
     reanalyze_project(&self.ws, pi, dirty, &self.docs)
-    self.progress_end(token.as_view())
+    self.progress_end(token.view)
     token.deinit()
     self.publish_project(pi)
     self.send_status()
@@ -883,8 +883,8 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
         }
         let path = got.unwrap()
 
-        if ends_with(path.as_view(), "/flang.toml") {
-            const owner = self.ws.find_project(parent_dir(path.as_view()))
+        if ends_with(path.view, "/flang.toml") {
+            const owner = self.ws.find_project(parent_dir(path.view))
             if owner.is_some() {
                 reopen[owner.unwrap()] = true
             }
@@ -892,7 +892,7 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
             continue
         }
 
-        const owner = self.ws.project_of_path(path.as_view())
+        const owner = self.ws.project_of_path(path.view)
         if owner.is_none() {
             path.deinit()
             continue
@@ -903,7 +903,7 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
             path.deinit()
             continue
         }
-        if self.is_open_path(path.as_view()) {
+        if self.is_open_path(path.view) {
             path.deinit()
             continue
         }
@@ -913,11 +913,11 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
 
     for pi in 0..self.ws.projects.len {
         if reopen[pi] {
-            const title = $"FLang: checking {self.ws.projects[pi].name.as_view()}"
-            const token = self.progress_begin(title.as_view())
+            const title = $"FLang: checking {self.ws.projects[pi].name.view}"
+            const token = self.progress_begin(title.view)
             title.deinit()
             const ok = reopen_project(&self.ws, pi, &self.docs)
-            self.progress_end(token.as_view())
+            self.progress_end(token.view)
             token.deinit()
             if ok {
                 self.publish_project(pi)
@@ -929,7 +929,7 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
         let dirty: Set(String) = set()
         for i in 0..touched.len {
             if touched_owner[i] == pi {
-                dirty.add(touched[i].as_view())
+                dirty.add(touched[i].view)
             }
         }
         if dirty.len() > 0 {
@@ -941,7 +941,7 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
 
 fn is_open_path(self: &LspServer, path: String) bool {
     for entry in self.docs.docs.iter() {
-        if entry.value.path.as_view() == path {
+        if entry.value.path.view == path {
             return true
         }
     }
@@ -965,7 +965,7 @@ fn on_document_symbol(self: &LspServer, msg: &RpcMessage) {
     if doc.is_none() {
         e.encode_null()
     } else {
-        const text = doc.unwrap().text.as_view()
+        const text = doc.unwrap().text.view
         let parsed = parse_doc(text)
         let syms = document_symbols(&parsed.module)
         encode_symbols(&e, &syms, &doc.unwrap().index, text, self.encoding)
@@ -982,7 +982,7 @@ fn encode_symbols(e: &Encoder, syms: &List(DocSymbol), idx: &LineIndex, text: St
     for &s in syms {
         e.begin_map(0)
         e.key("name")
-        e.encode_str(s.name.as_view())
+        e.encode_str(s.name.view)
         e.key("kind")
         e.encode_int(s.kind as i64, 8)
         e.key("range")
@@ -1013,7 +1013,7 @@ fn on_folding_range(self: &LspServer, msg: &RpcMessage) {
     if doc.is_none() {
         e.encode_null()
     } else {
-        let folds = folding_ranges(doc.unwrap().text.as_view())
+        let folds = folding_ranges(doc.unwrap().text.view)
         e.begin_seq(folds.len)
         for &f in folds {
             e.begin_map(0)
@@ -1064,7 +1064,7 @@ fn encode_project_symbols(self: &LspServer, e: &Encoder, pi: ProjectId, query: S
     for fid in 0..index.len {
         let any = false
         for &s in index[fid].symbols {
-            if symbol_matches(s.name.as_view(), query) {
+            if symbol_matches(s.name.view, query) {
                 any = true
             }
         }
@@ -1072,26 +1072,26 @@ fn encode_project_symbols(self: &LspServer, e: &Encoder, pi: ProjectId, query: S
             continue
         }
 
-        const text = unit.sources[fid].as_view()
+        const text = unit.sources[fid].view
         let lidx = line_index(text)
-        const u = self.uri_for_path(unit.file_paths[fid].as_view())
+        const u = self.uri_for_path(unit.file_paths[fid].view)
         for &s in index[fid].symbols {
-            if !symbol_matches(s.name.as_view(), query) {
+            if !symbol_matches(s.name.view, query) {
                 continue
             }
             e.begin_map(0)
             e.key("name")
-            e.encode_str(s.name.as_view())
+            e.encode_str(s.name.view)
             e.key("kind")
             e.encode_int(s.kind as i64, 8)
-            if s.container.as_view().len > 0 {
+            if s.container.view.len > 0 {
                 e.key("containerName")
-                e.encode_str(s.container.as_view())
+                e.encode_str(s.container.view)
             }
             e.key("location")
             e.begin_map(0)
             e.key("uri")
-            e.encode_str(u.as_view())
+            e.encode_str(u.view)
             e.key("range")
             encode_span_range(e, &lidx, text, s.span, self.encoding)
             e.end_map()
@@ -1118,14 +1118,14 @@ fn request_ctx(self: &LspServer, msg: &RpcMessage) ReqCtx? {
         return null
     }
     const doc = self.docs.get(uri.unwrap())
-    if doc.is_none() or doc.unwrap().path.as_view().len == 0 {
+    if doc.is_none() or doc.unwrap().path.view.len == 0 {
         return null
     }
-    const pi = self.ws.project_of_path(doc.unwrap().path.as_view())
+    const pi = self.ws.project_of_path(doc.unwrap().path.view)
     if pi.is_none() {
         return null
     }
-    const fid = file_id_of(&self.ws.projects[pi.unwrap()].unit, doc.unwrap().path.as_view())
+    const fid = file_id_of(&self.ws.projects[pi.unwrap()].unit, doc.unwrap().path.view)
     if fid.is_none() {
         return null
     }
@@ -1173,7 +1173,7 @@ fn cursor_at(self: &LspServer, msg: &RpcMessage) Cursor? {
     }
     const pi = ctx.unwrap().pi
     const fid = ctx.unwrap().fid
-    const text = self.ws.projects[pi].unit.sources[fid as usize].as_view()
+    const text = self.ws.projects[pi].unit.sources[fid as usize].view
     let idx = line_index(text)
     const off = idx.to_offset(text, pos.unwrap(), self.encoding)
     idx.deinit()
@@ -1190,16 +1190,16 @@ fn respond_null(self: &LspServer, msg: &RpcMessage) {
 fn encode_link(self: &LspServer, e: &Encoder, pi: ProjectId, origin: SourceSpan,
     target: SourceSpan) {
     const unit = &self.ws.projects[pi].unit
-    const origin_text = unit.sources[origin.file_id as usize].as_view()
+    const origin_text = unit.sources[origin.file_id as usize].view
     let origin_idx = line_index(origin_text)
-    const target_text = unit.sources[target.file_id as usize].as_view()
+    const target_text = unit.sources[target.file_id as usize].view
     let target_idx = line_index(target_text)
-    const u = self.uri_for_path(unit.file_paths[target.file_id as usize].as_view())
+    const u = self.uri_for_path(unit.file_paths[target.file_id as usize].view)
     e.begin_map(0)
     e.key("originSelectionRange")
     encode_span_range(e, &origin_idx, origin_text, origin, self.encoding)
     e.key("targetUri")
-    e.encode_str(u.as_view())
+    e.encode_str(u.view)
     e.key("targetRange")
     encode_span_range(e, &target_idx, target_text, target, self.encoding)
     e.key("targetSelectionRange")
@@ -1212,12 +1212,12 @@ fn encode_link(self: &LspServer, e: &Encoder, pi: ProjectId, origin: SourceSpan,
 fn encode_span_location(self: &LspServer, e: &Encoder, pi: ProjectId, span: SourceSpan) {
     const unit = &self.ws.projects[pi].unit
     const fid = span.file_id as usize
-    const text = unit.sources[fid].as_view()
+    const text = unit.sources[fid].view
     let idx = line_index(text)
-    const u = self.uri_for_path(unit.file_paths[fid].as_view())
+    const u = self.uri_for_path(unit.file_paths[fid].view)
     e.begin_map(0)
     e.key("uri")
-    e.encode_str(u.as_view())
+    e.encode_str(u.view)
     e.key("range")
     encode_span_range(e, &idx, text, span, self.encoding)
     e.end_map()
@@ -1238,7 +1238,7 @@ fn decl_label(self: &LspServer, pi: ProjectId, span: SourceSpan) String? {
     if !self.location_span_ok(pi, span) {
         return null
     }
-    const text = self.ws.projects[pi].unit.sources[span.file_id as usize].as_view()
+    const text = self.ws.projects[pi].unit.sources[span.file_id as usize].view
     let end = span.start + span.length
     if end > text.len {
         end = text.len
@@ -1266,7 +1266,7 @@ fn doc_for(self: &LspServer, pi: ProjectId, span: SourceSpan) OwnedString? {
     if !self.location_span_ok(pi, span) {
         return null
     }
-    return doc_above(self.ws.projects[pi].unit.sources[span.file_id as usize].as_view(), span.start)
+    return doc_above(self.ws.projects[pi].unit.sources[span.file_id as usize].view, span.start)
 }
 
 // What brings the binding declared at exactly `span` into scope - `let`, `const`, `param`, `for` -
@@ -1311,7 +1311,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     const offset = cur.unwrap().offset
     const unit = &self.ws.projects[pi].unit
     const result = &unit.result
-    const text = unit.sources[fid as usize].as_view()
+    const text = unit.sources[fid as usize].view
 
     // An import names one file: its path, with that module's docstring. Never falls through - a
     // path segment like `list` would otherwise hover as every declaration of that name.
@@ -1319,12 +1319,12 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     if imp.is_some() {
         let ref = imp.unwrap()
         defer ref.deinit()
-        const target = file_id_of_fqn(unit, ref.path.as_view())
+        const target = file_id_of_fqn(unit, ref.path.view)
         let doc: OwnedString? = null
         if target.is_some() {
-            doc = module_doc(unit.sources[target.unwrap() as usize].as_view())
+            doc = module_doc(unit.sources[target.unwrap() as usize].view)
         }
-        self.respond_hover(msg, $"import {ref.path.as_view()}", doc, text, ref.span)
+        self.respond_hover(msg, $"import {ref.path.view}", doc, text, ref.span)
         return
     }
 
@@ -1401,13 +1401,13 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
                 }
             }
             if intro.is_some() {
-                label = Some($"{intro.unwrap()} {wname}: {rendered.as_view()}")
+                label = Some($"{intro.unwrap()} {wname}: {rendered.view}")
                 rendered.deinit()
             } else if th.unwrap().span.length == wname.len {
-                label = Some($"{wname}: {rendered.as_view()}")
+                label = Some($"{wname}: {rendered.view}")
                 rendered.deinit()
             } else {
-                label = Some(rendered)
+                label = Some(move rendered)
             }
         }
     }
@@ -1423,7 +1423,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         if fh.is_some() {
             const vars = type_param_names(&unit.checker)
             const rendered = render_ty(result, fh.unwrap().ty, Some(vars))
-            label = Some($"field {wname}: {rendered.as_view()}")
+            label = Some($"field {wname}: {rendered.view}")
             rendered.deinit()
             doc_span = Some(fh.unwrap().decl_span)
         }
@@ -1465,7 +1465,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         if !is_member or call_shaped {
             const rh = self.registry_hover(pi, wname)
             if rh.is_some() {
-                label = Some(rh.unwrap().label)
+                label = Some(move rh.unwrap().label)
                 doc_span = rh.unwrap().sole
             }
         }
@@ -1481,8 +1481,8 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
 
 // The hover response: `label` as a flang code block, `doc` (consumed) as markdown prose below it,
 // over `span` in `text`.
-fn respond_hover(self: &LspServer, msg: &RpcMessage, label: OwnedString, doc: OwnedString?,
-    text: String, span: SourceSpan) {
+fn respond_hover(self: &LspServer, msg: &RpcMessage, label: move OwnedString,
+    doc: move OwnedString?, text: String, span: SourceSpan) {
     let sb = string_builder(512)
     defer sb.deinit()
     let jenc = json_encoder(sb.writer())
@@ -1496,12 +1496,12 @@ fn respond_hover(self: &LspServer, msg: &RpcMessage, label: OwnedString, doc: Ow
     e.key("value")
     let md = string_builder(label.len + 32)
     md.append("```flang\n")
-    md.append(label.as_view())
+    md.append(label.view)
     md.append("\n```")
     if doc.is_some() {
-        const prose = doc_markdown(doc.unwrap().as_view())
+        const prose = doc_markdown(doc.unwrap().view)
         md.append("\n\n")
-        md.append(prose.as_view())
+        md.append(prose.view)
         prose.deinit()
         doc.unwrap().deinit()
     }
@@ -1592,7 +1592,7 @@ fn registry_hover(self: &LspServer, pi: ProjectId, name: String) RegistryHover? 
     }
     const out = sb.to_string()
     sb.deinit()
-    return Some(RegistryHover { label = out, sole = sole })
+    return Some(RegistryHover { label = move out, sole = sole })
 }
 
 // ---- textDocument/definition ----
@@ -1623,7 +1623,7 @@ fn on_definition(self: &LspServer, msg: &RpcMessage) {
     envelope_response(&e, msg.id().unwrap())
     e.begin_seq(0)
 
-    const text = unit.sources[fid as usize].as_view()
+    const text = unit.sources[fid as usize].view
 
     // An import names one file: answer with its start, and never fall through to the name tiers - a
     // path segment like `list` would otherwise match every declaration of that name. As a
@@ -1632,7 +1632,7 @@ fn on_definition(self: &LspServer, msg: &RpcMessage) {
     if imp.is_some() {
         let ref = imp.unwrap()
         defer ref.deinit()
-        const target = file_id_of_fqn(unit, ref.path.as_view())
+        const target = file_id_of_fqn(unit, ref.path.view)
         if target.is_some() {
             const start = SourceSpan { file_id = target.unwrap(), start = 0, length = 0 }
             if self.definition_links {
@@ -1705,7 +1705,7 @@ fn encode_index_matches(self: &LspServer, e: &Encoder, name: String) {
         const index = &self.ws.projects[pi].index
         for fid in 0..index.len {
             for &s in index[fid].symbols {
-                if s.name.as_view() != name {
+                if s.name.view != name {
                     continue
                 }
                 if self.location_span_ok(pi, s.span) {
@@ -1777,7 +1777,7 @@ fn on_references(self: &LspServer, msg: &RpcMessage) {
     if tg.is_some() {
         targets.push(tg.unwrap().target)
     } else {
-        const text = unit.sources[fid as usize].as_view()
+        const text = unit.sources[fid as usize].view
         const word = identifier_at(text, offset)
         if word.is_some() {
             const overloads = result.functions.by_name.get_ref(word.unwrap().name)
@@ -1868,11 +1868,11 @@ fn on_inlay_hint(self: &LspServer, msg: &RpcMessage) {
         self.respond_null(msg)
         return
     }
-    const atext = unit.sources[fid as usize].as_view()
+    const atext = unit.sources[fid as usize].view
     const uri = doc_uri(msg)
     const doc = if uri.is_some() { self.docs.get(uri.unwrap()) } else { null }
     // The text positions are computed against: the live buffer when open, else the analyzed text.
-    const text = if doc.is_some() { doc.unwrap().text.as_view() } else { atext }
+    const text = if doc.is_some() { doc.unwrap().text.view } else { atext }
     let lidx = line_index(text)
     defer lidx.deinit()
 
@@ -1918,8 +1918,8 @@ fn on_inlay_hint(self: &LspServer, msg: &RpcMessage) {
         e.key("position")
         encode_pos(&e, lidx.to_position(text, site.offset, self.encoding))
         e.key("label")
-        const l = $": {rendered.as_view()}"
-        e.encode_str(l.as_view())
+        const l = $": {rendered.view}"
+        e.encode_str(l.view)
         l.deinit()
         rendered.deinit()
         e.key("kind")
@@ -1956,7 +1956,7 @@ fn on_signature_help(self: &LspServer, msg: &RpcMessage) {
         return
     }
     const pi = ctx.unwrap().pi
-    const text = doc.unwrap().text.as_view()
+    const text = doc.unwrap().text.view
     const offset = doc.unwrap().index.to_offset(text, pos.unwrap(), self.encoding)
 
     const site = call_site_at(text, offset)
@@ -1966,7 +1966,7 @@ fn on_signature_help(self: &LspServer, msg: &RpcMessage) {
     }
     let cs = site.unwrap()
     const result = &self.ws.projects[pi].unit.result
-    const overloads = result.functions.by_name.get_ref(cs.name.as_view())
+    const overloads = result.functions.by_name.get_ref(cs.name.view)
     if overloads.is_none() or overloads.unwrap().len == 0 {
         cs.deinit()
         self.respond_null(msg)
@@ -2042,17 +2042,17 @@ fn on_formatting(self: &LspServer, msg: &RpcMessage) {
         self.respond_null(msg)
         return
     }
-    const text = doc.unwrap().text.as_view()
+    const text = doc.unwrap().text.view
 
     let cfg = default_config()
     // The project name is owned here so the config's view of it outlives the format.
-    let project = if doc.unwrap().path.as_view().len > 0 {
-        apply_project_fmt(doc.unwrap().path.as_view(), &cfg)
+    let project = if doc.unwrap().path.view.len > 0 {
+        apply_project_fmt(doc.unwrap().path.view, &cfg)
     } else {
         from_view("")
     }
     defer project.deinit()
-    set_project(&cfg, project.as_view())
+    set_project(&cfg, project.view)
 
     const res = format_source(text, &cfg)
     if res.is_err() {
@@ -2062,13 +2062,13 @@ fn on_formatting(self: &LspServer, msg: &RpcMessage) {
     let formatted = res.unwrap()
     defer formatted.deinit()
 
-    let sb = string_builder(formatted.as_view().len + 256)
+    let sb = string_builder(formatted.view.len + 256)
     defer sb.deinit()
     let jenc = json_encoder(sb.writer())
     let e = jenc.encoder()
     envelope_response(&e, msg.id().unwrap())
     e.begin_seq(0)
-    if formatted.as_view() != text {
+    if formatted.view != text {
         e.begin_map(0)
         e.key("range")
         e.begin_map(0)
@@ -2078,7 +2078,7 @@ fn on_formatting(self: &LspServer, msg: &RpcMessage) {
         encode_pos(&e, doc.unwrap().index.to_position(text, text.len, self.encoding))
         e.end_map()
         e.key("newText")
-        e.encode_str(formatted.as_view())
+        e.encode_str(formatted.view)
         e.end_map()
     }
     e.end_seq()
@@ -2095,19 +2095,19 @@ fn apply_project_fmt(path: String, cfg: &FmtConfig) OwnedString {
         return from_view("")
     }
     let d = dir.unwrap()
-    const manifest = $"{d.as_view()}/flang.toml"
+    const manifest = $"{d.view}/flang.toml"
     d.deinit()
-    const got = read_text(manifest.as_view())
+    const got = read_text(manifest.view)
     manifest.deinit()
     if got.is_none() {
         return from_view("")
     }
     let toml = got.unwrap()
-    let proj = parse_project(toml.as_view())
+    let proj = parse_project(toml.view)
     for &e in proj.fmt {
-        const _ok = set_option(cfg, e.key.as_view(), e.value.as_view())
+        const _ok = set_option(cfg, e.key.view, e.value.view)
     }
-    const name = from_view(proj.name.as_view())
+    const name = from_view(proj.name.view)
     proj.deinit()
     toml.deinit()
     return name
@@ -2228,9 +2228,9 @@ test "didOpen and didChange replace the buffer, didClose drops it" {
 
     const doc = srv.docs.get("file:///t.f")
     assert_true(doc.is_some(), "document open")
-    assert_eq(doc.unwrap().text.as_view(), "const B: i32 = 2", "full sync replaced the text")
+    assert_eq(doc.unwrap().text.view, "const B: i32 = 2", "full sync replaced the text")
     assert_eq(doc.unwrap().version, 2, "version tracked")
-    assert_eq(doc.unwrap().path.as_view(), "/t.f", "file uri resolves to a path")
+    assert_eq(doc.unwrap().path.view, "/t.f", "file uri resolves to a path")
 
     let input2 = string_builder(256)
     defer input2.deinit()
@@ -2376,7 +2376,7 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
     srv.ws.projects.push(OpenProject {
         dir = from_view("/t"),
         name = from_view("t"),
-        ctx = ctx,
+        ctx = move ctx,
         unit = unit,
         index = index,
     })
@@ -2421,7 +2421,7 @@ fn demo_project_into(srv: &LspServer) {
     srv.ws.projects.push(OpenProject {
         dir = from_view("/t"),
         name = from_view("t"),
-        ctx = ctx,
+        ctx = move ctx,
         unit = unit,
         index = index,
     })
@@ -2445,9 +2445,9 @@ fn demo_src_json() OwnedString {
 fn demo_input(request: String) StringBuilder {
     let input = string_builder(4096)
     const src = demo_src_json()
-    const open = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\",\"version\":1,\"text\":\"{src.as_view()}\"}}}}}}"
+    const open = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\",\"version\":1,\"text\":\"{src.view}\"}}}}}}"
     src.deinit()
-    frame_into(&input, open.as_view())
+    frame_into(&input, open.view)
     open.deinit()
     frame_into(&input, request)
     return input
@@ -2533,7 +2533,7 @@ fn demo_import_run(request: String, out: &StringBuilder, links: bool = false) {
     srv.ws.projects.push(OpenProject {
         dir = from_view("/t"),
         name = from_view("t"),
-        ctx = ctx,
+        ctx = move ctx,
         unit = unit,
         index = index,
     })
@@ -2775,9 +2775,9 @@ test "inlayHint follows unsaved edits to live positions" {
     defer out.deinit()
     // The same source shifted down one line: every binder pairs, every hint moves with it.
     const src = demo_src_json()
-    const change = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\",\"version\":2}},\"contentChanges\":[{{\"text\":\"// pad\\n{src.as_view()}\"}}]}}}}"
+    const change = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\",\"version\":2}},\"contentChanges\":[{{\"text\":\"// pad\\n{src.view}\"}}]}}}}"
     src.deinit()
-    let input = demo_input(change.as_view())
+    let input = demo_input(change.view)
     change.deinit()
     frame_into(&input,
         "{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"textDocument/inlayHint\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"}}}")

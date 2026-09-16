@@ -42,7 +42,7 @@ pub type ClosureFact = struct {
     sig: ClosureSig
 }
 
-pub fn deinit(self: &ClosureFact) {
+pub fn deinit(self: move ClosureFact) {
     self.fqn.deinit()
     self.fields.deinit()
     self.sig.deinit()
@@ -53,7 +53,7 @@ pub fn clone_fact(f: &ClosureFact, allocator: &Allocator? = null) ClosureFact {
     fields.push_all(f.fields.as_slice())
     return ClosureFact {
         id = f.id,
-        fqn = from_view(f.fqn.as_view(), allocator),
+        fqn = from_view(f.fqn.view, allocator),
         module = f.module,
         fields = fields,
         decl_span = f.decl_span,
@@ -118,13 +118,13 @@ pub type Specialization = struct {
 
 // A fresh record with its reuse bookkeeping zeroed; `register` / `replace_at` stamp the demand
 // generation and assign the id.
-pub fn new_specialization(function_id: u32, key: OwnedString, name: String, module: String,
+pub fn new_specialization(function_id: u32, key: move OwnedString, name: String, module: String,
     decl: FunctionDecl, concrete_params: List(Ty), concrete_return: Ty, overlay: InferenceResults,
     allocator: &Allocator? = null) Specialization {
     return Specialization {
         id = 0 as SpecId,
         function_id = function_id,
-        key = key,
+        key = move key,
         name = name,
         module = module,
         decl = decl,
@@ -149,7 +149,7 @@ pub fn new_specialization(function_id: u32, key: OwnedString, name: String, modu
 // What one specialization owns: the key buffer, the overlay tables, the concrete-params list, and
 // the reuse bookkeeping. `decl` is a shallow copy into the module arena and the name/module strings
 // are views - not ours.
-pub fn deinit(self: &Specialization) {
+pub fn deinit(self: move Specialization) {
     self.key.deinit()
     self.overlay.deinit()
     self.concrete_params.deinit()
@@ -213,15 +213,15 @@ pub fn lookup(self: &SpecializationRegistry, key: String) SpecId? {
 // Register a fresh specialization. Returns the assigned id. The caller is expected to re-check the
 // template body immediately after and hand the resulting tables back via `set_overlay` -
 // registration comes first so a recursive instantiation finds its own key.
-pub fn register(self: &SpecializationRegistry, spec: Specialization) SpecId {
+pub fn register(self: &SpecializationRegistry, spec: move Specialization) SpecId {
     let id: SpecId = self.next_id
     self.next_id = id + 1
-    let with_id = spec
+    let with_id = move spec
     with_id.id = id
     with_id.touched_gen = self.gen
     // The OwnedString's heap buffer is separate from the entry that holds it, so a later rehash
     // does not move it and this view remains valid for the registry's life.
-    let stable_view = with_id.key.as_view()
+    let stable_view = with_id.key.view
     self.by_key.set(stable_view, id)
     self.specs.set(id, with_id)
     return id
@@ -229,17 +229,17 @@ pub fn register(self: &SpecializationRegistry, spec: Specialization) SpecId {
 
 // Re-register `id` in place with a fresh record - same id, new key, new overlay. The old entry's
 // contents are freed; the ids other caches carry keep pointing at the same entry.
-pub fn replace_at(self: &SpecializationRegistry, id: SpecId, spec: Specialization) {
+pub fn replace_at(self: &SpecializationRegistry, id: SpecId, spec: move Specialization) {
     let old = self.specs.remove(id)
     if old.is_some() {
         let d = old.unwrap()
-        let _k = self.by_key.remove(d.key.as_view())
+        let _k = self.by_key.remove(d.key.view)
         d.deinit()
     }
-    let with_id = spec
+    let with_id = move spec
     with_id.id = id
     with_id.touched_gen = self.gen
-    let stable_view = with_id.key.as_view()
+    let stable_view = with_id.key.view
     self.by_key.set(stable_view, id)
     self.specs.set(id, with_id)
 }
@@ -273,7 +273,7 @@ pub fn evict(self: &SpecializationRegistry, id: SpecId) {
         return
     }
     let live = found.unwrap()
-    let _k = self.by_key.remove(live.key.as_view())
+    let _k = self.by_key.remove(live.key.view)
     let dropped = self.specs.remove(id)
     if dropped.is_none() {
         return
@@ -411,7 +411,7 @@ pub fn carried_copy(self: &SpecializationRegistry,
         let copy = Specialization {
             id = s.id,
             function_id = s.function_id,
-            key = from_view(s.key.as_view(), allocator),
+            key = from_view(s.key.view, allocator),
             name = s.name,
             module = s.module,
             decl = s.decl,
@@ -431,7 +431,7 @@ pub fn carried_copy(self: &SpecializationRegistry,
             deps = deps,
             closures = facts,
         }
-        const view = copy.key.as_view()
+        const view = copy.key.view
         by_key.set(view, s.id)
         specs.set(s.id, copy)
     }
@@ -463,7 +463,7 @@ test "specialization keys separate same-named types from different modules" {
 
     let ka = key_for(&it, 3 as u32, &pa, a)
     let kb = key_for(&it, 3 as u32, &pb, b)
-    assert_true(ka.as_view() != kb.as_view(), "distinct nominal ids give distinct keys")
+    assert_true(ka.view != kb.view, "distinct nominal ids give distinct keys")
 
     ka.deinit()
     kb.deinit()
@@ -487,7 +487,7 @@ test "specialization keys reuse one entry for the same type" {
 
     let ka = key_for(&it, 3 as u32, &pa, a)
     let kb = key_for(&it, 3 as u32, &pb, b)
-    assert_true(ka.as_view() == kb.as_view(), "the same type keys to the same specialization")
+    assert_true(ka.view == kb.view, "the same type keys to the same specialization")
 
     ka.deinit()
     kb.deinit()
@@ -505,7 +505,7 @@ test "a carried copy holds every live entry under its key" {
     assert_eq(copy.len(), 2 as usize, "both entries copied")
     assert_eq(copy.next_id, reg.next_id, "numbering carries")
     assert_eq(copy.get(a).function_id, 1 as u32, "the entry answers at its id")
-    assert_true(copy.lookup(reg.get(b).key.as_view()).is_some(), "and under its key")
+    assert_true(copy.lookup(reg.get(b).key.view).is_some(), "and under its key")
 }
 
 test "an evicted specialization leaves a hole and never recycles its id" {
@@ -523,7 +523,7 @@ test "an evicted specialization leaves a hole and never recycles its id" {
     let bkey = key_for(&it, 2 as u32, &probe_params, prim_of(PrimitiveKind.I32))
     reg.evict(b)
     assert_true(reg.find(b).is_none(), "the evicted id names a hole")
-    assert_true(reg.lookup(bkey.as_view()).is_none(), "the evicted key stops resolving")
+    assert_true(reg.lookup(bkey.view).is_none(), "the evicted key stops resolving")
     bkey.deinit()
     probe_params.deinit()
     assert_eq(reg.get(c).function_id, 3 as u32, "the id past the hole still names its own spec")
@@ -566,8 +566,8 @@ pub fn set_signature(self: &SpecializationRegistry, id: SpecId, params: List(Ty)
 // Re-key a specialization under its settled signature. Returns false - and frees `new_key` - when a
 // DIFFERENT spec already owns that key: the caller's spec stays registered under its provisional
 // key and its emission dedups by symbol.
-pub fn rekey(self: &SpecializationRegistry, id: SpecId, new_key: OwnedString) bool {
-    let existing = self.by_key.get(new_key.as_view())
+pub fn rekey(self: &SpecializationRegistry, id: SpecId, new_key: move OwnedString) bool {
+    let existing = self.by_key.get(new_key.view)
     if existing.is_some() {
         if existing.unwrap() != id {
             new_key.deinit()
@@ -577,9 +577,9 @@ pub fn rekey(self: &SpecializationRegistry, id: SpecId, new_key: OwnedString) bo
         return true
     }
     let s = self.specs.get_ref(id).unwrap()
-    let _old = self.by_key.remove(s.key.as_view())
+    let _old = self.by_key.remove(s.key.view)
     s.key.deinit()
-    s.key = new_key
-    self.by_key.set(s.key.as_view(), id)
+    s.key = move new_key
+    self.by_key.set(s.key.view, id)
     return true
 }

@@ -656,14 +656,14 @@ pub fn end_map(self: &CsvEncoder) usize {
             if i > 0 {
                 self.w.write_byte(self.options.delimiter)
             }
-            self.w.write_str(self.current_keys[i].as_view())
+            self.w.write_str(self.current_keys[i].view)
         }
         self.w.write_byte(0x0A)
         for i in 0..self.first_row_values.len {
             if i > 0 {
                 self.w.write_byte(self.options.delimiter)
             }
-            const val = self.first_row_values[i].as_view()
+            const val = self.first_row_values[i].view
             self.field_index = i
             self.write_csv_field(val)
         }

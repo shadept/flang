@@ -28,7 +28,7 @@ import flang_typer.type
 // convention).
 pub fn file_id_of(unit: &AnalyzedProject, path: String) i32? {
     for i in 0..unit.file_paths.len {
-        if unit.file_paths[i].as_view() == path {
+        if unit.file_paths[i].view == path {
             return Some(i as i32)
         }
     }
@@ -46,7 +46,7 @@ pub type ImportRef = struct {
     span: SourceSpan
 }
 
-pub fn deinit(self: &ImportRef) {
+pub fn deinit(self: move ImportRef) {
     self.path.deinit()
 }
 
@@ -61,7 +61,7 @@ pub fn import_at(module: &Module, offset: usize) ImportRef? {
                     const end = id.span.start + id.span.length
                     const span = SourceSpan { file_id = id.span.file_id, start = end - path.len,
                         length = path.len }
-                    return Some(ImportRef { path = path, span = span })
+                    return Some(ImportRef { path = move path, span = span })
                 }
             }
             _ => {}
@@ -75,7 +75,7 @@ pub fn import_at(module: &Module, offset: usize) ImportRef? {
 // (the import did not resolve).
 pub fn file_id_of_fqn(unit: &AnalyzedProject, fqn: String) i32? {
     for i in 0..unit.fqns.len {
-        if unit.fqns[i].as_view() == fqn {
+        if unit.fqns[i].view == fqn {
             return Some(i as i32)
         }
     }

@@ -52,7 +52,7 @@ pub fn main() i32 {
     if first.is_none() {
         return 11
     }
-    if first.unwrap().as_view() != "world" {
+    if first.unwrap().view != "world" {
         return 12
     }
     if it.next().is_some() {

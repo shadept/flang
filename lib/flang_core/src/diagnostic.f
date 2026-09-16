@@ -36,18 +36,36 @@ pub type Diagnostic = struct {
 // literal. Copying a diagnostic into a second container copies the OWNERSHIP with it, so a copy
 // that outlives its source is made with `clone_diag`, and a bulk move leaves the source with
 // `List.release` rather than `clear`.
-pub fn deinit(self: &Diagnostic) {
+pub fn deinit(self: move Diagnostic) {
     self.message.deinit()
     self.hint.deinit()
 }
 
-pub fn error(code: String, message: OwnedString, span: SourceSpan) Diagnostic {
+// The element form: a list of diagnostics releases each with its allocator in hand. The strings
+// carry their own.
+pub fn deinit(self: move Diagnostic, allocator: &Allocator) {
+    self.deinit()
+}
+
+pub fn error(code: String, message: move OwnedString, span: SourceSpan) Diagnostic {
     let empty_hint: OwnedString
     return .{
         severity = Severity.Error,
         code = code,
-        message = message,
-        hint = empty_hint,
+        message = move message,
+        hint = move empty_hint,
+        span = span,
+    }
+}
+
+// The same diagnostic at another span: the message and hint move across, so `d` is dead. This is
+// how a phase that parses a fragment shifts its diagnostics onto file offsets.
+pub fn respan(d: move Diagnostic, span: SourceSpan) Diagnostic {
+    return .{
+        severity = d.severity,
+        code = d.code,
+        message = move d.message,
+        hint = move d.hint,
         span = span,
     }
 }
@@ -58,8 +76,8 @@ pub fn clone_diag(d: &Diagnostic) Diagnostic {
     return .{
         severity = d.severity,
         code = d.code,
-        message = from_view(d.message.as_view()),
-        hint = from_view(d.hint.as_view()),
+        message = from_view(d.message.view),
+        hint = from_view(d.hint.view),
         span = d.span,
     }
 }

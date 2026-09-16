@@ -42,7 +42,7 @@ pub fn instrument_profile(m: &IrModule, all: bool = false,
             continue
         }
         m.displays.get(f.name) match {
-            Some(d) => names.append(d.as_view())
+            Some(d) => names.append(d.view)
             None => names.append(f.name)
         }
         names.append('\n')
@@ -56,15 +56,15 @@ pub fn instrument_profile(m: &IrModule, all: bool = false,
         let f = &m.functions[i]
         if f.name == "main" {
             let entry = &f.blocks[0]
-            entry.instrs.insert(0, register_call(count, blob.as_view().len, allocator))
+            entry.instrs.insert(0, register_call(count, blob.view.len, allocator))
         }
     }
 
     m.add_global(Global {
         name = PROF_NAMES,
-        size = blob.as_view().len as u64,
+        size = blob.view.len as u64,
         align = 1,
-        init_bytes = Some(as_raw_bytes(blob.as_view())),
+        init_bytes = Some(as_raw_bytes(blob.view)),
         relocs = null,
     })
     add_runtime_foreigns(m, allocator)

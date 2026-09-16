@@ -9,6 +9,6 @@ import std.string_builder
 pub fn main() i32 {
     let msg = $"say \"hi\""
     defer msg.deinit()
-    print(msg.as_view())
+    print(msg.view)
     return 0
 }

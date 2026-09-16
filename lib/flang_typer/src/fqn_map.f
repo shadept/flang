@@ -58,7 +58,7 @@ pub fn contains(self: &FqnMap($V), fqn: String) bool {
 // name is copied into the pool and `fqn` is freed, whether or not it was already interned. Panics
 // when the pool or the table cannot grow.
 pub fn register(self: &FqnMap($V), fqn: OwnedString, value: V) {
-    const id = self.names.intern(fqn.as_view())
+    const id = self.names.intern(fqn.view)
     fqn.deinit()
     self.entries.set(id, value, self.allocator)
 }
@@ -117,7 +117,7 @@ pub fn lookup_entry(self: &FqnMap($V), name: String, vis: &Visibility) FqnHit($V
         let cur = vis.current_module.unwrap()
         let qualified = $"{cur}.{name}"
         defer qualified.deinit()
-        const own = self.names.find(qualified.as_view())
+        const own = self.names.find(qualified.view)
         if own.is_some() {
             const hit = self.entries.get(own.unwrap())
             if hit.is_some() {

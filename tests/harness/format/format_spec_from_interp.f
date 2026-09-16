@@ -28,6 +28,6 @@ pub fn main() i32 {
     let t = Tag { n = 1 }
     let msg = $"a{t}b{t:04}c{t:>10}"
     defer msg.deinit()
-    println(msg.as_view())
+    println(msg.view)
     return 0
 }

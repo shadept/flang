@@ -446,7 +446,7 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     let m = module(allocator)
     let sb = symbol_builder(result, allocator)
     for i in 0..modules.len {
-        sb.add_module(&modules[i], fqns[i].as_view())
+        sb.add_module(&modules[i], fqns[i].view)
     }
     let syms = sb.finish()
     let loop_stack: List(LoopFrame) = list(0, allocator)
@@ -500,9 +500,9 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     }
     for i in 0..modules.len {
         if module_demanded(demanded, i) {
-            lower_into(&m, &ctx, &modules[i], fqns[i].as_view())
+            lower_into(&m, &ctx, &modules[i], fqns[i].view)
         } else {
-            lower_foreign_decls(&m, &ctx, &modules[i], fqns[i].as_view())
+            lower_foreign_decls(&m, &ctx, &modules[i], fqns[i].view)
         }
     }
     // Test blocks after every ordinary declaration, so a block's calls resolve against symbols that
@@ -512,7 +512,7 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
         const want = tests.unwrap()
         for i in 0..modules.len {
             if i < want.len and want[i] {
-                lower_tests(&m, &ctx, &modules[i], fqns[i].as_view(), name_filter)
+                lower_tests(&m, &ctx, &modules[i], fqns[i].view, name_filter)
             }
         }
     }
@@ -524,7 +524,7 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     if demanded.is_some() {
         for i in 0..modules.len {
             if !module_demanded(demanded, i) {
-                skip_specs.add(fqns[i].as_view())
+                skip_specs.add(fqns[i].view)
             }
         }
     }
@@ -1303,8 +1303,8 @@ fn const_symbol(prefix: String, fqn: String, allocator: &Allocator?) OwnedString
 
 // Park an owned symbol string; the returned view stays valid because an OwnedString's heap bytes do
 // not move when the list grows.
-fn park_sym(ctx: &LowerCtx, s: OwnedString) String {
-    let v = s.as_view()
+fn park_sym(ctx: &LowerCtx, s: move OwnedString) String {
+    let v = s.view
     ctx.owned_syms.push(s)
     return v
 }
@@ -1604,7 +1604,7 @@ fn lower_pending_lambdas(m: &IrModule, ctx: &LowerCtx) {
     let i: usize = 0
     while i < ctx.pending_lambdas.len {
         // Copy out: the list may grow (and reallocate) during emission.
-        let pl = ctx.pending_lambdas[i]
+        let pl = move ctx.pending_lambdas[i]
         i = i + 1
         let saved = ctx.overlay
         ctx.overlay = pl.overlay
@@ -1619,7 +1619,7 @@ fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
         span = pl.lam.span,
         is_pub = false,
         directives = empty_dirs,
-        name = pl.info.symbol.as_view(),
+        name = pl.info.symbol.view,
         params = pl.lam.params,
         return_type = pl.lam.return_type,
         bounds = list(0, ctx.allocator),
@@ -1629,14 +1629,14 @@ fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
     sig_params.push_all(pl.info.params.as_slice())
     let sig = FnSig { params = sig_params, ret = pl.info.ret }
     if pl.info.captures.len == 0 {
-        lower_function_body(m, ctx, &decl, pl.info.symbol.as_view(), &sig)
+        lower_function_body(m, ctx, &decl, pl.info.symbol.view, &sig)
         return
     }
     let cid = pl.info.closure_id.unwrap()
     let no_args: List(Ty) = list(0, ctx.allocator)
     let cty = ctx.it.nominal_of(cid, &no_args)
     no_args.deinit()
-    lower_function_body(m, ctx, &decl, pl.info.symbol.as_view(), &sig, Some(LoweredClosure {
+    lower_function_body(m, ctx, &decl, pl.info.symbol.view, &sig, Some(LoweredClosure {
         ty = cty,
         captures = &pl.info.captures,
     }))
@@ -2570,11 +2570,11 @@ fn lower_lambda(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lam: &LambdaExpr) 
     let info = info_opt.unwrap()
     ctx.pending_lambdas.push(PendingLambda {
         lam = lam.*,
-        info = info.*,
+        info = move info.*,
         overlay = ctx.overlay,
     })
     if info.captures.len == 0 {
-        return Operand.FuncRef(info.symbol.as_view())
+        return Operand.FuncRef(info.symbol.view)
     }
     let cid = info.closure_id.unwrap()
     let no_args: List(Ty) = list(0, ctx.allocator)
@@ -2761,6 +2761,12 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
 // literal decay sites). Everything else passes through `lower_expr` unchanged; the consumer's own
 // layout reads then match what the checker approved.
 fn lower_adapted(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, e: &Expr, want: &Ty) Operand {
+    // An argument that reached its parameter through `op_deref` (RFC-020) carries the hop chain on
+    // its own node, the way a receiver's sits on the call node. Replay it before anything else.
+    const chain = ctx_arg_deref(ctx, node_id_of(expr_span(e)))
+    if chain.is_some() {
+        return lower_deref_receiver(ctx, bb, env, e, chain.unwrap(), want)
+    }
     let src = node_ty(ctx, expr_span(e))
     // `[T; N]` or `&[T; N]` - either way `lower_expr` yields the elements' base address (an
     // aggregate IS its address; a reference's value is the pointee's).
@@ -3707,7 +3713,7 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
         }
         let sig_params: List(Ty) = list(0, ctx.allocator)
         let sig = FnSig { params = sig_params, ret = c.ret }
-        return emit_call(ctx, bb, c.symbol.as_view(), &sig, args)
+        return emit_call(ctx, bb, c.symbol.view, &sig, args)
     }
 
     let ft = tn(ctx, callee_ty) match {
@@ -6164,7 +6170,7 @@ fn intern_string(ctx: &LowerCtx, raw: String) StrData? {
     // Data-segment bytes: decoded content plus a null terminator, so the `ptr` field satisfies
     // String's C-FFI contract (core/string.f).
     let buf = string_builder(d.len + 1, ctx.allocator)
-    buf.append(d.as_view())
+    buf.append(d.view)
     buf.append_byte(0u8)
     let bytes = buf.to_string()
 
@@ -6175,13 +6181,13 @@ fn intern_string(ctx: &LowerCtx, raw: String) StrData? {
     nb.deinit()
 
     ctx.globals.push(Global {
-        name = name.as_view(),
+        name = name.view,
         size = (d.len + 1) as u64,
         align = 1u64,
-        init_bytes = Some(bytes.as_view().as_raw_bytes()),
+        init_bytes = Some(bytes.view.as_raw_bytes()),
         relocs = null,
     })
-    let entry = StrData { name = name.as_view(), len = d.len }
+    let entry = StrData { name = name.view, len = d.len }
     ctx.strings.set(raw, entry)
     d.deinit()
     return Some(entry)
@@ -6755,6 +6761,20 @@ fn ctx_receiver_deref(ctx: &LowerCtx, id: NodeId) &List(ResolvedTarget)? {
         None => {}
     }
     return ctx.result.get_receiver_deref(id)
+}
+
+// The hops an ARGUMENT resolved through (RFC-020), on its own node.
+fn ctx_arg_deref(ctx: &LowerCtx, id: NodeId) &List(ResolvedTarget)? {
+    ctx.overlay match {
+        Some(ov) => {
+            let d = ov.arg_derefs.get_ref(id)
+            if d.is_some() {
+                return d
+            }
+        }
+        None => {}
+    }
+    return ctx.result.get_arg_deref(id)
 }
 
 // The materialized default arguments for the call at `id` (M11) - through the active overlay first
@@ -9007,7 +9027,7 @@ test "an interpolated string lowers through its recorded desugar" {
     let srcs: List(OwnedString) = list(4)
     srcs.push(from_view("pub type Option = enum(T) { None, Some(T) }"))
     srcs.push(from_view("pub type String = struct { ptr: &u8, len: usize }"))
-    srcs.push(from_view("import core.string\nimport core.option\npub type SB = struct { n: usize }\npub fn string_builder(capacity: usize, allocator: &SB? = null) SB { return SB { n = capacity } }\npub fn append(sb: &SB, text: String) { sb.n = sb.n + text.len }\npub fn append(sb: &SB, v: i64) { sb.n = sb.n + 1 }\npub fn to_string(sb: &SB) String { return \"done\" }\npub fn deinit(sb: &SB) {}"))
+    srcs.push(from_view("import core.string\nimport core.option\npub type SB = struct { n: usize }\npub fn string_builder(capacity: usize, allocator: &SB? = null) SB { return SB { n = capacity } }\npub fn append(sb: &SB, text: String) { sb.n = sb.n + text.len }\npub fn append(sb: &SB, v: i64) { sb.n = sb.n + 1 }\npub fn writer(sb: &SB) &SB { return sb }\npub fn format(v: i64, w: &SB, spec: String) { w.n = w.n + 1 }\npub fn to_string(sb: &SB) String { return \"done\" }\npub fn deinit(sb: &SB) {}"))
     srcs.push(from_view("import core.string\nimport builder\nfn f(x: i64) String { return $\"v={x}!\" }"))
     let fqns: List(String) = list(4)
     fqns.push("core.option")
@@ -9021,12 +9041,12 @@ test "an interpolated string lowers through its recorded desugar" {
     assert_true(!was_skipped(&m, "app__f__"), "the interpolating function is not refused")
     let fi = find_fn_starting(&m, "app__f__")
     assert_true(fi < m.functions.len, "the interpolating function is emitted")
-    // ctor + append("v=") + append(x) + append("!") + to_string + the deferred deinit: the whole
-    // desugar is replayed.
-    assert_eq(call_count_in(&m.functions[fi]), 6 as usize,
+    // ctor + append("v=") + writer() + x.format(w, "") + append("!") + to_string + the deferred
+    // deinit: the whole desugar is replayed, the hole read through the writer.
+    assert_eq(call_count_in(&m.functions[fi]), 7 as usize,
         "all desugared calls emit, deinit included")
-    // "v=", "!", and to_string's own "done" intern like any literal.
-    assert_eq(m.globals.len, 3 as usize, "segment literals land in the data segment")
+    // "v=", "!", the hole's empty format spec, and to_string's own "done" intern like any literal.
+    assert_eq(m.globals.len, 4 as usize, "segment literals land in the data segment")
 }
 
 // M10: generic specialization.

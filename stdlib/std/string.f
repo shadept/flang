@@ -436,11 +436,16 @@ pub fn next(self: &Lines) String? {
 // Owns its buffer and frees it on `deinit`. Null-terminated for C FFI; `len` excludes the
 // terminator. Fixed size, with no spare capacity: build strings with `StringBuilder`.
 //
-// The owning counterpart to [core.string.String], which `as_view` borrows one as.
+// The owning counterpart to [core.string.String]: `view` is the text, and every `String` read
+// reaches it through `op_deref`.
 pub type OwnedString = struct {
-    ptr: &u8
-    len: usize
+    view: String
     allocator: &Allocator?
+}
+
+// Every read of an `OwnedString` is a read of the `String` it holds.
+pub fn op_deref(self: &OwnedString) &String {
+    return &self.view
 }
 
 pub fn from_view(s: String, allocator: &Allocator) OwnedString {
@@ -462,37 +467,34 @@ pub fn from_view(s: String, allocator: &Allocator? = null) OwnedString {
     }
     const term = buf.ptr + s.len
     term.* = 0
-    return .{ ptr = buf.ptr, len = s.len, allocator = allocator }
+    return .{ view = .{ ptr = buf.ptr, len = s.len }, allocator = allocator }
 }
 
-pub fn deinit(self: &OwnedString) {
-    // Idempotent: a second call sees the nulled pointer and no-ops.
-    if self.ptr == (0usize as &u8) {
+// Frees the buffer. The binding is dead afterwards (RFC-033), so a second release is E2123 rather
+// than a run-time no-op.
+pub fn deinit(self: move OwnedString) {
+    if self.view.ptr == (0usize as &u8) {
         return
     }
-    self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.len))
-    self.ptr = 0usize as &u8
-    self.len = 0
+    self.allocator.or_global().free(slice_from_raw_parts(self.view.ptr, self.view.len))
 }
 
-// Reads `self`. Consuming an owned temporary is `append`'s behaviour, not this one's.
-pub fn format(self: OwnedString, w: Writer, spec: String) {
-    self.as_view().format(w, spec)
+// The element form: containers release their elements with an allocator in hand. The string frees
+// through the allocator it remembers, so `allocator` is ignored.
+pub fn deinit(self: move OwnedString, allocator: &Allocator) {
+    self.deinit()
 }
 
-pub fn as_view(self: &OwnedString) String {
-    return .{ ptr = self.ptr, len = self.len }
+// An independent copy on `allocator`, or on the global allocator when null.
+pub fn clone(self: &OwnedString, allocator: &Allocator? = null) OwnedString {
+    return from_view(self.view, allocator)
 }
 
-pub fn op_eq(a: OwnedString, b: OwnedString) bool {
-    return op_eq(a.as_view(), b.as_view())
-}
-
+// Declared rather than peeled: the catch-all `hash(val: $T)` takes an `OwnedString` as written and
+// would hash the struct's bytes, not the text.
 pub fn hash(s: OwnedString) usize {
-    return hash(s.as_view())
+    return hash(s.view)
 }
-
-#string_reader(OwnedString)
 
 // =============================================================================
 // Bytes Iterator
@@ -504,12 +506,6 @@ type Bytes = struct {
 }
 
 pub fn bytes(s: String) Bytes {
-    // TODO fix String to Slice(u8) coersion
-    const slice = slice_from_raw_parts(s.ptr, s.len)
-    return .{ buf = slice, idx = 0 }
-}
-
-pub fn bytes(s: &OwnedString) Bytes {
     // TODO fix String to Slice(u8) coersion
     const slice = slice_from_raw_parts(s.ptr, s.len)
     return .{ buf = slice, idx = 0 }
@@ -540,12 +536,6 @@ type Chars = struct {
 }
 
 pub fn chars(s: String) Chars {
-    // TODO fix String to Slice(u8) coersion
-    const slice = slice_from_raw_parts(s.ptr, s.len)
-    return .{ buf = slice, idx = 0 }
-}
-
-pub fn chars(s: &OwnedString) Chars {
     // TODO fix String to Slice(u8) coersion
     const slice = slice_from_raw_parts(s.ptr, s.len)
     return .{ buf = slice, idx = 0 }

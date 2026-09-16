@@ -13,7 +13,6 @@ import std.io.reader
 import std.io.types
 import std.io.writer
 import std.option
-import std.owned
 import std.result
 import std.string
 import std.string_builder
@@ -115,9 +114,7 @@ pub fn remove_file(path: String) Result((), FileError) {
 
 pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
-    // Owned so a mid-read failure frees the builder on the way out: `?` bails straight past the
-    // return, and the defer is what catches it.
-    let sb = owned(string_builder(PAGE_SIZE, allocator))
+    let sb = string_builder(PAGE_SIZE, allocator)
     defer sb.deinit()
     loop {
         const tail = sb.unwritten_buf()
@@ -131,12 +128,12 @@ pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, 
         // distributions (many small, few large).
         sb.ensure_capacity(sb.cap + PAGE_SIZE)
     }
-    return Ok(sb.transfer().to_string())
+    return Ok(sb.to_string())
 }
 
 pub fn read_all_inplace(file: &File, allocator: &Allocator) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
-    let sb = owned(string_builder(PAGE_SIZE, Some(allocator)))
+    let sb = string_builder(PAGE_SIZE, Some(allocator))
     defer sb.deinit()
     let buf = [0u8; 4096]
     loop {
@@ -147,7 +144,7 @@ pub fn read_all_inplace(file: &File, allocator: &Allocator) Result(OwnedString, 
             break
         }
     }
-    return Ok(sb.transfer().to_string())
+    return Ok(sb.to_string())
 }
 
 pub fn write(file: &File, value: String) Result((), FileError) {
@@ -251,7 +248,7 @@ test "write, read back, and remove a file" {
     const text = read_all(&r)
     assert_true(text.is_ok(), "read_all")
     let owned_text = text.unwrap()
-    assert_eq(owned_text.as_view(), "hello flang", "round-trip")
+    assert_eq(owned_text.view, "hello flang", "round-trip")
     owned_text.deinit()
     assert_true(close_file(&r).is_ok(), "close after read")
 
@@ -272,7 +269,7 @@ test "write truncates an existing file" {
 
     let c = open_file(p, FileMode.Read).unwrap()
     const text = read_all(&c).unwrap()
-    assert_eq(text.as_view(), "short", "old tail is gone")
+    assert_eq(text.view, "short", "old tail is gone")
     text.deinit()
     assert_true(close_file(&c).is_ok(), "close")
     assert_true(remove_file(p).is_ok(), "cleanup")
@@ -291,7 +288,7 @@ test "append adds to the end instead of truncating" {
 
     let c = open_file(p, FileMode.Read).unwrap()
     const text = read_all(&c).unwrap()
-    assert_eq(text.as_view(), "one-two", "appended")
+    assert_eq(text.view, "one-two", "appended")
     text.deinit()
     assert_true(close_file(&c).is_ok(), "close")
     assert_true(remove_file(p).is_ok(), "cleanup")

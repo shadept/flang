@@ -210,7 +210,7 @@ pub fn eval_condition_with(ctx: &ComptimeCtx, lookup: CtLookup, cond: &Expr) CtO
     defer env.bindings.deinit()
     return ct_eval_condition(&env, cond) match {
         Ok(b) => CtOutcome.Active(b)
-        Err(e) => CtOutcome.Invalid(e)
+        Err(e) => CtOutcome.Invalid(move e)
     }
 }
 
@@ -232,8 +232,8 @@ pub fn ct_eval_condition(env: &CtEnv, cond: &Expr) Result(bool, CtError) {
     }
 }
 
-fn ct_err(code: String, message: OwnedString, span: SourceSpan) Result(CtValue, CtError) {
-    return Err(CtError { code = code, message = message, span = span })
+fn ct_err(code: String, message: move OwnedString, span: SourceSpan) Result(CtValue, CtError) {
+    return Err(CtError { code = code, message = move message, span = span })
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -1138,8 +1138,8 @@ fn splice_decls(decls: &List(Decl), ctx: &ComptimeCtx, diags: &List(Diagnostic),
                         diags.push(Diagnostic {
                             severity = Severity.Error,
                             code = err.code,
-                            message = err.message,
-                            hint = empty_hint,
+                            message = move err.message,
+                            hint = move empty_hint,
                             span = err.span,
                         })
                     }

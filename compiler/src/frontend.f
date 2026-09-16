@@ -90,14 +90,14 @@ pub fn render_project_diagnostics(diags: &List(Diagnostic), paths: &List(OwnedSt
         } else if sources.len == 0 {
             continue
         }
-        const source = sources[which].as_view()
+        const source = sources[which].view
         if !indexes.contains(which) {
             indexes.set(which, line_index(source))
         }
         const idx = indexes.get_ref(which).unwrap()
-        const text = render_diagnostic(paths[which].as_view(), source, idx, d, style)
+        const text = render_diagnostic(paths[which].view, source, idx, d, style)
         defer text.deinit()
-        write_err(text.as_view())
+        write_err(text.view)
     }
 }
 
@@ -107,7 +107,7 @@ pub fn print_diagnostic(path: String, source: String, d: &Diagnostic, style: &Re
     defer idx.deinit()
     const text = render_diagnostic(path, source, &idx, d, style)
     defer text.deinit()
-    write_err(text.as_view())
+    write_err(text.view)
 }
 
 // Diagnostics go to stderr, build progress to stdout, so either can be redirected alone.

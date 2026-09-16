@@ -22,6 +22,14 @@ pub fn deinit(self: &f64) {}
 // String is a non-owning view (ptr + len), no memory to free.
 pub fn deinit(self: &String) {}
 
+// Releases what `slot` holds, for storage whose end the checker cannot see: a container's own
+// buffer, about to be freed or overwritten. The move out of the deref is untracked, the same
+// position an element store uses, so the bytes stay as they are and nothing may read them again.
+pub fn release_slot(slot: &$T) {
+    let v = move slot.*
+    v.deinit()
+}
+
 // Generic fallback: types without an explicit deinit are no-ops. Overload resolution prefers
 // concrete signatures (fewer generic params), so types with their own deinit still get their
 // specific version called.

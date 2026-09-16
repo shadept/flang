@@ -87,7 +87,7 @@ pub fn set_comptime(self: &ResolveCtx, c: ComptimeCtx) {
     self.comptime = c
 }
 
-pub fn deinit(self: &ResolveCtx) {
+pub fn deinit(self: move ResolveCtx) {
     self.project_name.deinit()
     self.project_source_root.deinit()
     for &d in self.deps {
@@ -106,10 +106,10 @@ pub fn deinit(self: &ResolveCtx) {
 pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String),
     allocator: &Allocator? = null) OwnedString? {
     // Project rule: first segment is the project name.
-    if segs.len > 1 and segs[0] == ctx.project_name.as_view() {
-        let p = join_module_path(ctx.project_source_root.as_view(), segs, 1, allocator)
-        if exists(p.as_view()) {
-            return Some(p)
+    if segs.len > 1 and segs[0] == ctx.project_name.view {
+        let p = join_module_path(ctx.project_source_root.view, segs, 1, allocator)
+        if exists(p.view) {
+            return Some(move p)
         }
         p.deinit()
     }
@@ -117,10 +117,10 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String),
     // Dependency rule: first segment names a direct dependency.
     if segs.len > 1 {
         for &d in ctx.deps {
-            if segs[0] == d.name.as_view() {
-                let p = join_module_path(d.root.as_view(), segs, 1, allocator)
-                if exists(p.as_view()) {
-                    return Some(p)
+            if segs[0] == d.name.view {
+                let p = join_module_path(d.root.view, segs, 1, allocator)
+                if exists(p.view) {
+                    return Some(move p)
                 }
                 p.deinit()
             }
@@ -128,15 +128,15 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String),
     }
 
     // Include rule: stdlib first, then the working directory.
-    let p1 = join_module_path(ctx.stdlib_root.as_view(), segs, 0, allocator)
-    if exists(p1.as_view()) {
-        return Some(p1)
+    let p1 = join_module_path(ctx.stdlib_root.view, segs, 0, allocator)
+    if exists(p1.view) {
+        return Some(move p1)
     }
     p1.deinit()
 
-    let p2 = join_module_path(ctx.cwd.as_view(), segs, 0, allocator)
-    if exists(p2.as_view()) {
-        return Some(p2)
+    let p2 = join_module_path(ctx.cwd.view, segs, 0, allocator)
+    if exists(p2.view) {
+        return Some(move p2)
     }
     p2.deinit()
 
@@ -149,26 +149,26 @@ pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String),
 pub fn module_fqn(ctx: &ResolveCtx, path: String, allocator: &Allocator? = null) OwnedString {
     let norm = normalize_sep(path, allocator)
     defer norm.deinit()
-    let np = norm.as_view()
+    let np = norm.view
 
-    let pr = strip_root(np, ctx.project_source_root.as_view())
+    let pr = strip_root(np, ctx.project_source_root.view)
     if pr.is_some() {
-        return dotted_with_prefix(ctx.project_name.as_view(), pr.unwrap(), allocator)
+        return dotted_with_prefix(ctx.project_name.view, pr.unwrap(), allocator)
     }
 
     for i in 0..ctx.deps.len {
-        let dr = strip_root(np, ctx.deps[i].root.as_view())
+        let dr = strip_root(np, ctx.deps[i].root.view)
         if dr.is_some() {
-            return dotted_with_prefix(ctx.deps[i].name.as_view(), dr.unwrap(), allocator)
+            return dotted_with_prefix(ctx.deps[i].name.view, dr.unwrap(), allocator)
         }
     }
 
-    let sr = strip_root(np, ctx.stdlib_root.as_view())
+    let sr = strip_root(np, ctx.stdlib_root.view)
     if sr.is_some() {
         return dotted(sr.unwrap(), allocator)
     }
 
-    let cr = strip_root(np, ctx.cwd.as_view())
+    let cr = strip_root(np, ctx.cwd.view)
     if cr.is_some() {
         return dotted(cr.unwrap(), allocator)
     }
@@ -204,18 +204,18 @@ pub fn resolve_ctx_at(proj: &Project, project_dir: String, stdlib_root: String,
     allocator: &Allocator? = null) ResolveCtx {
     let deps = list(0, allocator)
     for &d in proj.deps {
-        let dep_dir = join_under(project_dir, d.path.as_view(), allocator)
-        let root = normalized_owned(dep_source_root(dep_dir.as_view(), allocator), allocator)
+        let dep_dir = join_under(project_dir, d.path.view, allocator)
+        let root = normalized_owned(dep_source_root(dep_dir.view, allocator), allocator)
         dep_dir.deinit()
-        deps.push(DepRoot { name = from_view(d.name.as_view()), root = root })
+        deps.push(DepRoot { name = from_view(d.name.view), root = move root })
     }
     let globals: List(OwnedString) = list(proj.global_imports.len, allocator)
     for &g in proj.global_imports {
-        globals.push(from_view(g.as_view()))
+        globals.push(from_view(g.view))
     }
     return ResolveCtx {
-        project_name = from_view(proj.name.as_view()),
-        project_source_root = normalized_owned(source_root(project_dir, proj.source.as_view(),
+        project_name = from_view(proj.name.view),
+        project_source_root = normalized_owned(source_root(project_dir, proj.source.view,
                 allocator), allocator),
         deps = deps,
         stdlib_root = normalize_sep(stdlib_root, allocator),
@@ -278,15 +278,15 @@ pub fn single_file_ctx(stdlib_root: String, allocator: &Allocator? = null) Resol
 fn dep_source_root(dep_dir: String, allocator: &Allocator?) OwnedString {
     let manifest = $"{dep_dir}/flang.toml"
     defer manifest.deinit()
-    let text = read_text(manifest.as_view())
+    let text = read_text(manifest.view)
     if text.is_none() {
         return source_root(dep_dir, "src/**/*.f", allocator)
     }
     let t = text.unwrap()
     defer t.deinit()
-    let dp = parse_project(t.as_view(), allocator)
+    let dp = parse_project(t.view, allocator)
     defer dp.deinit()
-    return source_root(dep_dir, dp.source.as_view(), allocator)
+    return source_root(dep_dir, dp.source.view, allocator)
 }
 
 // The static (glob-free) prefix of `source_glob` under `project_dir`. `.` as the directory means
@@ -350,8 +350,8 @@ pub fn normalize_sep(path: String, allocator: &Allocator? = null) OwnedString {
 // Normalise an owned path to forward slashes, freeing the input. Keeps the `ResolveCtx` roots in
 // the single separator convention `strip_root` compares against, so an absolute or backslashed root
 // (e.g. an argv[0]-derived stdlib path on Windows) classifies the same as a forward-slash one.
-fn normalized_owned(s: OwnedString, allocator: &Allocator?) OwnedString {
-    let n = normalize_sep(s.as_view(), allocator)
+fn normalized_owned(s: move OwnedString, allocator: &Allocator?) OwnedString {
+    let n = normalize_sep(s.view, allocator)
     s.deinit()
     return n
 }
@@ -363,14 +363,14 @@ fn normalized_owned(s: OwnedString, allocator: &Allocator?) OwnedString {
 // absolute) counts as one module.
 pub fn canon_path(p: String, allocator: &Allocator? = null) OwnedString {
     let norm = normalize_sep(p, allocator)
-    if !is_absolute(norm.as_view()) {
+    if !is_absolute(norm.view) {
         const wd = cwd(allocator)
         if wd.is_ok() {
             let base = wd.unwrap()
-            const joined = $"{base.as_view()}/{norm.as_view()}"
+            const joined = $"{base.as_view()}/{norm.view}"
             base.deinit()
             norm.deinit()
-            norm = normalize_sep(joined.as_view(), allocator)
+            norm = normalize_sep(joined.view, allocator)
             joined.deinit()
         }
     }
@@ -379,8 +379,8 @@ pub fn canon_path(p: String, allocator: &Allocator? = null) OwnedString {
 
 // Resolve `.` and `..` segments of a forward-slash path; consumes the input. A `..` that would
 // climb past the root is dropped.
-fn fold_dots(p: OwnedString, alloc: &Allocator?) OwnedString {
-    const v = p.as_view()
+fn fold_dots(p: move OwnedString, alloc: &Allocator?) OwnedString {
+    const v = p.view
     let segs = split(v, '/')
     defer segs.deinit()
     let kept: List(String) = list(segs.len, alloc)
@@ -519,7 +519,7 @@ test "module_fqn: project file -> project-prefixed name" {
     defer ctx.deinit()
     let f = module_fqn(&ctx, "lib/flang_analysis/src/analyze.f")
     defer f.deinit()
-    assert_true(f.as_view() == "flang_analysis.analyze", "project root file")
+    assert_true(f.view == "flang_analysis.analyze", "project root file")
 }
 
 test "module_fqn: nested project file dots the subpath" {
@@ -527,7 +527,7 @@ test "module_fqn: nested project file dots the subpath" {
     defer ctx.deinit()
     let f = module_fqn(&ctx, "lib/flang_analysis/src/sub/thing.f")
     defer f.deinit()
-    assert_true(f.as_view() == "flang_analysis.sub.thing", "nested project file")
+    assert_true(f.view == "flang_analysis.sub.thing", "nested project file")
 }
 
 test "module_fqn: dependency file -> dep-prefixed name" {
@@ -535,7 +535,7 @@ test "module_fqn: dependency file -> dep-prefixed name" {
     defer ctx.deinit()
     let f = module_fqn(&ctx, "lib/flang_parser/src/lexer.f")
     defer f.deinit()
-    assert_true(f.as_view() == "flang_parser.lexer", "dep file")
+    assert_true(f.view == "flang_parser.lexer", "dep file")
 }
 
 test "module_fqn: stdlib file has no prefix" {
@@ -543,7 +543,7 @@ test "module_fqn: stdlib file has no prefix" {
     defer ctx.deinit()
     let f = module_fqn(&ctx, "stdlib/std/io/file.f")
     defer f.deinit()
-    assert_true(f.as_view() == "std.io.file", "stdlib file")
+    assert_true(f.view == "std.io.file", "stdlib file")
 }
 
 test "module_fqn: backslash paths normalise" {
@@ -551,7 +551,7 @@ test "module_fqn: backslash paths normalise" {
     defer ctx.deinit()
     let f = module_fqn(&ctx, "stdlib\\core\\option.f")
     defer f.deinit()
-    assert_true(f.as_view() == "core.option", "windows separators")
+    assert_true(f.view == "core.option", "windows separators")
 }
 
 test "module_fqn: unclassified path falls back to file stem" {
@@ -559,7 +559,7 @@ test "module_fqn: unclassified path falls back to file stem" {
     defer ctx.deinit()
     let f = module_fqn(&ctx, "scratch/area/foo.f")
     defer f.deinit()
-    assert_true(f.as_view() == "foo", "fallback stem")
+    assert_true(f.view == "foo", "fallback stem")
 }
 
 test "join_module_path: builds base/seg/seg.f from segments" {
@@ -570,30 +570,30 @@ test "join_module_path: builds base/seg/seg.f from segments" {
     defer segs.deinit()
     let p = join_module_path("stdlib", &segs, 0)
     defer p.deinit()
-    assert_true(p.as_view() == "stdlib/std/io/file.f", "include-rule path")
+    assert_true(p.view == "stdlib/std/io/file.f", "include-rule path")
 
     let p2 = join_module_path("dep/src", &segs, 1)
     defer p2.deinit()
-    assert_true(p2.as_view() == "dep/src/io/file.f", "skips leading segment")
+    assert_true(p2.view == "dep/src/io/file.f", "skips leading segment")
 }
 
 test "canon_path folds dots, absolutizes, and lowercases the drive" {
     let a = canon_path("C:\\w\\proj\\..\\core\\src\\a.f")
     defer a.deinit()
-    assert_true(a.as_view() == "c:/w/core/src/a.f", "dots folded, drive lowered, slashes forward")
+    assert_true(a.view == "c:/w/core/src/a.f", "dots folded, drive lowered, slashes forward")
 
     let b = canon_path("c:/w/./x/a.f")
     defer b.deinit()
-    assert_true(b.as_view() == "c:/w/x/a.f", "single dots vanish")
+    assert_true(b.view == "c:/w/x/a.f", "single dots vanish")
 
     let r = canon_path("src/main.f")
     defer r.deinit()
-    assert_true(r.as_view() != "src/main.f", "relative paths absolutize")
-    assert_true(ends_with(r.as_view(), "/src/main.f"), "under the current directory")
+    assert_true(r.view != "src/main.f", "relative paths absolutize")
+    assert_true(ends_with(r.view, "/src/main.f"), "under the current directory")
 
     let dot = canon_path("./src/main.f")
     defer dot.deinit()
-    assert_true(dot.as_view() == r.as_view(), "`./` spelling canonicalizes to the same path")
+    assert_true(dot.view == r.view, "`./` spelling canonicalizes to the same path")
 }
 
 test "resolve_ctx_at roots the project and its deps under the given directory" {
@@ -601,14 +601,14 @@ test "resolve_ctx_at roots the project and its deps under the given directory" {
     defer proj.deinit()
     let ctx = resolve_ctx_at(&proj, "w/proj", "stdlib")
     defer ctx.deinit()
-    assert_true(ctx.project_source_root.as_view() == "w/proj/src", "source root under the dir")
-    assert_true(ctx.cwd.as_view() == "w/proj", "cwd is the project dir")
-    assert_true(ctx.deps[0].root.as_view() == "w/proj/../core/src",
+    assert_true(ctx.project_source_root.view == "w/proj/src", "source root under the dir")
+    assert_true(ctx.cwd.view == "w/proj", "cwd is the project dir")
+    assert_true(ctx.deps[0].root.view == "w/proj/../core/src",
         "relative dep path joins under the dir")
 
     let abs = resolve_ctx_at(&proj, "c:/w", "stdlib")
     defer abs.deinit()
-    assert_true(abs.project_source_root.as_view() == "c:/w/src", "absolute dir kept")
+    assert_true(abs.project_source_root.view == "c:/w/src", "absolute dir kept")
 }
 
 test "resolve_ctx normalises a backslash stdlib root" {
@@ -619,9 +619,9 @@ test "resolve_ctx normalises a backslash stdlib root" {
     defer proj.deinit()
     let ctx = resolve_ctx(&proj, "C:\\x\\build\\stdlib")
     defer ctx.deinit()
-    assert_true(ctx.stdlib_root.as_view() == "C:/x/build/stdlib", "backslashes -> forward slashes")
+    assert_true(ctx.stdlib_root.view == "C:/x/build/stdlib", "backslashes -> forward slashes")
 
     let f = module_fqn(&ctx, "C:\\x\\build\\stdlib\\core\\string.f")
     defer f.deinit()
-    assert_true(f.as_view() == "core.string", "stdlib file under a backslash root")
+    assert_true(f.view == "core.string", "stdlib file under a backslash root")
 }

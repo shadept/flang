@@ -76,7 +76,7 @@ pub fn path(s: String, allocator: &Allocator? = null) Path {
 pub fn path_from_owned(s: &OwnedString) Path {
     const alloc = s.allocator
     let sb = string_builder(s.len + 1, alloc)
-    sb.append(s.as_view())
+    sb.append(s.view)
     s.deinit()
     return .{ __sb = sb }
 }
@@ -783,7 +783,7 @@ fn assert_slash_eq(actual: String, expected: String, msg: String) {
     defer p.deinit()
     const s = p.to_slash()
     defer s.deinit()
-    assert_eq(s.as_view(), expected, msg)
+    assert_eq(s.view, expected, msg)
 }
 
 test "path basics" {
@@ -1050,7 +1050,7 @@ test "to_slash and from_slash round-trip" {
     defer p.deinit()
     const s = p.to_slash()
     defer s.deinit()
-    assert_eq(s.as_view(), "src/a/b.f", "forward slashes on every platform")
+    assert_eq(s.view, "src/a/b.f", "forward slashes on every platform")
 
     let back = from_slash("src/a/b.f")
     defer back.deinit()

@@ -10,6 +10,6 @@ pub fn main() i32 {
     let n = 42i32
     let msg = $"{n:04}"
     defer msg.deinit()
-    print(msg.as_view())
+    print(msg.view)
     return 0
 }

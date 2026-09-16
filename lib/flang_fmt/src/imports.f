@@ -206,7 +206,7 @@ fn sorted(src: String) OwnedString {
 test "groups core, std, dependencies and the project, blank line between" {
     const out = sorted("import flang_fmt.fmt\nimport std.list\nimport flang_parser.ast\nimport core.math\nimport flang_core.span\n\nfn f() {}\n")
     defer out.deinit()
-    assert_eq(out.as_view(),
+    assert_eq(out.view,
         "import core.math\n\nimport std.list\n\nimport flang_core.span\nimport flang_parser.ast\n\nimport flang_fmt.fmt\n\nfn f() {}\n",
         "grouped")
 }
@@ -214,7 +214,7 @@ test "groups core, std, dependencies and the project, blank line between" {
 test "alphabetical by dotted path puts a package above its children" {
     const out = sorted("import std.time\nimport std.io.file\nimport std.io\nimport std.string_builder\nimport std.string\n")
     defer out.deinit()
-    assert_eq(out.as_view(),
+    assert_eq(out.view,
         "import std.io\nimport std.io.file\nimport std.string\nimport std.string_builder\nimport std.time\n",
         "sorted")
 }
@@ -222,7 +222,7 @@ test "alphabetical by dotted path puts a package above its children" {
 test "a comment above an import travels with it, a trailing one stays on its line" {
     const out = sorted("import std.string // explicit\n// Re-exported for callers.\npub import std.format\nimport std.dict\n")
     defer out.deinit()
-    assert_eq(out.as_view(),
+    assert_eq(out.view,
         "import std.dict\n// Re-exported for callers.\npub import std.format\nimport std.string // explicit\n",
         "comments")
 }
@@ -230,7 +230,7 @@ test "a comment above an import travels with it, a trailing one stays on its lin
 test "the file header, blank lines and what follows the block do not move" {
     const out = sorted("// Module doc.\n\nimport std.string\n\nimport std.dict\n\n// About f.\nfn f() {}\n")
     defer out.deinit()
-    assert_eq(out.as_view(),
+    assert_eq(out.view,
         "// Module doc.\n\nimport std.dict\nimport std.string\n\n// About f.\nfn f() {}\n",
         "surroundings")
 }
@@ -238,14 +238,13 @@ test "the file header, blank lines and what follows the block do not move" {
 test "duplicates collapse and an unknown root sorts with the dependencies" {
     const out = sorted("import std.list\nimport other.thing\nimport std.list\nimport flang_fmt.a\n")
     defer out.deinit()
-    assert_eq(out.as_view(), "import std.list\n\nimport other.thing\n\nimport flang_fmt.a\n",
-        "dedupe")
+    assert_eq(out.view, "import std.list\n\nimport other.thing\n\nimport flang_fmt.a\n", "dedupe")
 }
 
 test "an import inside a directive block ends the sortable block" {
     const out = sorted("import std.string\nimport std.dict\n#if platform.os == \"windows\" {\n    import std.terminal\n}\n")
     defer out.deinit()
-    assert_eq(out.as_view(),
+    assert_eq(out.view,
         "import std.dict\nimport std.string\n#if platform.os == \"windows\" {\n    import std.terminal\n}\n",
         "directive")
 }
@@ -253,9 +252,9 @@ test "an import inside a directive block ends the sortable block" {
 test "no imports is a no-op, CRLF is preserved" {
     const none = sorted("fn f() {}\n")
     defer none.deinit()
-    assert_eq(none.as_view(), "fn f() {}\n", "no block")
+    assert_eq(none.view, "fn f() {}\n", "no block")
     const crlf = sort_imports("import std.string\r\nimport std.dict\r\n\r\nfn f() {}\r\n", "",
         "\r\n")
     defer crlf.deinit()
-    assert_eq(crlf.as_view(), "import std.dict\r\nimport std.string\r\n\r\nfn f() {}\r\n", "crlf")
+    assert_eq(crlf.view, "import std.dict\r\nimport std.string\r\n\r\nfn f() {}\r\n", "crlf")
 }

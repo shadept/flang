@@ -10,6 +10,6 @@ pub fn main() i32 {
     let n = 255u8
     let msg = $"{n:x}"
     defer msg.deinit()
-    print(msg.as_view())
+    print(msg.view)
     return 0
 }

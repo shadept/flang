@@ -75,16 +75,16 @@ pub fn main() i32 {
     let source = source_opt.unwrap()
     defer source.deinit()
 
-    let lx = lexer(source.as_view())
+    let lx = lexer(source.view)
     let tokens = lx.tokenize()
 
-    let p = parser(tokens, source.as_view())
+    let p = parser(tokens, source.view)
     defer p.deinit()
     const cst = p.tree.node_at(p.parse_module())
 
     let ast = project_module(cst, 0i32)
     defer ast.deinit()
-    print_json(opts.path, source.as_view(), &tokens, &cst, &ast, &p.diagnostics)
+    print_json(opts.path, source.view, &tokens, &cst, &ast, &p.diagnostics)
     return if p.diagnostics.len > 0 { 1i32 } else { 0i32 }
 }
 
@@ -94,7 +94,7 @@ fn read_source(path: String) OwnedString? {
         Err(_) => {
             const msg = $"cst_explorer: cannot open `{path}`"
             defer msg.deinit()
-            println(msg.as_view())
+            println(msg.view)
             return null
         }
     }
@@ -103,7 +103,7 @@ fn read_source(path: String) OwnedString? {
     if read_result.is_err() {
         const msg = $"cst_explorer: read failed `{path}`"
         defer msg.deinit()
-        println(msg.as_view())
+        println(msg.view)
         return null
     }
     return Some(read_result.unwrap())
@@ -131,7 +131,7 @@ fn parse_args(argv: String[], opts: &Options) bool {
                 if parsed.is_err() {
                     const msg = $"cst_explorer: --iterations expects an integer, got `{v}`"
                     defer msg.deinit()
-                    println(msg.as_view())
+                    println(msg.view)
                     return false
                 }
                 opts.iterations = parsed.unwrap().0 as usize
@@ -145,20 +145,20 @@ fn parse_args(argv: String[], opts: &Options) bool {
                 } else {
                     const msg = $"cst_explorer: unexpected argument `{s}`"
                     defer msg.deinit()
-                    println(msg.as_view())
+                    println(msg.view)
                     return false
                 }
             }
             Error(ch) => {
                 const msg = $"cst_explorer: unknown option `-{ch as char}`"
                 defer msg.deinit()
-                println(msg.as_view())
+                println(msg.view)
                 return false
             }
             MissingArg(ch) => {
                 const msg = $"cst_explorer: option `-{ch as char}` requires a value"
                 defer msg.deinit()
-                println(msg.as_view())
+                println(msg.view)
                 return false
             }
             _ => {}
@@ -184,7 +184,7 @@ fn run_timing(path: String, iterations: usize) i32 {
     }
     let source = source_opt.unwrap()
     defer source.deinit()
-    const view = source.as_view()
+    const view = source.view
 
     let lex_min: u64 = 18446744073709551615
     let lex_max: u64 = 0
@@ -275,7 +275,7 @@ fn print_timing_banner(path: String, bytes: usize, tokens: usize, diagnostics: u
     iterations: usize) {
     const banner = $"{path}: {bytes} bytes, {tokens} tokens, {diagnostics} diagnostics - {iterations} iter"
     defer banner.deinit()
-    eprintln(banner.as_view())
+    eprintln(banner.view)
 }
 
 fn print_timing_row(label: String, min_ns: u64, max_ns: u64, sum_ns: u64, iterations: usize) {
@@ -284,7 +284,7 @@ fn print_timing_row(label: String, min_ns: u64, max_ns: u64, sum_ns: u64, iterat
     const max_us = (max_ns as f64) / 1000.0
     const line = $"  {label}  min {min_us:.3} µs   avg {avg_us:.3} µs   max {max_us:.3} µs"
     defer line.deinit()
-    eprintln(line.as_view())
+    eprintln(line.view)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -423,7 +423,7 @@ fn emit_diagnostic_json(sb: &StringBuilder, d: &Diagnostic) {
     sb.append("{\"code\":")
     append_json_string(sb, d.code)
     sb.append(",\"message\":")
-    append_json_string(sb, d.message.as_view())
+    append_json_string(sb, d.message.view)
     sb.append(",\"start\":")
     sb.append(d.span.start)
     sb.append(",\"length\":")

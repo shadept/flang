@@ -100,7 +100,7 @@ pub fn parse_template_body(body: String, base: usize, file_id: i32, alloc: &Allo
     return out
 }
 
-fn error_at(self: &TemplateParser, index: usize, code: String, message: OwnedString) {
+fn error_at(self: &TemplateParser, index: usize, code: String, message: move OwnedString) {
     let start: usize = self.body.len
     let length: usize = 0
     if index < self.tokens.len {
@@ -123,7 +123,8 @@ fn shift_diags(self: &TemplateParser, from: &List(Diagnostic)) {
             start = self.base + d.span.start,
             length = d.span.length,
         }
-        self.diags.push(error(d.code, d.message, sp))
+        let taken_d = move d.*
+        self.diags.push(respan(taken_d, sp))
     }
     taken.1.free(taken.0)
 }
@@ -427,7 +428,7 @@ test "template: #for over a bound list with #(x) and \"#(x)\"" {
     const out = expand_for_test("type P = struct {\n#for f in names {\n  #(f): #(fType), \"#(f)\"\n}\n}",
         &env, &a)
     defer out.deinit()
-    assert_true(out.as_view() == "type P = struct {\n\n  x: f32, \"x\"\n\n  y: f32, \"y\"\n\n  z: f32, \"z\"\n\n}",
+    assert_true(out.view == "type P = struct {\n\n  x: f32, \"x\"\n\n  y: f32, \"y\"\n\n  z: f32, \"z\"\n\n}",
         "expansion text")
 }
 
@@ -439,7 +440,7 @@ test "template: #if / #elif / #else on the closed context and bindings" {
     const out = expand_for_test("#if platform.os == \"windows\" {A} #elif n == 2 {B} #else {C}",
         &env, &a)
     defer out.deinit()
-    assert_true(out.as_view() == "B", "expansion text")
+    assert_true(out.view == "B", "expansion text")
 }
 
 test "template: string-literal hole escapes its value" {
@@ -449,5 +450,5 @@ test "template: string-literal hole escapes its value" {
     env.bindings["q"] = CtValue.S("say \"hi\"")
     const out = expand_for_test("let s = \"#(q)!\"", &env, &a)
     defer out.deinit()
-    assert_true(out.as_view() == "let s = \"say \\\"hi\\\"!\"", "expansion text")
+    assert_true(out.view == "let s = \"say \\\"hi\\\"!\"", "expansion text")
 }

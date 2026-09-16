@@ -52,6 +52,9 @@ pub type TypeCheckResult = struct {
     // Per UFCS call site, the op_deref hops the receiver resolved through - see
     // InferenceResults.receiver_derefs.
     receiver_derefs: Dict(NodeId, List(ResolvedTarget))
+    // Per argument that reached its parameter through `op_deref` (RFC-020), the hops - see
+    // InferenceResults.arg_derefs.
+    arg_derefs: Dict(NodeId, List(ResolvedTarget))
     nominals: NominalRegistry
     functions: FunctionRegistry
     // RFC-014: checked lambda literals of the PROGRAM tables (a lambda in a generic template
@@ -116,6 +119,7 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
         default_args = dict(allocator),
         arg_lists = dict(allocator),
         receiver_derefs = dict(allocator),
+        arg_derefs = dict(allocator),
         nominals = nominal_registry(allocator),
         functions = function_registry(allocator),
         lambdas = dict(allocator),
@@ -140,6 +144,7 @@ pub fn deinit(self: &TypeCheckResult) {
     self.default_args.deinit()
     self.arg_lists.deinit()
     self.receiver_derefs.deinit()
+    self.arg_derefs.deinit()
     self.nominals.deinit()
     self.functions.deinit()
     self.lambdas.deinit()
@@ -163,6 +168,7 @@ pub fn slim_retire(self: &TypeCheckResult) {
     self.default_args.deinit()
     self.arg_lists.deinit()
     self.receiver_derefs.deinit()
+    self.arg_derefs.deinit()
     self.nominals.deinit()
     self.functions.deinit()
     self.lambdas.deinit()
@@ -178,6 +184,7 @@ pub fn slim_retire(self: &TypeCheckResult) {
     self.default_args = dict()
     self.arg_lists = dict()
     self.receiver_derefs = dict()
+    self.arg_derefs = dict()
     self.nominals = nominal_registry()
     self.functions = function_registry()
     self.lambdas = dict()
@@ -225,6 +232,7 @@ pub fn table_caps(self: &TypeCheckResult) TableCaps {
         default_args = self.default_args.len(),
         arg_lists = self.arg_lists.len(),
         derefs = self.receiver_derefs.len(),
+        arg_derefs = self.arg_derefs.len(),
     }
 }
 
@@ -256,6 +264,10 @@ pub fn get_receiver_deref(self: &TypeCheckResult, id: NodeId) &List(ResolvedTarg
     return self.receiver_derefs.get_ref(id)
 }
 
+pub fn get_arg_deref(self: &TypeCheckResult, id: NodeId) &List(ResolvedTarget)? {
+    return self.arg_derefs.get_ref(id)
+}
+
 pub fn get_closure(self: &TypeCheckResult, id: NominalId) &ClosureSig? {
     return self.closures.get_ref(id)
 }
@@ -276,5 +288,5 @@ pub fn path_of(self: &TypeCheckResult, file_id: i32) String? {
     if i >= self.file_paths.len {
         return null
     }
-    return Some(self.file_paths[i].as_view())
+    return Some(self.file_paths[i].view)
 }

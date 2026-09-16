@@ -10,6 +10,6 @@ pub fn main() i32 {
     let n = 3.14f64
     let msg = $"{n:.2}"
     defer msg.deinit()
-    print(msg.as_view())
+    print(msg.view)
     return 0
 }

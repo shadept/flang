@@ -164,12 +164,6 @@ fn hash_key(key: $K) usize {
     return h
 }
 
-// A borrowed `String` dressed as an `OwnedString` so it hashes and compares like one - no
-// allocation for a lookup by view.
-fn fake_owned(key: String) OwnedString {
-    return .{ ptr = key.ptr, len = key.len, allocator = null }
-}
-
 // =============================================================================
 // UnmanagedDict: growth and release, allocator explicit
 // =============================================================================
@@ -255,12 +249,11 @@ pub fn add(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: 
 // owned key only when it is inserted.
 pub fn add(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V,
     allocator: &Allocator) bool {
-    const fake = fake_owned(key)
-    if self.find_entry(fake).is_some() {
+    if self.find_entry(key).is_some() {
         return false
     }
     self.ensure_capacity(allocator)
-    const _e = self.place(hash_key(fake), from_view(key, allocator), value)
+    const _e = self.place(hash_key(key), from_view(key, allocator), value)
     return true
 }
 
@@ -290,7 +283,7 @@ pub fn set(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: 
     const existing = self.get_ref(key)
     if existing.is_some() {
         const slot = existing.unwrap()
-        slot.deinit()
+        release_slot(slot)
         slot.* = move value
         key.deinit()
         return
@@ -303,16 +296,15 @@ pub fn set(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: 
 // owned key only when it is new to the table.
 pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V,
     allocator: &Allocator) {
-    const fake = fake_owned(key)
-    const existing = self.find_entry(fake)
+    const existing = self.find_entry(key)
     if existing.is_some() {
         const entry = existing.unwrap()
-        entry.value.deinit()
+        release_slot(&entry.value)
         entry.value = move value
         return
     }
     self.ensure_capacity(allocator)
-    const _placed = self.place(hash_key(fake), from_view(key, allocator), value)
+    const _placed = self.place(hash_key(key), from_view(key, allocator), value)
 }
 
 // Deinits every live key and value, frees the table and resets to empty, so a second call is a
@@ -344,22 +336,27 @@ pub fn merge(self: &UnmanagedDict($K, $V), other: &UnmanagedDict(K, V), allocato
 // Removes `key` and returns its value, or null when absent. The stored key is deinited; the value
 // is the caller's to deinit.
 pub fn remove(self: &UnmanagedDict($K, $V), key: K) V? {
-    const found = self.find_entry(key)
+    return self.take_entry(self.find_entry(key))
+}
+
+// Removes the entry whose key equals `key`, a probe of another type (a `String` against
+// `OwnedString` keys), and returns its value. `key.hash()` and `==` must agree with the key type's.
+pub fn remove(self: &UnmanagedDict($K, $V), key: $Q) V? {
+    return self.take_entry(self.find_entry(key))
+}
+
+// Tombstones `found`, deinits its key and hands back its value.
+fn take_entry(self: &UnmanagedDict($K, $V), found: &Entry(K, V)?) V? {
     if found.is_none() {
         return null
     }
     const entry = found.unwrap()
-    const val: V = entry.value
-    entry.key.deinit()
+    const val: V = move entry.value
+    release_slot(&entry.key)
     entry.hash = HASH_DEAD
     self.length = self.length - 1
     self.dead = self.dead + 1
     return Some(val)
-}
-
-// String-key `remove` for `UnmanagedDict(OwnedString, V)`: looks the owned key up by the view.
-pub fn remove(self: &UnmanagedDict(OwnedString, $V), key: String) V? {
-    return remove(self, fake_owned(key))
 }
 
 // Removes every entry, deiniting each key and value. The table is kept for reuse.
@@ -377,8 +374,8 @@ fn deinit_entries(self: &UnmanagedDict($K, $V)) {
     for i in 0..self.cap {
         const entry: &Entry(K, V) = self.entries + i
         if entry.hash >= 2 {
-            entry.key.deinit()
-            entry.value.deinit()
+            release_slot(&entry.key)
+            release_slot(&entry.value)
         }
     }
 }
@@ -400,8 +397,8 @@ pub fn update(self: &UnmanagedDict($K, $V), key: K, f: $F) bool {
 // =============================================================================
 
 // The live entry for `key`, or null. Tombstones fall through and keep probing; the first empty slot
-// ends the search.
-fn find_entry(self: &UnmanagedDict($K, $V), key: K) &Entry(K, V)? {
+// ends the search. `key` is a `K` or a probe whose `hash` and `==` agree with `K`'s.
+fn find_entry(self: &UnmanagedDict($K, $V), key: $Q) &Entry(K, V)? {
     if self.cap == 0 {
         return null
     }
@@ -459,14 +456,21 @@ pub fn get_ref(self: &UnmanagedDict($K, $V), key: K) &V? {
     return Some(&entry.value)
 }
 
-// String-key `get` for `UnmanagedDict(OwnedString, V)`: looks the owned key up by the view.
-pub fn get(self: &UnmanagedDict(OwnedString, $V), key: String) V? {
+// `get` by a probe of another type (a `String` against `OwnedString` keys). `key.hash()` and `==`
+// must agree with the key type's.
+pub fn get(self: &UnmanagedDict($K, $V), key: $Q) V? {
     return Some((self.get_ref(key)?).*)
 }
 
-// String-key `get_ref` for `UnmanagedDict(OwnedString, V)`: looks the owned key up by the view.
-pub fn get_ref(self: &UnmanagedDict(OwnedString, $V), key: String) &V? {
-    return get_ref(self, fake_owned(key))
+// `get_ref` by a probe of another type (a `String` against `OwnedString` keys). `key.hash()` and
+// `==` must agree with the key type's.
+pub fn get_ref(self: &UnmanagedDict($K, $V), key: $Q) &V? {
+    const found = self.find_entry(key)
+    if found.is_none() {
+        return null
+    }
+    const entry = found.unwrap()
+    return Some(&entry.value)
 }
 
 // Returns whether `key` is present.
@@ -474,9 +478,10 @@ pub fn contains(self: &UnmanagedDict($K, $V), key: K) bool {
     return self.find_entry(key).is_some()
 }
 
-// String-key `contains` for `UnmanagedDict(OwnedString, V)`: looks the owned key up by the view.
-pub fn contains(self: &UnmanagedDict(OwnedString, $V), key: String) bool {
-    return contains(self, fake_owned(key))
+// `contains` by a probe of another type (a `String` against `OwnedString` keys). `key.hash()` and
+// `==` must agree with the key type's.
+pub fn contains(self: &UnmanagedDict($K, $V), key: $Q) bool {
+    return self.find_entry(key).is_some()
 }
 
 // The value for `key`, or `fallback` when absent.
@@ -541,7 +546,7 @@ pub fn count(self: &UnmanagedDict($K, $V), pred: $F) usize {
 // Iterators
 // =============================================================================
 
-// Iterator over a dict's entries, each an `Entry` copy, in table order. A snapshot: the dict is not
+// Iterator over a dict's entries, each entry lent in table order. A snapshot: the dict is not
 // modified while it is being iterated.
 pub type DictIterator = struct(K, V) {
     dict: &UnmanagedDict(K, V)
@@ -559,14 +564,15 @@ pub fn iter(it: &DictIterator($K, $V)) DictIterator(K, V) {
     return it.*
 }
 
-// Advances and returns the next entry, or null after the last.
-pub fn next(it: &DictIterator($K, $V)) Entry(K, V)? {
+// Advances and returns the next entry, or null after the last. The entry is lent, not copied: a
+// dict may hold owned keys and values, and a copy of one would own them twice.
+pub fn next(it: &DictIterator($K, $V)) &Entry(K, V)? {
     for idx in it.current..it.dict.cap {
         const entry: &Entry(K, V) = it.dict.entries + idx
         if entry.hash >= 2 {
             it.current = idx + 1
             // Wrapped explicitly - see the note in core/range.f::next.
-            return Some(entry.*)
+            return Some(entry)
         }
     }
     it.current = it.dict.cap

@@ -249,12 +249,13 @@ fn record_expected(self: &Parser, kind: TokenKind, code: String) {
     self.record_error_at(code, msg, tok.offset, tok.text.len)
 }
 
-fn record_error_at(self: &Parser, code: String, message: OwnedString, start: usize, length: usize) {
+fn record_error_at(self: &Parser, code: String, message: move OwnedString, start: usize,
+    length: usize) {
     const sp: SourceSpan = .{ file_id = self.file_id, start = start, length = length }
     self.diagnostics.push(error(code, message, sp))
 }
 
-fn record_error_here(self: &Parser, code: String, message: OwnedString) {
+fn record_error_here(self: &Parser, code: String, message: move OwnedString) {
     const tok = self.current()
     self.record_error_at(code, message, tok.offset, tok.text.len)
 }
@@ -1679,7 +1680,7 @@ fn single_token_node(self: &Parser, kind: NodeKind) CstNodeId {
     return self.finish(b)
 }
 
-fn error_token_node(self: &Parser, code: String, message: OwnedString) CstNodeId {
+fn error_token_node(self: &Parser, code: String, message: move OwnedString) CstNodeId {
     let b = self.open(NodeKind.Error)
     self.record_error_at(code, message, self.current().offset, self.current().text.len)
     self.eat_into(&b)

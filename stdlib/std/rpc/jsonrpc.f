@@ -149,7 +149,7 @@ pub type RpcMessage = struct {
     doc: JsonValue
 }
 
-pub fn deinit(self: &RpcMessage) {
+pub fn deinit(self: move RpcMessage) {
     self.doc.deinit()
 }
 
@@ -227,7 +227,7 @@ pub fn parse_message(payload: String, allocator: &Allocator? = null) Result(RpcM
         return Err(RpcError.BadEnvelope)
     }
 
-    return Ok(RpcMessage { doc = doc })
+    return Ok(RpcMessage { doc = move doc })
 }
 
 // Read one frame and parse it: the receive path of a message loop.
@@ -238,7 +238,7 @@ pub fn read_message(r: Reader, allocator: &Allocator? = null) Result(RpcMessage,
     }
     let payload = framed.unwrap()
     defer payload.deinit()
-    return parse_message(payload.as_view(), allocator)
+    return parse_message(payload.view, allocator)
 }
 
 // =============================================================================
@@ -335,7 +335,7 @@ test "frame round-trip" {
     assert_true(got.is_ok(), "frame reads back")
     let payload = got.unwrap()
     defer payload.deinit()
-    assert_eq(payload.as_view(), "{\"x\":1}", "payload survives the round trip")
+    assert_eq(payload.view, "{\"x\":1}", "payload survives the round trip")
 }
 
 test "read_frame skips unknown headers" {
@@ -344,7 +344,7 @@ test "read_frame skips unknown headers" {
     assert_true(got.is_ok(), "extra headers are skipped")
     let payload = got.unwrap()
     defer payload.deinit()
-    assert_eq(payload.as_view(), "{}", "body follows the blank line")
+    assert_eq(payload.view, "{}", "body follows the blank line")
 }
 
 test "read_frame reads consecutive frames" {
@@ -352,11 +352,11 @@ test "read_frame reads consecutive frames" {
     const first = read_frame(mr.reader())
     let a = first.unwrap()
     defer a.deinit()
-    assert_eq(a.as_view(), "{}", "first frame")
+    assert_eq(a.view, "{}", "first frame")
     const second = read_frame(mr.reader())
     let b = second.unwrap()
     defer b.deinit()
-    assert_eq(b.as_view(), "null", "second frame starts at the next byte")
+    assert_eq(b.view, "null", "second frame starts at the next byte")
 }
 
 test "clean end of stream is Eof" {

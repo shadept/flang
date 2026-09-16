@@ -10,6 +10,6 @@ pub fn main() i32 {
     let who = "alice"
     let msg = $(64)"hi {who}"
     defer msg.deinit()
-    print(msg.as_view())
+    print(msg.view)
     return 0
 }

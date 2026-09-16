@@ -138,7 +138,7 @@ pub fn to_string(sb: &StringBuilder) OwnedString {
     const term = sb.ptr + sb.len
     term.* = 0
 
-    const result = OwnedString { ptr = sb.ptr, len = sb.len, allocator = sb.allocator }
+    const result = OwnedString { view = .{ ptr = sb.ptr, len = sb.len }, allocator = sb.allocator }
 
     sb.ptr = 0usize as &u8
     sb.len = 0
@@ -157,7 +157,8 @@ pub fn to_string(sb: &StringBuilder, allocator: &Allocator) OwnedString {
     // Null-terminate for C FFI compatibility
     const term = buf.ptr + sb.len
     term.* = 0
-    const result = OwnedString { ptr = buf.ptr, len = sb.len, allocator = Some(allocator) }
+    const result = OwnedString { view = .{ ptr = buf.ptr, len = sb.len },
+        allocator = Some(allocator) }
     sb.ptr = 0usize as &u8
     sb.len = 0
     return result

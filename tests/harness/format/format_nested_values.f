@@ -41,6 +41,6 @@ pub fn main() i32 {
         a = Point { x = 1i32, y = 2i32 },
         b = Point { x = 3i32, y = 4i32 },
     }
-    println($"{p}".as_view())
+    println($"{p}".view)
     return 0
 }

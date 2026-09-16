@@ -1,8 +1,9 @@
 ---
-status: implemented
+status: superseded
 type: stdlib
 created: 2026-05-03
 implemented: 2026-05-03
+superseded-by: RFC-033
 ---
 
 # RFC-012: `Owned(T)` — transfer-aware cleanup helper

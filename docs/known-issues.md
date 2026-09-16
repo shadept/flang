@@ -55,25 +55,19 @@ of `(key, value)`. The module is commented out and no longer re-exported by the 
 
 ---
 
-### RFC-020 Argument Coercion Is Not Implemented in the Self-Hosted Compiler
+### RFC-020 Argument Coercion Was Never Ported to the Self-Hosted Compiler - RESOLVED
 
-**Status:** Open
-**Affected:** `lib/flang_typer/src/checker.f` (`resolve_overload`), `docs/tickets/020-op-deref-argument-coercion.md`
+**Status:** Resolved 2026-09-16
+**Affected:** `lib/flang_typer/src/checker.f` (`peel_arg`, `commit_arg_peel`), `lib/flang_driver/src/lower.f`
 
-RFC-020 is marked implemented, but a reference argument does not reach its parameter through
-`op_deref`:
+RFC-020 was marked implemented, but an argument did not reach its parameter through `op_deref`:
+`read_x(&b)` was E2011 where `b.read_x()` resolved. The receiver, field, index, `for` and operator
+positions peeled; argument positions did not. The rule had lived in the retired reference compiler.
 
-```flang
-fn read_x(p: &Point) i32
-let b = Box { inner = Point { x = 7 } }     // op_deref(&Box) &Point
-read_x(&b)                                   // error E2011: no matching overload
-```
-
-The receiver, field, index, `for` and operator positions peel; argument positions do not. Most
-likely the rule lived in the retired reference compiler and was never ported.
-
-**Solution:** walk each reference-typed argument's `op_deref` chain at an argument mismatch, per
-the ticket's rule, recording per-argument hops for lowering.
+Arguments now peel in `probe_candidate`, taking `&I` or, when `I` is copyable, `I` by value - the
+owner-to-view decay (`OwnedString` to `String`). Each hop costs, so an overload taking the argument
+as written still wins. Pinned by `op_deref/op_deref_arg_decay.f`,
+`op_deref/op_deref_arg_as_written_wins.f` and `op_deref/op_deref_arg_owner_no_decay.f`.
 
 ---
 
@@ -2047,7 +2041,7 @@ With the original name `Directive`, `Directive.Inline` errored as `No variant In
 
 1. **Nested capturing closures (E2113).** A closure that captures a name an enclosing closure also captures requires transitive-capture lowering (the inner closure pulls its env field from the outer's env field). Today this is rejected up-front with E2113. Closures nested inside non-capturing closures (or whose captures don't overlap with the outer closure's) work fine.
 2. **Capture-by-reference (`&local`).** RFC §"Out of scope". Initial implementation captures only by value; explicit `&local` capture syntax + lifetime story is a follow-up.
-3. **Stdlib follow-ups.** Adding `box(allocator, callable)` to `std.owned` is unblocked by Phase 2 but tracked separately. ~~The generic-over-callable iterator change requires call resolution to handle `f(args)` where `f`'s type is a TypeVar bound to a closure NominalType~~ — done: `std.iter` adapters are generic over the callable and call `self.f(x)` directly. Field-position dispatch (`h.f(args)` where the field's type defines `op_call`) is wired in `TryFieldCall`, which rewrites to UFCS `op_call(&h.f, args...)` before the E2011 "not a function" error (test: `tests/harness/closures/closure_field_call.f`).
+3. **Stdlib follow-ups.** ~~Adding `box(allocator, callable)` to `std.owned`~~ (`std.owned` deleted 2026-09-15, RFC-031). ~~The generic-over-callable iterator change requires call resolution to handle `f(args)` where `f`'s type is a TypeVar bound to a closure NominalType~~ — done: `std.iter` adapters are generic over the callable and call `self.f(x)` directly. Field-position dispatch (`h.f(args)` where the field's type defines `op_call`) is wired in `TryFieldCall`, which rewrites to UFCS `op_call(&h.f, args...)` before the E2011 "not a function" error (test: `tests/harness/closures/closure_field_call.f`).
 
 ---
 

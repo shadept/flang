@@ -75,7 +75,7 @@ pub fn main() i32 {
     let out_path = pick_output_path()
     defer out_path.deinit()
 
-    let opts = build_options(out_path.as_view())
+    let opts = build_options(out_path.view)
     defer opts.deinit()
     opts.set_keep_temps(true)
 
@@ -87,7 +87,7 @@ pub fn main() i32 {
             CompilerFailed(code) => {
                 const msg = $"inliner_test: C compiler exited with code {code}"
                 defer msg.deinit()
-                println(msg.as_view())
+                println(msg.view)
             }
             SpawnFailed => println("inliner_test: failed to spawn the C compiler.")
             IOError => println("inliner_test: I/O error writing the generated .c file.")
@@ -105,7 +105,7 @@ pub fn main() i32 {
     } else {
         exe_sb.append("./")
     }
-    exe_sb.append(result.executable_path.as_view())
+    exe_sb.append(result.executable_path.view)
     let cmd = command(exe_sb.as_view())
     defer cmd.deinit()
     cmd.inherit_env()
@@ -125,7 +125,7 @@ pub fn main() i32 {
     if code != 0 {
         const msg = $"inliner_test: artifact exited with non-zero code {code}"
         defer msg.deinit()
-        println(msg.as_view())
+        println(msg.view)
         return 5
     }
     println("inliner_test: PASS")
@@ -254,25 +254,25 @@ fn verify_no_residual_calls(m: &IrModule) bool {
 fn print_stats(s: &InlineStats) {
     const m1 = $"  passes:           {s.passes}"
     defer m1.deinit()
-    println(m1.as_view())
+    println(m1.view)
     const m2 = $"  inlined:          {s.inlined}"
     defer m2.deinit()
-    println(m2.as_view())
+    println(m2.view)
     const m3 = $"  bail_size:        {s.bail_size}"
     defer m3.deinit()
-    println(m3.as_view())
+    println(m3.view)
     const m4 = $"  bail_multi_block: {s.bail_multi_block}"
     defer m4.deinit()
-    println(m4.as_view())
+    println(m4.view)
     const m5 = $"  bail_recursive:   {s.bail_recursive}"
     defer m5.deinit()
-    println(m5.as_view())
+    println(m5.view)
     const m6 = $"  bail_indirect:    {s.bail_indirect}"
     defer m6.deinit()
-    println(m6.as_view())
+    println(m6.view)
     const m7 = $"  bail_non_ret:     {s.bail_non_ret}"
     defer m7.deinit()
-    println(m7.as_view())
+    println(m7.view)
 }
 
 fn pick_output_path() OwnedString {

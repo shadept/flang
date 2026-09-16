@@ -306,11 +306,11 @@ fn starts_list_item(body: String) bool {
 
 test "doc_markdown fences indented runs and keeps list continuations" {
     const md = doc_markdown("Prose that\nwraps.\n\n  let x = 1\n  x + 1\n\n  - first item\n    continued\n2. second\nTail.")
-    assert_true(md.as_view() == "Prose that\nwraps.\n\n```flang\n  let x = 1\n  x + 1\n```\n\n  - first item\n  continued\n2. second\nTail.",
+    assert_true(md.view == "Prose that\nwraps.\n\n```flang\n  let x = 1\n  x + 1\n```\n\n  - first item\n  continued\n2. second\nTail.",
         "code fenced, list continuation indented, prose untouched")
     md.deinit()
     const plain = doc_markdown("Just prose.")
-    assert_true(plain.as_view() == "Just prose.", "prose passes through")
+    assert_true(plain.view == "Just prose.", "prose passes through")
     plain.deinit()
 }
 
@@ -318,32 +318,43 @@ test "doc_above collects the comment run glued to a declaration" {
     const src = "// Adds one.\n//\n//   Indented.\nfn inc(x: i32) i32 { return x + 1 }\n"
     const d = doc_above(src, 31)
     assert_true(d.is_some(), "a docstring")
-    assert_true(d.unwrap().as_view() == "Adds one.\n\n  Indented.", "prefix stripped, lines kept")
-    d.unwrap().deinit()
+    const text = d.unwrap()
+    assert_true(text.view == "Adds one.\n\n  Indented.", "prefix stripped, lines kept")
+    text.deinit()
 }
 
 test "doc_above stops at a blank line, a code line and a trailing comment" {
     const src = "// far\n\nfn a() {}\nlet x = 1 // near\nfn b() {}\n"
-    assert_true(doc_above(src, 8).is_none(), "blank line breaks the run")
-    assert_true(doc_above(src, 36).is_none(), "a trailing comment is not a docstring")
-    assert_true(doc_above(src, 3).is_none(), "an offset mid-line has no run above")
+    const blank = doc_above(src, 8)
+    assert_true(blank.is_none(), "blank line breaks the run")
+    const trailing = doc_above(src, 36)
+    assert_true(trailing.is_none(), "a trailing comment is not a docstring")
+    const midline = doc_above(src, 3)
+    assert_true(midline.is_none(), "an offset mid-line has no run above")
 }
 
 test "doc_above honours indentation and CRLF" {
     const src = "type S = struct {\r\n    // The x.\r\n    x: i32\r\n}\r\n"
     const d = doc_above(src, 38)
     assert_true(d.is_some(), "an indented field docstring")
-    assert_true(d.unwrap().as_view() == "The x.", "CR trimmed")
-    d.unwrap().deinit()
+    const text = d.unwrap()
+    assert_true(text.view == "The x.", "CR trimmed")
+    text.deinit()
 }
 
 test "module_doc takes the opening run only when a blank line follows it" {
     const m = module_doc("// Trivia.\n// More.\n\nimport std.option\n")
-    assert_true(m.is_some() and m.unwrap().as_view() == "Trivia.\nMore.", "module docstring")
-    m.unwrap().deinit()
-    assert_true(module_doc("// see\nfn f() {}\n").is_none(), "glued to the first decl")
-    assert_true(module_doc("import std.option\n").is_none(), "no opening comment")
+    assert_true(m.is_some(), "module docstring")
+    const text = m.unwrap()
+    assert_true(text.view == "Trivia.\nMore.", "and it is the opening run")
+    text.deinit()
+    const glued = module_doc("// see\nfn f() {}\n")
+    assert_true(glued.is_none(), "glued to the first decl")
+    const bare = module_doc("import std.option\n")
+    assert_true(bare.is_none(), "no opening comment")
     const eof = module_doc("// only\n")
-    assert_true(eof.is_some() and eof.unwrap().as_view() == "only", "end of file closes the run")
-    eof.unwrap().deinit()
+    assert_true(eof.is_some(), "end of file closes the run")
+    const eof_text = eof.unwrap()
+    assert_true(eof_text.view == "only", "and keeps the text")
+    eof_text.deinit()
 }

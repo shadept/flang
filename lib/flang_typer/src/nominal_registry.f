@@ -115,12 +115,12 @@ pub fn deinit(self: &NominalRegistry) {
 //
 // Caller is responsible for checking duplicates first - registering an FQN twice overwrites the
 // index and leaks the previous definition.
-pub fn register(self: &NominalRegistry, def: NominalDef, fqn_owned: OwnedString) NominalId {
+pub fn register(self: &NominalRegistry, def: NominalDef, fqn_owned: move OwnedString) NominalId {
     let id: NominalId = self.next_id
     self.next_id = id + 1
     let idx = self.owned_fqns.len
     self.owned_fqns.push(fqn_owned)
-    let stable: String = self.owned_fqns[idx].as_view()
+    let stable: String = self.owned_fqns[idx].view
     let fixed = with_fqn(def, stable)
     self.defs.set(id, fixed)
     self.by_fqn.set(stable, id)
@@ -185,7 +185,7 @@ fn fill_carried(out: &NominalRegistry, src: &NominalRegistry, allocator: &Alloca
         }
         const idx = out.owned_fqns.len
         out.owned_fqns.push(from_view(nominal_fqn(found.unwrap()), allocator))
-        out.register_at(id, clone_def(found.unwrap(), allocator), out.owned_fqns[idx].as_view())
+        out.register_at(id, clone_def(found.unwrap(), allocator), out.owned_fqns[idx].view)
     }
     out.next_id = src.next_id
 }
@@ -328,7 +328,7 @@ pub fn lookup(self: &NominalRegistry, name: String, vis: &Visibility) NomLookup 
     if vis.current_module.is_some() {
         let cur = vis.current_module.unwrap()
         let qualified_owned = $"{cur}.{name}"
-        let q = self.by_fqn.get(qualified_owned.as_view())
+        let q = self.by_fqn.get(qualified_owned.view)
         qualified_owned.deinit()
         if q.is_some() {
             return NomLookup.NomLookFound(q.unwrap())

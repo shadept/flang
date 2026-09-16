@@ -82,10 +82,6 @@ _Avoid_: heap string, allocated string
 An owning, mutable, growable buffer. `to_string()` transfers the buffer into a fresh `OwnedString` (move semantics — the builder resets).
 _Avoid_: rope, buffer
 
-**Owned(T)**:
-A heap-pointer wrapper with explicit transfer tracking — `__value: &T?` plus a cleanup callback. Pair with `defer buf.deinit()` for cleanup-on-error and `buf.transfer()` for hand-off-on-success. **Strictly for raw heap pointers** from an allocator; stack values are owned by their frame, and header-owns-heap types (`StringBuilder`, `List`, `Dict`) carry their own lifecycle through the header without wrapping. Doubles as FLang's `Box`-shaped abstraction — a single owning pointer with a destructor — so a separate `Box` type would be redundant.
-_Avoid_: Box, scope guard, smart pointer (use **Owned**)
-
 ### Stdlib conventions
 
 **Allocator pattern**:

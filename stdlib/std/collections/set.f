@@ -111,8 +111,9 @@ pub fn contains(self: &UnmanagedSet($T), value: T) bool {
     return self.__inner.contains(value)
 }
 
-// String `contains` for `UnmanagedSet(OwnedString)`: looks the owned element up by the view.
-pub fn contains(self: &UnmanagedSet(OwnedString), value: String) bool {
+// `contains` by a probe of another type (a `String` against `OwnedString` elements). `value.hash()`
+// and `==` must agree with the element type's.
+pub fn contains(self: &UnmanagedSet($T), value: $Q) bool {
     return self.__inner.contains(value)
 }
 
@@ -121,8 +122,9 @@ pub fn remove(self: &UnmanagedSet($T), value: T) bool {
     return self.__inner.remove(value).is_some()
 }
 
-// String `remove` for `UnmanagedSet(OwnedString)`: looks the owned element up by the view.
-pub fn remove(self: &UnmanagedSet(OwnedString), value: String) bool {
+// `remove` by a probe of another type (a `String` against `OwnedString` elements). `value.hash()`
+// and `==` must agree with the element type's.
+pub fn remove(self: &UnmanagedSet($T), value: $Q) bool {
     return self.__inner.remove(value).is_some()
 }
 

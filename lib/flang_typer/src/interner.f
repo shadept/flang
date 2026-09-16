@@ -652,10 +652,10 @@ test "leaves hold their fixed ids without touching the table" {
     assert_true(shape_ok, "the fixed prim id names its kind")
     const v = render(&it, TY_VOID)
     defer v.deinit()
-    assert_true(v.as_view() == "void", "void renders at id 0")
+    assert_true(v.view == "void", "void renders at id 0")
     const e = render(&it, TY_ERROR)
     defer e.deinit()
-    assert_true(e.as_view() == "<error>", "error renders at id 2")
+    assert_true(e.view == "<error>", "error renders at id 2")
 }
 
 test "a var keys on id and level together" {

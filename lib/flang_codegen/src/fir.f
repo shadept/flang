@@ -497,7 +497,7 @@ pub fn module(allocator: &Allocator? = null) IrModule {
     }
 }
 
-pub fn deinit(self: &IrModule) {
+pub fn deinit(self: move IrModule) {
     for &t in self.tests {
         t.label.deinit()
         t.symbol.deinit()
@@ -530,8 +530,8 @@ pub fn set_testing(self: &IrModule, on: bool) {
 }
 
 // Record a lowered `test {}` block. Order is run order.
-pub fn add_test(self: &IrModule, label: OwnedString, symbol: OwnedString) {
-    self.tests.push(TestCase { label = label, symbol = symbol })
+pub fn add_test(self: &IrModule, label: move OwnedString, symbol: move OwnedString) {
+    self.tests.push(TestCase { label = move label, symbol = move symbol })
 }
 
 // Keep only the tests whose symbol is still defined. Lowering calls this once, after the refusal
@@ -539,7 +539,7 @@ pub fn add_test(self: &IrModule, label: OwnedString, symbol: OwnedString) {
 pub fn retain_defined_tests(self: &IrModule, dropped: &Set(String)) {
     let kept: List(TestCase) = list(self.tests.len, self.tests.allocator)
     for &t in self.tests {
-        if dropped.contains(t.symbol.as_view()) {
+        if dropped.contains(t.symbol.view) {
             t.label.deinit()
             t.symbol.deinit()
             continue
@@ -551,8 +551,8 @@ pub fn retain_defined_tests(self: &IrModule, dropped: &Set(String)) {
 }
 
 // Scoped mutability: named once by lowering, when the symbol is known to have been emitted.
-pub fn set_install_tests(self: &IrModule, symbol: OwnedString) {
-    self.install_tests = Some(symbol)
+pub fn set_install_tests(self: &IrModule, symbol: move OwnedString) {
+    self.install_tests = Some(move symbol)
 }
 
 pub fn deinit(self: &Function) {
@@ -615,8 +615,8 @@ pub fn release_buffers(self: &Function, allocator: &Allocator?) {
 
 // Take ownership of a minted label buffer; returns the stable view the caller stores in blocks and
 // branch targets.
-pub fn add_label(self: &Function, owned: OwnedString) String {
-    let view = owned.as_view()
+pub fn add_label(self: &Function, owned: move OwnedString) String {
+    let view = owned.view
     self.label_storage.push(owned)
     return view
 }

@@ -22,7 +22,7 @@ pub fn uri_to_path(uri: String) OwnedString? {
     }
     let decoded = percent_decode(rest.unwrap())
     defer decoded.deinit()
-    let p = decoded.as_view()
+    let p = decoded.view
 
     // `file:///c:/x` decodes to `/c:/x`; drop the slash in front of a drive letter.
     if p.len > 2 and p[0] == '/' and p[2] == ':' {
@@ -132,19 +132,19 @@ test "windows uri decodes to a lowercase-drive forward-slash path" {
     assert_true(p.is_some(), "file scheme accepted")
     let owned = p.unwrap()
     defer owned.deinit()
-    assert_eq(owned.as_view(), "c:/Users/x y/a.f", "decoded, unslashed, lowercased drive")
+    assert_eq(owned.view, "c:/Users/x y/a.f", "decoded, unslashed, lowercased drive")
 
     let up = uri_to_path("file:///C:/a.f")
     let owned2 = up.unwrap()
     defer owned2.deinit()
-    assert_eq(owned2.as_view(), "c:/a.f", "uppercase drive normalises down")
+    assert_eq(owned2.view, "c:/a.f", "uppercase drive normalises down")
 }
 
 test "posix uri keeps its leading slash" {
     let p = uri_to_path("file:///home/u/a.f")
     let owned = p.unwrap()
     defer owned.deinit()
-    assert_eq(owned.as_view(), "/home/u/a.f", "rooted path preserved")
+    assert_eq(owned.view, "/home/u/a.f", "rooted path preserved")
 }
 
 test "non-file schemes are rejected" {
@@ -155,14 +155,14 @@ test "non-file schemes are rejected" {
 test "path round-trips through a uri" {
     let u = path_to_uri("c:/Users/x y/a.f")
     defer u.deinit()
-    assert_eq(u.as_view(), "file:///c:/Users/x%20y/a.f", "space encoded, drive kept")
+    assert_eq(u.view, "file:///c:/Users/x%20y/a.f", "space encoded, drive kept")
 
-    let back = uri_to_path(u.as_view())
+    let back = uri_to_path(u.view)
     let owned = back.unwrap()
     defer owned.deinit()
-    assert_eq(owned.as_view(), "c:/Users/x y/a.f", "and back")
+    assert_eq(owned.view, "c:/Users/x y/a.f", "and back")
 
     let posix = path_to_uri("/home/u/a.f")
     defer posix.deinit()
-    assert_eq(posix.as_view(), "file:///home/u/a.f", "rooted path gets no extra slash")
+    assert_eq(posix.view, "file:///home/u/a.f", "rooted path gets no extra slash")
 }

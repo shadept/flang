@@ -12,6 +12,6 @@ pub fn main() i32 {
     let x = "-"
     let msg = $"\u0041{x}\u0042"
     defer msg.deinit()
-    print(msg.as_view())
+    print(msg.view)
     return 0
 }

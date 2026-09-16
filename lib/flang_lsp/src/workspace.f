@@ -39,7 +39,7 @@ pub type OpenProject = struct {
     index: List(ModuleIndex)
 }
 
-pub fn deinit(self: &OpenProject) {
+pub fn deinit(self: move OpenProject) {
     self.index.deinit()
     self.unit.deinit()
     self.ctx.deinit()
@@ -85,7 +85,7 @@ fn canonical_root(p: String, alloc: &Allocator?) OwnedString {
     let base = wd.unwrap()
     const joined = $"{base.as_view()}/{rel}"
     base.deinit()
-    const norm = normalize_fs_path(joined.as_view())
+    const norm = normalize_fs_path(joined.view)
     joined.deinit()
     return norm
 }
@@ -97,7 +97,7 @@ fn is_abs(p: String) bool {
     return p.len > 1 and p[1] == ':'
 }
 
-pub fn deinit(self: &Workspace) {
+pub fn deinit(self: move Workspace) {
     self.projects.deinit()
     self.stdlib_path.deinit()
 }
@@ -116,7 +116,7 @@ pub fn project_dir_for(path: String, allocator: &Allocator? = null) OwnedString?
     let dir = parent_dir(path)
     while dir.len > 0 {
         const manifest = $"{dir}/flang.toml"
-        const hit = exists(manifest.as_view())
+        const hit = exists(manifest.view)
         manifest.deinit()
         if hit {
             return Some(from_view(dir, allocator))
@@ -129,7 +129,7 @@ pub fn project_dir_for(path: String, allocator: &Allocator? = null) OwnedString?
 // Index of the open project rooted exactly at `dir`.
 pub fn find_project(self: &Workspace, dir: String) ProjectId? {
     for i in 0..self.projects.len {
-        if self.projects[i].dir.as_view() == dir {
+        if self.projects[i].dir.view == dir {
             return Some(i)
         }
     }
@@ -142,7 +142,7 @@ pub fn project_of_path(self: &Workspace, path: String) ProjectId? {
     let best: ProjectId? = null
     let best_len: usize = 0
     for i in 0..self.projects.len {
-        const dir = self.projects[i].dir.as_view()
+        const dir = self.projects[i].dir.view
         if dir.len >= best_len and path_under(path, dir) {
             best = Some(i)
             best_len = dir.len
@@ -163,9 +163,9 @@ fn path_under(path: String, dir: String) bool {
 fn overrides_from(docs: &DocumentStore, allocator: &Allocator?) Dict(String, String) {
     let ov: Dict(String, String) = dict(allocator)
     for e in docs.docs.iter() {
-        const p = e.value.path.as_view()
+        const p = e.value.path.view
         if p.len > 0 {
-            ov.set(p, e.value.text.as_view())
+            ov.set(p, e.value.text.view)
         }
     }
     return ov
@@ -199,13 +199,13 @@ pub fn reanalyze_project(self: &Workspace, idx: ProjectId, dirty: &Set(String),
 // when the rebuild fails (manifest gone mid-edit).
 pub fn reopen_project(self: &Workspace, idx: ProjectId, docs: &DocumentStore,
     allocator: &Allocator? = null) bool {
-    let dir = from_view(self.projects[idx].dir.as_view(), allocator)
-    const fresh = self.load_project(dir.as_view(), docs, allocator)
+    let dir = from_view(self.projects[idx].dir.view, allocator)
+    const fresh = self.load_project(dir.view, docs, allocator)
     dir.deinit()
     if fresh.is_none() {
         return false
     }
-    let old = self.projects[idx]
+    let old = move self.projects[idx]
     old.deinit()
     self.projects[idx] = fresh.unwrap()
     return true
@@ -214,29 +214,29 @@ pub fn reopen_project(self: &Workspace, idx: ProjectId, docs: &DocumentStore,
 fn load_project(self: &Workspace, dir: String, docs: &DocumentStore,
     allocator: &Allocator?) OpenProject? {
     const manifest = $"{dir}/flang.toml"
-    const text = read_text(manifest.as_view())
+    const text = read_text(manifest.view)
     manifest.deinit()
     if text.is_none() {
         return null
     }
     let toml = text.unwrap()
     defer toml.deinit()
-    let proj = parse_project(toml.as_view(), allocator)
+    let proj = parse_project(toml.view, allocator)
     defer proj.deinit()
 
-    let ctx = resolve_ctx_at(&proj, dir, self.stdlib_path.as_view(), allocator)
+    let ctx = resolve_ctx_at(&proj, dir, self.stdlib_path.view, allocator)
     // The LSP checks every body (no lazy demand) and reports unused functions. Test bodies are in
     // that set: an editor has to diagnose a `test {}` block like any other code, and their calls
     // are what lets W1003 see a function that exists only for its tests.
     ctx.set_warn_unused(true)
     ctx.set_check_tests(true)
 
-    const pattern = $"{dir}/{proj.source.as_view()}"
-    let raw = glob_sources(pattern.as_view(), allocator)
+    const pattern = $"{dir}/{proj.source.view}"
+    let raw = glob_sources(pattern.view, allocator)
     pattern.deinit()
     let entries: List(OwnedString) = list(raw.len, allocator)
     for &r in raw {
-        entries.push(normalize_sep(r.as_view(), allocator))
+        entries.push(normalize_sep(r.view, allocator))
     }
     raw.deinit()
     if entries.len == 0 {
@@ -253,8 +253,8 @@ fn load_project(self: &Workspace, dir: String, docs: &DocumentStore,
 
     return Some(OpenProject {
         dir = from_view(dir, allocator),
-        name = from_view(proj.name.as_view(), allocator),
-        ctx = ctx,
+        name = from_view(proj.name.view, allocator),
+        ctx = move ctx,
         unit = unit,
         index = index,
     })

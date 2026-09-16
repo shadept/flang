@@ -21,7 +21,6 @@ import std.io.internal.fs
 import std.io.print
 import std.io.types
 import std.option
-import std.owned
 import std.path
 import std.result
 import std.string
@@ -187,7 +186,7 @@ type Doomed = struct {
 
 fn free_doomed(items: &List(Doomed)) {
     for item in items.iter_ref() {
-        item.path.deinit()
+        release_slot(&item.path)
     }
     items.deinit()
 }
@@ -222,7 +221,7 @@ pub fn remove_dir_all(path: String, allocator: &Allocator? = null) Result((), Di
     while i > 0 {
         i = i - 1
         const item: &Doomed = doomed.op_index_ref(i)
-        const view = item.path.as_view()
+        const view = item.path.view
         // A file that will not unlink is a failure of the directory removal, so it is reported as
         // one.
         const r = if item.is_dir { remove_dir(view) } else { raw_unlink(view).map_err(to_dir_error) }

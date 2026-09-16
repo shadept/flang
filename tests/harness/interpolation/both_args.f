@@ -15,6 +15,6 @@ pub fn main() i32 {
     let x = 42i32
     let msg = $(32, &alloc)"x={x}"
     defer msg.deinit()
-    print(msg.as_view())
+    print(msg.view)
     return 0
 }

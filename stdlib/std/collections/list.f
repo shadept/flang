@@ -282,11 +282,8 @@ pub fn insert(s: &UnmanagedList($T), index: usize, value: move T, allocator: &Al
 // Deinits every live element, frees the buffer and resets to empty, so a second call is a no-op.
 pub fn deinit(s: &UnmanagedList($T), allocator: &Allocator) {
     if s.cap > 0 {
-        // TODO use #if to check if T supports deinit(&T)
         for i in 0..s.len {
-            const elem = s.get_ref(i)
-            const elem2 = elem.unwrap()
-            elem2.deinit()
+            release_slot(s.get_ref(i).unwrap())
         }
         allocator.free(slice_from_raw_parts(s.ptr, s.cap))
     }
@@ -1155,10 +1152,6 @@ test "deinit is idempotent on every core container" {
     d.deinit()
     d.deinit()
 
-    let s = from_view("gamma")
-    s.deinit()
-    s.deinit()
-
     let sb = string_builder(8)
     sb.append("x")
     sb.deinit()
@@ -1332,14 +1325,14 @@ test "join concatenates with separator" {
 
     let joined = xs.join(", ")
     defer joined.deinit()
-    assert_eq(joined.as_view(), "a, b, c", "separators between elements only")
+    assert_eq(joined.view, "a, b, c", "separators between elements only")
 
     let one: List(String) = list(1)
     defer one.deinit()
     one.push("solo")
     let single = one.join(", ")
     defer single.deinit()
-    assert_eq(single.as_view(), "solo", "no separator for one element")
+    assert_eq(single.view, "solo", "no separator for one element")
 }
 
 test "filled_list gives a list of length count, ready to index" {

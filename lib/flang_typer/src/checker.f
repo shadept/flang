@@ -155,6 +155,8 @@ type PendingSpec = struct {
     // When set, the pick is an op_deref hop of a UFCS receiver chain (`deref_retry`): the drain
     // rewrites `receiver_derefs[span][index]` instead of the call/operator tables.
     deref_index: usize?
+    // The hop sits on an argument's chain (RFC-020) rather than the receiver's.
+    deref_on_arg: bool
     function_id: u32
     tp_binds: Dict(VarId, Ty) // template quantified id → call-site fresh var
     inst_params: List(Ty)
@@ -280,9 +282,8 @@ pub type Checker = struct {
     pending_members: List(PendingMember)
     // True while `resolve_pending_calls` redoes parked calls, so the picks they note are tagged.
     resolving_parked: bool
-    // Overloaded function NAMES in value position (`.map(deinit)`, `owned(v, deinit)`) awaiting
-    // instantiation-time resolution: once the surrounding inference pins the slot's Func shape, the
-    // overload
+    // Overloaded function NAMES in value position (`.map(deinit)`) awaiting instantiation-time
+    // resolution: once the surrounding inference pins the slot's Func shape, the overload
     // resolves against it (ticket 019 §4). Drained per body scope with
     // the other pendings.
     pending_fn_names: List(PendingFnName)
@@ -470,7 +471,7 @@ pub type NodeLambdaFact = struct {
     info: LambdaInfo
 }
 
-pub fn deinit(self: &NodeLambdaFact) {
+pub fn deinit(self: move NodeLambdaFact) {
     self.info.deinit()
 }
 
@@ -500,6 +501,8 @@ pub type CapturedPick = struct {
     span: SourceSpan
     is_operator: bool
     deref_index: usize?
+    // The hop sits on an argument's chain rather than the receiver's (RFC-020).
+    deref_on_arg: bool
     function_id: u32
     tp_binds: Dict(VarId, Ty)
     inst_params: List(Ty)
@@ -534,6 +537,7 @@ pub type ModuleBodyCache = struct {
     default_args: List(NodeExprsFact)
     arg_lists: List(NodeExprsFact)
     derefs: List(NodeDerefsFact)
+    arg_derefs: List(NodeDerefsFact)
     picks: List(CapturedPick)
     calls: List(PendingCall)
     // Every top-level pick the slot's settlement resolved, in process order, with the
@@ -800,8 +804,8 @@ fn retire_names(self: &Checker, retiring: &Set(String)) {
 // Register a definition under a stable key, at the id it held before it was retired when it had
 // one. A registration with no retired id to reclaim is a name this demand added - noted, because
 // carried bodies stay valid only while the name set they resolved against holds still.
-fn register_collected(self: &Checker, def: NominalDef, fqn_owned: OwnedString) NominalId {
-    const previous = self.recycled.remove(fqn_owned.as_view())
+fn register_collected(self: &Checker, def: NominalDef, fqn_owned: move OwnedString) NominalId {
+    const previous = self.recycled.remove(fqn_owned.view)
     if previous.is_none() {
         self.saw_new_name = true
         return self.nominals.register(def, fqn_owned)
@@ -1217,45 +1221,45 @@ pub fn set_check_tests(self: &Checker, on: bool) {
 // both, so the caller's lists need not outlive the call.
 pub fn set_project_globals(self: &Checker, names: &List(OwnedString), origin: &List(bool)) {
     for &n in names {
-        self.project_globals.push(from_view(n.as_view()))
+        self.project_globals.push(from_view(n.view))
     }
     for i in 0..origin.len {
         self.project_origin.push(origin[i])
     }
 }
 
-pub fn push_diag_e(self: &Checker, span: SourceSpan, code: String, message: OwnedString) {
+pub fn push_diag_e(self: &Checker, span: SourceSpan, code: String, message: move OwnedString) {
     let empty_hint: OwnedString
     self.diagnostics.push(Diagnostic {
         severity = Severity.Error,
         code = code,
-        message = message,
-        hint = empty_hint,
+        message = move message,
+        hint = move empty_hint,
         span = span,
     })
 }
 
 // Warning-severity counterpart. Warnings render like errors but do not fail the build
 // (`driver.count_errors` filters on severity).
-pub fn push_diag_w(self: &Checker, span: SourceSpan, code: String, message: OwnedString) {
+pub fn push_diag_w(self: &Checker, span: SourceSpan, code: String, message: move OwnedString) {
     let empty_hint: OwnedString
     self.diagnostics.push(Diagnostic {
         severity = Severity.Warning,
         code = code,
-        message = message,
-        hint = empty_hint,
+        message = move message,
+        hint = move empty_hint,
         span = span,
     })
 }
 
 // Info-severity counterpart: a note on source that is valid as written.
-pub fn push_diag_i(self: &Checker, span: SourceSpan, code: String, message: OwnedString) {
+pub fn push_diag_i(self: &Checker, span: SourceSpan, code: String, message: move OwnedString) {
     let empty_hint: OwnedString
     self.diagnostics.push(Diagnostic {
         severity = Severity.Info,
         code = code,
-        message = message,
-        hint = empty_hint,
+        message = move message,
+        hint = move empty_hint,
         span = span,
     })
 }
@@ -1356,7 +1360,7 @@ fn build_visibility(self: &Checker, modules: &List(Module), paths: &List(String)
         // (Compiler.cs).
         if i < self.project_origin.len and self.project_origin[i] {
             for &g in self.project_globals {
-                let gv = find_fqn(paths, g.as_view())
+                let gv = find_fqn(paths, g.view)
                 if gv.is_some() {
                     let v = gv.unwrap()
                     if !contains_view(&imps, v) {
@@ -1387,7 +1391,7 @@ fn collect_edges(m: &Module, paths: &List(String), imps: &List(String), reexps: 
         d.* match {
             Import(id) => {
                 let dotted = dot_join(&id.path, alloc)
-                let fv = find_fqn(paths, dotted.as_view())
+                let fv = find_fqn(paths, dotted.view)
                 dotted.deinit()
                 if fv.is_some() {
                     let v = fv.unwrap()
@@ -1506,8 +1510,7 @@ fn collect_one_name(self: &Checker, decl: &Decl, module_path: String) {
     decl.* match {
         Type(td) => {
             let fqn_owned = $"{module_path}.{td.name}"
-            if self.nominals.contains(fqn_owned.as_view())
-                or self.aliases.contains(fqn_owned.as_view()) {
+            if self.nominals.contains(fqn_owned.view) or self.aliases.contains(fqn_owned.view) {
                 push_diag_e(self, td.span, E_DUP_TYPE_DECL,
                     $"duplicate type declaration `{td.name}`")
                 fqn_owned.deinit()
@@ -1555,7 +1558,7 @@ fn nominal_kind_of(body: &TypeExpr) Nk {
     }
 }
 
-fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) {
+fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedString) {
     let empty_params: List(VarId) = list(0, self.allocator)
     let empty_fields: List(Field) = list(0, self.allocator)
     // `fqn` field is a placeholder - `register` overwrites it with the stable view it owns. The
@@ -1578,7 +1581,7 @@ fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) 
     const _id = register_collected(self, NominalDef.NomStruct(sd), fqn)
 }
 
-fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) {
+fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedString) {
     let empty_params: List(VarId) = list(0, self.allocator)
     let empty_variants: List(VariantDef) = list(0, self.allocator)
     let ed = EnumDef {
@@ -1596,7 +1599,7 @@ fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: OwnedString) {
 
 fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let fqn_owned = $"{module_path}.{td.name}"
-    let id_opt = self.nominals.lookup_fqn(fqn_owned.as_view())
+    let id_opt = self.nominals.lookup_fqn(fqn_owned.view)
     fqn_owned.deinit()
     if id_opt.is_none() {
         return
@@ -1871,7 +1874,7 @@ fn parse_i64_text(text: String) i64 {
 
 fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let fqn_owned = $"{module_path}.{td.name}"
-    let id_opt = self.nominals.lookup_fqn(fqn_owned.as_view())
+    let id_opt = self.nominals.lookup_fqn(fqn_owned.view)
     fqn_owned.deinit()
     if id_opt.is_none() {
         return
@@ -2046,7 +2049,7 @@ fn register_constant(self: &Checker, cd: &ConstDecl) {
     let fqn = $"{self.current_module.unwrap()}.{cd.name}"
     // A second module-level constant under the same name would silently overwrite the first (E2005;
     // the local same-scope case is only a warning - see `check_let`).
-    if self.constants.contains(fqn.as_view()) {
+    if self.constants.contains(fqn.view) {
         push_diag_e(self, cd.span, E_DUP_TYPE_DECL, $"global `{cd.name}` is already declared")
         fqn.deinit()
         return
@@ -2241,7 +2244,7 @@ fn check_test_body(self: &Checker, td: &TestDecl) {
 
 fn check_constant_init(self: &Checker, cd: &ConstDecl) {
     let fqn = $"{self.current_module.unwrap()}.{cd.name}"
-    let reg = self.constants.get_fqn(fqn.as_view())
+    let reg = self.constants.get_fqn(fqn.view)
     // The decl node carries its own FQN as an RtConst target - lowering's const pre-pass reads it
     // to name the global (M11), so no module-path plumbing is needed lowering-side. Interned;
     // outlives the checker.
@@ -2634,7 +2637,7 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
     const l0 = self.next_lambda
 
     let key = key_for(&self.engine.interner, p.function_id, &params, ret, self.allocator)
-    let existing = self.specs.lookup(key.as_view())
+    let existing = self.specs.lookup(key.view)
     if existing.is_none() {
         // A provisional key that misses can still name a carried entry - one whose stored key was
         // re-keyed to its settled signature, or renders variables. The call site is the stable
@@ -2675,7 +2678,10 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
     // is the table set the pick was recorded into - the program tables at top level, the owning
     // instantiation's overlay during a nested drain.
     let node = self.node_of(p.span)
-    if p.deref_index.is_some() {
+    if p.deref_index.is_some() and p.deref_on_arg {
+        self.results.update_arg_deref(node, p.deref_index.unwrap(),
+            ResolvedTarget.RtSpecialized(id.unwrap()))
+    } else if p.deref_index.is_some() {
         self.results.update_receiver_deref(node, p.deref_index.unwrap(),
             ResolvedTarget.RtSpecialized(id.unwrap()))
     } else if p.is_operator {
@@ -2693,8 +2699,8 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
 // keyed-lookup hit. Carried from an earlier demand means either a replay - counters burned, closure
 // environments re-registered, deps touched - or, when the entry or anything under it cannot be
 // replayed from here, an in-place re-instantiation at the id it holds.
-fn resolve_against(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(Ty), ret: Ty,
-    sid: SpecId) SpecId? {
+fn resolve_against(self: &Checker, p: &PendingSpec, key: move OwnedString, params: List(Ty),
+    ret: Ty, sid: SpecId) SpecId? {
     const alive = self.specs.get(sid).touched_gen == self.specs.gen
     if !alive {
         let ok = pick_concrete(self, p, &params, ret)
@@ -3051,7 +3057,7 @@ fn sig_concrete(self: &Checker, params: &List(Ty), ret: Ty) bool {
 // diagnostic) when the instantiation chain is implausibly deep. `at` re-registers a carried entry
 // in place - same id, fresh overlay - handing its previous dep list to the frame as nested reuse
 // hints.
-fn instantiate(self: &Checker, p: &PendingSpec, key: OwnedString, params: List(Ty), ret: Ty,
+fn instantiate(self: &Checker, p: &PendingSpec, key: move OwnedString, params: List(Ty), ret: Ty,
     at: SpecId? = null) SpecId? {
     if self.spec_depth >= MAX_SPEC_DEPTH {
         push_diag_e(self, p.span, E_UNINFERRED,
@@ -3414,20 +3420,47 @@ fn push_append_stmts(self: &Checker, stmts: &List(Stmt), name: String,
                 }
             }
             Hole(h) => {
-                let args: List(CallArgument) = list(2, self.allocator)
-                args.push(CallArgument.Positional(h.expr))
-                h.format match {
-                    Some(spec) => {
-                        const slit = synth_string_lit(self,
-                            self.results.add_synth_string(escape_backslashes(self, spec)))
-                        args.push(CallArgument.Positional(synth_box(self, slit)))
-                    }
-                    None => {}
+                const spec_lit = h.format match {
+                    Some(spec) => synth_string_lit(self,
+                        self.results.add_synth_string(escape_backslashes(self, spec)))
+                    None => synth_string_lit(self, "")
                 }
-                push_expr_stmt(self, stmts, synth_method_call(self, name, "append", args))
+                if hole_is_place(h.expr) {
+                    push_expr_stmt(self, stmts, synth_hole_format(self, name, h.expr, spec_lit))
+                } else {
+                    let args: List(CallArgument) = list(2, self.allocator)
+                    args.push(CallArgument.Positional(h.expr))
+                    args.push(CallArgument.Positional(synth_box(self, spec_lit)))
+                    push_expr_stmt(self, stmts, synth_method_call(self, name, "append", args))
+                }
             }
         }
     }
+}
+
+// Whether a hole names a place rather than producing a value. A place is read: `$"{s}"` must leave
+// `s` the caller's, while a temporary has no other owner and goes to the consuming `append`.
+fn hole_is_place(e: &Expr) bool {
+    return e.* match {
+        Identifier(_) => true
+        MemberAccess(_) => true
+        Index(_) => true
+        Dereference(_) => true
+        _ => false
+    }
+}
+
+// `place.format(NAME.writer(), spec)` - the read form of an append.
+fn synth_hole_format(self: &Checker, name: String, place: &Expr, spec_lit: Expr) Expr {
+    let wargs: List(CallArgument) = list(0, self.allocator)
+    let args: List(CallArgument) = list(2, self.allocator)
+    args.push(CallArgument.Positional(synth_box(self, synth_method_call(self, name, "writer",
+                    wargs))))
+    args.push(CallArgument.Positional(synth_box(self, spec_lit)))
+    const ma = Expr.MemberAccess(MemberAccessExpr { span = synth_span(self), receiver = place,
+        member = "format" })
+    return Expr.Call(CallExpr { span = synth_span(self), callee = synth_box(self, ma),
+        args = args })
 }
 
 fn push_expr_stmt(self: &Checker, stmts: &List(Stmt), e: Expr) {
@@ -3574,7 +3607,7 @@ fn segment_literal_text(self: &Checker, raw: String) String {
         return raw
     }
     let decoded = decoded_opt.unwrap()
-    const out = self.results.add_synth_string(escape_backslashes(self, decoded.as_view()))
+    const out = self.results.add_synth_string(escape_backslashes(self, decoded.view))
     decoded.deinit()
     return out
 }
@@ -5272,7 +5305,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     self.closures.set(nid, ClosureSig {
         params = sig_params,
         ret = ret,
-        symbol = from_view(sym.as_view()),
+        symbol = from_view(sym.view),
         lambda_node = node,
     })
     self.results.record_lambda(node, LambdaInfo {
@@ -5281,7 +5314,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
         ret = ret,
         captures = frame.captures,
         closure_id = Some(nid),
-        symbol = sym,
+        symbol = move sym,
     })
     let no_args: List(Ty) = list(0, self.allocator)
     return mk_nominal(self, nid, no_args)
@@ -6224,8 +6257,13 @@ fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, ar
     if cands.is_some() {
         let candidates = cands.unwrap()
         self.overload_deferred = false
+        let chain: List(OverloadPick) = list(0, self.allocator)
+        defer chain.deinit()
+        let ctx = PeelCtx { vis = &vis, chain = &chain }
+        let spans = arg_span_list(self, pos_exprs, null)
+        defer spans.deinit()
         let pick = resolve_overload(self, &candidates, arg_tys, call.span, null, named, 0usize,
-            true)
+            true, Some(&ctx), Some(&spans))
         candidates.deinit()
         if pick.is_none() and self.overload_deferred {
             self.overload_deferred = false
@@ -6309,8 +6347,10 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     defer chain.deinit()
     let ctx = PeelCtx { vis = &vis, chain = &chain }
     self.overload_deferred = false
+    let spans = arg_span_list(self, pos_exprs, Some(expr_span(ma.receiver)))
+    defer spans.deinit()
     let pick = receiver_overload(self, &candidates, recv_ty, arg_tys, call.span, Some(adapted),
-        named, Some(&ctx))
+        named, Some(&ctx), Some(&spans))
     if pick.is_some() {
         commit_deref_chain(self, &chain, pick.unwrap().hops, call.span)
     }
@@ -6333,11 +6373,12 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
 // adapted value <-> &T shape, competing in the same ranked set.
 fn receiver_overload(self: &Checker, candidates: &List(FunctionScheme), recv: Ty,
     arg_tys: &List(Ty), span: SourceSpan, alt_recv: Ty? = null, named: &NamedArgs? = null,
-    peel: &PeelCtx? = null) OverloadPick? {
+    peel: &PeelCtx? = null, arg_spans: &List(SourceSpan)? = null) OverloadPick? {
     let full = list(arg_tys.len + 1, self.allocator)
     full.push(recv)
     full.push_all(arg_tys.as_slice())
-    let pick = resolve_overload(self, candidates, &full, span, alt_recv, named, 1usize, false, peel)
+    let pick = resolve_overload(self, candidates, &full, span, alt_recv, named, 1usize, false, peel,
+        arg_spans)
     full.deinit()
     return pick
 }
@@ -6392,7 +6433,8 @@ fn deref_candidates(self: &Checker, vis: &Visibility) List(FunctionScheme)? {
 // call each hop before the winner: one target per hop, outermost first, plus a pending
 // specialization per generic hop (the drain rewrites that hop's entry to `RtSpecialized`, keyed by
 // `deref_index`). Records nothing for zero hops.
-fn commit_deref_chain(self: &Checker, chain: &List(OverloadPick), hops: usize, span: SourceSpan) {
+fn commit_deref_chain(self: &Checker, chain: &List(OverloadPick), hops: usize, span: SourceSpan,
+    on_arg: bool = false) {
     if hops == 0 {
         return
     }
@@ -6402,9 +6444,13 @@ fn commit_deref_chain(self: &Checker, chain: &List(OverloadPick), hops: usize, s
     }
     // Recorded BEFORE the pendings are noted: a pick that instantiates immediately rewrites its hop
     // through `update_receiver_deref`, which needs the chain to already be there.
-    self.results.record_receiver_deref(self.node_of(span), targets)
+    if on_arg {
+        self.results.record_arg_deref(self.node_of(span), targets)
+    } else {
+        self.results.record_receiver_deref(self.node_of(span), targets)
+    }
     for i in 0..hops {
-        note_pending(self, span, false, &chain[i], Some(i))
+        note_pending(self, span, false, &chain[i], Some(i), on_arg)
     }
 }
 
@@ -6412,7 +6458,7 @@ fn commit_deref_chain(self: &Checker, chain: &List(OverloadPick), hops: usize, s
 // enclosing body's inference has settled (M10). `is_operator` selects which table the drain
 // rewrites: `resolved_ops` for operator nodes, `resolved_targets` for calls.
 fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &OverloadPick,
-    deref_index: usize? = null) {
+    deref_index: usize? = null, deref_on_arg: bool = false) {
     if pick.inst.is_none() {
         return
     }
@@ -6421,6 +6467,7 @@ fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &Over
         span = span,
         is_operator = is_operator,
         deref_index = deref_index,
+        deref_on_arg = deref_on_arg,
         function_id = pick.id,
         tp_binds = inst.tp_binds,
         inst_params = inst.params,
@@ -6574,8 +6621,14 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
         if cands.is_some() {
             let candidates = cands.unwrap()
             self.overload_deferred = false
+            let pchain: List(OverloadPick) = list(0, self.allocator)
+            defer pchain.deinit()
+            const pctx = PeelCtx { vis = &vis, chain = &pchain }
+            const recv_span: SourceSpan? = if pc.recv_extra > 0 { Some(pc.span) } else { null }
+            let pspans = arg_span_list(self, &pc.pos_exprs, recv_span)
+            defer pspans.deinit()
             let pick = resolve_overload(self, &candidates, &pc.arg_tys, pc.span, pc.alt_recv, null,
-                pc.recv_extra, true)
+                pc.recv_extra, true, Some(&pctx), Some(&pspans))
             candidates.deinit()
             if pick.is_none() and self.overload_deferred {
                 self.overload_deferred = false
@@ -7108,7 +7161,8 @@ type PickInst = struct {
 // quantified vars, then registration order.
 fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: &List(Ty),
     span: SourceSpan, alt_recv: Ty? = null, named: &NamedArgs? = null, ufcs_offset: usize = 0usize,
-    report_ambiguity: bool = false, peel: &PeelCtx? = null) OverloadPick? {
+    report_ambiguity: bool = false, peel: &PeelCtx? = null,
+    arg_spans: &List(SourceSpan)? = null) OverloadPick? {
     // The receiver shapes, tried in tiers across all candidates (spec 7.2): as written (`arg_tys`
     // itself); when no candidate accepts that, `alt_recv` - the UFCS receiver adapted value <-> &T;
     // when none accepts that either, the wrapped values reached through `op_deref`. Only the first
@@ -7128,14 +7182,15 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     let st: List(CandProbe) = list(candidates.len, self.allocator)
     defer st.deinit()
     for &c in candidates {
-        const probed = probe_candidate(self, c, arg_tys, named, ufcs_offset)
+        const probed = probe_candidate(self, c, arg_tys, named, ufcs_offset, peel, span)
         const spec = if probed.is_some() { scheme_specificity(self, &c.signature,
                 arg_tys) } else { 0u32 }
         st.push(CandProbe { cost = probed, used = 0usize, spec = spec })
     }
     if alts.len > 0 and peel_needed(&st) {
         for ci in 0..candidates.len {
-            const ap = probe_candidate(self, &candidates[ci], &alt_args[0], named, ufcs_offset)
+            const ap = probe_candidate(self, &candidates[ci], &alt_args[0], named, ufcs_offset,
+                peel, span)
             if ap.is_some() {
                 st[ci].cost = Some(ProbeCost { coercions = ap.unwrap().coercions,
                     penalty = ap.unwrap().penalty + alts[0].penalty })
@@ -7146,7 +7201,7 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     }
 
     // The peel, only when nothing took the receiver as written or adapted.
-    if peel.is_some() and arg_tys.len > 0 and peel_needed(&st) {
+    if peel.is_some() and ufcs_offset > 0 and arg_tys.len > 0 and peel_needed(&st) {
         let first = alts.len
         deref_alternatives(self, arg_tys[0], span, peel.unwrap(), &alts)
         for ai in first..alts.len {
@@ -7157,7 +7212,8 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
                 continue
             }
             for ai in first..alts.len {
-                let ap = probe_candidate(self, &candidates[ci], &alt_args[ai], named, ufcs_offset)
+                let ap = probe_candidate(self, &candidates[ci], &alt_args[ai], named, ufcs_offset,
+                    peel, span)
                 if ap.is_some() {
                     st[ci].cost = Some(ProbeCost { coercions = ap.unwrap().coercions,
                         penalty = ap.unwrap().penalty + alts[ai].penalty })
@@ -7258,7 +7314,11 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
         // Commit with the receiver shape the winner actually matched.
         let arg = if i == 0 and best_used > 0 { alts[best_used - 1].ty } else { arg_tys[i] }
         const o = self.engine.unify(arg, fparams[i])
-        report_unify(self, &o, E_TYPE_MISMATCH, span)
+        const fitted = o match { Unified(_) => true, _ => false }
+        if fitted or !commit_arg_peel(self, arg, fparams[i], i, ufcs_offset, span, arg_spans,
+            peel) {
+            report_unify(self, &o, E_TYPE_MISMATCH, span)
+        }
     }
     // The variadic tail's surplus arguments commit against its element type - without this an
     // unsuffixed literal in the tail never pins.
@@ -7296,6 +7356,30 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     return Some(OverloadPick { id = w.id, ret = f.ret, params = fparams, inst = inst, hops = hops })
 }
 
+// Commits a winning argument's `op_deref` hops: unifies through the chain and records it on the
+// argument's own node, the way a receiver's chain is recorded on the call node. Lowering replays it
+// before the call. False when the argument does not reach the parameter that way, leaving the
+// caller to report the mismatch it already has.
+fn commit_arg_peel(self: &Checker, arg: Ty, param: Ty, index: usize, ufcs_offset: usize,
+    span: SourceSpan, arg_spans: &List(SourceSpan)?, peel: &PeelCtx?) bool {
+    if peel.is_none() or arg_spans.is_none() or index < ufcs_offset {
+        return false
+    }
+    const spans = arg_spans.unwrap()
+    if index >= spans.len {
+        return false
+    }
+    let chain: List(OverloadPick) = list(2, self.allocator)
+    defer chain.deinit()
+    const ctx = PeelCtx { vis = peel.unwrap().vis, chain = &chain }
+    const hops = peel_arg(self, arg, param, span, &ctx, Some(&chain))
+    if hops.is_none() {
+        return false
+    }
+    commit_deref_chain(self, &chain, hops.unwrap(), spans[index], true)
+    return true
+}
+
 // Whether the next receiver tier is tried: no candidate matched in the tiers so far. Adaptation and
 // the `op_deref` peel are fallbacks - UFCS does not change which overload wins, so a catch-all that
 // takes the receiver as written takes the call.
@@ -7312,6 +7396,20 @@ fn peel_needed(st: &List(CandProbe)) bool {
 // and no more than declared unless a variadic tail takes the surplus.
 fn arity_accepts(c: &FunctionScheme, n_params: usize, supplied: usize) bool {
     return supplied >= c.required_params and (c.has_variadic or supplied <= n_params)
+}
+
+// The spans of a call's arguments, aligned with its argument types, so a winning argument's
+// `op_deref` chain is recorded on the argument's own node. `recv` is the receiver's span for a UFCS
+// call, which occupies the first slot.
+fn arg_span_list(self: &Checker, pos_exprs: &List(Expr), recv: SourceSpan?) List(SourceSpan) {
+    let out: List(SourceSpan) = list(pos_exprs.len + 1, self.allocator)
+    if recv.is_some() {
+        out.push(recv.unwrap())
+    }
+    for &e in pos_exprs {
+        out.push(expr_span(e))
+    }
+    return out
 }
 
 // `arg_tys` with its first entry - the receiver - replaced by `recv`.
@@ -7457,10 +7555,79 @@ pub fn total(self: ProbeCost) u32 {
     return self.coercions + self.penalty
 }
 
+// An argument that does not fit its parameter is retried through the wrapped values `op_deref`
+// reaches, by reference first and then by value when that value is copyable, fewest hops first
+// (RFC-020): an owner decays to the view it holds, never to a second owner. Unifies the first shape
+// that fits and returns the hops it took; null leaves the engine as it was found. `chain` collects
+// the hop picks when the caller is committing rather than probing.
+fn peel_arg(self: &Checker, arg: Ty, param: Ty, span: SourceSpan, ctx: &PeelCtx,
+    chain: &List(OverloadPick)?) usize? {
+    let dcands = deref_candidates(self, ctx.vis)
+    if dcands.is_none() {
+        return null
+    }
+    let dc = dcands.unwrap()
+    defer dc.deinit()
+    let current = self.engine.resolve(arg)
+    let hops = 0usize
+    while hops < 10 {
+        let peeled = ty_node(self, current) match {
+            NRef(inner) => self.engine.resolve(inner)
+            _ => current
+        }
+        const nominal = ty_node(self, peeled) match { NNominal(_) => true, _ => false }
+        if !nominal {
+            return null
+        }
+        let dargs = list(1, self.allocator)
+        dargs.push(self.engine.mk_ref(peeled))
+        const dpick = resolve_overload(self, &dc, &dargs, span)
+        dargs.deinit()
+        if dpick.is_none() {
+            return null
+        }
+        hops = hops + 1
+        if chain.is_some() {
+            chain.unwrap().push(dpick.unwrap())
+        }
+        const dret = self.engine.resolve(dpick.unwrap().ret)
+        const inner = ty_node(self, dret) match {
+            NRef(i) => self.engine.resolve(i)
+            _ => return null
+        }
+        // The value leg decays an owner to the view it holds, so it is gated on that view being
+        // copyable: peeling to a non-copyable value would hand the same resource to two owners.
+        if try_unify_arg(self, dret, param) {
+            return Some(hops)
+        }
+        if self.engine.is_copyable(inner) and try_unify_arg(self, inner, param) {
+            return Some(hops)
+        }
+        current = inner
+    }
+    return null
+}
+
+// Unify inside a checkpoint that is kept on success and rolled back on failure.
+fn try_unify_arg(self: &Checker, arg: Ty, param: Ty) bool {
+    self.engine.push_checkpoint()
+    const ok = self.engine.unify(arg, param) match {
+        Unified(_) => true
+        _ => false
+    }
+    if ok {
+        self.engine.commit()
+    } else {
+        self.engine.rollback()
+    }
+    return ok
+}
+
 // Speculatively check one candidate: null when it cannot take these arguments, else its ProbeCost
 // (fuller matches win via the omitted-defaults penalty, as in the reference checker).
 fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty),
-    named: &NamedArgs? = null, ufcs_offset: usize = 0usize) ProbeCost? {
+    named: &NamedArgs? = null, ufcs_offset: usize = 0usize, peel: &PeelCtx? = null,
+    span: SourceSpan = none_span()) ProbeCost? {
     let f = scheme_fn_ty(self, &c.signature) match {
         Some(ft) => ft
         None => return null
@@ -7507,9 +7674,22 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty),
             ok = false
         }
         if ok {
-            self.engine.unify(arg_tys[i], self.engine.interner.child_at(f.params, i)) match {
+            const param = self.engine.interner.child_at(f.params, i)
+            self.engine.unify(arg_tys[i], param) match {
                 Unified(u) => cost = cost + u.cost
-                _ => ok = false
+                // The argument does not fit as written: RFC-020 retries it through `op_deref`.
+                _ => {
+                    const hops = if peel.is_some() and i >= ufcs_offset {
+                        peel_arg(self, arg_tys[i], param, span, peel.unwrap(), null)
+                    } else {
+                        null
+                    }
+                    if hops.is_some() {
+                        cost = cost + 2u32 * (hops.unwrap() as u32)
+                    } else {
+                        ok = false
+                    }
+                }
             }
         }
         i = i + 1
@@ -8749,7 +8929,7 @@ fn own_mark_field(self: &Checker, p: &OwnPass, decl: NodeId, path: String) {
     }
     own_unmark_field(p, decl, path)
     let stored = from_view(path, self.allocator)
-    p.moved.push(MovedRec { decl = decl, path = stored.as_view() })
+    p.moved.push(MovedRec { decl = decl, path = stored.view })
     p.paths.push(stored)
 }
 
@@ -8882,7 +9062,7 @@ fn own_claim(p: &OwnPass, node: NodeId) bool {
 // A copy rejected inside a generic body belongs to the caller: the template is written once, and
 // this instantiation is what made the type non-copyable. Reporting at the outermost open
 // instantiation names a line in the file the author is editing rather than one in the stdlib.
-fn own_report(self: &Checker, span: SourceSpan, code: String, msg: OwnedString) {
+fn own_report(self: &Checker, span: SourceSpan, code: String, msg: move OwnedString) {
     const at = if self.spec_call_spans.len > 0 { self.spec_call_spans[0] } else { span }
     push_diag_e(self, at, code, msg)
 }
@@ -9107,8 +9287,7 @@ fn own_moved_use(self: &Checker, p: &OwnPass, decl: NodeId, name: String, path: 
         if own_claim(p, node) {
             const shown = place_text(name, path)
             defer shown.deinit()
-            own_report(self, span, E_USE_AFTER_MOVE,
-                $"`{shown.as_view()}` was moved and cannot be used")
+            own_report(self, span, E_USE_AFTER_MOVE, $"`{shown.view}` was moved and cannot be used")
         }
         return
     }
@@ -9120,7 +9299,7 @@ fn own_moved_use(self: &Checker, p: &OwnPass, decl: NodeId, name: String, path: 
     defer shown.deinit()
     const field = if path.len == 0 { below.unwrap() } else { below.unwrap()[path.len + 1..] }
     own_report(self, span, E_USE_AFTER_MOVE,
-        $"`{shown.as_view()}` is incomplete: field `{field}` was moved out - assign it before using `{shown.as_view()}`")
+        $"`{shown.view}` is incomplete: field `{field}` was moved out - assign it before using `{shown.view}`")
 }
 
 fn place_text(name: String, path: String) OwnedString {
@@ -9145,7 +9324,7 @@ fn own_member_use(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr) {
     }
     const path = member_path(ma)
     defer path.deinit()
-    own_moved_use(self, p, d.unwrap(), id.name, path.as_view(), ma.span)
+    own_moved_use(self, p, d.unwrap(), id.name, path.view, ma.span)
 }
 
 // The identifier a chain of field accesses starts from, when no step goes through a reference.
@@ -9166,7 +9345,7 @@ fn member_path(ma: &MemberAccessExpr) OwnedString {
         MemberAccess(inner) => {
             const head = member_path(&inner)
             defer head.deinit()
-            $"{head.as_view()}.{ma.member}"
+            $"{head.view}.{ma.member}"
         }
         _ => from_view(ma.member)
     }
@@ -9256,7 +9435,7 @@ fn own_mark_member(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr) {
     }
     const path = member_path(ma)
     defer path.deinit()
-    own_mark_field(self, p, d.unwrap(), path.as_view())
+    own_mark_field(self, p, d.unwrap(), path.view)
 }
 
 // Whether `e` names storage the function owns: a local, or a `move` parameter, and the fields of
@@ -9815,15 +9994,15 @@ fn own_assign_field(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr, span: So
     }
     const path = member_path(ma)
     defer path.deinit()
-    const released = own_released(self, p, d.unwrap(), path.as_view(), own_type(self, ma.span))
-    own_unmark_field(p, d.unwrap(), path.as_view())
+    const released = own_released(self, p, d.unwrap(), path.view, own_type(self, ma.span))
+    own_unmark_field(p, d.unwrap(), path.view)
     if released or own_is_copyable(self, ma.span) or !own_claim(p, self.node_of(ma.span)) {
         return
     }
-    const shown = place_text(root.unwrap().name, path.as_view())
+    const shown = place_text(root.unwrap().name, path.view)
     defer shown.deinit()
     let sb = string_builder(160, self.allocator)
-    sb.append($"`{shown.as_view()}` is live - assigning over it leaks the value it holds")
+    sb.append($"`{shown.view}` is live - assigning over it leaks the value it holds")
     own_blame(self, ma.span, &sb)
     own_report(self, span, E_ASSIGN_OVER_LIVE, sb.to_string())
 }
@@ -9861,7 +10040,7 @@ fn own_released(self: &Checker, p: &OwnPass, decl: NodeId, path: String, ty: Ty?
     for &f in sd.unwrap().fields {
         const sub = if path.len == 0 { from_view(f.name) } else { $"{path}.{f.name}" }
         defer sub.deinit()
-        if !own_released(self, p, decl, sub.as_view(), struct_field_lookup(self, t, f.name)) {
+        if !own_released(self, p, decl, sub.view, struct_field_lookup(self, t, f.name)) {
             return false
         }
     }
@@ -10377,6 +10556,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     let out_default_args = self.results.default_args
     let out_arg_lists = self.results.arg_lists
     let out_receiver_derefs = self.results.receiver_derefs
+    let out_arg_derefs = self.results.arg_derefs
     let out_nominals = self.nominals
     let out_functions = self.functions
     let out_lambdas = self.results.lambdas
@@ -10391,7 +10571,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     // list. An empty `file_paths` leaves `path_of` reporting every file as unknown.
     let out_paths: List(OwnedString) = list(file_paths.len, self.allocator)
     for &fp in file_paths {
-        out_paths.push(from_view(fp.as_view()))
+        out_paths.push(from_view(fp.view))
     }
 
     self.results.reset_side_tables()
@@ -10422,6 +10602,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
         default_args = out_default_args,
         arg_lists = out_arg_lists,
         receiver_derefs = out_receiver_derefs,
+        arg_derefs = out_arg_derefs,
         nominals = out_nominals,
         functions = out_functions,
         lambdas = out_lambdas,
@@ -10546,7 +10727,7 @@ fn module_diags_entry(self: &Checker, path: String, from: usize) &ModuleNomDiags
         }
         const idx = self.nominal_diag_keys.len
         self.nominal_diag_keys.push(from_view(path, self.allocator))
-        self.nominal_diags.set(self.nominal_diag_keys[idx].as_view(), ModuleNomDiags {
+        self.nominal_diags.set(self.nominal_diag_keys[idx].view, ModuleNomDiags {
             collect = list(0, self.allocator),
             resolve = list(0, self.allocator),
             signatures = list(0, self.allocator),
@@ -10695,7 +10876,7 @@ fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark,
     if found.is_none() {
         const idx = self.sig_cache_keys.len
         self.sig_cache_keys.push(from_view(path, self.allocator))
-        self.sig_caches.set(self.sig_cache_keys[idx].as_view(), cache)
+        self.sig_caches.set(self.sig_cache_keys[idx].view, cache)
         return
     }
     let slot = found.unwrap()
@@ -10747,7 +10928,7 @@ fn replay_signature_cache(self: &Checker, path: String) {
 // still unresolved would owe an E2001 per demand, so its module stays uncached and re-runs.
 fn harvest_sig_caches(self: &Checker, zonked: &Dict(NodeId, Ty)) {
     for k in 0..self.sig_cache_keys.len {
-        const path = self.sig_cache_keys[k].as_view()
+        const path = self.sig_cache_keys[k].view
         let entry = self.sig_caches.get_ref(path).unwrap()
         if !entry.fresh {
             continue
@@ -10891,6 +11072,7 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
         default_args = list(0, self.allocator),
         arg_lists = list(0, self.allocator),
         derefs = list(0, self.allocator),
+        arg_derefs = list(0, self.allocator),
         picks = picks,
         calls = calls,
         spec_sites = sites,
@@ -10959,6 +11141,11 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
         chain.push_all(f.chain.as_slice())
         self.results.record_receiver_deref(f.node, chain)
     }
+    for &f in c.arg_derefs {
+        let chain: List(ResolvedTarget) = list(f.chain.len, self.allocator)
+        chain.push_all(f.chain.as_slice())
+        self.results.record_arg_deref(f.node, chain)
+    }
     for _k in 0..c.var_burn {
         self.engine.burn_var()
     }
@@ -10973,6 +11160,7 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
             span = cp.span,
             is_operator = cp.is_operator,
             deref_index = cp.deref_index,
+            deref_on_arg = cp.deref_on_arg,
             function_id = cp.function_id,
             tp_binds = cp.tp_binds,
             inst_params = cp.inst_params,
@@ -11065,6 +11253,7 @@ fn log_pick(self: &Checker, p: &PendingSpec, params: &List(Ty), ret: Ty) {
         span = p.span,
         is_operator = p.is_operator,
         deref_index = p.deref_index,
+        deref_on_arg = p.deref_on_arg,
         function_id = p.function_id,
         tp_binds = binds,
         inst_params = ps,
@@ -11124,7 +11313,7 @@ fn replay_closure(self: &Checker, f: &ClosureFact) {
         is_simd = false,
         is_foreign = false,
     }
-    const nid = register_collected(self, NominalDef.NomStruct(sd), from_view(f.fqn.as_view()))
+    const nid = register_collected(self, NominalDef.NomStruct(sd), from_view(f.fqn.view))
     self.closures.set(nid, copy_sig(&f.sig, self.allocator))
 }
 
@@ -11133,7 +11322,7 @@ fn store_body_cache(self: &Checker, path: String, cache: ModuleBodyCache) {
     if found.is_none() {
         const idx = self.body_cache_keys.len
         self.body_cache_keys.push(from_view(path, self.allocator))
-        self.body_caches.set(self.body_cache_keys[idx].as_view(), cache)
+        self.body_caches.set(self.body_cache_keys[idx].view, cache)
         return
     }
     let slot = found.unwrap()
@@ -11144,7 +11333,7 @@ fn store_body_cache(self: &Checker, path: String, cache: ModuleBodyCache) {
 // Fill this demand's fresh body caches from the finished tables, once the final zonk has run.
 fn harvest_body_caches(self: &Checker, zonked: &Dict(NodeId, Ty)) {
     for k in 0..self.body_cache_keys.len {
-        const path = self.body_cache_keys[k].as_view()
+        const path = self.body_cache_keys[k].view
         let entry = self.body_caches.get_ref(path).unwrap()
         if !entry.fresh {
             continue
@@ -11264,6 +11453,19 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
             let chain: List(ResolvedTarget) = list(found.unwrap().len, self.allocator)
             chain.push_all(found.unwrap().as_slice())
             c.derefs.push(NodeDerefsFact { node = n, chain = chain })
+        }
+    }
+    seen.clear()
+    for n in c.keys.arg_derefs {
+        if seen.contains(n) {
+            continue
+        }
+        seen.add(n)
+        const found = self.results.arg_derefs.get_ref(n)
+        if found.is_some() {
+            let chain: List(ResolvedTarget) = list(found.unwrap().len, self.allocator)
+            chain.push_all(found.unwrap().as_slice())
+            c.arg_derefs.push(NodeDerefsFact { node = n, chain = chain })
         }
     }
     seen.deinit()
@@ -11443,7 +11645,7 @@ fn nominal_defs_differ(self: &Checker, old: &Dict(String, OwnedString)) bool {
         }
         sb.clear()
         render_def_fingerprint(self.nominals.find(id.unwrap()).unwrap(), &sb)
-        if sb.as_view() != entry.value.as_view() {
+        if sb.as_view() != entry.value.view {
             return true
         }
     }
@@ -11536,7 +11738,7 @@ fn default_text_of(sources: &List(OwnedString), sp: SourceSpan) String {
     if f >= sources.len {
         return ""
     }
-    const src = sources[f].as_view()
+    const src = sources[f].view
     if sp.start + sp.length > src.len {
         return ""
     }
@@ -11548,7 +11750,7 @@ fn default_texts_differ(old: &List(OwnedString), new: &List(OwnedString)) bool {
         return true
     }
     for i in 0..old.len {
-        if old[i].as_view() != new[i].as_view() {
+        if old[i].view != new[i].view {
             return true
         }
     }
@@ -11605,7 +11807,7 @@ fn aliases_differ(self: &Checker, old: &Dict(StrId, OwnedString), retiring: &Set
         if !render_alias_body(&body, &sb) {
             return true
         }
-        if sb.as_view() != prev.unwrap().as_view() {
+        if sb.as_view() != prev.unwrap().view {
             return true
         }
     }
@@ -11968,7 +12170,7 @@ test "a changed default value invalidates the carried slots" {
     chk.adopt_specs(take_specs(&res1))
     let old_b = mods[0]
     mods[0] = parse_src(b2, 0i32)
-    let old_src = srcs[0]
+    let old_src = move srcs[0]
     srcs[0] = from_view(b2)
     let recollect: List(bool) = list(2)
     recollect.push(true)
@@ -12385,8 +12587,9 @@ test "postfix ? without an op_try overload is E2092" {
 // M9: interpolation desugars to StringBuilder calls (RFC-004).
 
 // Minimal StringBuilder surface the desugar resolves against. `Owned` stands in for OwnedString -
-// the desugar hardcodes no type, it takes whatever `to_string` returns.
-const INTERP_SB_SRC: String = "import core.string\nimport core.option\npub type StringBuilder = struct { n: usize }\npub type Owned = struct { n: usize }\npub fn string_builder(capacity: usize, allocator: &StringBuilder? = null) StringBuilder { return StringBuilder { n = capacity } }\npub fn append(sb: &StringBuilder, text: String) { sb.n = sb.n + text.len }\npub fn append(sb: &StringBuilder, v: i32) { sb.n = sb.n + 1 }\npub fn append(sb: &StringBuilder, v: i32, spec: String) { sb.n = sb.n + spec.len }\npub fn to_string(sb: &StringBuilder) Owned { return Owned { n = sb.n } }\npub fn deinit(sb: &StringBuilder) {}\npub fn deinit(s: &Owned) {}\n"
+// the desugar hardcodes no type, it takes whatever `to_string` returns. A hole naming a place is
+// read through `writer` and `format`, so the surface carries both.
+const INTERP_SB_SRC: String = "import core.string\nimport core.option\npub type StringBuilder = struct { n: usize }\npub type Owned = struct { n: usize }\npub fn string_builder(capacity: usize, allocator: &StringBuilder? = null) StringBuilder { return StringBuilder { n = capacity } }\npub fn append(sb: &StringBuilder, text: String) { sb.n = sb.n + text.len }\npub fn append(sb: &StringBuilder, v: i32) { sb.n = sb.n + 1 }\npub fn append(sb: &StringBuilder, v: i32, spec: String) { sb.n = sb.n + spec.len }\npub fn writer(sb: &StringBuilder) &StringBuilder { return sb }\npub fn format(v: i32, w: &StringBuilder, spec: String) { w.n = w.n + 1 }\npub fn to_string(sb: &StringBuilder) Owned { return Owned { n = sb.n } }\npub fn deinit(sb: &StringBuilder) {}\npub fn deinit(s: &Owned) {}\n"
 const INTERP_STRING_SRC: String = "pub type String = struct { ptr: &u8, len: usize }\n"
 
 test "interpolation desugars: appends resolve and the result is to_string's type" {
@@ -12394,7 +12597,7 @@ test "interpolation desugars: appends resolve and the result is to_string's type
             "import std.string_builder\nfn f(x: i32) i32 { const s = $\"got {x} ok\" s.deinit() return x }\n"],
         ["core.option", "core.string", "std.string_builder", "interp_ok"])
     assert_true(errors == 0,
-        "segment and hole appends resolve; the result takes Owned's UFCS surface")
+        "the segment appends and the hole's format resolve; the result takes Owned's UFCS surface")
 
     let hole_errors = count_check_errors([OPTION_SRC, INTERP_STRING_SRC, INTERP_SB_SRC,
             "import std.string_builder\nfn f() i32 { const s = $\"got {no_such_name}\" return 0 }\n"],
@@ -12409,11 +12612,11 @@ test "into-builder interpolation appends onto the target and is void" {
     assert_true(errors == 0, "the target's append overloads resolve; the statement is void")
 }
 
-test "a hole's format spec routes to the spec-taking append overload" {
+test "a hole's format spec reaches format, and a place is read rather than appended" {
     let errors = count_check_errors([OPTION_SRC, INTERP_STRING_SRC, INTERP_SB_SRC,
             "import std.string_builder\nfn f(x: i32) i32 { const s = $\"n={x:04}\" s.deinit() return x }\n"],
         ["core.option", "core.string", "std.string_builder", "interp_spec"])
-    assert_true(errors == 0, "append(sb, v, spec) resolves for `{x:04}`")
+    assert_true(errors == 0, "`{x:04}` resolves as x.format(sb.writer(), \"04\")")
 }
 
 // ── M10 - specialization ─────────────────────────────────────────────
@@ -12595,63 +12798,62 @@ fn with_wrap(rest: String) OwnedString {
 test "ranking: a concrete parameter beats a catch-all on a direct call" {
     let src = with_wrap("pub fn f(x: Inner) i64 { return 1 }\npub fn f(x: $T) i64 { return 2 }\nfn main() i64 { let i: Inner return f(i) }\n")
     defer src.deinit()
-    let r = resolved_call(src.as_view(), "f")
+    let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
-    assert_true(r.signature.as_view() == "fn(Inner) i64",
-        "the nominal parameter is the stricter match")
+    assert_true(r.signature.view == "fn(Inner) i64", "the nominal parameter is the stricter match")
 }
 
 test "ranking: a value receiver as written beats adapting it to a reference parameter" {
     let src = with_wrap("pub fn f(x: &Inner) i64 { return 1 }\npub fn f(x: $T) i64 { return 2 }\nfn main(i: Inner) i64 { return i.f() }\n")
     defer src.deinit()
-    let r = resolved_call(src.as_view(), "f")
+    let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
-    assert_true(r.signature.as_view().starts_with("fn(?"), "the receiver as written takes the call")
+    assert_true(r.signature.view.starts_with("fn(?"), "the receiver as written takes the call")
     assert_eq(r.hops, 0 as usize, "no op_deref hop")
 }
 
 test "ranking: a value receiver adapts to a reference parameter when nothing takes it as written" {
     let src = with_wrap("pub fn f(x: &Inner) i64 { return 1 }\nfn main(i: Inner) i64 { return i.f() }\n")
     defer src.deinit()
-    let r = resolved_call(src.as_view(), "f")
+    let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
-    assert_true(r.signature.as_view() == "fn(&Inner) i64", "the adapted receiver takes the call")
+    assert_true(r.signature.view == "fn(&Inner) i64", "the adapted receiver takes the call")
     assert_eq(r.hops, 0 as usize, "no op_deref hop")
 }
 
 test "ranking: a direct hit beats an equally specific overload through op_deref" {
     let src = with_wrap("pub fn f(x: &Wrap) i64 { return 1 }\npub fn f(x: &Inner) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n")
     defer src.deinit()
-    let r = resolved_call(src.as_view(), "f")
+    let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
-    assert_true(r.signature.as_view() == "fn(&Wrap) i64", "the wrapper's own overload wins")
+    assert_true(r.signature.view == "fn(&Wrap) i64", "the wrapper's own overload wins")
     assert_eq(r.hops, 0 as usize, "no op_deref hop")
 }
 
 test "ranking: a catch-all matched as written beats a concrete overload through op_deref" {
     let src = with_wrap("pub fn f(x: &Inner) i64 { return 1 }\npub fn f(x: $I) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n")
     defer src.deinit()
-    let r = resolved_call(src.as_view(), "f")
+    let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
-    assert_true(r.signature.as_view().starts_with("fn(?"), "the receiver as written takes the call")
+    assert_true(r.signature.view.starts_with("fn(?"), "the receiver as written takes the call")
     assert_eq(r.hops, 0 as usize, "no op_deref hop")
 }
 
 test "ranking: the peel also runs through a generic wrapper" {
     let src = with_wrap("pub type Box = struct(T) { pad: i64 inner: T }\npub fn op_deref(b: &Box($T)) &T { return &b.inner }\npub fn f(x: &Inner) i64 { return 1 }\nfn main(b: &Box(Inner)) i64 { return b.f() }\n")
     defer src.deinit()
-    let r = resolved_call(src.as_view(), "f")
+    let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
-    assert_true(r.signature.as_view() == "fn(&Inner) i64", "the peeled receiver's overload wins")
+    assert_true(r.signature.view == "fn(&Inner) i64", "the peeled receiver's overload wins")
     assert_eq(r.hops, 1 as usize, "one op_deref hop recorded for lowering")
 }
 
 test "ranking: the peel chains through two wrappers" {
     let src = with_wrap("pub type Outer = struct { tag: i64 w: Wrap }\npub fn op_deref(o: &Outer) &Wrap { return &o.w }\npub fn f(x: &Inner) i64 { return 1 }\nfn main(o: &Outer) i64 { return o.f() }\n")
     defer src.deinit()
-    let r = resolved_call(src.as_view(), "f")
+    let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
-    assert_true(r.signature.as_view() == "fn(&Inner) i64", "the innermost receiver's overload wins")
+    assert_true(r.signature.view == "fn(&Inner) i64", "the innermost receiver's overload wins")
     assert_eq(r.hops, 2 as usize, "both hops recorded for lowering")
 }
 
@@ -12660,36 +12862,36 @@ test "ranking: a wrapper declares the member a catch-all would otherwise take" {
     // so the wrapper declares its own `any` rather than relying on the peel.
     let src = with_wrap("pub fn any(x: &Inner, pred: $F) bool { return pred(x.value, x.value) }\npub fn any(w: &Wrap, pred: $F) bool { return w.inner.any(pred) }\npub fn any(it: $I, pred: $F) bool { return pred(0i64) }\nfn main(w: &Wrap) bool { return w.any(fn(a, b) { a == b }) }\n")
     defer src.deinit()
-    let r = resolved_call(src.as_view(), "any")
+    let r = resolved_call(src.view, "any")
     defer r.signature.deinit()
-    assert_true(r.signature.as_view().starts_with("fn(&Wrap, "), "the wrapper's own overload wins")
+    assert_true(r.signature.view.starts_with("fn(&Wrap, "), "the wrapper's own overload wins")
     assert_eq(r.hops, 0 as usize, "no op_deref hop")
 }
 
 test "ranking: indexing resolves op_index_ref through op_deref, like the call it desugars to" {
     let src = with_wrap("pub fn op_index_ref(x: &Inner, i: usize) &i64 { return &x.value }\nfn main(w: &Wrap) i64 { return w[0usize] }\n")
     defer src.deinit()
-    let r = resolved_call(src.as_view(), "op_index_ref")
+    let r = resolved_call(src.view, "op_index_ref")
     defer r.signature.deinit()
-    assert_true(r.signature.as_view() == "fn(&Inner, usize) &i64", "the inner type's operator")
+    assert_true(r.signature.view == "fn(&Inner, usize) &i64", "the inner type's operator")
     assert_eq(r.hops, 1 as usize, "one op_deref hop recorded on the index node")
 }
 
 test "ranking: for resolves iter through op_deref, like the call it desugars to" {
     let src = with_wrap("pub type It = struct { n: i64 }\npub fn iter(x: &Inner) It { return It { n = x.value } }\npub fn next(it: &It) i64? { if it.n == 0 { return null } it.n = it.n - 1 return Some(it.n) }\nfn main(w: &Wrap) i64 { let t = 0i64 for x in w { t = t + x } return t }\n")
     defer src.deinit()
-    let r = resolved_call(src.as_view(), "iter")
+    let r = resolved_call(src.view, "iter")
     defer r.signature.deinit()
-    assert_true(r.signature.as_view() == "fn(&Inner) It", "the inner type's iter")
+    assert_true(r.signature.view == "fn(&Inner) It", "the inner type's iter")
     assert_eq(r.hops, 1 as usize, "one op_deref hop recorded beside the iter pick")
 }
 
 test "ranking: the catch-all still wins when nothing through the peel matches" {
     let src = with_wrap("pub type Other = struct { n: i64 }\npub fn f(x: &Other) i64 { return 1 }\npub fn f(x: $I) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n")
     defer src.deinit()
-    let r = resolved_call(src.as_view(), "f")
+    let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
-    assert_true(r.signature.as_view().starts_with("fn(?"), "only the catch-all matches")
+    assert_true(r.signature.view.starts_with("fn(?"), "only the catch-all matches")
     assert_eq(r.hops, 0 as usize, "no op_deref hop")
 }
 

@@ -22,7 +22,7 @@ pub type DependencySpec = struct {
     path: OwnedString
 }
 
-pub fn deinit(self: &DependencySpec) {
+pub fn deinit(self: move DependencySpec) {
     self.name.deinit()
     self.path.deinit()
 }
@@ -42,7 +42,7 @@ pub type FmtEntry = struct {
     value: OwnedString
 }
 
-pub fn deinit(self: &FmtEntry) {
+pub fn deinit(self: move FmtEntry) {
     self.key.deinit()
     self.value.deinit()
 }
@@ -90,7 +90,7 @@ pub fn parse_project(text: String, allocator: &Allocator? = null) Project {
     return proj
 }
 
-pub fn deinit(self: &Project) {
+pub fn deinit(self: move Project) {
     self.name.deinit()
     self.version.deinit()
     self.source.deinit()
@@ -398,33 +398,33 @@ test "parses project metadata, deps, build config and imports" {
     let p = parse_project(src)
     defer p.deinit()
 
-    assert_true(p.name.as_view() == "demo", "name parsed")
-    assert_true(p.version.as_view() == "0.2.0", "version parsed")
+    assert_true(p.name.view == "demo", "name parsed")
+    assert_true(p.version.view == "0.2.0", "version parsed")
     let is_lib = p.kind match { Lib => true, _ => false }
     assert_true(is_lib, "kind = lib")
 
     assert_eq(p.deps.len, 2 as usize, "two dependencies")
-    assert_true(p.deps[0].name.as_view() == "flang_core", "dep 0 name")
-    assert_true(p.deps[0].path.as_view() == "../flang_core", "dep 0 path")
-    assert_true(p.deps[1].path.as_view() == "../lib/flang_parser", "dep 1 path")
+    assert_true(p.deps[0].name.view == "flang_core", "dep 0 name")
+    assert_true(p.deps[0].path.view == "../flang_core", "dep 0 path")
+    assert_true(p.deps[1].path.view == "../lib/flang_parser", "dep 1 path")
 
     assert_eq(p.windows.libs.len, 2 as usize, "two windows libs")
-    assert_true(p.windows.libs[0].as_view() == "raylib.lib", "lib 0")
-    assert_true(p.windows.libs[1].as_view() == "user32.lib", "lib 1")
+    assert_true(p.windows.libs[0].view == "raylib.lib", "lib 0")
+    assert_true(p.windows.libs[1].view == "user32.lib", "lib 1")
     assert_eq(p.windows.headers.len, 1 as usize, "one windows header")
 
     assert_eq(p.global_imports.len, 1 as usize, "one global import")
-    assert_true(p.global_imports[0].as_view() == "std.prelude", "global import value")
+    assert_true(p.global_imports[0].view == "std.prelude", "global import value")
 }
 
 test "collects [fmt] entries verbatim with values unquoted" {
     let p = parse_project("[project]\nname = \"x\"\n\n[fmt]\nindent = 2\ntrailing-comma = \"always\"\n")
     defer p.deinit()
     assert_eq(p.fmt.len, 2 as usize, "two fmt entries")
-    assert_true(p.fmt[0].key.as_view() == "indent", "key 0")
-    assert_true(p.fmt[0].value.as_view() == "2", "value 0")
-    assert_true(p.fmt[1].key.as_view() == "trailing-comma", "key 1")
-    assert_true(p.fmt[1].value.as_view() == "always", "value 1 unquoted")
+    assert_true(p.fmt[0].key.view == "indent", "key 0")
+    assert_true(p.fmt[0].value.view == "2", "value 0")
+    assert_true(p.fmt[1].key.view == "trailing-comma", "key 1")
+    assert_true(p.fmt[1].value.view == "always", "value 1 unquoted")
 }
 
 test "applies defaults for kind, source and output" {
@@ -432,14 +432,14 @@ test "applies defaults for kind, source and output" {
     defer p.deinit()
     let is_exe = p.kind match { Exe => true, _ => false }
     assert_true(is_exe, "kind defaults to exe")
-    assert_true(p.source.as_view() == "src/**/*.f", "source default")
-    assert_true(p.output.as_view() == "build", "output default")
+    assert_true(p.source.view == "src/**/*.f", "source default")
+    assert_true(p.output.view == "build", "output default")
     assert_eq(p.deps.len, 0 as usize, "no deps")
 }
 
 test "ignores comments and blank lines" {
     let p = parse_project("\n  # a comment\n[project]\nname = \"c\"  # trailing\nversion = \"2\"\n\n")
     defer p.deinit()
-    assert_true(p.name.as_view() == "c", "name ignores trailing comment")
-    assert_true(p.version.as_view() == "2", "version after blank lines")
+    assert_true(p.name.view == "c", "name ignores trailing comment")
+    assert_true(p.version.view == "2", "version after blank lines")
 }

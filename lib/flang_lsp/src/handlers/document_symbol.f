@@ -32,7 +32,7 @@ pub type DocSymbol = struct {
     children: List(DocSymbol)
 }
 
-pub fn deinit(self: &DocSymbol) {
+pub fn deinit(self: move DocSymbol) {
     self.children.deinit()
     self.name.deinit()
 }
@@ -49,12 +49,12 @@ pub fn document_symbols(m: &Module, allocator: &Allocator? = null) List(DocSymbo
                 // and a label with spaces in it needs the delimiters to read as one name.
                 const label = $"test \"{t.label}\""
                 defer label.deinit()
-                out.push(leaf(label.as_view(), SymbolKind.Function, t.span, allocator))
+                out.push(leaf(label.view, SymbolKind.Function, t.span, allocator))
             }
             GenDef(g) => {
                 const label = $"#{g.name}"
                 defer label.deinit()
-                out.push(leaf(label.as_view(), SymbolKind.Function, g.span, allocator))
+                out.push(leaf(label.view, SymbolKind.Function, g.span, allocator))
             }
             _ => {}
         }
@@ -134,16 +134,16 @@ test "document symbols cover functions, types, consts and tests" {
     let syms = document_symbols(&doc.module)
     defer syms.deinit()
     assert_eq(syms.len, 6 as usize, "import excluded, six symbols")
-    assert_eq(syms[0].name.as_view(), "go", "function name")
+    assert_eq(syms[0].name.view, "go", "function name")
     assert_eq(syms[0].kind as i64, SymbolKind.Function as i64, "function kind")
-    assert_eq(syms[1].name.as_view(), "P", "struct name")
+    assert_eq(syms[1].name.view, "P", "struct name")
     assert_eq(syms[1].children.len, 2 as usize, "struct fields as children")
-    assert_eq(syms[1].children[0].name.as_view(), "x", "field name")
+    assert_eq(syms[1].children[0].name.view, "x", "field name")
     assert_eq(syms[1].children[0].kind as i64, SymbolKind.Field as i64, "field kind")
     assert_eq(syms[2].kind as i64, SymbolKind.Enum as i64, "enum kind")
-    assert_eq(syms[2].children[1].name.as_view(), "B", "variant name")
+    assert_eq(syms[2].children[1].name.view, "B", "variant name")
     assert_eq(syms[2].children[1].kind as i64, SymbolKind.EnumMember as i64, "variant kind")
     assert_eq(syms[3].kind as i64, SymbolKind.Class as i64, "alias kind")
     assert_eq(syms[4].kind as i64, SymbolKind.Constant as i64, "const kind")
-    assert_eq(syms[5].name.as_view(), "test \"works\"", "test label")
+    assert_eq(syms[5].name.view, "test \"works\"", "test label")
 }

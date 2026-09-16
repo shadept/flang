@@ -545,7 +545,7 @@ pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &L
                 Import(id) => {
                     if id.is_pub {
                         let dotted = dotted_name(&id.path, allocator)
-                        const to = index_of.get(dotted.as_view())
+                        const to = index_of.get(dotted.view)
                         dotted.deinit()
                         if to.is_some() {
                             row.push(to.unwrap())
@@ -582,7 +582,7 @@ pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &L
         out.push(Diagnostic {
             severity = Severity.Warning,
             code = W_UNUSED_IMPORT,
-            message = $"unused import `{m.name.as_view()}`",
+            message = $"unused import `{m.name.view}`",
             hint = from_view("nothing from it is used - remove the import"),
             span = m.span,
         })
@@ -595,7 +595,7 @@ type ImportSite = struct {
     span: SourceSpan
 }
 
-pub fn deinit(self: &ImportSite) {
+pub fn deinit(self: move ImportSite) {
     self.name.deinit()
 }
 
@@ -635,11 +635,11 @@ fn check_import(id: &ImportDecl, from: usize, fqns: &List(String), index_of: &Di
         return
     }
     let dotted = dotted_name(&id.path, allocator)
-    if dotted.as_view() == "core.prelude" or index_of.get(dotted.as_view()).is_none() {
+    if dotted.view == "core.prelude" or index_of.get(dotted.view).is_none() {
         dotted.deinit()
         return
     }
-    const target = index_of.get(dotted.as_view()).unwrap()
+    const target = index_of.get(dotted.view).unwrap()
     if target == from {
         dotted.deinit()
         return
@@ -666,7 +666,7 @@ fn check_import(id: &ImportDecl, from: usize, fqns: &List(String), index_of: &Di
         }
     }
 
-    missed.push(ImportSite { name = dotted, span = id.span })
+    missed.push(ImportSite { name = move dotted, span = id.span })
 }
 
 // Whether a module exports anything the recorded edges cannot witness: a `pub` type alias (its
@@ -850,7 +850,7 @@ fn analyzed_fixture(source: String) AnalyzedProject {
     const root = if exists("fixtures/leaf.f") { "fixtures" } else { "lib/flang_analysis/fixtures" }
     const manifest = $"[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"{root}/**/*.f\"\n"
     defer manifest.deinit()
-    let proj = parse_project(manifest.as_view())
+    let proj = parse_project(manifest.view)
     defer proj.deinit()
     let ctx = resolve_ctx(&proj, "")
     defer ctx.deinit()
@@ -868,7 +868,7 @@ fn diag_messages(unit: &AnalyzedProject, code: String) List(String) {
     let out: List(String) = list(0)
     for i in 0..unit.diagnostics.len {
         if unit.diagnostics[i].code == code {
-            out.push(unit.diagnostics[i].message.as_view())
+            out.push(unit.diagnostics[i].message.view)
         }
     }
     return out

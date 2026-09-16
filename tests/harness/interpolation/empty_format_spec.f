@@ -16,8 +16,8 @@ pub fn main() i32 {
     let no_spec = $"{n}"
     defer no_spec.deinit()
 
-    print(with_spec.as_view())
+    print(with_spec.view)
     print(" / ")
-    print(no_spec.as_view())
+    print(no_spec.view)
     return 0
 }

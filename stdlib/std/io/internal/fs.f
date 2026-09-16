@@ -17,7 +17,6 @@
 import std.allocator
 import std.io.types
 import std.option
-import std.owned
 import std.result
 import std.string
 import std.string_builder

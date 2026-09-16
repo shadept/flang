@@ -157,7 +157,7 @@ test "read_all drains a reader to EOF" {
     let r = mem_reader("hello, reader")
     let out = read_all(r.reader())
     defer out.deinit()
-    assert_true(out.as_view() == "hello, reader", "everything arrives, nothing extra")
+    assert_true(out.view == "hello, reader", "everything arrives, nothing extra")
 }
 
 test "read_all crosses the internal chunk size" {
@@ -165,9 +165,9 @@ test "read_all crosses the internal chunk size" {
     sb.append_repeated("abcdefgh", 1200)
     let src = sb.to_string()
     defer src.deinit()
-    let r = mem_reader(src.as_view())
+    let r = mem_reader(src.view)
     let out = read_all(r.reader())
     defer out.deinit()
     assert_eq(out.len, src.len, "a payload larger than one chunk arrives whole")
-    assert_true(out.as_view() == src.as_view(), "byte for byte")
+    assert_true(out.view == src.view, "byte for byte")
 }

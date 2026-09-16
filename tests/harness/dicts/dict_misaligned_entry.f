@@ -109,7 +109,7 @@ pub fn main() i32 {
         if v.is_none() {
             return 12
         }
-        if v.unwrap().as_view() != "five" {
+        if v.unwrap().view != "five" {
             return 13
         }
     }

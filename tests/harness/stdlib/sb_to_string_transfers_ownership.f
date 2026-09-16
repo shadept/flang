@@ -31,7 +31,7 @@ pub fn main() i32 {
     if owned_ptr != sb_ptr_before { return 20 }
     if owned.len != sb_len_before { return 21 }
 
-    const view = owned.as_view()
+    const view = owned.view
     if view.len != 12 { return 30 }
     for i in 0..view.len {
         if view[i] != "hello, world"[i] { return 31 }

@@ -21,7 +21,7 @@ pub type CallSite = struct {
     active: usize
 }
 
-pub fn deinit(self: &CallSite) {
+pub fn deinit(self: move CallSite) {
     self.name.deinit()
 }
 
@@ -125,7 +125,7 @@ test "call_site_at finds the callee and counts top-level commas" {
     const site = call_site_at(src, src.len)
     assert_true(site.is_some(), "cursor is inside the call")
     let s = site.unwrap()
-    assert_eq(s.name.as_view(), "point", "outer callee, not the nested one")
+    assert_eq(s.name.view, "point", "outer callee, not the nested one")
     assert_eq(s.active, 2 as usize, "nested call commas do not count")
     s.deinit()
 }
@@ -140,7 +140,7 @@ test "call_site_at handles ufcs receivers" {
     const src = "xs.push("
     const site = call_site_at(src, src.len)
     let s = site.unwrap()
-    assert_eq(s.name.as_view(), "push", "method name only")
+    assert_eq(s.name.view, "push", "method name only")
     assert_eq(s.active, 0 as usize, "first argument")
     s.deinit()
 }

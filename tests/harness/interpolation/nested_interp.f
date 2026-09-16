@@ -14,6 +14,6 @@ pub fn main() i32 {
     let n = 42i32
     let msg = $"outer[{$"inner={n}"}] end"
     defer msg.deinit()
-    print(msg.as_view())
+    print(msg.view)
     return 0
 }

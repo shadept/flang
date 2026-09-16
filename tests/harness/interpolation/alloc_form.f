@@ -15,6 +15,6 @@ pub fn main() i32 {
     let n = 7i32
     let msg = $(&alloc)"count={n}"
     defer msg.deinit()
-    print(msg.as_view())
+    print(msg.view)
     return 0
 }

@@ -23,7 +23,7 @@ pub type IndexSymbol = struct {
     span: SourceSpan
 }
 
-pub fn deinit(self: &IndexSymbol) {
+pub fn deinit(self: move IndexSymbol) {
     self.name.deinit()
     self.container.deinit()
 }
@@ -50,13 +50,13 @@ pub fn module_index(m: &Module, allocator: &Allocator? = null) ModuleIndex {
 
 fn flatten(out: &List(IndexSymbol), s: &DocSymbol, container: String, alloc: &Allocator?) {
     out.push(.{
-        name = from_view(s.name.as_view(), alloc),
+        name = from_view(s.name.view, alloc),
         container = from_view(container, alloc),
         kind = s.kind,
         span = s.span,
     })
     for &c in s.children {
-        flatten(out, c, s.name.as_view(), alloc)
+        flatten(out, c, s.name.view, alloc)
     }
 }
 
@@ -86,11 +86,11 @@ test "module_index flattens members under their container" {
     defer idx.deinit()
 
     assert_eq(idx.symbols.len, 3 as usize, "function, struct, field")
-    assert_eq(idx.symbols[0].name.as_view(), "go", "function first")
-    assert_eq(idx.symbols[0].container.as_view(), "", "top-level has no container")
-    assert_eq(idx.symbols[1].name.as_view(), "P", "struct follows")
-    assert_eq(idx.symbols[2].name.as_view(), "x", "field flattened after its struct")
-    assert_eq(idx.symbols[2].container.as_view(), "P", "field carries its container")
+    assert_eq(idx.symbols[0].name.view, "go", "function first")
+    assert_eq(idx.symbols[0].container.view, "", "top-level has no container")
+    assert_eq(idx.symbols[1].name.view, "P", "struct follows")
+    assert_eq(idx.symbols[2].name.view, "x", "field flattened after its struct")
+    assert_eq(idx.symbols[2].container.view, "P", "field carries its container")
     assert_eq(idx.symbols[2].kind as i64, SymbolKind.Field as i64, "field kind preserved")
 }
 

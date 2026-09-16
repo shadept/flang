@@ -126,15 +126,16 @@ Both landed 2026-09-15. Tiers disable `std.iter` until RFC-019 can bound its `$I
 | a by-value `String` method through `op_deref` (`s.starts_with("he")`) | works |
 | `s.hash()` reaching `String`'s `hash` | needs `hash(s: OwnedString)` (prerequisite 2) |
 | `s == "hello"`, `"hello" == s`, `s == t` | works (prerequisite 1) |
-| `$"{s}"` through `op_deref` | unverified |
+| `$"{s}"` through `op_deref` | works; consumes a named `s` (open question 1) |
 
 ## Migration
 
 - **`OwnedString`'s own API.** `hash` stays, forwarding to the view. `as_view`, `bytes`, `chars`, `format` and `op_eq` are deleted.
   `path_from_owned(s: &OwnedString)` takes the view. `#string_reader(OwnedString)` retargets to
   `String` through the hop or is deleted if the generator reads the view already.
-- **`s.as_view()` call sites** (924 across the tree) become `s.view` where a `String` value is
-  wanted and disappear where a `String` method follows. Mechanical.
+- **`s.as_view()` call sites** (~990 across the tree) become `s.view`. Dropping the call where a
+  `String` method follows is left to taste: `.view` resolves as written, while the peel is the last
+  receiver tier and a catch-all can take the receiver first.
 - **Struct literals naming the old fields** (`ptr`, `len`, `allocator`): `from_view`,
   `StringBuilder.to_string` and the `fake_owned` sites in `dict.f`.
 - **The ~40 types holding an `OwnedString`** become non-copyable and follow RFC-033: `deinit(self:
@@ -148,16 +149,23 @@ so a `defer` can free on the error path and do nothing after a hand-off. Ownersh
 a moved binding is dead, and a `defer` that would release it is E2123 on the path that moved it.
 Its three users are `std.io` sites around a `StringBuilder`; two end in `to_string()`, which leaves
 the builder empty so a plain `defer sb.deinit()` is correct, and one moves the builder into
-`GlobIter` after a fallible step and handles that step's error path explicitly.
+`GlobIter` and now builds it after the fallible step, so no error path holds it.
 
 ## Sequencing
 
 1. Operator dispatch peels `op_deref`. Done.
 2. Receiver tiers. Done.
-3. Seed promote: stdlib source is about to depend on both.
-4. `std/owned.f` deleted, its three users restructured.
+3. Seed promote. Done.
+4. `std/owned.f` deleted, its three users restructured. Done.
 5. `OwnedString` becomes the struct above, the key lookups become generic, the parallel API and
-   `fake_owned` go, and the tree is swept until green. One commit per green state.
+   `fake_owned` go, and the tree is swept until green. One commit per green state:
+   - 5a. `{ view, allocator }` plus `op_deref`, still copyable. Done.
+   - 5b. `$Q` lookups on `UnmanagedDict` and `UnmanagedSet`; `fake_owned` and the `String` lookup
+     overloads deleted. The `K` overloads stay, so a literal probe still types from the key. Done.
+   - 5c. `as_view`, `format`, `op_eq`, `bytes`, `chars` and `#string_reader(OwnedString)` deleted;
+     call sites read `.view`. Done.
+   - 5d. `owned view`: non-copyable, `deinit(self: move OwnedString)`, `clone`, and the types
+     holding one.
 
 ## Tests
 
@@ -176,8 +184,10 @@ loses to a catch-all as written.
 
 ## Open questions
 
-1. **Interpolation.** Whether `$"{s}"` reaches `String`'s `format` through the hop. Probe before
-   deleting `format`.
+1. **Interpolating a named `OwnedString`.** `$"{s}"` reaches `String`'s `format` through the hop,
+   but the hole resolves `append(sb, move OwnedString)`, which consumes `s`. Copyability hides it
+   today; under 5d it is E2123 on the next use. Either the desugar reads the view for a place and
+   consumes only a temporary, or `append` reads and temporaries are released by the desugar.
 2. **`List.to_owned_slice`.** Returns a `(T[], &Allocator)` tuple the caller frees by hand. Not
    this RFC's: the `List` increment of RFC-033 step 6c replaces it with drains and `take_all`.
 
