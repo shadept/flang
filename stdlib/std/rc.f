@@ -59,7 +59,8 @@ pub fn deinit(self: &Rc($T)) {
 
     if inner.ref_count == 0 {
         let val_ptr: &T = (inner as &u8 + size_of(usize)) as &T
-        val_ptr.deinit()
+        let val = move val_ptr.*
+        release(val)
         self.__allocator.or_global().free(inner)
     }
 
@@ -234,7 +235,8 @@ pub fn deinit(self: &Arc($T)) {
 
     if old == 1 {
         let val_ptr: &T = (inner as &u8 + size_of(usize)) as &T
-        val_ptr.deinit()
+        let val = move val_ptr.*
+        release(val)
         self.__allocator.or_global().free(inner)
     }
 

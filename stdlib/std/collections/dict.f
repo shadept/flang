@@ -42,7 +42,7 @@ pub type Entry = struct(K, V) {
 // zero-initialised value is a valid empty dict. Keys and values are owned: `deinit` deinits each
 // before freeing the table. `K` needs `hash` and `==`.
 pub type UnmanagedDict = struct(K, V) {
-    entries: &Entry(K, V)
+    owned entries: &Entry(K, V)
     length: usize
     // Tombstones left by removals. They occupy probe slots until the next rehash, so the load
     // factor must count them or a delete-heavy dict fills up while `length` stays low.
@@ -107,9 +107,8 @@ pub fn unmanaged_dict(capacity: usize, allocator: &Allocator) UnmanagedDict($K, 
 // Construct an empty Dict. Storage is allocated lazily on the first `set` / `op_set_index`. `K` and
 // `V` are inferred from the call's expected type (e.g. `let d: Dict(String, i32) = dict()`).
 pub fn dict(allocator: &Allocator? = null) Dict($K, $V) {
-    let out: Dict(K, V)
-    out.allocator = allocator.or_global()
-    return out
+    let empty: UnmanagedDict(K, V)
+    return .{ __storage = move empty, allocator = allocator.or_global() }
 }
 
 // Creates a dict whose table starts at `capacity` slots and that allocates through `allocator` for
@@ -123,10 +122,8 @@ pub fn dict(capacity: usize, allocator: &Allocator) Dict($K, $V) {
 //
 // - `allocator`: kept for the dict's whole life. Null is the global allocator.
 pub fn dict(capacity: usize, allocator: &Allocator? = null) Dict($K, $V) {
-    let out: Dict(K, V)
-    out.allocator = allocator.or_global()
-    out.__storage = unmanaged_dict(capacity, out.allocator)
-    return out
+    const alloc = allocator.or_global()
+    return .{ __storage = unmanaged_dict(capacity, alloc), allocator = alloc }
 }
 
 // The smallest power of two at or above `v`, floored at 8 - every capacity branch must yield one,
@@ -177,30 +174,29 @@ fn ensure_capacity(self: &UnmanagedDict($K, $V), allocator: &Allocator) {
         return
     }
 
-    const old_cap: usize = self.cap
-    const old_entries: &Entry(K, V) = self.entries
     // A rehash that mostly clears tombstones keeps its capacity; only live-entry pressure grows the
     // table. Every branch here must yield a power of two - `probe_slot` masks instead of dividing.
     let new_cap: usize = 8
-    if old_cap > 0 {
-        new_cap = if self.length * 2 <= old_cap { old_cap } else { old_cap * 2 }
+    if self.cap > 0 {
+        new_cap = if self.length * 2 <= self.cap { self.cap } else { self.cap * 2 }
     }
 
-    self.alloc_table(new_cap, allocator)
-    self.length = 0
-    self.dead = 0
-
-    if old_cap > 0 {
-        for i in 0..old_cap {
-            const old_entry: &Entry(K, V) = old_entries + i
-            if old_entry.hash >= 2 {
-                // The old buffer is freed without deinit, so its entries are handed over as stored.
-                const slot = self.claim_slot(old_entry.hash)
-                slot.key = move old_entry.key
-                slot.value = move old_entry.value
-            }
+    // The entries leave through `self.entries`, the storage this module owns, into a fresh table
+    // that then takes the old one's place.
+    let next: UnmanagedDict(K, V)
+    next.alloc_table(new_cap, allocator)
+    for i in 0..self.cap {
+        const h = (self.entries + i).hash
+        if h >= 2 {
+            const slot = next.claim_slot(h)
+            slot.key = move (self.entries + i).key
+            slot.value = move (self.entries + i).value
         }
-        allocator.free(slice_from_raw_parts(old_entries, old_cap))
+    }
+    swap(self, &next)
+    // The old buffer is freed without deinit: every live entry was handed over above.
+    if next.cap > 0 {
+        allocator.free(slice_from_raw_parts(next.entries, next.cap))
     }
 }
 
@@ -280,15 +276,16 @@ pub fn get_or_insert_with(self: &UnmanagedDict($K, $V), key: move K, make: $F,
 // Insert or update a key-value pair. On an update the old value is deinited, and so is `key`, since
 // the entry keeps the one it already has. Panics when the allocation fails.
 pub fn set(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: &Allocator) {
-    const existing = self.find_entry(key)
+    const existing = self.find_index(key)
     if existing.is_some() {
-        // Through the entry, not a bare `&V`: taking out of this module's own `Entry` is what the
-        // scoped-mutability rule allows (E2125).
-        const entry = existing.unwrap()
-        let old = move entry.value
-        old.deinit()
+        // Written from `self.entries`, not through a lent `&Entry`: taking out of storage this
+        // module owns is the scoped-mutability right (E2125).
+        const i = existing.unwrap()
+        let old = move (self.entries + i).value
+        release(old)
+        const entry = self.entries + i
         entry.value = move value
-        key.deinit()
+        release(key)
         return
     }
     self.ensure_capacity(allocator)
@@ -299,11 +296,12 @@ pub fn set(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: 
 // owned key only when it is new to the table.
 pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V,
     allocator: &Allocator) {
-    const existing = self.find_entry(key)
+    const existing = self.find_index(key)
     if existing.is_some() {
-        const entry = existing.unwrap()
-        let old = move entry.value
-        old.deinit()
+        const i = existing.unwrap()
+        let old = move (self.entries + i).value
+        release(old)
+        const entry = self.entries + i
         entry.value = move value
         return
     }
@@ -313,7 +311,7 @@ pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V,
 
 // Deinits every live key and value, frees the table and resets to empty, so a second call is a
 // no-op.
-pub fn deinit(self: &UnmanagedDict($K, $V), allocator: &Allocator) {
+pub fn deinit(self: move UnmanagedDict($K, $V), allocator: &Allocator) {
     if self.cap > 0 {
         self.deinit_entries()
         allocator.free(slice_from_raw_parts(self.entries, self.cap))
@@ -340,24 +338,25 @@ pub fn merge(self: &UnmanagedDict($K, $V), other: &UnmanagedDict(K, V), allocato
 // Removes `key` and returns its value, or null when absent. The stored key is deinited; the value
 // is the caller's to deinit.
 pub fn remove(self: &UnmanagedDict($K, $V), key: K) V? {
-    return self.take_entry(self.find_entry(key))
+    return self.take_entry(self.find_index(key))
 }
 
 // Removes the entry whose key equals `key`, a probe of another type (a `String` against
 // `OwnedString` keys), and returns its value. `key.hash()` and `==` must agree with the key type's.
 pub fn remove(self: &UnmanagedDict($K, $V), key: $Q) V? {
-    return self.take_entry(self.find_entry(key))
+    return self.take_entry(self.find_index(key))
 }
 
-// Tombstones `found`, deinits its key and hands back its value.
-fn take_entry(self: &UnmanagedDict($K, $V), found: &Entry(K, V)?) V? {
+// Tombstones the slot at `found`, deinits its key and hands back its value.
+fn take_entry(self: &UnmanagedDict($K, $V), found: usize?) V? {
     if found.is_none() {
         return null
     }
-    const entry = found.unwrap()
-    const val: V = move entry.value
-    let k = move entry.key
-    k.deinit()
+    const i = found.unwrap()
+    const val: V = move (self.entries + i).value
+    let k = move (self.entries + i).key
+    release(k)
+    const entry = self.entries + i
     entry.hash = HASH_DEAD
     self.length = self.length - 1
     self.dead = self.dead + 1
@@ -377,12 +376,11 @@ pub fn clear(self: &UnmanagedDict($K, $V)) {
 // Deinit every live key and value, leaving the slots as they are.
 fn deinit_entries(self: &UnmanagedDict($K, $V)) {
     for i in 0..self.cap {
-        const entry: &Entry(K, V) = self.entries + i
-        if entry.hash >= 2 {
-            let k = move entry.key
-            k.deinit()
-            let v = move entry.value
-            v.deinit()
+        if (self.entries + i).hash >= 2 {
+            let k = move (self.entries + i).key
+            release(k)
+            let v = move (self.entries + i).value
+            release(v)
         }
     }
 }
@@ -406,12 +404,22 @@ pub fn update(self: &UnmanagedDict($K, $V), key: K, f: $F) bool {
 // The live entry for `key`, or null. Tombstones fall through and keep probing; the first empty slot
 // ends the search. `key` is a `K` or a probe whose `hash` and `==` agree with `K`'s.
 fn find_entry(self: &UnmanagedDict($K, $V), key: $Q) &Entry(K, V)? {
+    return self.find_index(key) match {
+        Some(i) => Some(self.entries + i)
+        None => null
+    }
+}
+
+// The slot index holding `key`, or null. What a take goes through: the entry is then written as
+// `(self.entries + i)`, a place this module owns, rather than through a lent `&Entry`.
+fn find_index(self: &UnmanagedDict($K, $V), key: $Q) usize? {
     if self.cap == 0 {
         return null
     }
     const h: usize = hash_key(key)
     for i in 0..self.cap {
-        const entry: &Entry(K, V) = self.entries + probe_slot(h, i, self.cap)
+        const slot = probe_slot(h, i, self.cap)
+        const entry: &Entry(K, V) = self.entries + slot
         if entry.hash == HASH_EMPTY {
             return null
         }
@@ -419,7 +427,7 @@ fn find_entry(self: &UnmanagedDict($K, $V), key: $Q) &Entry(K, V)? {
         // with the reserved states.
         if entry.hash == h {
             if entry.key == key {
-                return Some(entry)
+                return Some(slot)
             }
         }
     }
@@ -616,8 +624,8 @@ pub fn next(self: &DictDrain($K, $V)) (K, V)? {
             self.current = idx + 1
             self.taken = self.taken + 1
             entry.hash = HASH_DEAD
-            const k = move entry.key
-            const v = move entry.value
+            const k = move (self.__dict.entries + idx).key
+            const v = move (self.__dict.entries + idx).value
             return Some((k, v))
         }
     }
@@ -779,7 +787,7 @@ pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) Unm
 #managed_dict(DictRef)
 
 // Deinits every live key and value and frees the table. Idempotent: a second call is a no-op.
-pub fn deinit(self: &Dict($K, $V)) {
+pub fn deinit(self: move Dict($K, $V)) {
     self.__storage.deinit(self.allocator)
 }
 

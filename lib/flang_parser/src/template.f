@@ -78,14 +78,17 @@ pub fn parse_template_body(body: String, base: usize, file_id: i32, alloc: &Allo
     diags: &List(Diagnostic)) List(TemplateNode) {
     let lx = lexer(body, Some(alloc))
     const tokens = lx.tokenize()
+    // The parser takes the token list; this one keeps a copy of its own for the template scan.
+    let own_tokens: List(Token) = list(tokens.len, Some(alloc))
+    own_tokens.push_all(tokens.as_slice())
     let p = parser(tokens, body, Some(alloc))
     p.set_file_id(file_id)
     let tp: TemplateParser = .{
         body = body,
         base = base,
         file_id = file_id,
-        tokens = tokens,
-        parser = p,
+        tokens = move own_tokens,
+        parser = move p,
         alloc = alloc,
         diags = diags,
         cursor = 0,
@@ -96,7 +99,7 @@ pub fn parse_template_body(body: String, base: usize, file_id: i32, alloc: &Allo
         tp.error_at(stop, "E1002", $"unbalanced closing brace in template body")
     }
     tp.flush_verbatim(body.len, &out)
-    tp.shift_diags(&tp.parser.diagnostics)
+    tp.shift_diags()
     return out
 }
 
@@ -115,7 +118,12 @@ fn error_at(self: &TemplateParser, index: usize, code: String, message: move Own
 }
 
 // Move body-relative parser diagnostics out, shifted to file offsets.
-fn shift_diags(self: &TemplateParser, from: &List(Diagnostic)) {
+fn shift_diags(self: &TemplateParser) {
+    self.shift_from(&self.parser.diagnostics)
+}
+
+// The same shift for a parser of this template's own making, whose diagnostics it drains.
+fn shift_from(self: &TemplateParser, from: &List(Diagnostic)) {
     for d in from.drain() {
         const sp: SourceSpan = .{
             file_id = self.file_id,
@@ -203,7 +211,7 @@ fn parse_interpolation(self: &TemplateParser, i: usize, out: &List(TemplateNode)
         return j
     }
     self.cursor = self.tokens[j].offset + 1
-    out.push(TemplateNode.Interp(TemplateInterp { expr = e, in_string = false }))
+    out.push(TemplateNode.Interp(TemplateInterp { expr = move e, in_string = false }))
     return j + 1
 }
 
@@ -224,8 +232,8 @@ fn parse_for(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
     const iterable = project_expression(cst, self.file_id, self.alloc)
     let body: List(TemplateNode) = list(0, Some(self.alloc))
     const after = self.parse_braced_body(self.parser.token_index(), &body)
-    out.push(TemplateNode.Loop(TemplateFor { var_name = var_name, iterable = iterable,
-        body = body }))
+    out.push(TemplateNode.Loop(TemplateFor { var_name = var_name, iterable = move iterable,
+        body = move body }))
     return after
 }
 
@@ -246,7 +254,8 @@ fn parse_if(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
         self.cursor = self.tokens[after].offset
         after = self.parse_braced_body(after + 2, &else_body)
     }
-    out.push(TemplateNode.Cond(TemplateIf { cond = cond, body = body, else_body = else_body }))
+    out.push(TemplateNode.Cond(TemplateIf { cond = move cond, body = move body,
+        else_body = move else_body }))
     return after
 }
 
@@ -284,13 +293,16 @@ fn parse_string_holes(self: &TemplateParser, tok: Token, out: &List(TemplateNode
         }
         let lx = lexer(self.body, Some(self.alloc), tok.offset + hole + 2)
         const toks = lx.tokenize()
+        // The parser takes the list; the bounds check below reads a copy of its own.
+        let scan: List(Token) = list(toks.len, Some(self.alloc))
+        scan.push_all(toks.as_slice())
         let p = parser(toks, self.body, Some(self.alloc))
         p.set_file_id(self.file_id)
         const cst = p.tree.node_at(p.parse_expression())
         const e = project_expression(cst, self.file_id, self.alloc)
         let close_end = cst.end
-        if p.token_index() < toks.len and toks[p.token_index()].kind == TokenKind.CloseParenthesis {
-            close_end = (toks[p.token_index()].offset + 1) as u32
+        if p.token_index() < scan.len and scan[p.token_index()].kind == TokenKind.CloseParenthesis {
+            close_end = (scan[p.token_index()].offset + 1) as u32
         } else {
             self.diags.push(error("E1002", $"expected `)` to close `#(` inside a string literal", .{
                 file_id = self.file_id,
@@ -298,8 +310,8 @@ fn parse_string_holes(self: &TemplateParser, tok: Token, out: &List(TemplateNode
                 length = 0,
             }))
         }
-        self.shift_diags(&p.diagnostics)
-        out.push(TemplateNode.Interp(TemplateInterp { expr = e, in_string = true }))
+        self.shift_from(&p.diagnostics)
+        out.push(TemplateNode.Interp(TemplateInterp { expr = move e, in_string = true }))
         local = close_end - tok.offset
     }
     if local < text.len {
@@ -338,20 +350,20 @@ fn expand_node(env: &CtEnv, node: &TemplateNode, sb: &StringBuilder) Result((), 
         Loop(lp) => {
             const iterable = ct_eval(env, &lp.iterable)?
             const items: List(CtValue) = iterable match {
-                List(l) => l
+                List(l) => move l
                 _ => return Err(CtError {
                     code = "E2118",
                     message = $"`#for` requires a list to iterate",
                     span = expr_span(&lp.iterable),
                 })
             }
-            const shadowed = env.bindings[lp.var_name]
-            for item in items {
-                env.bindings[lp.var_name] = item
+            const shadowed = env.bindings.remove(lp.var_name)
+            for item in items.drain() {
+                env.bindings[lp.var_name] = move item
                 expand_template(env, &lp.body, sb)?
             }
             shadowed match {
-                Some(prev) => { env.bindings[lp.var_name] = prev }
+                Some(prev) => { env.bindings[lp.var_name] = move prev }
                 None => { let _dropped = env.bindings.remove(lp.var_name) }
             }
         }
@@ -420,7 +432,7 @@ test "template: #for over a bound list with #(x) and \"#(x)\"" {
     names.push(CtValue.S("x"))
     names.push(CtValue.S("y"))
     names.push(CtValue.S("z"))
-    env.bindings["names"] = CtValue.List(names)
+    env.bindings["names"] = CtValue.List(move names)
     env.bindings["fType"] = CtValue.Ident("f32")
     const out = expand_for_test("type P = struct {\n#for f in names {\n  #(f): #(fType), \"#(f)\"\n}\n}",
         &env, &a)

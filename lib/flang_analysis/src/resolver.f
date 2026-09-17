@@ -33,6 +33,11 @@ pub type DepRoot = struct {
     root: OwnedString
 }
 
+pub fn deinit(self: move DepRoot) {
+    self.name.deinit()
+    self.root.deinit()
+}
+
 // Everything import resolution needs about the project under build. All roots are stored normalised
 // (forward slashes, no trailing separator).
 pub type ResolveCtx = struct {
@@ -95,14 +100,11 @@ pub fn deinit(self: move ResolveCtx) {
         if next.is_none() {
             break
         }
-        const d = next.unwrap()
-        d.name.deinit()
-        d.root.deinit()
+        release(next.unwrap())
     }
     self.deps.deinit()
     self.stdlib_root.deinit()
     self.cwd.deinit()
-    for &g in self.global_imports { g.deinit() }
     self.global_imports.deinit()
 }
 
@@ -222,10 +224,10 @@ pub fn resolve_ctx_at(proj: &Project, project_dir: String, stdlib_root: String,
         project_name = from_view(proj.name.view),
         project_source_root = normalized_owned(source_root(project_dir, proj.source.view,
                 allocator), allocator),
-        deps = deps,
+        deps = move deps,
         stdlib_root = normalize_sep(stdlib_root, allocator),
         cwd = normalize_sep(project_dir, allocator),
-        global_imports = globals,
+        global_imports = move globals,
         comptime = host_ctx(),
         lib_kind = proj.kind match {
             Lib => true
@@ -266,10 +268,10 @@ pub fn single_file_ctx(stdlib_root: String, allocator: &Allocator? = null) Resol
     return ResolveCtx {
         project_name = from_view(""),
         project_source_root = from_view(""),
-        deps = deps,
+        deps = move deps,
         stdlib_root = normalize_sep(stdlib_root, allocator),
         cwd = from_view("."),
-        global_imports = globals,
+        global_imports = move globals,
         comptime = host_ctx(),
         lib_kind = false,
         lazy_bodies = false,
@@ -374,8 +376,7 @@ pub fn canon_path(p: String, allocator: &Allocator? = null) OwnedString {
             let base = wd.unwrap()
             const joined = $"{base.as_view()}/{norm.view}"
             base.deinit()
-            norm.deinit()
-            norm = normalize_sep(joined.view, allocator)
+            install(&norm, normalize_sep(joined.view, allocator))
             joined.deinit()
         }
     }
@@ -507,10 +508,10 @@ fn fixture_ctx() ResolveCtx {
     return ResolveCtx {
         project_name = from_view("flang_analysis"),
         project_source_root = from_view("lib/flang_analysis/src"),
-        deps = deps,
+        deps = move deps,
         stdlib_root = from_view("stdlib"),
         cwd = from_view("."),
-        global_imports = globals,
+        global_imports = move globals,
         comptime = host_ctx(),
         lib_kind = false,
         lazy_bodies = false,

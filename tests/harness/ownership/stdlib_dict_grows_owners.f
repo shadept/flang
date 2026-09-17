@@ -12,6 +12,9 @@ fn open(n: i32) FileHandle {
     return .{ fd = n }
 }
 
+// A container releases its elements, so an owning element type declares how.
+pub fn deinit(self: move FileHandle) {}
+
 // Growing the table hands every entry to the new buffer.
 pub fn main() i32 {
     let d: Dict(i32, FileHandle) = dict()

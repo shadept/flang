@@ -84,7 +84,7 @@ pub fn main() i32 {
 
     let ast = project_module(cst, 0i32)
     defer ast.deinit()
-    print_json(opts.path, source.view, &tokens, &cst, &ast, &p.diagnostics)
+    print_json(opts.path, source.view, &p.tree.tokens, &cst, &ast, &p.diagnostics)
     return if p.diagnostics.len > 0 { 1i32 } else { 0i32 }
 }
 
@@ -251,7 +251,7 @@ fn run_timing(path: String, iterations: usize) i32 {
         }
         total_sum = total_sum + total_ns
 
-        tokens_seen = tokens.len
+        tokens_seen = p.tree.tokens.len
         diagnostics_seen = p.diagnostics.len
 
         ast.deinit()

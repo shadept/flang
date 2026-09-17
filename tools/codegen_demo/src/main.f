@@ -158,7 +158,7 @@ fn build_demo_module() IrModule {
     m.add_foreign(ForeignDecl {
         name = "puts",
         return_ty = puts_ret,
-        param_types = puts_params,
+        param_types = move puts_params,
         variadic = false,
         cc = CallConv.C,
     })
@@ -170,7 +170,7 @@ fn build_demo_module() IrModule {
     m.add_foreign(ForeignDecl {
         name = "printf",
         return_ty = printf_ret,
-        param_types = printf_params,
+        param_types = move printf_params,
         variadic = true,
         cc = CallConv.C,
     })
@@ -182,7 +182,7 @@ fn build_demo_module() IrModule {
     m.add_foreign(ForeignDecl {
         name = "__flang_get_argc",
         return_ty = argc_ret,
-        param_types = argc_params,
+        param_types = move argc_params,
         variadic = false,
         cc = CallConv.C,
     })
@@ -192,7 +192,7 @@ fn build_demo_module() IrModule {
     m.add_foreign(ForeignDecl {
         name = "__flang_get_arg",
         return_ty = getarg_ret,
-        param_types = getarg_params,
+        param_types = move getarg_params,
         variadic = false,
         cc = CallConv.C,
     })
@@ -204,6 +204,7 @@ fn build_demo_module() IrModule {
         size = hello.len as u64,
         align = 1u64,
         init_bytes = Some(hello.as_raw_bytes()),
+        relocs = null,
     })
 
     // printf format string: "sum_to(%d) = %d\n\0"
@@ -213,6 +214,7 @@ fn build_demo_module() IrModule {
         size = sum_fmt.len as u64,
         align = 1u64,
         init_bytes = Some(sum_fmt.as_raw_bytes()),
+        relocs = null,
     })
 
     // product format string: "product = %d\n\0"
@@ -222,6 +224,7 @@ fn build_demo_module() IrModule {
         size = prod_fmt.len as u64,
         align = 1u64,
         init_bytes = Some(prod_fmt.as_raw_bytes()),
+        relocs = null,
     })
 
     // argv format strings - used to prove the runtime captures argv.
@@ -231,6 +234,7 @@ fn build_demo_module() IrModule {
         size = argc_fmt.len as u64,
         align = 1u64,
         init_bytes = Some(argc_fmt.as_raw_bytes()),
+        relocs = null,
     })
     const argv0_fmt: String = "argv[0]   = %s\n\0"
     m.add_global(Global {
@@ -238,6 +242,7 @@ fn build_demo_module() IrModule {
         size = argv0_fmt.len as u64,
         align = 1u64,
         init_bytes = Some(argv0_fmt.as_raw_bytes()),
+        relocs = null,
     })
 
     m.add_function(build_sum_to())

@@ -114,7 +114,7 @@ pub fn clear(self: &Journal($T)) {
 }
 
 // Deinits every entry still logged and frees both buffers. Idempotent: a second call is a no-op.
-pub fn deinit(self: &Journal($T)) {
+pub fn deinit(self: move Journal($T)) {
     self.entries.deinit(self.allocator)
     self.marks.deinit(self.allocator)
 }

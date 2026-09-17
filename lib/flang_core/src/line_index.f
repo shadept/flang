@@ -28,10 +28,10 @@ pub fn line_index(text: String, allocator: &Allocator? = null) LineIndex {
             starts.push(i + 1)
         }
     }
-    return .{ starts = starts, all_ascii = is_ascii(text), text_len = text.len }
+    return .{ starts = move starts, all_ascii = is_ascii(text), text_len = text.len }
 }
 
-pub fn deinit(self: &LineIndex) {
+pub fn deinit(self: move LineIndex) {
     self.starts.deinit()
 }
 

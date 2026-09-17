@@ -8,11 +8,11 @@ type Handle = struct {
 fn close(self: move Handle) {
 }
 
-// A tiny container: `slots` is its own storage, so this module may take an element back out of it -
-// the same right that lets it store one. The value behind a reference it was merely handed stays
-// with its owner (see move_through_reference_refused).
+// A tiny container: `slots` is its own `owned` storage, so this module may take an element back out
+// of it - the same right that lets it store one. The value behind a reference it was merely handed
+// stays with its owner (see move_through_reference_refused).
 type Slots = struct {
-    slots: &Handle
+    owned slots: &Handle
     len: usize
 }
 

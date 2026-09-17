@@ -37,9 +37,9 @@ pub fn main() i32 {
         span_start = 100,
         span_length = 3,
         name_len = 3,
-        generic_args = gargs,
+        generic_args = move gargs,
     }
-    let sub: SubExpr = SubExpr.Named(info)
+    let sub: SubExpr = SubExpr.Named(move info)
     return sub match {
         Named(n) => {
             if n.span_start != 100 {

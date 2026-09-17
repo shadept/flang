@@ -27,12 +27,12 @@ pub fn bitset(initial_bits: usize, allocator: &Allocator? = null) Bitset {
 }
 
 // Free the backing storage. The bitset should not be used after this.
-pub fn deinit(self: &Bitset) {
+pub fn deinit(self: move Bitset) {
     self.words.deinit()
 }
 
 // Number of bits currently set. O(words).
-pub fn len(self: Bitset) usize {
+pub fn len(self: &Bitset) usize {
     let total: usize = 0
     for w in self.words {
         total = total + count_ones_u64(w) as usize
@@ -41,7 +41,7 @@ pub fn len(self: Bitset) usize {
 }
 
 // True when no bits are set. O(words) in the worst case (must walk the whole list to confirm).
-pub fn is_empty(self: Bitset) bool {
+pub fn is_empty(self: &Bitset) bool {
     for w in self.words {
         if w != 0u64 {
             return false
@@ -67,7 +67,7 @@ pub fn add(self: &Bitset, i: usize) {
 }
 
 // Test bit `i`. Indices past the current storage are treated as unset.
-pub fn contains(self: Bitset, i: usize) bool {
+pub fn contains(self: &Bitset, i: usize) bool {
     const word_idx = i / BITS_PER_WORD
     if word_idx >= self.words.len {
         return false

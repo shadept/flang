@@ -273,7 +273,7 @@ fn intern_field_kids(self: &TypeInterner, fields: &List(Field)) u32 {
     return tail
 }
 
-pub fn deinit(self: &TypeInterner) {
+pub fn deinit(self: move TypeInterner) {
     self.nodes.deinit()
     self.children.deinit()
     self.ground.deinit()

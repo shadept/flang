@@ -29,7 +29,7 @@ import std.test
 // zero-initialised value is a valid empty list. Elements are owned: `deinit` deinits each before
 // freeing the buffer.
 pub type UnmanagedList = struct(T) {
-    ptr: &T
+    owned ptr: &T
     len: usize
     cap: usize
 }
@@ -96,14 +96,13 @@ fn default_capacity(elem_size: usize) usize {
 //
 // Panics when the allocation fails.
 pub fn unmanaged_list(capacity: usize, allocator: &Allocator) UnmanagedList($T) {
-    let out: UnmanagedList(T)
-    if capacity > 0 {
-        const buf = allocator.alloc(capacity * size_of(T),
-            align_of(T)).expect("list: allocation failed")
-        out.ptr = buf.ptr as &T
-        out.cap = capacity
+    if capacity == 0 {
+        let empty: UnmanagedList(T)
+        return move empty
     }
-    return out
+    const buf = allocator.alloc(capacity * size_of(T),
+        align_of(T)).expect("list: allocation failed")
+    return .{ ptr = buf.ptr as &T, len = 0usize, cap = capacity }
 }
 
 // Creates an unmanaged list holding a copy of `source`, in fresh storage sized to its length.
@@ -126,14 +125,7 @@ pub fn unmanaged_list(source: $T[], allocator: &Allocator) UnmanagedList(T) {
 // Creates a list with room for `capacity` elements that allocates through `allocator` for its whole
 // life. Zero allocates nothing. Panics when the allocation fails.
 pub fn list(capacity: usize, allocator: &Allocator) List($T) {
-    let out: List(T)
-    out.allocator = allocator
-    if capacity > 0 {
-        const buf = allocator.alloc(capacity * size_of(T),
-            align_of(T)).expect("list: allocation failed")
-        out.__storage = .{ ptr = buf.ptr as &T, len = 0usize, cap = capacity }
-    }
-    return out
+    return .{ __storage = unmanaged_list(capacity, allocator), allocator = allocator }
 }
 
 // Creates a list with room for `capacity` elements. Zero allocates nothing; a zero-initialised
@@ -143,14 +135,8 @@ pub fn list(capacity: usize, allocator: &Allocator) List($T) {
 //
 // Panics when the allocation fails.
 pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
-    let out: List(T)
-    out.allocator = allocator.or_global()
-    if capacity > 0 {
-        const buf = out.allocator.alloc(capacity * size_of(T),
-            align_of(T)).expect("list: allocation failed")
-        out.__storage = .{ ptr = buf.ptr as &T, len = 0usize, cap = capacity }
-    }
-    return out
+    const alloc = allocator.or_global()
+    return .{ __storage = unmanaged_list(capacity, alloc), allocator = alloc }
 }
 
 // Creates a list holding a copy of `source`'s elements, in fresh storage sized to fit. Elements are
@@ -168,8 +154,7 @@ pub fn list(source: List($T), allocator: &Allocator? = null) List(T) {
 // - `allocator`: kept for the list's whole life. Null is the global allocator.
 pub fn list(source: $T[], allocator: &Allocator? = null) List(T) {
     const alloc = allocator.or_global()
-    let st: UnmanagedList(T) = unmanaged_list(source, alloc)
-    return .{ __storage = st, allocator = alloc }
+    return .{ __storage = unmanaged_list(source, alloc), allocator = alloc }
 }
 
 // Creates an unmanaged list of `count` bitwise copies of `value`, in storage sized to fit. Zero
@@ -281,14 +266,31 @@ pub fn insert(s: &UnmanagedList($T), index: usize, value: move T, allocator: &Al
     at.* = move value
 }
 
+// Takes the element at `index` out and hands it over, shifting what follows one slot toward the
+// front. Null past the end. O(len - index).
+pub fn remove_at(s: &UnmanagedList($T), index: usize) T? {
+    if index >= s.len {
+        return null
+    }
+    const taken = move (s.ptr + index).*
+    let i = index
+    while i + 1 < s.len {
+        let dst: &T = s.ptr + i
+        dst.* = move (s.ptr + (i + 1)).*
+        i = i + 1
+    }
+    s.len = s.len - 1
+    return Some(move taken)
+}
+
 // Deinits every live element, frees the buffer and resets to empty, so a second call is a no-op.
-pub fn deinit(s: &UnmanagedList($T), allocator: &Allocator) {
+pub fn deinit(s: move UnmanagedList($T), allocator: &Allocator) {
     if s.cap > 0 {
         for i in 0..s.len {
             // Taken out of the list's own buffer, which this module declares `owned`: the slot is
             // about to be freed and nothing reads it again.
             let v = move (s.ptr + i).*
-            v.deinit()
+            release(v)
         }
         allocator.free(slice_from_raw_parts(s.ptr, s.cap))
     }
@@ -361,8 +363,8 @@ pub fn set(list: &UnmanagedList($T), index: usize, value: move T) {
 // Drops every element, deiniting each. The backing storage is kept for reuse.
 pub fn clear(list: &UnmanagedList($T)) {
     for i in 0..list.len {
-        const elem: &T = list.ptr + i
-        elem.deinit()
+        let v = move (list.ptr + i).*
+        release(v)
     }
     list.len = 0
 }
@@ -372,8 +374,8 @@ pub fn clear(list: &UnmanagedList($T)) {
 pub fn truncate(list: &UnmanagedList($T), n: usize) {
     while list.len > n {
         list.len = list.len - 1
-        const elem: &T = list.ptr + list.len
-        elem.deinit()
+        let v = move (list.ptr + list.len).*
+        release(v)
     }
 }
 
@@ -686,7 +688,7 @@ pub fn partition(s: &UnmanagedList($T), pred: $F, allocator: &Allocator) (Unmana
             no.push(s[i], allocator)
         }
     }
-    return (yes, no)
+    return (move yes, move no)
 }
 
 // Returns a new list of every inner list's elements, in order, in one allocation sized from the
@@ -804,7 +806,12 @@ pub fn deinit(self: &Drain($T)) {
     }
 
     // Inserts `value` at `index`, shifting everything at and after it one slot toward the end.
-    // `index == len` appends. Panics past the end.
+    // `index == len` appends. Panics past the end. Takes the element at `index` out, shifting what
+    // follows toward the front. Null past the end.
+    pub fn remove_at(self: &#(Self)($T), index: usize) T? {
+        return self.__storage.remove_at(index)
+    }
+
     pub fn insert(self: &#(Self)($T), index: usize, value: move T) {
         self.__storage.insert(index, value, self.allocator)
     }
@@ -858,8 +865,8 @@ pub fn deinit(self: &Drain($T)) {
     pub fn partition(self: &#(Self)($T), pred: $F,
         allocator: &Allocator? = null) (List(T), List(T)) {
         const alloc = allocator ?? self.allocator
-        const parts = self.__storage.partition(pred, alloc)
-        return (.{ __storage = parts.0, allocator = alloc }, .{ __storage = parts.1,
+        let parts = self.__storage.partition(pred, alloc)
+        return (.{ __storage = move parts.0, allocator = alloc }, .{ __storage = move parts.1,
             allocator = alloc })
     }
 
@@ -882,7 +889,7 @@ pub fn deinit(self: &Drain($T)) {
 #managed_list(ListRef)
 
 // Deinits every live element and frees the backing storage. Idempotent: a second call is a no-op.
-pub fn deinit(self: &List($T)) {
+pub fn deinit(self: move List($T)) {
     self.__storage.deinit(self.allocator)
 }
 
@@ -1199,19 +1206,17 @@ test "search utilities: find, find_index, any, all" {
     assert_true(empty.all(test_is_even), "all is vacuously true on empty")
 }
 
-test "deinit is idempotent on every core container" {
-    // Any deinit may run twice: state nulls on the first call, so the second is a no-op, not a
-    // double free.
+test "a container's deinit consumes it, and a reusable one stays idempotent" {
+    // A container releases once: `deinit` takes the value, so a second call is E2123 rather than a
+    // run-time no-op. What is reused rather than consumed - a `StringBuilder` - keeps the
+    // idempotent form.
     let xs: List(OwnedString) = list(2)
     xs.push(from_view("alpha"))
     xs.push(from_view("beta"))
     xs.deinit()
-    xs.deinit()
-    assert_eq(xs.len, 0 as usize, "list is empty after deinit")
 
     let d: Dict(OwnedString, i32) = dict()
     d.set("k", 1i32)
-    d.deinit()
     d.deinit()
 
     let sb = string_builder(8)
@@ -1219,10 +1224,9 @@ test "deinit is idempotent on every core container" {
     sb.deinit()
     sb.deinit()
 
+    // An option releases like anything else: the payload goes and the option with it.
     let o: OwnedString? = Some(from_view("delta"))
     o.deinit()
-    o.deinit()
-    assert_true(o.is_none(), "option resets to None on deinit")
 }
 
 test "combinators accept capturing closures with unannotated params" {
@@ -1351,9 +1355,9 @@ test "partition splits by predicate preserving order" {
     for i in 0..4usize { xs.push(i as i32) }
 
     let parts = xs.partition(test_is_even)
-    let evens = parts.0
+    let evens = move parts.0
     defer evens.deinit()
-    let odds = parts.1
+    let odds = move parts.1
     defer odds.deinit()
     assert_eq(evens.len, 2 as usize, "two evens")
     assert_eq(evens[0], 0i32, "in order")

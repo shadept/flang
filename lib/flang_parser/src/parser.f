@@ -63,7 +63,7 @@ pub type Parser = struct {
 // reference the original tokens, so `tokens` must outlive the produced tree. `allocator` backs
 // every CST child list and the diagnostics list; pass `null` to default to the global allocator
 // (resolved per use at the allocation leaves).
-pub fn parser(tokens: List(Token), source: String, allocator: &Allocator? = null) Parser {
+pub fn parser(tokens: move List(Token), source: String, allocator: &Allocator? = null) Parser {
     return .{
         tree = cst(tokens, source, allocator),
         scratch = list(64, allocator),
@@ -79,7 +79,7 @@ pub fn parser(tokens: List(Token), source: String, allocator: &Allocator? = null
 // Release the parser's diagnostics list. The token list is borrowed from the caller and is NOT
 // freed here. Each `Diagnostic` owns its `message` / `hint` OwnedStrings - those are freed by the
 // list's element walk inside `deinit()`.
-pub fn deinit(self: &Parser) {
+pub fn deinit(self: move Parser) {
     self.diagnostics.deinit()
     self.scratch.deinit()
     self.tree.deinit()
@@ -396,7 +396,7 @@ fn is_known_directive(name: String) bool {
         or name == "allow"
 }
 
-fn recover_unexpected_top_level(self: &Parser, leading: List(CstNodeId)) CstNodeId {
+fn recover_unexpected_top_level(self: &Parser, leading: move List(CstNodeId)) CstNodeId {
     let b = self.open(NodeKind.Error)
     for i in 0..leading.len {
         self.push_node_into(&b, leading[i])
@@ -572,7 +572,7 @@ fn parse_generator_invocation(self: &Parser) CstNodeId {
 // Functions
 // ─────────────────────────────────────────────────────────────────────────
 
-fn parse_function_with_directives(self: &Parser, leading: List(CstNodeId)) CstNodeId {
+fn parse_function_with_directives(self: &Parser, leading: move List(CstNodeId)) CstNodeId {
     let b = self.open(NodeKind.FunctionDecl)
     for i in 0..leading.len { self.push_node_into(&b, leading[i]) }
     leading.deinit()
@@ -689,7 +689,7 @@ fn can_start_type(self: &Parser, k: TokenKind) bool {
 // `struct Name { … }` / `enum Name { … }` - the pre-`type` declaration
 // syntax. Removed from the language; parsed anyway so the rest of the file still reads, but
 // rejected at its keyword (E1050 / E1051).
-fn parse_legacy_type_decl(self: &Parser, leading: List(CstNodeId), is_struct: bool) CstNodeId {
+fn parse_legacy_type_decl(self: &Parser, leading: move List(CstNodeId), is_struct: bool) CstNodeId {
     let b = self.open(if is_struct { NodeKind.StructDecl } else { NodeKind.EnumDecl })
     for i in 0..leading.len { self.push_node_into(&b, leading[i]) }
     leading.deinit()
@@ -717,7 +717,7 @@ fn parse_legacy_type_decl(self: &Parser, leading: List(CstNodeId), is_struct: bo
     return self.finish(b)
 }
 
-fn parse_type_decl_with_directives(self: &Parser, leading: List(CstNodeId)) CstNodeId {
+fn parse_type_decl_with_directives(self: &Parser, leading: move List(CstNodeId)) CstNodeId {
     // We don't know yet whether the rhs is `struct` or `enum`, so open with a placeholder kind and
     // rewrite it once we see the `=` rhs.
     let b = self.open(NodeKind.TypeAliasDecl)
@@ -888,7 +888,7 @@ fn parse_enum_variant(self: &Parser) CstNodeId {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────
 
-fn parse_test_with_directives(self: &Parser, leading: List(CstNodeId)) CstNodeId {
+fn parse_test_with_directives(self: &Parser, leading: move List(CstNodeId)) CstNodeId {
     let b = self.open(NodeKind.TestDecl)
     for i in 0..leading.len { self.push_node_into(&b, leading[i]) }
     leading.deinit()
@@ -909,7 +909,7 @@ fn parse_test_with_directives(self: &Parser, leading: List(CstNodeId)) CstNodeId
 // Variable declarations (let / const)
 // ─────────────────────────────────────────────────────────────────────────
 
-fn parse_variable_decl_with_directives(self: &Parser, leading: List(CstNodeId)) CstNodeId {
+fn parse_variable_decl_with_directives(self: &Parser, leading: move List(CstNodeId)) CstNodeId {
     let b = self.open(NodeKind.VariableDecl)
     for i in 0..leading.len { self.push_node_into(&b, leading[i]) }
     leading.deinit()

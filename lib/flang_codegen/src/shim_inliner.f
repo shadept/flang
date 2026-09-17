@@ -184,12 +184,7 @@ fn find_recursive(m: &IrModule, foreigns: &Set(OwnedString), alloc: &Allocator?)
     }
 
     let adj: List(List(usize)) = list(m.functions.len, alloc)
-    defer {
-        for &e in adj {
-            e.deinit()
-        }
-        adj.deinit()
-    }
+    defer adj.deinit()
     for i in 0..m.functions.len {
         let edges: List(usize) = list(0, alloc)
         const f = &m.functions[i]
@@ -511,8 +506,8 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
                 result = new_result,
                 result_ty = new_result_ty,
                 callee = c.callee,
-                args = args,
-                variadic_arg_types = var_types,
+                args = move args,
+                variadic_arg_types = move var_types,
             })
         }
         CallIndirect(c) => {
@@ -538,9 +533,9 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
                 result = new_result,
                 result_ty = new_result_ty,
                 fn_ptr = fn_ptr,
-                param_types = param_types,
-                args = args,
-                variadic_arg_types = var_types,
+                param_types = move param_types,
+                args = move args,
+                variadic_arg_types = move var_types,
                 cc = c.cc,
             })
         }

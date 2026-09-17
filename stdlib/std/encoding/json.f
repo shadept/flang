@@ -66,12 +66,12 @@ pub fn json_string(value: String, allocator: &Allocator? = null) JsonValue {
 
 pub fn json_array(allocator: &Allocator? = null) JsonValue {
     let items: List(JsonValue) = list(0, allocator)
-    return JsonValue.Array(items)
+    return JsonValue.Array(move items)
 }
 
 pub fn json_object(allocator: &Allocator? = null) JsonValue {
     let d: Dict(OwnedString, JsonValue) = dict(allocator)
-    return JsonValue.Object(d)
+    return JsonValue.Object(move d)
 }
 
 // =============================================================================
@@ -804,7 +804,7 @@ fn scan_array(self: &JsonDecoder) Result(JsonValue, JsonError) {
     if c.is_some() {
         if c.unwrap() == ']' {
             self.advance()
-            return Result.Ok(JsonValue.Array(items))
+            return Result.Ok(JsonValue.Array(move items))
         }
     }
 
@@ -824,7 +824,7 @@ fn scan_array(self: &JsonDecoder) Result(JsonValue, JsonError) {
         }
         if c.unwrap() == ']' {
             self.advance()
-            return Result.Ok(JsonValue.Array(items))
+            return Result.Ok(JsonValue.Array(move items))
         }
         if c.unwrap() == ',' {
             self.advance()
@@ -849,7 +849,7 @@ fn scan_object(self: &JsonDecoder) Result(JsonValue, JsonError) {
     if c.is_some() {
         if c.unwrap() == '}' {
             self.advance()
-            return Result.Ok(JsonValue.Object(obj))
+            return Result.Ok(JsonValue.Object(move obj))
         }
     }
 
@@ -891,7 +891,7 @@ fn scan_object(self: &JsonDecoder) Result(JsonValue, JsonError) {
         }
         if c.unwrap() == '}' {
             self.advance()
-            return Result.Ok(JsonValue.Object(obj))
+            return Result.Ok(JsonValue.Object(move obj))
         }
         if c.unwrap() == ',' {
             self.advance()

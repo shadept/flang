@@ -75,6 +75,11 @@ pub type FnSig = struct {
     ret: Ty
 }
 
+// The parameter list is the table's own; the types in it index the interner.
+pub fn deinit(self: move FnSig) {
+    self.params.deinit()
+}
+
 pub fn lookup_symbol(self: &SymbolTable, fn_id: u32) String? {
     return self.by_fn_id.get_ref(fn_id) match {
         Some(s) => Some(s.view)
@@ -96,8 +101,8 @@ pub fn is_foreign(self: &SymbolTable, fn_id: u32) bool {
     }
 }
 
-pub fn sig_of(self: &SymbolTable, fn_id: u32) FnSig? {
-    return self.by_fn_sig.get(fn_id)
+pub fn sig_of(self: &SymbolTable, fn_id: u32) &FnSig? {
+    return self.by_fn_sig.get_ref(fn_id)
 }
 
 pub fn spec_symbol(self: &SymbolTable, spec_id: u32) String? {
@@ -107,11 +112,11 @@ pub fn spec_symbol(self: &SymbolTable, spec_id: u32) String? {
     }
 }
 
-pub fn spec_sig(self: &SymbolTable, spec_id: u32) FnSig? {
-    return self.by_spec_sig.get(spec_id)
+pub fn spec_sig(self: &SymbolTable, spec_id: u32) &FnSig? {
+    return self.by_spec_sig.get_ref(spec_id)
 }
 
-pub fn deinit(self: &SymbolTable) {
+pub fn deinit(self: move SymbolTable) {
     self.by_fn_id.deinit()
     self.by_decl.deinit()
     self.by_fn_sig.deinit()
@@ -125,10 +130,7 @@ pub fn deinit(self: &SymbolTable) {
 // names survive lowering (the table's symbol strings outlive the module, so the viewed keys stay
 // valid).
 pub fn take_displays(self: &SymbolTable) Dict(String, OwnedString) {
-    let out = self.displays
-    let empty: Dict(String, OwnedString) = dict()
-    self.displays = empty
-    return out
+    return replace(&self.displays, dict())
 }
 
 // Assigns symbols across a whole program. `seen` carries the ordinal counter across modules, so the
@@ -159,7 +161,7 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
     for entry in result.functions.by_name {
         // Annotated: the self-hosted checker types for-over-iterator variables as unconstrained
         // vars (protocol resolution is post-M10), so `entry.value` needs the pin.
-        let overloads: List(FunctionScheme) = entry.value
+        let overloads: &List(FunctionScheme) = &entry.value
         for &f in overloads {
             // A FOREIGN variadic function is declared (the backend emits its extern) but never
             // called through this table: C varargs have no FLang signature to check a call against.
@@ -193,7 +195,9 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
             continue
         }
         let sp = found.unwrap()
-        let s = FnSig { params = sp.concrete_params, ret = sp.concrete_return }
+        let params: List(Ty) = list(sp.concrete_params.len, allocator)
+        params.push_all(sp.concrete_params.as_slice())
+        let s = FnSig { params = move params, ret = sp.concrete_return }
         if !sig_lowerable(&result.interner, &s, false, &result.nominals) {
             continue
         }
@@ -207,13 +211,13 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
     }
 
     return .{
-        by_fn_id = by_fn_id,
-        by_decl = by_decl,
-        by_fn_sig = by_fn_sig,
-        by_fn_foreign = by_fn_foreign,
-        by_spec_id = by_spec_id,
-        by_spec_sig = by_spec_sig,
-        displays = displays,
+        by_fn_id = move by_fn_id,
+        by_decl = move by_decl,
+        by_fn_sig = move by_fn_sig,
+        by_fn_foreign = move by_fn_foreign,
+        by_spec_id = move by_spec_id,
+        by_spec_sig = move by_spec_sig,
+        displays = move displays,
         nominals = &result.nominals,
         interner = &result.interner,
         allocator = allocator,
@@ -230,7 +234,7 @@ fn scheme_sig(it: &TypeInterner, s: &Scheme) FnSig? {
             for i in 0..ft.params.len {
                 ps.push(it.child_at(ft.params, i))
             }
-            Some(FnSig { params = ps, ret = ft.ret })
+            Some(FnSig { params = move ps, ret = ft.ret })
         }
         _ => null
     }
@@ -291,7 +295,7 @@ fn ty_lowerable(it: &TypeInterner, ty: Ty, is_foreign: bool, reg: &NominalRegist
 pub fn agg_abi_safe(it: &TypeInterner, ty: Ty, reg: &NominalRegistry) bool {
     let sd = it.node(ty) match {
         NNominal(nn) => reg.get(nn.id).* match {
-            NomStruct(d) => d
+            NomStruct(d) => move d
             _ => return false
         }
         _ => return false
@@ -342,7 +346,7 @@ fn c_layout_agrees(it: &TypeInterner, ty: Ty, sd: &StructDef, reg: &NominalRegis
             ok = false
         }
     }
-    sl.offsets.deinit()
+    sl.deinit()
     return ok
 }
 
@@ -382,7 +386,7 @@ fn ty_is_niche_option(it: &TypeInterner, ty: Ty, reg: &NominalRegistry) bool {
         _ => return false
     }
     let ed = reg.get(nn.id).* match {
-        NomEnum(e) => Some(e)
+        NomEnum(e) => Some(&e)
         _ => null
     }
     if ed.is_none() {
@@ -451,7 +455,7 @@ fn add_function_symbol(self: &SymbolBuilder, decl: &FunctionDecl, fqn: String) {
     if fid.is_none() {
         return
     }
-    let sig = self.by_fn_sig.get(fid.unwrap())
+    let sig = self.by_fn_sig.get_ref(fid.unwrap())
     if sig.is_none() {
         return
     }
@@ -468,15 +472,15 @@ fn add_function_symbol(self: &SymbolBuilder, decl: &FunctionDecl, fqn: String) {
     }
 }
 
-pub fn finish(self: &SymbolBuilder) SymbolTable {
+pub fn finish(self: move SymbolBuilder) SymbolTable {
     return SymbolTable {
-        by_fn_id = self.by_fn_id,
-        by_decl = self.by_decl,
-        by_fn_sig = self.by_fn_sig,
-        by_fn_foreign = self.by_fn_foreign,
-        by_spec_id = self.by_spec_id,
-        by_spec_sig = self.by_spec_sig,
-        displays = self.displays,
+        by_fn_id = move self.by_fn_id,
+        by_decl = move self.by_decl,
+        by_fn_sig = move self.by_fn_sig,
+        by_fn_foreign = move self.by_fn_foreign,
+        by_spec_id = move self.by_spec_id,
+        by_spec_sig = move self.by_spec_sig,
+        displays = move self.displays,
     }
 }
 

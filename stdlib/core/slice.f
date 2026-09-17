@@ -394,6 +394,13 @@ pub fn replace(slot: &move $T, value: move T) T {
     return old
 }
 
+// Puts `value` into the slot and releases what was there: the assign-over-a-live-value the language
+// refuses on its own (E2126), with the release the refusal is about.
+pub fn install(slot: &move $T, value: move T) {
+    let old = replace(slot, value)
+    release(old)
+}
+
 // Fills every element of the slice with `value`.
 pub fn fill(s: $T[], value: T) {
     for i in 0..s.len {

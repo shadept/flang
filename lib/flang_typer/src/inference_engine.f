@@ -165,14 +165,14 @@ pub fn engine(allocator: &Allocator? = null) Engine {
     let pu: Journal(PrimConstraintUndo) = journal(allocator)
     let lu: Journal(LevelUndo) = journal(allocator)
     return .{
-        uf = uf,
+        uf = move uf,
         interner = type_interner(allocator),
-        bindings = bindings,
-        prim_constraints = prim_constraints,
-        levels = levels,
-        binding_undo = bu,
-        prim_undo = pu,
-        level_undo = lu,
+        bindings = move bindings,
+        prim_constraints = move prim_constraints,
+        levels = move levels,
+        binding_undo = move bu,
+        prim_undo = move pu,
+        level_undo = move lu,
         var_counter = 0u32,
         level = 0u32,
         nominals = null,
@@ -187,7 +187,7 @@ pub fn set_nominal_registry(self: &Engine, reg: &NominalRegistry) {
     self.nominals = Some(reg)
 }
 
-pub fn deinit(self: &Engine) {
+pub fn deinit(self: move Engine) {
     self.uf.deinit()
     self.interner.deinit()
     self.bindings.deinit()
@@ -202,17 +202,15 @@ pub fn deinit(self: &Engine) {
 // the moved table, so nothing may resolve through this engine afterwards - the next demand readies
 // a fresh one.
 pub fn take_interner(self: &Engine) TypeInterner {
-    let out = self.interner
-    self.interner = type_interner(self.allocator, 0)
+    let out = replace(&self.interner, type_interner(self.allocator, 0))
     return out
 }
 
 // Replace the engine's table with one carried from an earlier demand, so the handles already minted
 // into it (carried nominal bodies) stay valid and equal shapes intern to the ids they already hold.
 // Only sound on an engine that has not interned anything of its own yet.
-pub fn set_interner(self: &Engine, it: TypeInterner) {
-    self.interner.deinit()
-    self.interner = it
+pub fn set_interner(self: &Engine, it: move TypeInterner) {
+    install(&self.interner, it)
 }
 
 // The shape behind a handle - engine-side shorthand.
@@ -287,7 +285,7 @@ pub fn mk_array(self: &Engine, elem: Ty, length: usize) Ty {
     return self.interner.array_of(elem, length)
 }
 
-pub fn mk_func(self: &Engine, params: List(Ty), ret: Ty, moves: usize = 0usize) Ty {
+pub fn mk_func(self: &Engine, params: move List(Ty), ret: Ty, moves: usize = 0usize) Ty {
     const t = self.interner.func_of(&params, moves, ret)
     params.deinit()
     return t
@@ -670,7 +668,7 @@ fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
 //
 // On rollback the original `fallback` outcome is returned so the reporter surfaces the leaf
 // mismatch the caller actually wrote, not some derived side-unification failure.
-fn apply_coercion(self: &Engine, c: Coercion, fallback: UnifyOutcome) UnifyOutcome {
+fn apply_coercion(self: &Engine, c: move Coercion, fallback: UnifyOutcome) UnifyOutcome {
     self.push_checkpoint()
     for &con in c.side_unifications {
         let out = self.unify(con.a, con.b)
@@ -1049,7 +1047,7 @@ pub fn generalize(self: &Engine, t: Ty) Scheme {
     let z = self.zonk(t)
     let quantified: Set(VarId) = set(self.allocator)
     free_vars(&self.interner, z, self.level, &quantified)
-    return .{ quantified = quantified, body = z }
+    return .{ quantified = move quantified, body = z }
 }
 
 // Instantiate `s` with engine-fresh variables substituted for every quantified id. The fresh vars
@@ -1261,13 +1259,13 @@ test "zonk is the identity on ground types and collapses bound vars" {
 // Tests - copyability (RFC-028)
 // ─────────────────────────────────────────────────────────────────────
 
-fn cp_struct(params: List(VarId), fields: List(Field)) StructDef {
+fn cp_struct(params: move List(VarId), fields: move List(Field)) StructDef {
     return StructDef {
         fqn = "",
         module = "m",
         is_pub = true,
-        type_params = params,
-        fields = fields,
+        type_params = move params,
+        fields = move fields,
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
@@ -1279,7 +1277,7 @@ fn cp_field(name: String, ty: Ty, owned: bool) Field {
     return Field { name = name, ty = ty, decl_span = none_span(), owned = owned }
 }
 
-fn cp_nominal(eng: &Engine, id: NominalId, args: List(Ty)) Ty {
+fn cp_nominal(eng: &Engine, id: NominalId, args: move List(Ty)) Ty {
     const t = eng.interner.nominal_of(id, &args)
     args.deinit()
     return t
@@ -1405,13 +1403,13 @@ test "an enum variant payload propagates the bit" {
     payload.push(handle)
     let variants: List(VariantDef) = list(2)
     variants.push(VariantDef { name = "None", payloads = list(0), decl_span = none_span() })
-    variants.push(VariantDef { name = "Some", payloads = payload, decl_span = none_span() })
+    variants.push(VariantDef { name = "Some", payloads = move payload, decl_span = none_span() })
     const maybe = reg.register(NominalDef.NomEnum(EnumDef {
         fqn = "",
         module = "m",
         is_pub = true,
         type_params = list(0),
-        variants = variants,
+        variants = move variants,
         tag_values = null,
         decl_span = none_span(),
         deprecation = null,

@@ -80,10 +80,10 @@ pub type FunctionRegistry = struct {
 
 pub fn function_registry(allocator: &Allocator? = null) FunctionRegistry {
     let by_name: Dict(String, List(FunctionScheme)) = dict(allocator)
-    return .{ by_name = by_name, next_id = 0u32, changed = false, allocator = allocator }
+    return .{ by_name = move by_name, next_id = 0u32, changed = false, allocator = allocator }
 }
 
-pub fn deinit(self: &FunctionRegistry) {
+pub fn deinit(self: move FunctionRegistry) {
     self.by_name.deinit()
 }
 
@@ -94,7 +94,7 @@ pub fn deinit(self: &FunctionRegistry) {
 // - so a module whose declarations register again after `retire_module` rebuilds exactly the
 // entries it had. Registration order within one module and name is source order both times, which
 // is what pairs each declaration with its own slot.
-pub fn register(self: &FunctionRegistry, scheme: FunctionScheme) u32 {
+pub fn register(self: &FunctionRegistry, scheme: move FunctionScheme) u32 {
     if self.by_name.get_ref(scheme.name).is_none() {
         let fresh: List(FunctionScheme) = list(1, self.allocator)
         self.by_name.set(scheme.name, fresh)
@@ -108,20 +108,20 @@ pub fn register(self: &FunctionRegistry, scheme: FunctionScheme) u32 {
             if !reclaim_equal(&lst[j], &scheme) {
                 self.changed = true
             }
-            lst[j] = with_id(&scheme, id)
+            install(&lst[j], with_id(scheme, id))
             return id
         }
     }
     let id = self.next_id
     self.next_id = id + 1u32
-    lst.push(with_id(&scheme, id))
+    lst.push(with_id(scheme, id))
     return id
 }
 
-fn with_id(scheme: &FunctionScheme, id: u32) FunctionScheme {
+fn with_id(scheme: move FunctionScheme, id: u32) FunctionScheme {
     return FunctionScheme {
         name = scheme.name,
-        signature = scheme.signature,
+        signature = move scheme.signature,
         module = scheme.module,
         is_pub = scheme.is_pub,
         is_foreign = scheme.is_foreign,
@@ -193,9 +193,7 @@ pub fn retire_module(self: &FunctionRegistry, module: String) {
             if !same_module(lst[j].module, Some(module)) {
                 continue
             }
-            let dead = lst[j]
-            dead.retired = true
-            lst[j] = dead
+            lst[j].retired = true
         }
     }
 }
@@ -217,7 +215,7 @@ pub fn purge_retired(self: &FunctionRegistry) List(u32) {
                 any_dead = true
                 continue
             }
-            keep.push(lst[j])
+            keep.push_all(lst.as_slice()[j..(j + 1)])
         }
         if !any_dead {
             keep.deinit()
@@ -242,11 +240,10 @@ pub fn carried_copy(self: &FunctionRegistry, allocator: &Allocator? = null) Func
 
 fn fill_fn_carried(out: &FunctionRegistry, src: &FunctionRegistry, allocator: &Allocator?) {
     for entry in src.by_name {
-        let overloads: List(FunctionScheme) = entry.value
-        let cl: List(FunctionScheme) = list(overloads.len, allocator)
-        for &f in overloads {
-            cl.push(f.*)
-        }
+        // The carried registry shares each scheme's own buffers, as the previous demand's tables do
+        // throughout; only the overload list itself is fresh.
+        let cl: List(FunctionScheme) = list(entry.value.len, allocator)
+        cl.push_all(entry.value.as_slice())
         out.by_name.set(entry.key, cl)
     }
     out.next_id = src.next_id
@@ -269,7 +266,7 @@ pub fn find_by_id(self: &FunctionRegistry, id: u32) &FunctionScheme? {
 // nothing is reachable but some hidden overloads exist, returns one of them along with its module
 // for the diagnostic hint.
 pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup {
-    let overloads_opt = self.by_name.get(name)
+    let overloads_opt = self.by_name.get_ref(name)
     if overloads_opt.is_none() {
         return FnLookup.FnLookMissing
     }
@@ -285,7 +282,9 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
             continue
         }
         if visibility_for(f, vis) {
-            visible.push(f.*)
+            // The lookup lends the registry's schemes: the candidate list shares their buffers and
+            // is released by the caller without touching them.
+            visible.push_all(overloads.as_slice()[j..(j + 1)])
         } else {
             if hidden_module.is_none() {
                 f.module match {
@@ -299,13 +298,13 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
         }
     }
     if visible.len > 0 {
-        return FnLookup.FnLookFound(visible)
+        return FnLookup.FnLookFound(move visible)
     }
     if hidden_module.is_some() {
         let one: List(FunctionScheme) = list(1, self.allocator)
-        one.push(overloads[hidden_at])
+        one.push_all(overloads.as_slice()[hidden_at..(hidden_at + 1)])
         return FnLookup.FnLookHidden(FnLookHiddenInfo {
-            candidates = one,
+            candidates = move one,
             module = hidden_module.unwrap(),
         })
     }
@@ -360,7 +359,7 @@ test "a retired entry stops resolving until it is registered again" {
     reg.retire_module("m")
     let scope: Set(String) = set()
     let vis = visibility(Some("m"), scope)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let missing = reg.lookup("f", &vis) match {
         FnLookMissing => true
         _ => false
@@ -410,7 +409,7 @@ test "purge drops what stayed retired and reports the ids" {
     assert_eq(dropped.len, 1 as usize, "the unclaimed retirement is dropped")
     assert_eq(dropped[0], b, "and named by id")
     let vis = open()
-    defer vis.visible.deinit()
+    defer vis.deinit()
     let gone = reg.lookup("g", &vis) match {
         FnLookMissing => true
         _ => false

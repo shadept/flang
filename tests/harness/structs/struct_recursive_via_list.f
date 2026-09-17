@@ -11,8 +11,8 @@ type TreeNode = struct {
 
 fn depth(node: &TreeNode) i32 {
     let max_child = 0
-    for child in node.children {
-        let d = depth(&child)
+    for &child in node.children {
+        let d = depth(child)
         if d > max_child {
             max_child = d
         }
@@ -27,11 +27,11 @@ pub fn main() i32 {
     let mid_children: List(TreeNode) = list(2)
     mid_children.push(leaf1)
     mid_children.push(leaf2)
-    let mid = TreeNode { value = 3, children = mid_children }
+    let mid = TreeNode { value = 3, children = move mid_children }
 
     let root_children: List(TreeNode) = list(1)
     root_children.push(mid)
-    let root = TreeNode { value = 0, children = root_children }
+    let root = TreeNode { value = 0, children = move root_children }
 
     return depth(&root)
 }

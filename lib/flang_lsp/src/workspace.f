@@ -191,8 +191,7 @@ pub fn reanalyze_project(self: &Workspace, idx: ProjectId, dirty: &Set(String),
     let ov = overrides_from(docs, allocator)
     reanalyze(&p.unit, &p.ctx, dirty, Some(&ov), allocator)
     ov.deinit()
-    p.index.deinit()
-    p.index = build_indexes(&p.unit, allocator)
+    install(&p.index, build_indexes(&p.unit, allocator))
 }
 
 // Rebuild an open project from scratch: fresh manifest, fresh module set. Keeps the old analysis
@@ -205,9 +204,7 @@ pub fn reopen_project(self: &Workspace, idx: ProjectId, docs: &DocumentStore,
     if fresh.is_none() {
         return false
     }
-    let old = move self.projects[idx]
-    old.deinit()
-    self.projects[idx] = fresh.unwrap()
+    install(&self.projects[idx], fresh.unwrap())
     return true
 }
 
@@ -255,8 +252,8 @@ fn load_project(self: &Workspace, dir: String, docs: &DocumentStore,
         dir = from_view(dir, allocator),
         name = from_view(proj.name.view, allocator),
         ctx = move ctx,
-        unit = unit,
-        index = index,
+        unit = move unit,
+        index = move index,
     })
 }
 

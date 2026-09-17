@@ -115,11 +115,11 @@ pub fn new(allocator: &Allocator, ty: Type($T)) &T {
     return buffer.unwrap().ptr as &T
 }
 
-// Allocate a slot for `T` and copy `value` into it. Returns a reference to the heap-allocated
-// value.
-#inline pub fn box(allocator: &Allocator, value: $T) &T {
+// Allocate a slot for `T` and move `value` into it. Returns a reference to the heap-allocated
+// value, which owns it from here.
+#inline pub fn box(allocator: &Allocator, value: move $T) &T {
     const ptr = allocator.new(Type(T))
-    ptr.* = value
+    ptr.* = move value
     return ptr
 }
 

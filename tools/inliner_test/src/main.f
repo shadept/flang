@@ -145,7 +145,7 @@ fn build_module() IrModule {
     m.add_foreign(ForeignDecl {
         name = "printf",
         return_ty = printf_ret,
-        param_types = printf_params,
+        param_types = move printf_params,
         variadic = true,
         cc = CallConv.C,
     })
@@ -156,6 +156,7 @@ fn build_module() IrModule {
         size = fmt.len as u64,
         align = 1u64,
         init_bytes = Some(fmt.as_raw_bytes()),
+        relocs = null,
     })
 
     m.add_function(build_inner())

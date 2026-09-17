@@ -109,7 +109,7 @@ pub fn unused_functions(result: &TypeCheckResult, modules: &List(Module), fqns: 
     defer work.deinit()
 
     for entry in result.functions.by_name {
-        const overloads = entry.value
+        const overloads = &entry.value
         for j in 0..overloads.len {
             const f = &overloads[j]
             if f.retired or f.is_foreign {
@@ -389,7 +389,7 @@ pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &L
     let fn_module: Dict(u32, String) = dict(allocator)
     defer fn_module.deinit()
     for entry in result.functions.by_name {
-        const overloads = entry.value
+        const overloads = &entry.value
         for j in 0..overloads.len {
             if overloads[j].module.is_some() {
                 fn_module.set(overloads[j].id, overloads[j].module.unwrap())
@@ -463,7 +463,7 @@ pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &L
     // function's body is never checked, so nothing else records them). The registries hold the
     // resolved types - walk each project declaration's.
     for entry in result.functions.by_name {
-        const overloads = entry.value
+        const overloads = &entry.value
         for j in 0..overloads.len {
             const f = &overloads[j]
             if f.retired or f.module.is_none() {

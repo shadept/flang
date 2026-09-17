@@ -34,8 +34,8 @@ pub type Binder = struct {
 
 pub fn module_binders(m: &Module, allocator: &Allocator? = null) List(Binder) {
     let out: List(Binder) = list(16, allocator)
-    for d in m.decls {
-        d match {
+    for &d in m.decls {
+        d.* match {
             Function(f) => {
                 push_params(&out, &f.params, f.span)
                 f.body match {

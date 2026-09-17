@@ -1044,7 +1044,7 @@ fn build_sig_index(m: &IrModule) SigIndex {
     for i in 0..m.foreigns.len {
         by_name.set(m.foreigns[i].name, m.functions.len + i)
     }
-    return SigIndex { funcs = &m.functions, foreigns = &m.foreigns, by_name = by_name }
+    return SigIndex { funcs = &m.functions, foreigns = &m.foreigns, by_name = move by_name }
 }
 
 // Declared type of `callee`'s parameter `i`; null for an unknown callee or a position past the
@@ -1682,8 +1682,8 @@ fn discover_or_override(options: &BuildOptions, allocator: &Allocator?) Result(C
                 kind = kind,
                 name = from_view(p, allocator),
                 path = from_view(p, allocator),
-                extra_env_keys = env_keys,
-                extra_env_vals = env_vals,
+                extra_env_keys = move env_keys,
+                extra_env_vals = move env_vals,
                 allocator = allocator,
             })
         }
@@ -1771,8 +1771,8 @@ fn make_simple_info(kind: CompilerKind, name: String, allocator: &Allocator?) Co
         kind = kind,
         name = from_view(name, allocator),
         path = from_view(name, allocator),
-        extra_env_keys = env_keys,
-        extra_env_vals = env_vals,
+        extra_env_keys = move env_keys,
+        extra_env_vals = move env_vals,
         allocator = allocator,
     }
 }
@@ -1973,8 +1973,8 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
         kind = CompilerKind.Msvc,
         name = from_view("cl.exe", allocator),
         path = from_view(cl.as_view(), allocator),
-        extra_env_keys = env_keys,
-        extra_env_vals = env_vals,
+        extra_env_keys = move env_keys,
+        extra_env_vals = move env_vals,
         allocator = allocator,
     })
 }
@@ -2298,7 +2298,7 @@ test "emits each foreign symbol at most once" {
     m.add_foreign(ForeignDecl {
         name = "isatty",
         return_ty = Some(IrType.I32),
-        param_types = p1,
+        param_types = move p1,
         variadic = false,
         cc = CallConv.C,
     })
@@ -2308,7 +2308,7 @@ test "emits each foreign symbol at most once" {
     m.add_foreign(ForeignDecl {
         name = "isatty",
         return_ty = Some(IrType.I32),
-        param_types = p2,
+        param_types = move p2,
         variadic = false,
         cc = CallConv.C,
     })

@@ -47,6 +47,10 @@ pub type AggDef = struct {
     fields: List(AggField)
 }
 
+pub fn deinit(self: move AggDef) {
+    self.fields.deinit()
+}
+
 // Seven scalars, plus `Agg` for the one case that needs more. Aggregates (structs, enums, arrays,
 // slices) are otherwise NOT FIR types - they live in memory as opaque byte buffers, addressed via
 // `gep` + `load`/`store`, and the lowering pass resolves their layouts before FIR is emitted. `Agg`
@@ -364,8 +368,8 @@ pub type Block = struct {
 // Replace a block's instruction list wholesale (scoped mutability keeps the field module-private).
 // Used by the const-init wiring in lower.f, which prepends calls to `main`'s entry block after it
 // is built.
-pub fn set_instrs(self: &Block, instrs: List(Instr)) {
-    self.instrs = instrs
+pub fn set_instrs(self: &Block, instrs: move List(Instr)) {
+    self.instrs = move instrs
 }
 
 // FIR function. `params` carries the SSA-named function parameters; they're in scope across every
@@ -432,6 +436,11 @@ pub type TestCase = struct {
     symbol: OwnedString
 }
 
+pub fn deinit(self: move TestCase) {
+    self.label.deinit()
+    self.symbol.deinit()
+}
+
 // Unit of compilation.
 pub type IrModule = struct {
     globals: List(Global)
@@ -485,15 +494,15 @@ pub fn module(allocator: &Allocator? = null) IrModule {
     let displays: Dict(String, OwnedString) = dict(allocator)
     let tests: List(TestCase) = list(0, allocator)
     return IrModule {
-        globals = globals,
-        foreigns = foreigns,
-        functions = functions,
-        skipped = skipped,
-        skip_notes = skip_notes,
-        aggs = aggs,
-        displays = displays,
+        globals = move globals,
+        foreigns = move foreigns,
+        functions = move functions,
+        skipped = move skipped,
+        skip_notes = move skip_notes,
+        aggs = move aggs,
+        displays = move displays,
         testing = false,
-        tests = tests,
+        tests = move tests,
         install_tests = null,
     }
 }
@@ -523,11 +532,9 @@ pub fn deinit(self: move IrModule) {
 
 // Replace the display-name map wholesale (scoped mutability keeps the field module-private).
 // Returns the previous map so the caller can free it.
-pub fn set_displays(self: &IrModule, displays: Dict(String, OwnedString)) Dict(String,
+pub fn set_displays(self: &IrModule, displays: move Dict(String, OwnedString)) Dict(String,
     OwnedString) {
-    let old = self.displays
-    self.displays = displays
-    return old
+    return replace(&self.displays, displays)
 }
 
 // Scoped mutability: lowering declares the module a test binary before recording any block.
@@ -552,8 +559,7 @@ pub fn retain_defined_tests(self: &IrModule, dropped: &Set(String)) {
         }
         kept.push(t)
     }
-    self.tests.deinit()
-    self.tests = kept
+    install(&self.tests, kept)
 }
 
 // Scoped mutability: named once by lowering, when the symbol is known to have been emitted.
@@ -561,13 +567,13 @@ pub fn set_install_tests(self: &IrModule, symbol: move OwnedString) {
     self.install_tests = Some(move symbol)
 }
 
-pub fn deinit(self: &Function) {
+pub fn deinit(self: move Function) {
     self.blocks.deinit()
     self.params.deinit()
     self.label_storage.deinit()
 }
 
-pub fn deinit(self: &Block) {
+pub fn deinit(self: move Block) {
     self.instrs.deinit()
     self.params.deinit()
     self.terminator.deinit()
@@ -599,7 +605,7 @@ pub fn deinit(self: &Terminator) {
     }
 }
 
-pub fn deinit(self: &ForeignDecl) {
+pub fn deinit(self: move ForeignDecl) {
     self.param_types.deinit()
 }
 
@@ -610,14 +616,6 @@ pub fn deinit(self: &Global) {
 // ─────────────────────────────────────────────────────────────────────────
 // Mutators
 // ─────────────────────────────────────────────────────────────────────────
-
-// Hand this instance's buffers to a copy the caller took: the list fields are re-pointed at fresh
-// zero-cap lists, so a later `deinit` here frees nothing.
-pub fn release_buffers(self: &Function, allocator: &Allocator?) {
-    self.params = list(0, allocator)
-    self.blocks = list(0, allocator)
-    self.label_storage = list(0, allocator)
-}
 
 // Take ownership of a minted label buffer; returns the stable view the caller stores in blocks and
 // branch targets.
@@ -638,27 +636,23 @@ pub fn fresh_value_id(self: &Function) u32 {
 // scratch start with `Unreachable` and call this once, so the discarded value owns no heap. Pair
 // with `replace_terminator` (below) when the previous terminator may own `BlockTarget` args that
 // need freeing.
-pub fn set_terminator(self: &Block, t: Terminator) {
-    self.terminator = t
+pub fn set_terminator(self: &Block, t: move Terminator) {
+    self.terminator = move t
 }
 
 // Replace the block's instruction list, returning the prior list so the caller can free its
 // embedded storage. Used by IR transforms (e.g. the shim inliner) that rebuild blocks
 // instruction-by- instruction; using direct field assignment is blocked by scoped mutability
 // outside this module.
-pub fn replace_instrs(self: &Block, instrs: List(Instr)) List(Instr) {
-    let old = self.instrs
-    self.instrs = instrs
-    return old
+pub fn replace_instrs(self: &Block, instrs: move List(Instr)) List(Instr) {
+    return replace(&self.instrs, instrs)
 }
 
 // Replace the block's terminator, returning the previous one. Mirrors `replace_instrs`: lets
 // external transforms swap terminators while keeping ownership of the discarded value so they can
 // deinit its `BlockTarget` args.
-pub fn replace_terminator(self: &Block, t: Terminator) Terminator {
-    let old = self.terminator
-    self.terminator = t
-    return old
+pub fn replace_terminator(self: &Block, t: move Terminator) Terminator {
+    return replace(&self.terminator, t)
 }
 
 // Append a function parameter.
@@ -667,21 +661,21 @@ pub fn add_param(self: &Function, p: BlockParam) {
 }
 
 // Append a block and return its index.
-pub fn add_block(self: &Function, b: Block) usize {
+pub fn add_block(self: &Function, b: move Block) usize {
     self.blocks.push(b)
     return self.blocks.len - 1
 }
 
-pub fn add_function(self: &IrModule, f: Function) {
+pub fn add_function(self: &IrModule, f: move Function) {
     self.functions.push(f)
 }
 
-pub fn add_foreign(self: &IrModule, f: ForeignDecl) {
+pub fn add_foreign(self: &IrModule, f: move ForeignDecl) {
     self.foreigns.push(f)
 }
 
 // Record an aggregate definition the backend must emit, once per name.
-pub fn add_agg(self: &IrModule, a: AggDef) {
+pub fn add_agg(self: &IrModule, a: move AggDef) {
     for i in 0..self.aggs.len {
         if self.aggs[i].name == a.name {
             return

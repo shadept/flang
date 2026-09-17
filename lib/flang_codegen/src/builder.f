@@ -43,13 +43,13 @@ pub fn function(name: String, return_ty: IrType?, allocator: &Allocator? = null)
     return FunctionBuilder {
         func = Function {
             name = name,
-            params = params,
+            params = move params,
             return_ty = return_ty,
-            blocks = blocks,
+            blocks = move blocks,
             variadic = false,
             cc = CallConv.C,
             next_value_id = 0u32,
-            label_storage = labels,
+            label_storage = move labels,
         },
         allocator = allocator,
     }
@@ -87,7 +87,7 @@ pub fn entry(self: &FunctionBuilder) BlockBuilder {
 
 // Add a non-entry block with `label`. `param_types` is the list of types for the block's parameters
 // (commonly empty; non-empty for loop heads receiving values via `br`).
-pub fn block(self: &FunctionBuilder, label: String, param_types: List(IrType)) BlockBuilder {
+pub fn block(self: &FunctionBuilder, label: String, param_types: move List(IrType)) BlockBuilder {
     return self.block_internal(label, param_types)
 }
 
@@ -109,7 +109,8 @@ pub fn block(self: &FunctionBuilder, label: String, p0: IrType, p1: IrType) Bloc
     return self.block_internal(label, types)
 }
 
-fn block_internal(self: &FunctionBuilder, label: String, param_types: List(IrType)) BlockBuilder {
+fn block_internal(self: &FunctionBuilder, label: String,
+    param_types: move List(IrType)) BlockBuilder {
     let params: List(BlockParam) = list(param_types.len, self.allocator)
     for i in 0..param_types.len {
         const id = self.fresh()
@@ -119,25 +120,22 @@ fn block_internal(self: &FunctionBuilder, label: String, param_types: List(IrTyp
     let instrs: List(Instr) = list(0, self.allocator)
     let new_block = Block {
         label = label,
-        params = params,
-        instrs = instrs,
+        params = move params,
+        instrs = move instrs,
         terminator = Terminator.Unreachable,
     }
     const idx = self.func.add_block(new_block)
     return BlockBuilder { fb = self, block_idx = idx }
 }
 
-// Move the built function out. The builder is left holding empty lists, so a `deinit` after
-// `finish` frees nothing - callers may pair every builder with a `deinit` unconditionally.
-pub fn finish(self: &FunctionBuilder) Function {
-    let f = self.func
-    self.func.release_buffers(self.allocator)
-    return f
+// Hands over the built function, consuming the builder: a builder ends in exactly one of `finish`
+// or `deinit`.
+pub fn finish(self: move FunctionBuilder) Function {
+    return move self.func
 }
 
-// Free a builder abandoned before `finish` (a refused body). Safe after `finish` too: the move left
-// empty lists behind.
-pub fn deinit(self: &FunctionBuilder) {
+// Free a builder abandoned instead of finished (a refused body).
+pub fn deinit(self: move FunctionBuilder) {
     self.func.deinit()
 }
 
@@ -444,7 +442,8 @@ pub fn memset(self: &BlockBuilder, dst: Operand, byte: Operand, size: Operand) {
 // ─────────────────────────────────────────────────────────────────────────
 
 // Direct call returning a value. `args` ownership transfers in.
-pub fn call(self: &BlockBuilder, callee: String, return_ty: IrType, args: List(Operand)) Operand {
+pub fn call(self: &BlockBuilder, callee: String, return_ty: IrType,
+    args: move List(Operand)) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(0, self.fb.allocator)
@@ -454,14 +453,14 @@ pub fn call(self: &BlockBuilder, callee: String, return_ty: IrType, args: List(O
         result = result,
         result_ty = result_ty,
         callee = callee,
-        args = args,
-        variadic_arg_types = var_types,
+        args = move args,
+        variadic_arg_types = move var_types,
     }))
     return Operand.Local(id)
 }
 
 // Direct call to a void function.
-pub fn call_void(self: &BlockBuilder, callee: String, args: List(Operand)) {
+pub fn call_void(self: &BlockBuilder, callee: String, args: move List(Operand)) {
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(0, self.fb.allocator)
     let result: u32? = null
@@ -470,15 +469,15 @@ pub fn call_void(self: &BlockBuilder, callee: String, args: List(Operand)) {
         result = result,
         result_ty = result_ty,
         callee = callee,
-        args = args,
-        variadic_arg_types = var_types,
+        args = move args,
+        variadic_arg_types = move var_types,
     }))
 }
 
 // Indirect call through a fn-pointer value. The inline signature is the C cast the backend spells;
 // aggregate params/returns already travel as `ptr` operands, mirroring direct calls.
-pub fn call_indirect(self: &BlockBuilder, fn_ptr: Operand, param_types: List(IrType),
-    return_ty: IrType, args: List(Operand)) Operand {
+pub fn call_indirect(self: &BlockBuilder, fn_ptr: Operand, param_types: move List(IrType),
+    return_ty: IrType, args: move List(Operand)) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(0, self.fb.allocator)
@@ -488,16 +487,16 @@ pub fn call_indirect(self: &BlockBuilder, fn_ptr: Operand, param_types: List(IrT
         result = result,
         result_ty = result_ty,
         fn_ptr = fn_ptr,
-        param_types = param_types,
-        args = args,
-        variadic_arg_types = var_types,
+        param_types = move param_types,
+        args = move args,
+        variadic_arg_types = move var_types,
         cc = CallConv.C,
     }))
     return Operand.Local(id)
 }
 
-pub fn call_indirect_void(self: &BlockBuilder, fn_ptr: Operand, param_types: List(IrType),
-    args: List(Operand)) {
+pub fn call_indirect_void(self: &BlockBuilder, fn_ptr: Operand, param_types: move List(IrType),
+    args: move List(Operand)) {
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(0, self.fb.allocator)
     let result: u32? = null
@@ -506,9 +505,9 @@ pub fn call_indirect_void(self: &BlockBuilder, fn_ptr: Operand, param_types: Lis
         result = result,
         result_ty = result_ty,
         fn_ptr = fn_ptr,
-        param_types = param_types,
-        args = args,
-        variadic_arg_types = var_types,
+        param_types = move param_types,
+        args = move args,
+        variadic_arg_types = move var_types,
         cc = CallConv.C,
     }))
 }
@@ -531,7 +530,7 @@ pub fn call_two(self: &BlockBuilder, callee: String, return_ty: IrType, a0: Oper
 // Variadic foreign call. `fixed_args` are the named parameters of the foreign decl; `extras` are
 // the variadic portion with explicit types.
 pub fn call_variadic(self: &BlockBuilder, callee: String, return_ty: IrType,
-    fixed_args: List(Operand), extras: List((IrType, Operand))) Operand {
+    fixed_args: move List(Operand), extras: move List((IrType, Operand))) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(extras.len, self.fb.allocator)
@@ -546,8 +545,8 @@ pub fn call_variadic(self: &BlockBuilder, callee: String, return_ty: IrType,
         result = result,
         result_ty = result_ty,
         callee = callee,
-        args = fixed_args,
-        variadic_arg_types = var_types,
+        args = move fixed_args,
+        variadic_arg_types = move var_types,
     }))
     return Operand.Local(id)
 }
@@ -586,9 +585,9 @@ pub fn br_arg(self: &BlockBuilder, label: String, arg: Operand) {
 }
 
 // Unconditional branch with block arguments (passes ownership of args).
-pub fn br_args(self: &BlockBuilder, label: String, args: List(Operand)) {
+pub fn br_args(self: &BlockBuilder, label: String, args: move List(Operand)) {
     let block = &self.fb.func.blocks[self.block_idx]
-    block.set_terminator(Terminator.Br(BlockTarget { label = label, args = args }))
+    block.set_terminator(Terminator.Br(BlockTarget { label = label, args = move args }))
 }
 
 // Conditional branch to `then_label` / `else_label` with no block args.
@@ -599,13 +598,13 @@ pub fn br_if(self: &BlockBuilder, cond: Operand, then_label: String, else_label:
 }
 
 // Conditional branch with block arguments on each edge.
-pub fn br_if_args(self: &BlockBuilder, cond: Operand, then_label: String, then_args: List(Operand),
-    else_label: String, else_args: List(Operand)) {
+pub fn br_if_args(self: &BlockBuilder, cond: Operand, then_label: String,
+    then_args: move List(Operand), else_label: String, else_args: move List(Operand)) {
     let block = &self.fb.func.blocks[self.block_idx]
     block.set_terminator(Terminator.BrIf(BrIfTerm {
         cond = cond,
-        then_target = BlockTarget { label = then_label, args = then_args },
-        else_target = BlockTarget { label = else_label, args = else_args },
+        then_target = BlockTarget { label = then_label, args = move then_args },
+        else_target = BlockTarget { label = else_label, args = move else_args },
     }))
 }
 

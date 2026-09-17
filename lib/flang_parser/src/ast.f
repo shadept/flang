@@ -48,17 +48,19 @@ pub type Module = struct {
 // ponytail: the rebuilt buffer leaks at Module.deinit (arena-only free); fine, modules live to end
 // of build.
 pub fn append_decls(self: &Module, decls: &List(Decl)) {
+    // Copied in bulk, as the arena model wants: a declaration's own lists stay where the projection
+    // put them, and both modules read the same nodes.
     let merged: List(Decl) = list(self.decls.len + decls.len)
-    for &d in self.decls { merged.push(d.*) }
-    for &d in decls { merged.push(d.*) }
-    self.decls = merged
+    merged.push_all(self.decls.as_slice())
+    merged.push_all(decls.as_slice())
+    install(&self.decls, merged)
 }
 
-pub fn set_decls(self: &Module, decls: List(Decl)) {
-    self.decls = decls
+pub fn set_decls(self: &Module, decls: move List(Decl)) {
+    self.decls = move decls
 }
 
-pub fn deinit(self: &Module) {
+pub fn deinit(self: move Module) {
     // Every AST allocation - the decls list's buffer and every nested list in the tree - lives in
     // the arena, so ONE bulk free reclaims it all. Do not walk the tree element-wise: the nested
     // lists carry allocator pointers into the (stack-local) arena view they were built with, which
@@ -84,6 +86,9 @@ pub type Decl = enum {
     IfDirective(IfDirectiveDecl)
     Error(DeclError)
 }
+
+// Arena-owned, like every AST node (see `deinit(Expr)`).
+pub fn deinit(self: move Decl) {}
 
 // Decl-level attributes. `Foreign`, `Inline`, `Intrinsic`, `Simd` are flag-shaped;
 // `Deprecated(msg?)` carries an optional reason string; `Allow(codes)` names the diagnostic codes
@@ -400,6 +405,13 @@ pub type Expr = enum {
     Error(ErrorExpr)
 }
 
+// Arena-owned. Every node the parser and the projector build lives as long as the compilation and
+// is shared by handle across the checker's tables, so releasing one from a container that holds it
+// would free storage another table still reads. Declared, not inherited: the decision is the type's
+// own, and a container releasing its elements lands here rather than on a blanket that answers for
+// everything.
+pub fn deinit(self: move Expr) {}
+
 // A literal expression. The seven literal kinds are shared with patterns (see
 // `LiteralPattern.value`) - same payload structs, narrower outer enum where the grammar is
 // narrower.
@@ -482,6 +494,9 @@ pub type InterpolationTarget = enum {
     NewString(List(Expr))
     IntoBuilder(&Expr)
 }
+
+// Arena-owned, like every AST node (see `deinit(Expr)`).
+pub fn deinit(self: move InterpolationTarget) {}
 
 // One segment of an interpolated string: either raw text between holes or a `{expr}` hole.
 pub type InterpolationPart = enum {
@@ -913,6 +928,9 @@ pub type TypeExpr = enum {
     Error(ErrorType)
 }
 
+// Arena-owned, like every AST node (see `deinit(Expr)`).
+pub fn deinit(self: move TypeExpr) {}
+
 // `Name`, `Name(T, U)` - named type with optional generic argument list.
 pub type NamedType = struct {
     span: SourceSpan
@@ -1069,10 +1087,10 @@ fn function_mentions_generic(f: &FunctionType) bool {
 }
 
 fn any_generic(tes: &List(TypeExpr)) bool {
-    return tes.any(mentions_generic_value)
-}
-
-// `any` takes elements by value; adapt the reference-taking walk.
-fn mentions_generic_value(te: TypeExpr) bool {
-    return mentions_generic(&te)
+    for &te in tes {
+        if mentions_generic(te) {
+            return true
+        }
+    }
+    return false
 }

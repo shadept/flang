@@ -184,16 +184,8 @@ type Doomed = struct {
     is_dir: bool
 }
 
-fn free_doomed(items: &List(Doomed)) {
-    loop {
-        const next = items.pop()
-        if next.is_none() {
-            break
-        }
-        const item = next.unwrap()
-        item.path.deinit()
-    }
-    items.deinit()
+pub fn deinit(self: move Doomed) {
+    self.path.deinit()
 }
 
 // Deletes `path` and everything under it. Symlinks are removed as links - never followed - so a
@@ -207,7 +199,7 @@ pub fn remove_dir_all(path: String, allocator: &Allocator? = null) Result((), Di
     defer walk.deinit()
 
     let doomed: List(Doomed) = list(64, allocator)
-    defer free_doomed(&doomed)
+    defer doomed.deinit()
 
     for entry in walk {
         doomed.push(Doomed {

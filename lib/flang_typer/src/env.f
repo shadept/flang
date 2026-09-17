@@ -25,10 +25,19 @@ pub type Binding = struct {
     is_type_param: bool
 }
 
+// The scheme's quantified set is this binding's own: `mono` / `instantiate` build one per binding.
+pub fn deinit(self: move Binding) {
+    self.scheme.deinit()
+}
+
 // One lexical scope's bindings. Allocates through the owning `TypeEnv`'s allocator.
 pub type Scope = struct {
     bindings: UnmanagedDict(String, Binding)
 }
+
+// The table needs the env's allocator to go, so `pop_scope` and `TypeEnv.deinit` free it before the
+// scope itself is dropped.
+pub fn deinit(self: move Scope) {}
 
 // The lexical environment of the function being checked: a stack of scopes, innermost on top, each
 // mapping a name to its binding. Lookup walks from the innermost scope outward. One allocator
@@ -47,11 +56,11 @@ pub fn type_env(allocator: &Allocator? = null) TypeEnv {
     return out
 }
 
-pub fn deinit(self: &TypeEnv) {
+pub fn deinit(self: move TypeEnv) {
     loop {
         self.scopes.pop() match {
             Some(scope) => {
-                let s = scope
+                let s = move scope
                 s.bindings.deinit(self.allocator)
             }
             None => break
@@ -70,18 +79,18 @@ pub fn pop_scope(self: &TypeEnv) {
         panic("pop_scope: cannot pop global scope")
     }
     let s = self.scopes.pop().expect("pop_scope: no scope")
-    let scope = s
+    let scope = move s
     scope.bindings.deinit(self.allocator)
 }
 
-pub fn bind(self: &TypeEnv, name: String, binding: Binding) {
+pub fn bind(self: &TypeEnv, name: String, binding: move Binding) {
     self.scopes.peek_ref() match {
         Some(top) => top.bindings.set(name, binding, self.allocator)
         None => panic("bind: no open scope")
     }
 }
 
-pub fn lookup(self: &TypeEnv, name: String) Binding? {
+pub fn lookup(self: &TypeEnv, name: String) &Binding? {
     let frames = self.scopes.as_slice()
     let i: isize = (frames.len as isize) - 1
     loop {
@@ -89,7 +98,7 @@ pub fn lookup(self: &TypeEnv, name: String) Binding? {
             break
         }
         let scope = &frames[i as usize]
-        let hit = scope.bindings.get(name)
+        let hit = scope.bindings.get_ref(name)
         if hit.is_some() {
             return hit
         }

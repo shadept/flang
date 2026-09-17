@@ -255,11 +255,11 @@ pub type Cst = struct {
     allocator: &Allocator?
 }
 
-pub fn cst(tokens: List(Token), source: String, allocator: &Allocator? = null) Cst {
+pub fn cst(tokens: move List(Token), source: String, allocator: &Allocator? = null) Cst {
     return .{
         source = source,
         nodes = list(64, allocator),
-        tokens = tokens,
+        tokens = move tokens,
         children = list(256, allocator),
         root = 0,
         allocator = allocator,
@@ -272,7 +272,7 @@ pub fn set_root(self: &Cst, id: CstNodeId) {
 }
 
 // Frees the nodes, the flat child array and the tokens. `source` is borrowed, not owned.
-pub fn deinit(self: &Cst) {
+pub fn deinit(self: move Cst) {
     self.nodes.deinit()
     self.children.deinit()
     self.tokens.deinit()

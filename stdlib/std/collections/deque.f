@@ -122,11 +122,11 @@ pub fn push_front(self: &UnmanagedDeque($T), value: move T, allocator: &Allocato
 }
 
 // Deinits every element, front to back, and frees the buffer. Idempotent: a second call is a no-op.
-pub fn deinit(self: &UnmanagedDeque($T), allocator: &Allocator) {
+pub fn deinit(self: move UnmanagedDeque($T), allocator: &Allocator) {
     if self.cap > 0 {
         for i in 0..self.len {
-            const elem: &T = self.ptr + ((self.head + i) % self.cap)
-            elem.deinit()
+            let v = move (self.ptr + ((self.head + i) % self.cap)).*
+            release(v)
         }
         allocator.free(slice_from_raw_parts(self.ptr, self.cap))
     }
@@ -244,7 +244,7 @@ pub fn push_front(self: &Deque($T), value: move T) {
 }
 
 // Deinits every element, front to back, and frees the buffer. Idempotent: a second call is a no-op.
-pub fn deinit(self: &Deque($T)) {
+pub fn deinit(self: move Deque($T)) {
     self.__storage.deinit(self.allocator)
 }
 

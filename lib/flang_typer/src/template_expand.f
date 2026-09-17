@@ -49,6 +49,10 @@ pub type GenDefEntry = struct {
     file_id: i32
 }
 
+pub fn deinit(self: move GenDefEntry) {
+    self.params.deinit()
+}
+
 // Where a type declaration lives: `modules[module].decls[decl]`. Indices, not pointers - the decl
 // list grows as chunks are appended.
 pub type DeclRef = struct {
@@ -93,35 +97,35 @@ pub fn empty_template_output(allocator: &Allocator? = null) TemplateOutput {
 }
 
 pub fn take_output(self: &TemplateState) TemplateOutput {
-    const out: TemplateOutput = .{ chunk_modules = self.chunk_modules, emitted = self.emitted }
-    self.chunk_modules = list(0, self.allocator)
-    self.emitted = list(0, self.allocator)
-    return out
+    return .{
+        chunk_modules = replace(&self.chunk_modules, list(0, self.allocator)),
+        emitted = replace(&self.emitted, list(0, self.allocator)),
+    }
 }
 
-pub fn deinit(self: &EmittedFile) {
+pub fn deinit(self: move EmittedFile) {
     self.text.deinit()
 }
 
-pub fn deinit(self: &TemplateOutput) {
+pub fn deinit(self: move TemplateOutput) {
     self.chunk_modules.deinit()
     self.emitted.deinit()
 }
 
 // Deliberately leak the output (single-unit analysis has no slot to keep it alive; the appended
 // decls reference the chunk arenas). The modules are popped out before the list is freed.
-pub fn forget(self: &TemplateState) {
+pub fn forget(self: move TemplateState) {
     let out = self.take_output()
-    while out.chunk_modules.pop().is_some() {}
+    // The modules are dropped without release: their decls live in the chunk arenas.
     out.chunk_modules.deinit()
     self.defs.deinit()
     self.syntax.deinit()
 }
 
-pub fn deinit(self: &TemplateState) {
+pub fn deinit(self: move TemplateState) {
+    let rest = self.take_output()
     self.defs.deinit()
     self.syntax.deinit()
-    let rest = self.take_output()
     rest.deinit()
 }
 
@@ -130,6 +134,9 @@ type WorkItem = struct {
     inv: GenInvoke
     generation: u32
 }
+
+// `inv` is an AST node the arena owns (see `deinit(Decl)`).
+pub fn deinit(self: move WorkItem) {}
 
 type Outcome = enum {
     Expanded
@@ -195,13 +202,13 @@ pub fn expand_templates(chk: &Checker, state: &TemplateState, modules: &List(Mod
     loop {
         let parked: List(WorkItem) = list(0, chk.allocator)
         let progress = false
-        for item in work {
+        for item in work.drain() {
             if item.generation >= MAX_GENERATIONS {
                 push_diag_e(chk, item.inv.span, E_TEMPLATE_DEPTH,
                     $"Template expansion depth exceeded ({MAX_GENERATIONS}) at `#{item.inv.name}`")
                 continue
             }
-            const outcome = expand_one(chk, state, modules, paths, sources, file_paths, item,
+            const outcome = expand_one(chk, state, modules, paths, sources, file_paths, &item,
                 &parked)
             outcome match {
                 Outcome.Expanded => { progress = true }
@@ -213,7 +220,7 @@ pub fn expand_templates(chk: &Checker, state: &TemplateState, modules: &List(Mod
             for &item in parked { report_unknown_types(chk, state, paths, item) }
             break
         }
-        work = parked
+        install(&work, parked)
         if work.len == 0 {
             break
         }
@@ -229,9 +236,12 @@ fn index_module(state: &TemplateState, module: &Module, m: usize, decl_base: usi
     for &d in module.decls {
         d.* match {
             GenDef(g) => {
+                // The entry shares the definition's parameter list, which the arena owns.
+                let params: List(GenParam) = list(g.params.len, state.allocator)
+                params.push_all(g.params.as_slice())
                 state.defs[$"{g.name}"] = GenDefEntry {
                     name = g.name,
-                    params = g.params,
+                    params = move params,
                     body = source[g.body_start..g.body_end],
                     base = g.body_start,
                     file_id = module.span.file_id,
@@ -239,7 +249,7 @@ fn index_module(state: &TemplateState, module: &Module, m: usize, decl_base: usi
             }
             GenInvoke(inv) => { work.push(WorkItem {
                     module = m,
-                    inv = inv,
+                    inv = move inv,
                     generation = generation,
                 }) }
             Type(td) => {
@@ -252,15 +262,15 @@ fn index_module(state: &TemplateState, module: &Module, m: usize, decl_base: usi
 }
 
 fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), paths: &List(String),
-    sources: &List(OwnedString), file_paths: &List(OwnedString), item: WorkItem,
+    sources: &List(OwnedString), file_paths: &List(OwnedString), item: &WorkItem,
     parked: &List(WorkItem)) Outcome {
-    const inv = item.inv
-    const found_def = state.defs.get(inv.name)
+    const inv = &item.inv
+    const found_def = state.defs.get_ref(inv.name)
     if found_def.is_none() {
         push_diag_e(chk, inv.span, E_UNKNOWN_GENERATOR, $"Unknown source generator `{inv.name}`")
         return Outcome.Failed
     }
-    const def: GenDefEntry = found_def.unwrap()
+    const def: &GenDefEntry = found_def.unwrap()
 
     const has_variadic = def.params.len > 0 and def.params[def.params.len - 1].variadic
     const required: usize = if has_variadic { def.params.len - 1 } else { def.params.len }
@@ -285,7 +295,7 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
         vis = current_visibility(chk),
         alloc = &a,
     }
-    defer ectx.vis.visible.deinit()
+    defer ectx.vis.deinit()
     const lookup: CtLookup = .{ ctx = &ectx as &u8, resolve = resolve_type_decl,
         name = no_name }
     let env = ct_env(&chk.comptime, &a, lookup)
@@ -302,11 +312,11 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
                     Err(o) => return o
                 }
             }
-            env.bindings[param.name] = CtValue.List(rest)
+            env.bindings[param.name] = CtValue.List(move rest)
             break
         }
         bind_arg(chk, &env, &param, &inv.args[p], inv.name, &a) match {
-            Ok(v) => { env.bindings[param.name] = v }
+            Ok(v) => { env.bindings[param.name] = move v }
             Err(o) => return o
         }
     }
@@ -428,7 +438,7 @@ fn type_is_collected(chk: &Checker, name: String) bool {
         return true
     }
     const vis = current_visibility(chk)
-    defer vis.visible.deinit()
+    defer vis.deinit()
     return chk.nominals.lookup(name, &vis) match {
         NomLookFound(_) => true
         _ => false
@@ -437,11 +447,11 @@ fn type_is_collected(chk: &Checker, name: String) bool {
 
 fn report_unknown_types(chk: &Checker, state: &TemplateState, paths: &List(String),
     item: &WorkItem) {
-    const found = state.defs.get(item.inv.name)
+    const found = state.defs.get_ref(item.inv.name)
     if found.is_none() {
         return
     }
-    const def: GenDefEntry = found.unwrap()
+    const def: &GenDefEntry = found.unwrap()
     chk.set_current_module(paths[item.module])
     for p in 0..def.params.len {
         if p >= item.inv.args.len {

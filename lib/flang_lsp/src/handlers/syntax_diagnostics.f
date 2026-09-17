@@ -22,7 +22,7 @@ pub type ParsedDoc = struct {
     diagnostics: List(Diagnostic)
 }
 
-pub fn deinit(self: &ParsedDoc) {
+pub fn deinit(self: move ParsedDoc) {
     self.diagnostics.deinit()
     self.module.deinit()
 }
@@ -42,7 +42,7 @@ pub fn parse_doc(text: String, allocator: &Allocator? = null) ParsedDoc {
     diagnostics.push_all(taken.0)
     taken.1.free(taken.0)
     p.deinit()
-    return .{ module = module, diagnostics = diagnostics }
+    return .{ module = move module, diagnostics = move diagnostics }
 }
 
 // Tests

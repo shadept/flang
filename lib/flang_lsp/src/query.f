@@ -53,8 +53,8 @@ pub fn deinit(self: move ImportRef) {
 // The `import` declaration under `offset` in `module`, or null when the cursor is not inside one.
 // The declaration's span ends at its last path segment, so the path's span is its tail.
 pub fn import_at(module: &Module, offset: usize) ImportRef? {
-    for d in module.decls {
-        d match {
+    for &d in module.decls {
+        d.* match {
             Import(id) => {
                 if span_contains(id.span, offset) {
                     const path = id.path.join(".")

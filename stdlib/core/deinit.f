@@ -1,28 +1,12 @@
-// Universal no-op deinit for primitive types and non-owning views. Every type in FLang should have
-// a deinit function so that generic containers (Dict, List, etc.) can unconditionally call
-// key.deinit() and value.deinit() without knowing whether the type owns heap memory.
+// Releasing a value whose type is still open.
 //
-// Types that own heap memory (OwnedString, List, Dict, etc.) provide their own deinit that frees
-// through the allocator.
+// There is no blanket `deinit`: a type that owns memory declares its own, and a generic container
+// reaches its elements through `release` rather than through a call every type would answer. A
+// blanket is what made a container free its buffer and leak everything the elements held, picked
+// per binary and reported nowhere (docs/known-issues.md).
 
-pub fn deinit(self: &bool) {}
-pub fn deinit(self: &u8) {}
-pub fn deinit(self: &u16) {}
-pub fn deinit(self: &u32) {}
-pub fn deinit(self: &u64) {}
-pub fn deinit(self: &i8) {}
-pub fn deinit(self: &i16) {}
-pub fn deinit(self: &i32) {}
-pub fn deinit(self: &i64) {}
-pub fn deinit(self: &usize) {}
-pub fn deinit(self: &isize) {}
-pub fn deinit(self: &f32) {}
-pub fn deinit(self: &f64) {}
-
-// String is a non-owning view (ptr + len), no memory to free.
-pub fn deinit(self: &String) {}
-
-// Generic fallback: types without an explicit deinit are no-ops. Overload resolution prefers
-// concrete signatures (fewer generic params), so types with their own deinit still get their
-// specific version called.
-pub fn deinit(self: &$T) {}
+pub fn release(value: move $T) {
+    #if !type_info(T).copyable {
+        value.deinit()
+    }
+}

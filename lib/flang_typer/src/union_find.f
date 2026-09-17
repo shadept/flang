@@ -51,15 +51,13 @@ pub type UnionFind = struct(K) {
 //
 // - `allocator`: kept for the forest's whole life. Null is the global allocator.
 pub fn union_find(allocator: &Allocator? = null) UnionFind($K) {
-    let out: UnionFind(K)
-    out.allocator = allocator.or_global()
-    let undo: Journal(UnionFindUndo(K)) = journal(out.allocator)
-    out.undo = undo
-    return out
+    const alloc = allocator.or_global()
+    let nodes: UnmanagedDict(K, UnionFindNode(K))
+    return .{ nodes = move nodes, undo = journal(alloc), allocator = alloc }
 }
 
 // Frees the node table and the undo journal, open regions included. Idempotent.
-pub fn deinit(self: &UnionFind($K)) {
+pub fn deinit(self: move UnionFind($K)) {
     self.nodes.deinit(self.allocator)
     self.undo.deinit()
 }

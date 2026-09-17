@@ -32,7 +32,7 @@ pub type ModuleIndex = struct {
     symbols: List(IndexSymbol)
 }
 
-pub fn deinit(self: &ModuleIndex) {
+pub fn deinit(self: move ModuleIndex) {
     self.symbols.deinit()
 }
 
@@ -45,7 +45,7 @@ pub fn module_index(m: &Module, allocator: &Allocator? = null) ModuleIndex {
         flatten(&symbols, s, "", allocator)
     }
     tree.deinit()
-    return .{ symbols = symbols }
+    return .{ symbols = move symbols }
 }
 
 fn flatten(out: &List(IndexSymbol), s: &DocSymbol, container: String, alloc: &Allocator?) {

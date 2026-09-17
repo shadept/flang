@@ -22,11 +22,16 @@ pub type Scheme = struct {
     body: Ty
 }
 
+// The quantified set is the scheme's own; the body is a handle into the type table.
+pub fn deinit(self: move Scheme) {
+    self.quantified.deinit()
+}
+
 // Construct a monomorphic scheme around `body`. `allocator` is used only for the empty `quantified`
 // set's lazy backing storage.
 pub fn mono(body: Ty, allocator: &Allocator? = null) Scheme {
     let q: Set(VarId) = set(allocator)
-    return .{ quantified = q, body = body }
+    return .{ quantified = move q, body = body }
 }
 
 // Monomorphic - `quantified.len == 0`. A `Scheme` is the engine's canonical "binding" type even for

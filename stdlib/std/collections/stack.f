@@ -46,10 +46,8 @@ pub fn unmanaged_stack(capacity: usize, allocator: &Allocator) UnmanagedStack($T
 //
 // - `allocator`: kept for the stack's whole life. Null is the global allocator.
 pub fn stack(capacity: usize, allocator: &Allocator? = null) Stack($T) {
-    let out: Stack(T)
-    out.allocator = allocator.or_global()
-    out.__storage = unmanaged_stack(capacity, out.allocator)
-    return out
+    const alloc = allocator.or_global()
+    return .{ __storage = unmanaged_stack(capacity, alloc), allocator = alloc }
 }
 
 // =============================================================================
@@ -63,7 +61,7 @@ pub fn push(self: &UnmanagedStack($T), value: move T, allocator: &Allocator) {
 }
 
 // Deinits every element and frees the storage. Idempotent: a second call is a no-op.
-pub fn deinit(self: &UnmanagedStack($T), allocator: &Allocator) {
+pub fn deinit(self: move UnmanagedStack($T), allocator: &Allocator) {
     self.__inner.deinit(allocator)
 }
 
@@ -133,7 +131,7 @@ pub fn push(self: &Stack($T), value: move T) {
 }
 
 // Deinits every element and frees the storage. Idempotent: a second call is a no-op.
-pub fn deinit(self: &Stack($T)) {
+pub fn deinit(self: move Stack($T)) {
     self.__storage.deinit(self.allocator)
 }
 

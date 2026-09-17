@@ -113,8 +113,8 @@ fn probe_call(callee: String, id: usize?, allocator: &Allocator?) Instr {
         result = null,
         result_ty = null,
         callee = callee,
-        args = args,
-        variadic_arg_types = variadic,
+        args = move args,
+        variadic_arg_types = move variadic,
     })
 }
 
@@ -128,8 +128,8 @@ fn register_call(count: usize, names_len: usize, allocator: &Allocator?) Instr {
         result = null,
         result_ty = null,
         callee = PROF_REGISTER,
-        args = args,
-        variadic_arg_types = variadic,
+        args = move args,
+        variadic_arg_types = move variadic,
     })
 }
 
@@ -141,7 +141,7 @@ fn add_runtime_foreigns(m: &IrModule, allocator: &Allocator?) {
     m.add_foreign(ForeignDecl {
         name = PROF_ENTER,
         return_ty = null,
-        param_types = enter_params,
+        param_types = move enter_params,
         variadic = false,
         cc = CallConv.C,
     })
@@ -150,7 +150,7 @@ fn add_runtime_foreigns(m: &IrModule, allocator: &Allocator?) {
     m.add_foreign(ForeignDecl {
         name = PROF_EXIT,
         return_ty = null,
-        param_types = exit_params,
+        param_types = move exit_params,
         variadic = false,
         cc = CallConv.C,
     })
@@ -162,7 +162,7 @@ fn add_runtime_foreigns(m: &IrModule, allocator: &Allocator?) {
     m.add_foreign(ForeignDecl {
         name = PROF_REGISTER,
         return_ty = null,
-        param_types = register_params,
+        param_types = move register_params,
         variadic = false,
         cc = CallConv.C,
     })

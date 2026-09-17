@@ -240,8 +240,7 @@ pub fn format_source(source: String, cfg: &FmtConfig) Result(OwnedString, FmtErr
             next.deinit()
             return Ok(move current)
         }
-        current.deinit()
-        current = move next
+        install(&current, next)
         passes = passes + 1
     }
     current.deinit()
@@ -930,8 +929,7 @@ fn maybe_wrap(r: &Renderer, incoming: usize) bool {
             })
         }
     }
-    r.wrap_points.deinit()
-    r.wrap_points = kept
+    install(&r.wrap_points, kept)
     return fresh
 }
 

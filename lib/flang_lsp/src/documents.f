@@ -36,7 +36,7 @@ pub fn document_store(allocator: &Allocator? = null) DocumentStore {
     return .{ docs = dict(allocator) }
 }
 
-pub fn deinit(self: &DocumentStore) {
+pub fn deinit(self: move DocumentStore) {
     self.docs.deinit()
 }
 
@@ -60,17 +60,9 @@ pub fn open(self: &DocumentStore, uri: String, version: i64, text: String) {
 // didChange, full sync: replace the text wholesale. A change for a URI that is not open is dropped
 // - there is no buffer for it to apply to.
 pub fn change(self: &DocumentStore, uri: String, version: i64, text: String) {
-    const existing = self.docs.get_ref(uri)
-    if existing.is_none() {
-        return
+    if self.docs.contains(uri) {
+        self.open(uri, version, text)
     }
-    let doc = existing.unwrap()
-    let old_text = move doc.text
-    old_text.deinit()
-    doc.index.deinit()
-    doc.text = from_view(text)
-    doc.index = line_index(doc.text.view)
-    doc.version = version
 }
 
 // didClose: drop the entry. Closing an unknown URI is a no-op.

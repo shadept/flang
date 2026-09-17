@@ -6,15 +6,14 @@ import core.option
 
 import std.test
 
-// Deinit the payload (if any) and reset to `None`. Lets options participate in container cascades
-// (`List(Option(T)).deinit` reaches the payloads) and makes `opt.deinit()` the one-liner for owned
-// optional fields. Idempotent: the second call sees `None`.
-pub fn deinit(self: &Option($T)) {
-    self.* match {
-        Some(v) => { v.deinit() }
+// Releases the payload, if any. Consuming, like every other `deinit`: an option of an owning type
+// hands the payload over, and the option is gone with it. Lets options participate in container
+// cascades (`List(Option(T)).deinit` reaches the payloads).
+pub fn deinit(self: move Option($T)) {
+    self match {
+        Some(v) => { release(v) }
         None => {}
     }
-    self.* = None
 }
 
 // Read-only, so the receiver is a reference: a by-value receiver of a non-copyable type has no
@@ -46,6 +45,14 @@ pub fn unwrap(self: move Option($T)) T {
     return self match {
         Some(v) => v
         None => panic("called `unwrap` on a `None` value")
+    }
+}
+
+// The payload, lent: the option keeps it, which is how an owning payload is read in place.
+pub fn unwrap_ref(self: &Option($T)) &T {
+    return self.* match {
+        Some(v) => &v
+        None => panic("called `unwrap_ref` on a `None` value")
     }
 }
 

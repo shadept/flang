@@ -153,16 +153,19 @@ fn rotate(self: move Server) Server {
 }
 ```
 
-A field reached through a reference is not tracked: `slot.key = move old.key` in a container's
-own storage stays the element-store form containers use. A `deinit(self: move T)` that moves every
-field out and never uses `self` whole needs nothing further.
+A place reached through a container's `owned` storage is not tracked: `slot.key = move
+(self.entries + i).key` stays the element-store form containers use. A `deinit(self: move T)` that
+moves every field out and never uses `self` whole needs nothing further.
 
-**What `move` may take** (2026-09-16). A binding, a field path, the value in a `&move` slot, or an
-element or dereference reached through a field of a type the module declares; anything else is
-E2125. Taking out of one's own
-storage is the read side of the element store above, and the gate is the same scoped-mutability
-right. Without it, `fn take(slot: &$T) T { return move slot.* }` in any module would turn a lent
-reference into ownership, which is how the first cut of the container sweep smuggled elements out.
+**What `move` may take** (2026-09-16, one rule for both spellings since 2026-09-17). A binding, a
+field of a binding the function owns, the value in a `&move` slot, or a place reached through an
+`owned` field of a type the module declares. Anything else is E2131 for a plain field, E2125 for an
+element or dereference. Handing a place to a `move` parameter is checked exactly as `move` in front
+of it. Taking out of one's own `owned` storage is the read side of the element store above, and
+the gate is the same scoped-mutability right. Without it, `fn take(slot: &$T) T { return move
+slot.* }` in any module would turn a lent reference into ownership, which is how the first cut of
+the container sweep smuggled elements out. A plain field is not storage the type releases, so rule
+3 governs it in the declaring module too; `replace(&self.f, fresh)` takes one through a reference.
 The chain is read syntactically, so a container writes `move (self.entries + i).key`, not a local
 `&Entry` binding first.
 
@@ -435,7 +438,9 @@ promote, then use.
    - `return h` of a binding moves with no marker; `return move h` is accepted with an info note
      (I2001).
    - Into a `move` parameter, an element (`xs[i]`) and a dereference (`p.*`) are E2125; a field
-     moves only out of a local or a `move` parameter, in the declaring module.
+     moves only out of a local or a `move` parameter. Since 2026-09-17 the explicit `move` follows
+     the same rule, with one exception for both: a place reached through an `owned` field of a type
+     the module declares (see "What `move` may take").
    - Rule 9 fires when the overlapping argument is non-copyable, or reached through an `owned` field
      or a container element, and one side moves or shares: `take(h.fd, h)` with `owned fd`,
      `xs.concat(xs)`, `g(xs[0], &xs)`. `take(h.id, h)` with a plain `id` compiles. This narrows
@@ -494,9 +499,37 @@ promote, then use.
      a `List` and `Dict` drain, a dict that lends its entries (`for e in d` binds `&Entry`), a set
      that keeps by-value iteration and adds `iter_ref` for owning elements, `swap` through `&move`
      slots, and sorts that compare an owning element by reference. The
-     `move` gate above landed with them. `List` and `Dict` buffers are not `owned` yet - that turns
-     every container into a non-copyable type, and it is the next type in this list rather than part
-     of `OwnedString`.
+     `move` gate above landed with them.
+
+     `List` and `Dict` buffers became `owned` on 2026-09-16, which makes every container
+     non-copyable and reached the whole compiler at once. What the sweep changed, by shape: tables
+     that used to hold a container by value now hold a reference (`Dict(NodeId, List(&Expr))`, an
+     `&FnSig` from the symbol table, `&LambdaExpr` in a pending lambda); a read that used to copy a
+     table entry now lends it (`get_ref`, `lookup_ref`, `Option.unwrap_ref`); a value built into a
+     list is copied in bulk (`push_all(slice)`) where the arena owns the elements; and a body freed
+     through a reference became one call that replaces it (`NominalRegistry.replace_body`) rather
+     than a free followed by a write. Iteration over a non-copyable element is `for &x in xs`.
+
+     The blanket `deinit(&$T)` went with them, on 2026-09-17. It was the other half of the same
+     hole: a container freeing its buffer while the blanket answered for every element, so anything
+     the elements owned leaked with nothing reported (docs/known-issues.md). Containers now release
+     an element through `release(value: move $T)`, which is `#if !type_info(T).copyable {
+     value.deinit() }` - nothing for a copyable element, the element's own `deinit` otherwise, and
+     E2011 for a non-copyable type that declares none. Types whose storage is released elsewhere
+     (AST nodes the arena owns, registry definitions freed by `free_body`) declare an empty
+     `deinit` that names whose the storage is, so the decision reads at the type instead of
+     defaulting invisibly.
+
+     The move gate was then made one rule, on 2026-09-17. `let v = move X` and handing `X` to a
+     `move` parameter had been checked by two paths that disagreed: the explicit form accepted a
+     field of any type the module declares, the argument form only an owned base. So rule 3 held
+     for `close(s.conn)` and not for `let c = move s.conn`. Both now read the same rule, and the
+     scoped-mutability exception keys off `owned`: a place leaves through a reference only if its
+     chain passes through an `owned` field of a type this module declares. A plain field follows
+     rule 3 in its own module too. The sweep turned about seventy take-and-reset sites
+     (`let x = move self.f` then `self.f = fresh`) into `replace(&self.f, fresh)`, made dict take
+     through `(self.entries + i)` by index instead of a lent `&Entry`, and gave builders that end in
+     `finish` a consuming `move self`.
 7. **Compiler libraries.** Sweep `lib/*`, `tools/*`, `compiler/`.
 8. **Docs.** Spec §3.2, §3.6, §4.1, §7.2, §7.3 and the stdlib callback convention; RFC-028 and
    RFC-030 status and cross-references.

@@ -104,8 +104,8 @@ pub fn command(prog: String, allocator: &Allocator? = null) Command {
     argv.push(from_view(prog, allocator))
     let envs: List(OwnedString) = list(0, allocator)
     return .{
-        __args = argv,
-        __env_pairs = envs,
+        __args = move argv,
+        __env_pairs = move envs,
         __cwd = null,
         __has_cwd = false,
         __stdin = Stdio.Inherit as i32,
@@ -115,11 +115,10 @@ pub fn command(prog: String, allocator: &Allocator? = null) Command {
     }
 }
 
-pub fn deinit(self: &Command) {
+pub fn deinit(self: move Command) {
     self.__args.deinit()
     self.__env_pairs.deinit()
     self.__cwd.deinit()
-    self.__has_cwd = false
 }
 
 pub fn arg(self: &Command, a: String) &Command {
@@ -135,11 +134,8 @@ pub fn args(self: &Command, items: String[]) &Command {
 }
 
 pub fn cwd(self: &Command, dir: String) &Command {
-    // Free a previously-set cwd before overwriting so a second call doesn't leak.
-    if self.__has_cwd {
-        self.__cwd.deinit()
-    }
-    self.__cwd = Some(from_view(dir, self.__allocator))
+    // Frees a previously-set cwd, so a second call doesn't leak.
+    install(&self.__cwd, Some(from_view(dir, self.__allocator)))
     self.__has_cwd = true
     return self
 }

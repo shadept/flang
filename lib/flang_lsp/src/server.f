@@ -323,8 +323,7 @@ fn encode_diag(e: &Encoder, idx: &LineIndex, text: String, d: &Diagnostic, enc: 
 // start = 0) lands at the top of the file rather than being hidden. Replaces the hover label,
 // releasing what it held: assigning over a live binding leaks it (E2126).
 fn set_hover_label(slot: &Option(OwnedString), text: move OwnedString) {
-    slot.deinit()
-    slot.* = Some(move text)
+    install(slot, Some(move text))
 }
 
 fn publish_file_diags(self: &LspServer, uri: String, text: String, diags: &List(&Diagnostic)) {
@@ -2391,8 +2390,8 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
         dir = from_view("/t"),
         name = from_view("t"),
         ctx = move ctx,
-        unit = unit,
-        index = index,
+        unit = move unit,
+        index = move index,
     })
     srv.run()
 
@@ -2436,8 +2435,8 @@ fn demo_project_into(srv: &LspServer) {
         dir = from_view("/t"),
         name = from_view("t"),
         ctx = move ctx,
-        unit = unit,
-        index = index,
+        unit = move unit,
+        index = move index,
     })
 }
 
@@ -2548,8 +2547,8 @@ fn demo_import_run(request: String, out: &StringBuilder, links: bool = false) {
         dir = from_view("/t"),
         name = from_view("t"),
         ctx = move ctx,
-        unit = unit,
-        index = index,
+        unit = move unit,
+        index = move index,
     })
     srv.run()
 }

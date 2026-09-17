@@ -174,12 +174,8 @@ pub fn walk_dir(root: String, allocator: &Allocator? = null) Result(WalkIter, Fs
         path_len_before = root_len,
     })
 
-    let w: WalkIter
-    w.stack = stack
-    w.path_buf = sb
-    w.last_error = null
-    w.done = false
-    return Ok(w)
+    return Ok(WalkIter { stack = move stack, path_buf = move sb, last_error = null,
+        done = false })
 }
 
 pub fn iter(self: &WalkIter) &WalkIter {
@@ -252,7 +248,7 @@ pub fn err(self: &WalkIter) FsError? {
     return self.last_error
 }
 
-pub fn deinit(self: &WalkIter) {
+pub fn deinit(self: move WalkIter) {
     while !self.stack.is_empty() {
         const top: &WalkFrame = self.stack.peek_ref().unwrap()
         top.dir.deinit()
@@ -299,7 +295,7 @@ pub fn glob(pattern: String, allocator: &Allocator? = null) Result(GlobIter, FsE
     pat_buf.append(pattern)
 
     return Ok(GlobIter {
-        walk = walk,
+        walk = move walk,
         pattern = pat_buf,
         done = false,
     })
@@ -332,7 +328,7 @@ pub fn err(self: &GlobIter) FsError? {
     return self.walk.err()
 }
 
-pub fn deinit(self: &GlobIter) {
+pub fn deinit(self: move GlobIter) {
     self.walk.deinit()
     self.pattern.deinit()
 }

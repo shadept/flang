@@ -101,17 +101,23 @@ pub type BuildOptions = struct {
 // - `allocator`: used for everything the backend allocates on the call's behalf. Null is the
 //   global allocator.
 pub fn build_options(output_path: String, allocator: &Allocator? = null) BuildOptions {
-    // A zero-initialised unmanaged list is the empty list; nothing allocates until the first add.
-    let none: UnmanagedList(String)
+    // A zero-initialised unmanaged list is the empty list; nothing allocates until the first add,
+    // and each field gets its own.
+    let c_files: UnmanagedList(String)
+    let obj_files: UnmanagedList(String)
+    let includes: UnmanagedList(String)
+    let libs: UnmanagedList(String)
+    let cflags: UnmanagedList(String)
+    let ldflags: UnmanagedList(String)
     return BuildOptions {
         output_path = output_path,
         mode = BuildMode.Debug,
-        extra_c_files = none,
-        extra_obj_files = none,
-        include_paths = none,
-        libs = none,
-        cflags = none,
-        ldflags = none,
+        extra_c_files = move c_files,
+        extra_obj_files = move obj_files,
+        include_paths = move includes,
+        libs = move libs,
+        cflags = move cflags,
+        ldflags = move ldflags,
         emit_c_path = null,
         keep_temps = false,
         emit_only = false,
@@ -129,7 +135,7 @@ fn list_allocator(self: &BuildOptions) &Allocator {
     return self.allocator.or_global()
 }
 
-pub fn deinit(self: &BuildOptions) {
+pub fn deinit(self: move BuildOptions) {
     const alloc = self.list_allocator()
     self.extra_c_files.deinit(alloc)
     self.extra_obj_files.deinit(alloc)

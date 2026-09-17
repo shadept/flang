@@ -126,7 +126,7 @@ pub fn clear(self: &StringPool) {
 }
 
 // Frees the buffer, the split table and the index. Idempotent: a second call is a no-op.
-pub fn deinit(self: &StringPool) {
+pub fn deinit(self: move StringPool) {
     self.bytes.deinit(self.allocator)
     self.ends.deinit(self.allocator)
     self.index.deinit(self.allocator)
@@ -163,8 +163,9 @@ fn ensure_index_room(self: &StringPool) {
         }
         fresh[slot] = id as StrId
     }
-    self.index.deinit(self.allocator)
-    self.index = fresh
+    // Exchanged through the slot: the field is never empty, and the old table leaves as a value.
+    let old = replace(&self.index, fresh)
+    old.deinit(self.allocator)
 }
 
 // =============================================================================

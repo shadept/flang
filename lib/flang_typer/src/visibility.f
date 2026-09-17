@@ -24,17 +24,22 @@ pub type Visibility = struct {
     visible: Set(String)
 }
 
+// Releases the set of visible modules. The scope is built per lookup and dies with it.
+pub fn deinit(self: move Visibility) {
+    self.visible.deinit()
+}
+
 // Construct a visibility scope. `current_module` is None for synthesized contexts; `visible` is
 // built by the caller from the import graph.
-pub fn visibility(current_module: String?, visible: Set(String)) Visibility {
-    return .{ current_module = current_module, visible = visible }
+pub fn visibility(current_module: String?, visible: move Set(String)) Visibility {
+    return .{ current_module = current_module, visible = move visible }
 }
 
 // Empty visibility - used by tests and by codegen-time lookups that don't need filtering (the
 // source code has already been validated).
 pub fn open(allocator: &Allocator? = null) Visibility {
     let s: Set(String) = set(allocator)
-    return .{ current_module = null, visible = s }
+    return .{ current_module = null, visible = move s }
 }
 
 // True when `module` is reachable from `current_module`. Same-module references are always allowed;

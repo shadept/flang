@@ -102,6 +102,11 @@ pub type CtValue = enum {
     NsTypeKind
 }
 
+// Nothing to release: the list a `List` value holds is `clone_ct`'s copy over the expansion's
+// allocator, which outlives every value built from it, and every other variant borrows the
+// template's own storage.
+pub fn deinit(self: move CtValue) {}
+
 // Compile-time `core.rtti.TypeInfo`: `kind` is the `TypeKind` discriminant or -1 when the spelled
 // type has none (`&T`, `T?`, an unknown name). Members are derived on access from `source`, so
 // recursive types terminate. Layout (`size`/`align`/`offset`) is never available here. `copyable`
@@ -258,8 +263,9 @@ pub fn ct_eval(env: &CtEnv, e: &Expr) Result(CtValue, CtError) {
             _ => ct_err("E2118", $"literal form not allowed at compile time", l.span)
         }
         Identifier(id) => {
-            env.bindings[id.name] match {
-                Some(v) => return Ok(v)
+            // The binding stays the environment's; the value handed back is a copy of it.
+            env.bindings.get_ref(id.name) match {
+                Some(v) => return Ok(clone_ct(v, env.alloc))
                 None => {}
             }
             if id.name == "platform" {
@@ -272,7 +278,7 @@ pub fn ct_eval(env: &CtEnv, e: &Expr) Result(CtValue, CtError) {
                 return Ok(CtValue.NsTypeKind)
             }
             env.lookup.name(env.lookup.ctx, id.name, id.span) match {
-                Some(v) => return Ok(v)
+                Some(v) => return Ok(move v)
                 None => {}
             }
             ct_err("E2116", $"unknown compile-time name `{id.name}`", id.span)
@@ -435,7 +441,7 @@ fn ct_index(env: &CtEnv, ix: &IndexExpr) Result(CtValue, CtError) {
                 if i < 0 or (i as usize) >= items.len {
                     return ct_err("E2118", $"index {i} out of range (len {items.len})", ix.span)
                 }
-                Ok(items[i as usize])
+                Ok(clone_ct(&items[i as usize], env.alloc))
             }
             _ => ct_err("E2118", $"a list is indexed by an integer", ix.span)
         }
@@ -446,7 +452,7 @@ fn ct_index(env: &CtEnv, ix: &IndexExpr) Result(CtValue, CtError) {
 fn ct_slice(env: &CtEnv, recv: &CtValue, rg: &RangeExpr, span: SourceSpan) Result(CtValue,
     CtError) {
     const items: List(CtValue) = recv.* match {
-        List(l) => l
+        List(l) => move l
         _ => return ct_err("E2118", $"cannot slice {describe(recv)}", span)
     }
     let start: i64 = 0
@@ -468,8 +474,10 @@ fn ct_slice(env: &CtEnv, recv: &CtValue, rg: &RangeExpr, span: SourceSpan) Resul
         return ct_err("E2118", $"slice {start}..{end} out of range (len {items.len})", span)
     }
     let out: List(CtValue) = list((end - start) as usize, Some(env.alloc))
-    for i in (start as usize)..(end as usize) { out.push(items[i]) }
-    return Ok(CtValue.List(out))
+    for i in (start as usize)..(end as usize) {
+        out.push(clone_ct(&items[i], env.alloc))
+    }
+    return Ok(CtValue.List(move out))
 }
 
 fn ct_expect_int(env: &CtEnv, e: &Expr) Result(i64, CtError) {
@@ -500,7 +508,7 @@ fn ct_call(env: &CtEnv, c: &CallExpr) Result(CtValue, CtError) {
     const arg_span = expr_span(arg_expr)
     if name == "type_info" {
         return arg match {
-            TypeInfo(_) => Ok(arg)
+            TypeInfo(_) => Ok(move arg)
             Value(_) => ct_err("E2118",
                 $"`type_info` expects a type, got a value (`type_of` reads a value's type)",
                 arg_span)
@@ -677,7 +685,7 @@ fn ct_type_member(env: &CtEnv, t: &CtTypeInfo, member: String, span: SourceSpan)
     }
     if member == "type_params" or member == "type_args" {
         let empty: List(CtValue) = list(0, Some(env.alloc))
-        return Ok(CtValue.List(empty))
+        return Ok(CtValue.List(move empty))
     }
     if member == "fields" {
         return Ok(CtValue.List(type_fields(env, t)))
@@ -769,6 +777,35 @@ fn void_type_info() CtTypeInfo {
     return unsourced_type_info("void", KIND_PRIMITIVE)
 }
 
+// An independent copy. Only `List` owns anything, so every other variant copies as it is, and a
+// list's elements are cloned into fresh storage - comptime values are small and short-lived.
+fn clone_ct(v: &CtValue, alloc: &Allocator) CtValue {
+    return v.* match {
+        List(items) => {
+            let out: List(CtValue) = list(items.len, Some(alloc))
+            for &it in items {
+                out.push(clone_ct(it, alloc))
+            }
+            CtValue.List(move out)
+        }
+        B(b) => CtValue.B(b)
+        I(i) => CtValue.I(i)
+        S(s) => CtValue.S(s)
+        Ident(s) => CtValue.Ident(s)
+        OptStr(o) => CtValue.OptStr(o)
+        TypeInfo(t) => CtValue.TypeInfo(t)
+        Value(t) => CtValue.Value(t)
+        Field(f) => CtValue.Field(f)
+        Variant(vr) => CtValue.Variant(vr)
+        Param(p) => CtValue.Param(p)
+        Kind(k) => CtValue.Kind(k)
+        NsPlatform => CtValue.NsPlatform
+        NsRuntime => CtValue.NsRuntime
+        NsEnv => CtValue.NsEnv
+        NsTypeKind => CtValue.NsTypeKind
+    }
+}
+
 fn type_syntax(t: &CtTypeInfo) &TypeExpr? {
     return t.source match {
         FromDecl(td) => Some(td.body)
@@ -778,17 +815,16 @@ fn type_syntax(t: &CtTypeInfo) &TypeExpr? {
     }
 }
 
-fn type_function_syntax(t: &CtTypeInfo) FunctionType? {
-    let found: FunctionType? = null
+// Lent, not copied: a `FunctionType` owns its parameter list, and both readers only walk it.
+fn type_function_syntax(t: &CtTypeInfo) &FunctionType? {
     const te = type_syntax(t)
-    te match {
+    return te match {
         Some(x) => x.* match {
-            Function(f) => { found = Some(f) }
-            _ => {}
+            Function(f) => Some(&f)
+            _ => null
         }
-        None => {}
+        None => null
     }
-    return found
 }
 
 fn type_fields(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
@@ -1151,7 +1187,8 @@ fn splice_decls(decls: &List(Decl), ctx: &ComptimeCtx, diags: &List(Diagnostic),
                     }
                 }
             }
-            _ => { out.push(decls[i]) }
+            // Shared with the module the declaration came from, as the arena model wants.
+            _ => { out.push_all(decls.as_slice()[i..(i + 1)]) }
         }
     }
 }

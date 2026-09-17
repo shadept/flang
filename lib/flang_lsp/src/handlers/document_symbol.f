@@ -39,8 +39,8 @@ pub fn deinit(self: move DocSymbol) {
 
 pub fn document_symbols(m: &Module, allocator: &Allocator? = null) List(DocSymbol) {
     let out: List(DocSymbol) = list(0, allocator)
-    for d in m.decls {
-        d match {
+    for &d in m.decls {
+        d.* match {
             Function(f) => out.push(leaf(f.name, SymbolKind.Function, f.span, allocator))
             Const(c) => out.push(leaf(c.name, SymbolKind.Constant, c.span, allocator))
             Type(t) => out.push(type_symbol(&t, allocator))
@@ -79,8 +79,7 @@ fn type_symbol(t: &TypeDecl, alloc: &Allocator?) DocSymbol {
                 children.push(leaf(f.name, SymbolKind.Field, f.span, alloc))
             }
             let sym = leaf(t.name, SymbolKind.Struct, t.span, alloc)
-            sym.children.deinit()
-            sym.children = children
+            install(&sym.children, children)
             return sym
         }
         AnonEnum(en) => {
@@ -89,8 +88,7 @@ fn type_symbol(t: &TypeDecl, alloc: &Allocator?) DocSymbol {
                 children.push(leaf(v.name, SymbolKind.EnumMember, v.span, alloc))
             }
             let sym = leaf(t.name, SymbolKind.Enum, t.span, alloc)
-            sym.children.deinit()
-            sym.children = children
+            install(&sym.children, children)
             return sym
         }
         else => {}
@@ -103,8 +101,8 @@ fn type_symbol(t: &TypeDecl, alloc: &Allocator?) DocSymbol {
 test "a single-line struct decl keeps its fields in the outline" {
     let doc = parse_doc("pub type P = struct { x: i32\n y: i32 }\n")
     let found = false
-    for d in doc.module.decls {
-        d match {
+    for &d in doc.module.decls {
+        d.* match {
             Type(t) => {
                 found = true
                 t.body match {

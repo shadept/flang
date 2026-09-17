@@ -45,7 +45,7 @@ const UNVISITED: usize = 0xFFFF_FFFF_FFFF_FFFF
 // numbers and low links, the DFS stack, and the order being emitted. Scratch for `demand_order`,
 // which hands `out` to its caller and frees the rest. One allocator serves every field.
 type Tarjan = struct {
-    adj: UnmanagedList(UnmanagedList(usize))
+    adj: UnmanagedList(List(usize))
     index: UnmanagedList(usize)
     low: UnmanagedList(usize)
     on_stack: UnmanagedList(bool)
@@ -57,9 +57,9 @@ type Tarjan = struct {
 }
 
 // Frees every field, the adjacency rows included.
-fn deinit(self: &Tarjan) {
-    for &row in self.adj {
-        row.deinit(self.allocator)
+fn deinit(self: move Tarjan) {
+    for row in self.adj.drain() {
+        row.deinit()
     }
     self.adj.deinit(self.allocator)
     self.index.deinit(self.allocator)
@@ -97,9 +97,9 @@ pub fn demand_order(count: usize, fqns: &List(String), edges: &List(ImportEdge),
     }
     // The order goes to the caller as a list over the same allocator; everything else was scratch.
     // Leaving an empty list behind keeps `deinit` free to release every field it owns.
-    let out: List(usize) = .{ __storage = t.out, allocator = alloc }
+    let out: List(usize) = .{ __storage = move t.out, allocator = alloc }
     let empty: UnmanagedList(usize)
-    t.out = empty
+    t.out = move empty
     t.deinit()
     return out
 }
@@ -107,11 +107,10 @@ pub fn demand_order(count: usize, fqns: &List(String), edges: &List(ImportEdge),
 // Returns the successors of each node, one row per node, deduplicated and in FQN order. Edges
 // naming a module outside `0..count` and self-edges are dropped.
 fn build_adjacency(count: usize, fqns: &List(String), edges: &List(ImportEdge),
-    allocator: &Allocator) UnmanagedList(UnmanagedList(usize)) {
-    let adj: UnmanagedList(UnmanagedList(usize)) = unmanaged_list(count, allocator)
+    allocator: &Allocator) UnmanagedList(List(usize)) {
+    let adj: UnmanagedList(List(usize)) = unmanaged_list(count, allocator)
     for _i in 0..count {
-        let row: UnmanagedList(usize)
-        adj.push(row, allocator)
+        adj.push(list(0, allocator), allocator)
     }
     for e in edges {
         if e.from >= count or e.to >= count {
@@ -122,7 +121,7 @@ fn build_adjacency(count: usize, fqns: &List(String), edges: &List(ImportEdge),
         }
         let row = &adj[e.from]
         if !row.contains(e.to) {
-            row.push(e.to, allocator)
+            row.push(e.to)
         }
     }
     for &row in adj {

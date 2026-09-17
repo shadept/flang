@@ -92,14 +92,11 @@ pub fn lexer(source: String, allocator: &Allocator? = null, start: usize = 0) Le
 
 // Release the lexer's own bookkeeping: the interp frame stack and any token queued ahead (only
 // relevant if the caller abandons the lexer between `next_token()` calls - `tokenize()` always
-// drains the queue before returning). Tokens already handed to the caller are independent; deinit
-// the returned `List(Token)` to free them.
-pub fn deinit(self: &Lexer) {
+// drains the queue before returning). A token owns nothing, so dropping a pending one is just the
+// flag.
+pub fn deinit(self: move Lexer) {
     self.interp_stack.deinit()
-    if self.has_pending {
-        self.pending_token.deinit()
-        self.has_pending = false
-    }
+    self.has_pending = false
 }
 
 // Mark the next `"` as the opener of an interpolated string. The flag is consumed by the next

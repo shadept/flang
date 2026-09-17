@@ -73,7 +73,7 @@ pub fn path(s: String, allocator: &Allocator? = null) Path {
 // StringBuilder have different shapes (no cap field on OwnedString), so the bytes are copied rather
 // than re-attached. Callers that care about avoiding the copy should build into a StringBuilder
 // directly and skip the OwnedString entirely.
-pub fn path_from_owned(s: &OwnedString) Path {
+pub fn path_from_owned(s: move OwnedString) Path {
     const alloc = s.allocator
     let sb = string_builder(s.len + 1, alloc)
     sb.append(s.view)

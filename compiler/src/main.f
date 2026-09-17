@@ -169,7 +169,7 @@ pub fn main() i32 {
 // `flang --help` / `--version` with no command are the only forms where an option leads.
 fn parse_cli(argv: String[]) Cli {
     let cli: Cli
-    cli.args = list(0)
+    install(&cli.args, list(0))
     cli.color = ColorChoice.Auto
     if argv.len < 2 {
         cli.show_help = true
@@ -650,10 +650,13 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
             println(gm.view)
         }
     }
-    // No manifest, so no `[build.<os>]` inputs.
-    let none: List(OwnedString) = list(0)
-    defer none.deinit()
-    return finish_build(&unit, path, out, opts, &none, &none)
+    // No manifest, so no `[build.<os>]` inputs. One list per parameter: the call may not reach the
+    // same one twice.
+    let no_libs: List(OwnedString) = list(0)
+    defer no_libs.deinit()
+    let no_ldflags: List(OwnedString) = list(0)
+    defer no_ldflags.deinit()
+    return finish_build(&unit, path, out, opts, &no_libs, &no_ldflags)
 }
 
 // Expand `${VAR}` in each entry against the environment. An undefined variable's name is collected
@@ -1022,8 +1025,7 @@ fn run_fmt(cli: &Cli) i32 {
         defer toml.deinit()
         let proj = parse_project(toml.view)
         defer proj.deinit()
-        project_name.deinit()
-        project_name = from_view(proj.name.view)
+        install(&project_name, from_view(proj.name.view))
         set_project(&cfg, project_name.view)
         for &e in proj.fmt {
             if !set_option(&cfg, e.key.view, e.value.view) {
@@ -1033,7 +1035,7 @@ fn run_fmt(cli: &Cli) i32 {
             }
         }
         if files.len == 0 {
-            sources = glob_sources(proj.source.view)
+            install(&sources, glob_sources(proj.source.view))
         }
     }
     for f in files {

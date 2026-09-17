@@ -298,9 +298,9 @@ which now binds `let dst: &T = s.ptr + i` and assigns through it.
 
 ---
 
-### The Blanket `deinit(&$T)` Silently Wins Over an Element's Own
+### The Blanket `deinit(&$T)` Silently Wins Over an Element's Own - RESOLVED
 
-**Status:** Open
+**Status:** Resolved 2026-09-17: the blanket is deleted.
 **Affected:** `stdlib/core/deinit.f`, `stdlib/std/collections/list.f`, any element type that owns memory
 
 `List(T).deinit` calls `.deinit()` on each element. `core.deinit`'s blanket
@@ -321,18 +321,19 @@ the emitted C with `flang test -k`, or reproduce with
 call site does not change it, nor does importing it in `flang_analysis`'s `analyze.f`, so the
 deciding site is unidentified and plain visibility does not explain it.
 
-RFC-033's `move` gate (2026-09-16) closes the neighbouring hole rather than this one: a container
-now takes an element out of its own storage, and a `release_slot(slot: &$T)` helper that any module
-could call on any reference is E2125. The blanket still answers `elem.deinit()` on a reference.
+RFC-033's `move` gate (2026-09-16) closed the neighbouring hole: a container takes an element out of
+its own storage, and a `release_slot(slot: &$T)` helper that any module could call on any reference
+is E2125.
 
-The blanket cannot simply be deleted: `List(T).deinit` resolves `elem.deinit()` while `T` is still
-a free variable, when the TEMPLATE body is checked and no instantiation exists, so the blanket is
-load-bearing for template checking. Every concrete type in the tree now carries its own `deinit`,
-and with the blanket removed the whole residual is calls whose receiver is an unresolved variable
-(`on &?7086`) - each one a generic container or a wrapper forwarding to one, `Stack($T).deinit`
-calling `self.__inner.deinit()` on a `List(T)` being the smallest. The fix is to resolve the
-element call per specialization instead of in the template: skip it while `T` is open, and at
-instantiation either bind the element's own `deinit` or emit nothing when the type has none.
+The blanket itself went on 2026-09-17. What had blocked it - `List(T).deinit` resolves
+`elem.deinit()` while `T` is still a free variable, in the TEMPLATE body, where no instantiation
+exists - is what `#if` already sidesteps: a directive is evaluated per specialization, so only the
+branch that applies to the bound `T` is checked. Containers now call `release(value: move $T)`
+(stdlib/core/deinit.f), whose body is `#if !type_info(T).copyable { value.deinit() }`. A copyable
+element compiles to nothing; a non-copyable one resolves the element's own `deinit`, and a
+non-copyable type that declares none is E2011 at the container holding it. Roughly thirty types
+gained a `deinit` in the sweep - some releasing what they own, the arena-backed ones declaring an
+empty body that says whose storage it is.
 
 ---
 
@@ -3743,16 +3744,17 @@ Workarounds: put the block first, or give the binding a non-call initializer.
 
 ---
 
-### `tools/codegen_demo` and `tools/inliner_test` Do Not Type-Check
+### `tools/codegen_demo` and `tools/inliner_test` Do Not Type-Check - RESOLVED
 
-**Status:** Open.
+**Status:** Resolved 2026-09-16 (with the RFC-033 container sweep).
 **Affected:** `tools/codegen_demo/src/main.f`, `tools/inliner_test/src/main.f`.
 
-Six `FirGlobal` literals leave the `relocs` field out, which E2050 now rejects. `relocs: Reloc[]?`
-takes `null` for a global with no relocations, so the fix is one field per literal.
+Six `FirGlobal` literals left the `relocs` field out, which E2050 rejects. `relocs: Reloc[]?` takes
+`null` for a global with no relocations, so the fix was one field per literal.
 
 Neither tool is covered by `dotnet test.cs` or `dotnet test-all.cs`, which is why the break went
-unnoticed; `flang check` from either directory reports it.
+unnoticed; `flang check` from either directory reports it. Every tool under `tools/` was checked
+by hand after the sweep.
 
 ---
 

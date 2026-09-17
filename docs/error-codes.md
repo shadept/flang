@@ -3905,12 +3905,14 @@ stays in its container, and the value behind a reference stays with its owner, s
 be a second owner. Inside a generic body - a combinator calling back a function that takes
 ownership - the error is reported at the instantiation and names the callback parameter.
 
-`move` itself takes a binding, a field path, or - inside the module that declares the field it is
-reached through - an element or a dereference. That is the scoped-mutability right a container
-already has over its own storage (spec 3.4.1): `std.collections.list` takes an element out of
-`s.ptr`, and nobody else can, or a lent reference would be a way to take ownership of what it points
-at. The chain has to be written out at the move: a local reference binding loses the provenance the
-rule reads.
+`move` itself takes a binding, a field of a binding the function owns, or a place reached through
+an `owned` field of a type the current module declares. That is the scoped-mutability right a
+container has over the storage it releases (spec 3.4.1): `std.collections.list` takes an element
+out of `owned ptr`, and nobody else can, or a lent reference would be a way to take ownership of
+what it points at. A pointer field without `owned` grants nothing. The chain has to be written out
+at the move: a local reference binding loses the provenance the rule reads. Handing the place to a
+`move` parameter follows the same rule as writing `move` in front of it, so `release((s.ptr + i).*)`
+inside `std.collections.list` is accepted and `close(h.*)` on a lent `h: &Handle` is not.
 
 #### Example
 
@@ -4079,8 +4081,11 @@ copy rules of its type. A non-copyable one may be read and passed on to another 
 anything that needs a copy or ownership - writing it or a field of it, sharing it with `&` or an
 auto-referenced receiver, binding, returning or moving it - is refused.
 
-A field moved into a `move` parameter needs an owned base: a local or a `move` parameter. A value
-reached through a reference, or a parameter without `move`, keeps its fields.
+A field moved out - with `move`, or into a `move` parameter - needs an owned base: a local or a
+`move` parameter. A value reached through a reference, or a parameter without `move`, keeps its
+fields, in the declaring module too. The one exception is an `owned` field of a type this module
+declares, the storage the type releases (E2125). To take a plain field through a reference, put a
+value in its place: `replace(&self.field, fresh)`.
 
 A closure's captures are references to the enclosing bindings: the closure may read and write
 them, and moving one out is refused. A capture of a parameter without `move` stays read-only.
@@ -4099,11 +4104,21 @@ fn reset(r: Route) {
 fn steal(s: &Session) i32 {
     return close(s.conn)        // error[E2131]: `s` is reached through a reference
 }
+
+fn steal_too(s: &Session) i32 {
+    let c = move s.conn         // error[E2131]: the same place, spelled with `move`
+    return close(c)
+}
+
+fn swap_out(s: &Session) FileHandle {
+    return replace(&s.conn, open(0)) // ok: the field is never left empty
+}
 ```
 
 #### Solution
 
-Declare the parameter `move T` to own the value, or `&T` to write the caller's.
+Declare the parameter `move T` to own the value, or `&T` to write the caller's. To take a field out
+of a value you only hold by reference, put another in its place with `replace`.
 
 ---
 

@@ -192,7 +192,8 @@ type ConstInfo = struct {
 // site, so a lambda inside an instantiated template body lowers against that instantiation's node
 // types.
 type PendingLambda = struct {
-    lam: LambdaExpr
+    // Lent by the arena that owns the AST, like `info`.
+    lam: &LambdaExpr
     // Lent by the result tables, which outlive the drain: the info stays theirs.
     info: &LambdaInfo
     overlay: &InferenceResults?
@@ -350,7 +351,7 @@ fn get(self: &Env, name: String) LocalSlot? {
     }
 }
 
-pub fn deinit(self: &Env) {
+pub fn deinit(self: move Env) {
     self.names.deinit(self.allocator)
     self.bindings.deinit(self.allocator)
 }
@@ -395,15 +396,15 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult,
         overlay = null,
         syms = &syms,
         allocator = allocator,
-        loops = loop_stack,
+        loops = move loop_stack,
         sret = null,
         ret_size = 0u64,
-        strings = interner,
-        globals = globals,
-        const_blobs = const_blobs,
-        const_relocs = const_relocs,
-        defers = defer_stack,
-        defer_marks = defer_marks,
+        strings = move interner,
+        globals = move globals,
+        const_blobs = move const_blobs,
+        const_relocs = move const_relocs,
+        defers = move defer_stack,
+        defer_marks = move defer_marks,
         flushing = false,
         blocked = false,
         blocked_note = null,
@@ -424,6 +425,8 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult,
     lower_pending_lambdas(&m, &ctx)
     flush_globals(&m, &ctx)
     wire_const_inits(&m, &ctx)
+    ctx.globals.deinit()
+    ctx.strings.deinit()
     // ponytail: the symbol table leaks - the IrModule's function names are views into its owned
     // strings, so freeing it here would dangle every name the backend is about to print. Upgrade
     // path: arena-own IrModule names.
@@ -466,15 +469,15 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
         overlay = null,
         syms = &syms,
         allocator = allocator,
-        loops = loop_stack,
+        loops = move loop_stack,
         sret = null,
         ret_size = 0u64,
-        strings = interner,
-        globals = globals,
-        const_blobs = const_blobs,
-        const_relocs = const_relocs,
-        defers = defer_stack,
-        defer_marks = defer_marks,
+        strings = move interner,
+        globals = move globals,
+        const_blobs = move const_blobs,
+        const_relocs = move const_relocs,
+        defers = move defer_stack,
+        defer_marks = move defer_marks,
         flushing = false,
         blocked = false,
         blocked_note = null,
@@ -552,6 +555,8 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     }
     let no_displays = m.set_displays(syms.take_displays())
     no_displays.deinit()
+    ctx.globals.deinit()
+    ctx.strings.deinit()
     return m
 }
 
@@ -609,20 +614,19 @@ fn drop_callers_of_refused(m: &IrModule, ctx: &LowerCtx, alloc: &Allocator?) {
         }
     }
 
-    // Compact once the set has settled. A kept function MOVES into `keep` (its buffers now owned by
-    // the copy); a dropped one frees its tree here. The stale headers are popped out of both lists,
-    // so each function tree is deinited exactly once.
+    // Compact once the set has settled: the module's list is drained, a kept function moves into
+    // `keep`, and a dropped one frees its tree here. Each function tree is released exactly once.
     let keep: List(Function) = list(m.functions.len, alloc)
-    for &f in m.functions {
+    for f in m.functions.drain() {
         if defined.get(f.name).is_some() {
-            keep.push(f.*)
+            keep.push(f)
         } else {
             f.deinit()
         }
     }
-    while m.functions.pop().is_some() {}
-    m.functions.push_all(keep.as_slice())
-    while keep.pop().is_some() {}
+    for f in keep.drain() {
+        m.functions.push(f)
+    }
     keep.deinit()
     defined.deinit()
 }
@@ -849,7 +853,7 @@ fn lower_test_block(m: &IrModule, ctx: &LowerCtx, td: &TestDecl, fqn: String) {
 // symbol for the runner. Absent when std.test is not in the module set (a project with test blocks
 // but no assertions), which costs the run its leak tracking and nothing else.
 fn name_install_tests(m: &IrModule, ctx: &LowerCtx) {
-    const overloads = ctx.result.functions.by_name.get("install_test_allocator")
+    const overloads = ctx.result.functions.by_name.get_ref("install_test_allocator")
     if overloads.is_none() {
         return
     }
@@ -1345,8 +1349,7 @@ fn wire_const_inits(m: &IrModule, ctx: &LowerCtx) {
         if !(m.functions[i].name == "main") {
             continue
         }
-        let old = m.functions[i].blocks[0].instrs
-        calls.push_all(old.as_slice())
+        calls.push_all(m.functions[i].blocks[0].instrs.as_slice())
         set_instrs(&m.functions[i].blocks[0], calls)
         live.deinit()
         return
@@ -1370,8 +1373,8 @@ fn const_init_calls(ctx: &LowerCtx, live: &Set(String)) List(Instr) {
             result = no_result,
             result_ty = no_ty,
             callee = ctx.const_inits[k],
-            args = args,
-            variadic_arg_types = var_types,
+            args = move args,
+            variadic_arg_types = move var_types,
         }))
     }
     return out
@@ -1458,7 +1461,7 @@ fn foreign_from_sig(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) ForeignDe
     return Some(ForeignDecl {
         name = decl.name,
         return_ty = ret,
-        param_types = ptys,
+        param_types = move ptys,
         variadic = false,
         cc = CallConv.C,
     })
@@ -1521,7 +1524,7 @@ fn foreign_decl_of(decl: &FunctionDecl, allocator: &Allocator?) ForeignDecl? {
     return Some(ForeignDecl {
         name = decl.name,
         return_ty = ret,
-        param_types = ptys,
+        param_types = move ptys,
         variadic = variadic,
         cc = CallConv.C,
     })
@@ -1555,7 +1558,7 @@ fn lower_function(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) {
         return
     }
     let sig = sig_opt.unwrap()
-    lower_function_body(m, ctx, decl, sym, &sig)
+    lower_function_body(m, ctx, decl, sym, sig)
 }
 
 // Lower every specialization the checker instantiated (M10): the template's declaration re-lowers
@@ -1593,7 +1596,7 @@ fn lower_specializations(m: &IrModule, ctx: &LowerCtx, skip_modules: &Set(String
         emitted.add(sym.unwrap())
         let g = sig.unwrap()
         ctx.overlay = Some(&s.overlay)
-        lower_function_body(m, ctx, &s.decl, sym.unwrap(), &g)
+        lower_function_body(m, ctx, s.decl, sym.unwrap(), g)
         ctx.overlay = null
     }
     emitted.deinit()
@@ -1605,7 +1608,7 @@ fn lower_pending_lambdas(m: &IrModule, ctx: &LowerCtx) {
     let i: usize = 0
     while i < ctx.pending_lambdas.len {
         // Copy out: the list may grow (and reallocate) during emission.
-        let pl = move ctx.pending_lambdas[i]
+        let pl = ctx.pending_lambdas[i]
         i = i + 1
         let saved = ctx.overlay
         ctx.overlay = pl.overlay
@@ -1616,19 +1619,22 @@ fn lower_pending_lambdas(m: &IrModule, ctx: &LowerCtx) {
 
 fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
     let empty_dirs: List(DeclAttribute) = list(0, ctx.allocator)
+    // The synthesized declaration shares the lambda's parameter list, which the arena owns.
+    let lam_params: List(FunctionParam) = list(pl.lam.params.len, ctx.allocator)
+    lam_params.push_all(pl.lam.params.as_slice())
     let decl = FunctionDecl {
         span = pl.lam.span,
         is_pub = false,
-        directives = empty_dirs,
+        directives = move empty_dirs,
         name = pl.info.symbol.view,
-        params = pl.lam.params,
+        params = move lam_params,
         return_type = pl.lam.return_type,
         bounds = list(0, ctx.allocator),
         body = Some(pl.lam.body),
     }
     let sig_params: List(Ty) = list(pl.info.params.len, ctx.allocator)
     sig_params.push_all(pl.info.params.as_slice())
-    let sig = FnSig { params = sig_params, ret = pl.info.ret }
+    let sig = FnSig { params = move sig_params, ret = pl.info.ret }
     if pl.info.captures.len == 0 {
         lower_function_body(m, ctx, &decl, pl.info.symbol.view, &sig)
         return
@@ -2404,7 +2410,7 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
     }
     let iargs: List(Operand) = list(2, ctx.allocator)
     iargs.push(recv)
-    let state = emit_call(ctx, bb, isym.unwrap(), &ig, iargs)
+    let state = emit_call(ctx, bb, isym.unwrap(), ig, iargs)
     // `next` takes the state as its parameter declares: a self-iterator (`iter -> &State`,
     // `next(&State)`) passes it unchanged; otherwise the state's address (an aggregate's value IS
     // one; a scalar spills).
@@ -2427,7 +2433,7 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
     bb.move_to(&head)
     let nargs: List(Operand) = list(2, ctx.allocator)
     nargs.push(state_addr)
-    let nxt = emit_call(ctx, bb, nsym.unwrap(), &ng, nargs)
+    let nxt = emit_call(ctx, bb, nsym.unwrap(), ng, nargs)
     let cond = if ol.is_niche {
         bb.icmp_ne(IrType.Ptr, nxt, Operand.NullPtr)
     } else {
@@ -2570,7 +2576,7 @@ fn lower_lambda(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lam: &LambdaExpr) 
     }
     let info = info_opt.unwrap()
     ctx.pending_lambdas.push(PendingLambda {
-        lam = lam.*,
+        lam = lam,
         info = info,
         overlay = ctx.overlay,
     })
@@ -2613,17 +2619,19 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
     // A call the checker left on a generic template refuses - every generic call site must have
     // been rewritten to its specialization (M10); the symbol table has no entry for a generic
     // scheme, so the lookups stay null.
-    let callable: (String, FnSig)? = null
+    let sym_opt: String? = null
+    let sig_opt: &FnSig? = null
     let target = ctx_target(ctx, node_id_of(call.span))
     let is_foreign_call = false
     if target.is_some() {
-        callable = target_callable(ctx, &target.unwrap())
+        sym_opt = target_symbol(ctx, &target.unwrap())
+        sig_opt = target_sig(ctx, &target.unwrap())
         is_foreign_call = target.unwrap() match {
             RtFunction(fid) => ctx.syms.is_foreign(fid)
             _ => false
         }
     }
-    if callable.is_none() {
+    if sym_opt.is_none() or sig_opt.is_none() {
         // `Type(T)` instantiation syntax is a reified-type VALUE, not a call (minimal RTTI, M11).
         let cty = node_ty(ctx, call.span)
         if nominal_fqn_is(ctx, &cty, FQN_TYPE) {
@@ -2632,13 +2640,13 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
         // No resolved symbol: the callee may be a VALUE - a closure or a bare fn pointer (RFC-014).
         return lower_callee_value_call(ctx, bb, env, call)
     }
-    const sym = callable.unwrap().0
-    const sig = callable.unwrap().1
+    const sym = sym_opt.unwrap()
+    const sig = sig_opt.unwrap()
 
     // `size_of(T)` / `align_of(T)` fold to layout constants and `type_info(T)` to its descriptor's
     // address (M11, ADR-0001): the answers are compile-time constants, and the stdlib bodies are
     // placeholders. Same pattern as the reference's `project_info()` intercept.
-    let folded = intercept_rtti(ctx, sym, &sig)
+    let folded = intercept_rtti(ctx, sym, sig)
     if folded.is_some() {
         return folded.unwrap()
     }
@@ -2698,7 +2706,7 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
                 args.deinit()
                 return unlowerable(ctx)
             }
-            args.push(lower_adapted(ctx, bb, env, &ordered[i], &sig.params[args.len]))
+            args.push(lower_adapted(ctx, bb, env, ordered[i], &sig.params[args.len]))
         }
     } else if call_has_named(call) {
         args.deinit()
@@ -2736,7 +2744,7 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
                 return unlowerable(ctx)
             }
             for i in 0..defaults.len {
-                args.push(lower_expr(ctx, bb, env, &defaults[i]))
+                args.push(lower_expr(ctx, bb, env, defaults[i]))
             }
         }
     }
@@ -2753,7 +2761,7 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
         return unlowerable(ctx)
     }
 
-    return emit_call(ctx, bb, sym, &sig, args, is_foreign_call)
+    return emit_call(ctx, bb, sym, sig, args, is_foreign_call)
 }
 
 // A value whose own type is a fixed array landing in a slice-typed slot (a callee's parameter, a
@@ -2793,26 +2801,23 @@ fn lower_adapted(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, e: &Expr, want: &
     return lower_expr(ctx, bb, env, e)
 }
 
-// A resolved target's callable symbol and signature: the specialization when the pick was generic
-// (M10), the function's own otherwise. Both null for anything else (a variant, a local, a const).
-fn target_callable(ctx: &LowerCtx, t: &ResolvedTarget) (String, FnSig)? {
-    let sym: String? = null
-    let sig: FnSig? = null
-    t.* match {
-        RtFunction(id) => {
-            sym = ctx.syms.lookup_symbol(id)
-            sig = ctx.syms.sig_of(id)
-        }
-        RtSpecialized(sid) => {
-            sym = ctx.syms.spec_symbol(sid)
-            sig = ctx.syms.spec_sig(sid)
-        }
-        _ => {}
+// A resolved target's callable symbol: the specialization when the pick was generic (M10), the
+// function's own otherwise. Both null for anything else (a variant, a local, a const).
+fn target_symbol(ctx: &LowerCtx, t: &ResolvedTarget) String? {
+    return t.* match {
+        RtFunction(id) => ctx.syms.lookup_symbol(id)
+        RtSpecialized(sid) => ctx.syms.spec_symbol(sid)
+        _ => null
     }
-    if sym.is_none() or sig.is_none() {
-        return null
+}
+
+// The signature the table holds for `t`, lent where it lies.
+fn target_sig(ctx: &LowerCtx, t: &ResolvedTarget) &FnSig? {
+    return t.* match {
+        RtFunction(id) => ctx.syms.sig_of(id)
+        RtSpecialized(sid) => ctx.syms.spec_sig(sid)
+        _ => null
     }
-    return Some((sym.unwrap(), sig.unwrap()))
 }
 
 // Call a one-pointer-in, pointer-out hop (`op_deref`) on `addr`.
@@ -3147,11 +3152,12 @@ fn lower_deref_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Exp
     chain: &List(ResolvedTarget), want: &Ty) Operand {
     let cur = deref_hop_base(ctx, bb, env, recv)
     for i in 0..chain.len {
-        const c = target_callable(ctx, &chain[i]) match {
-            Some(c) => c
-            None => return unlowerable_why(ctx, "op_deref hop without a callable symbol")
+        const hsym = target_symbol(ctx, &chain[i])
+        const hsig = target_sig(ctx, &chain[i])
+        if hsym.is_none() or hsig.is_none() {
+            return unlowerable_why(ctx, "op_deref hop without a callable symbol")
         }
-        cur = call_hop(ctx, bb, c.0, &c.1, cur)
+        cur = call_hop(ctx, bb, hsym.unwrap(), hsig.unwrap(), cur)
     }
     if is_prim(ctx, want.*) {
         return bb.load(ir_of(ctx, want.*), cur)
@@ -3289,7 +3295,7 @@ fn static_typeinfo(ctx: &LowerCtx, t: Ty) String? {
         return hit
     }
     let st = well_known_struct(ctx, FQN_TYPE_INFO) match {
-        Some(s) => s
+        Some(s) => move s
         None => return null
     }
     let sym = park_sym(ctx, $"rtti_{ctx.rtti_syms.len()}")
@@ -3323,8 +3329,8 @@ fn well_known_struct(ctx: &LowerCtx, fqn: String) StructTarget? {
 
 // A data-segment global over `blob`, its address slots in `rel`. The buffers move into the ctx so
 // the `Global` can borrow them as slices for the rest of the walk.
-fn push_blob_global(ctx: &LowerCtx, sym: String, size: usize, align: usize, blob: List(u8),
-    rel: List(Reloc)) {
+fn push_blob_global(ctx: &LowerCtx, sym: String, size: usize, align: usize, blob: move List(u8),
+    rel: move List(Reloc)) {
     let bytes = blob.as_slice()
     let rs = rel.as_slice()
     ctx.const_blobs.push(blob)
@@ -3381,7 +3387,7 @@ fn blob_slice_field(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel: &Li
 fn blob_slice(ctx: &LowerCtx, sty: &Ty, blob: &List(u8), rel: &List(Reloc), at: usize,
     elems: String?, len: usize) {
     let ss = resolve_struct(ctx, sty, &ctx.result.nominals, ctx.allocator) match {
-        Some(s) => s
+        Some(s) => move s
         None => return
     }
     let pi = field_index(&ss.def, "ptr")
@@ -3443,7 +3449,7 @@ fn static_ti_type_params(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel
 // An array of `count` empty `String` records, as the element global of a `String[]`.
 fn static_empty_names(ctx: &LowerCtx, count: usize) String? {
     let ss = well_known_struct(ctx, FQN_STRING) match {
-        Some(s) => s
+        Some(s) => move s
         None => return null
     }
     let sty = well_known_ty(ctx, FQN_STRING).unwrap()
@@ -3460,14 +3466,14 @@ fn static_empty_names(ctx: &LowerCtx, count: usize) String? {
 fn static_ti_fields(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel: &List(Reloc), t: Ty) {
     let reg = &ctx.result.nominals
     let ts = resolve_struct(ctx, &t, reg, ctx.allocator) match {
-        Some(s) => s
+        Some(s) => move s
         None => return
     }
     if ts.def.fields.len == 0 {
         return
     }
     let fs = well_known_struct(ctx, FQN_FIELD_INFO) match {
-        Some(s) => s
+        Some(s) => move s
         None => return
     }
     let n = ts.def.fields.len
@@ -3492,14 +3498,14 @@ fn static_ti_variants(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel: &
     t: Ty) {
     let reg = &ctx.result.nominals
     let te = resolve_enum(ctx, &t, reg) match {
-        Some(e) => e
+        Some(e) => move e
         None => return
     }
     if te.def.variants.len == 0 {
         return
     }
     let vs = well_known_struct(ctx, FQN_VARIANT_INFO) match {
-        Some(s) => s
+        Some(s) => move s
         None => return
     }
     let n = te.def.variants.len
@@ -3525,7 +3531,7 @@ fn static_ti_function(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel: &
     }
     if f.params.len > 0 {
         let ps = well_known_struct(ctx, FQN_PARAM_INFO) match {
-            Some(s) => s
+            Some(s) => move s
             None => return
         }
         let n = f.params.len
@@ -3625,7 +3631,7 @@ fn intercept_rtti(ctx: &LowerCtx, sym: String, sig: &FnSig) Operand? {
 // void (and Never), scalar, and aggregate - the last through a caller-allocated buffer passed as a
 // trailing sret argument, mirroring `lower_function`'s parameter layout. Takes ownership of `args`.
 // The result operand of an aggregate-returning call is the buffer's address.
-fn emit_call(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig, args: List(Operand),
+fn emit_call(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig, args: move List(Operand),
     foreign: bool = false) Operand {
     if foreign {
         return emit_foreign_call(ctx, bb, sym, sig, args)
@@ -3651,7 +3657,7 @@ fn emit_call(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig, args: 
 // convention is deliberately NOT used - the C definition returns its struct normally, and inventing
 // a hidden pointer parameter would not match the function this links against.
 fn emit_foreign_call(ctx: &LowerCtx, bb: &BlockBuilder, sym: String, sig: &FnSig,
-    args: List(Operand)) Operand {
+    args: move List(Operand)) Operand {
     let n = if args.len < sig.params.len { args.len } else { sig.params.len }
     for i in 0..n {
         let pa = agg_type_of(ctx, &sig.params[i])
@@ -3713,7 +3719,7 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
             return unlowerable(ctx)
         }
         let sig_params: List(Ty) = list(0, ctx.allocator)
-        let sig = FnSig { params = sig_params, ret = c.ret }
+        let sig = FnSig { params = move sig_params, ret = c.ret }
         return emit_call(ctx, bb, c.symbol.view, &sig, args)
     }
 
@@ -4246,7 +4252,8 @@ fn literal_test(ctx: &LowerCtx, bb: &BlockBuilder, l: &LiteralPattern, scrut: Op
     // handles both.
     let is_null = v.* match { Null => true, _ => false }
     if is_null {
-        if resolve_enum(ctx, scrut_ty, &ctx.result.nominals).is_some() {
+        const enum_here = resolve_enum(ctx, scrut_ty, &ctx.result.nominals)
+        if enum_here.is_some() {
             return discriminant_test(ctx, bb, 0u32, scrut, scrut_ty)
         }
         return unlowerable(ctx)
@@ -4281,7 +4288,7 @@ fn literal_test(ctx: &LowerCtx, bb: &BlockBuilder, l: &LiteralPattern, scrut: Op
         let args: List(Operand) = list(2, ctx.allocator)
         args.push(scrut)
         args.push(lit)
-        return emit_call(ctx, bb, sym.unwrap(), &g, args)
+        return emit_call(ctx, bb, sym.unwrap(), g, args)
     }
 
     let lit = lower_literal_value(ctx, v)
@@ -4368,7 +4375,8 @@ fn discriminant_test(ctx: &LowerCtx, bb: &BlockBuilder, idx: u32, scrut: Operand
     // scrutinee leaves the index standing in; the caller's own refusal path reports the shape.
     let tag = bb.load(IrType.I32, scrut)
     let t = resolve_enum(ctx, scrut_ty, &ctx.result.nominals)
-    const want = if t.is_some() { variant_tag(&t.unwrap().def, idx as usize) } else { idx as i64 }
+    const want = if t.is_some() { variant_tag(&t.unwrap_ref().def,
+            idx as usize) } else { idx as i64 }
     return bb.icmp_eq(IrType.I32, tag, Operand.IntConst(want))
 }
 
@@ -4499,7 +4507,7 @@ fn resolve_enum(ctx: &LowerCtx, ty: &Ty, reg: &NominalRegistry) EnumTarget? {
     let args: List(Ty) = list(nr.args.len, ctx.allocator)
     for i in 0..nr.args.len { args.push(tyit(ctx).child_at(nr.args, i)) }
     return reg.get(nr.id).* match {
-        NomEnum(e) => Some(EnumTarget { def = e, args = args })
+        NomEnum(e) => Some(EnumTarget { def = move e, args = move args })
         _ => null
     }
 }
@@ -5017,7 +5025,7 @@ fn lower_try(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, t: &TryExpr) Operand 
     let v = lower_expr(ctx, bb, env, t.operand)
     let args: List(Operand) = list(2, ctx.allocator)
     args.push(v)
-    let res = emit_call(ctx, bb, sym.unwrap(), &sig, args)
+    let res = emit_call(ctx, bb, sym.unwrap(), sig, args)
 
     let tag = bb.load(IrType.I32, res)
     let is_cont = bb.icmp_eq(IrType.I32, tag, Operand.IntConst(0))
@@ -5157,7 +5165,7 @@ fn deref_target(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, d: &DereferenceExp
         Some(a) => a
         None => lower_expr(ctx, bb, env, d.operand)
     }
-    return Some((peel_ref(ctx, g.ret), call_hop(ctx, bb, sym.unwrap(), &g, self_addr)))
+    return Some((peel_ref(ctx, g.ret), call_hop(ctx, bb, sym.unwrap(), g, self_addr)))
 }
 
 fn lower_place(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand? {
@@ -5354,12 +5362,14 @@ fn follow_deref_hops(ctx: &LowerCtx, bb: &BlockBuilder, base: Operand,
     let cur = base
     let inner: Ty? = null
     for i in 0..chain.len {
-        const c = target_callable(ctx, &chain[i]) match {
-            Some(c) => c
-            None => return null
+        const hsym = target_symbol(ctx, &chain[i])
+        const hsig = target_sig(ctx, &chain[i])
+        if hsym.is_none() or hsig.is_none() {
+            return null
         }
-        cur = call_hop(ctx, bb, c.0, &c.1, cur)
-        inner = tn(ctx, c.1.ret) match {
+        const hs = hsig.unwrap()
+        cur = call_hop(ctx, bb, hsym.unwrap(), hs, cur)
+        inner = tn(ctx, hs.ret) match {
             NRef(t) => Some(t)
             _ => null
         }
@@ -5384,7 +5394,7 @@ fn deref_member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberA
     let cur = landed.0
     let it = landed.1
     let st = resolve_struct(ctx, &it, &ctx.result.nominals, ctx.allocator) match {
-        Some(s) => s
+        Some(s) => move s
         None => return null
     }
     let di = field_index(&st.def, ma.member)
@@ -5584,7 +5594,7 @@ fn index_operator_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &IndexE
     let args: List(Operand) = list(3, ctx.allocator)
     args.push(recv)
     args.push(idx)
-    return emit_call(ctx, bb, sym.unwrap(), &sig, args)
+    return emit_call(ctx, bb, sym.unwrap(), sig, args)
 }
 
 // `base[key] = value` through `op_set_index(&Self, K, V)` (or value-self): an ordinary
@@ -5617,7 +5627,7 @@ fn set_index_operator_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ix: &In
     args.push(recv)
     args.push(lower_adapted(ctx, bb, env, ix.index, &sig.params[1]))
     args.push(lower_adapted(ctx, bb, env, rhs, &sig.params[2]))
-    let _r = emit_call(ctx, bb, sym.unwrap(), &sig, args)
+    let _r = emit_call(ctx, bb, sym.unwrap(), sig, args)
     return Operand.IntConst(0)
 }
 
@@ -5814,17 +5824,19 @@ fn resolve_struct(ctx: &LowerCtx, ty: &Ty, reg: &NominalRegistry,
                     reg.get(ti.unwrap()).* match {
                         NomStruct(ts) => {
                             args.clear()
+                            const ti_layout = st_layout(ctx, &ts, &args)
                             return Some(StructTarget {
-                                def = ts,
-                                layout = st_layout(ctx, &ts, &args),
-                                args = args,
+                                def = move ts,
+                                layout = move ti_layout,
+                                args = move args,
                             })
                         }
                         _ => {}
                     }
                 }
             }
-            Some(StructTarget { def = s, layout = st_layout(ctx, &s, &args), args = args })
+            const layout = st_layout(ctx, &s, &args)
+            Some(StructTarget { def = move s, layout = move layout, args = move args })
         }
         _ => null
     }
@@ -5896,7 +5908,7 @@ fn agg_type_of(ctx: &LowerCtx, ty: &Ty) AggType? {
 fn agg_fields_of(ctx: &LowerCtx, ty: &Ty) List(AggField)? {
     let sd = tn(ctx, ty.*) match {
         NNominal(n) => ctx.result.nominals.get(n.id).* match {
-            NomStruct(d) => d
+            NomStruct(d) => move d
             _ => return null
         }
         _ => return null
@@ -5910,7 +5922,7 @@ fn agg_fields_of(ctx: &LowerCtx, ty: &Ty) List(AggField)? {
         }
         fields.push(f.unwrap())
     }
-    return Some(fields)
+    return Some(move fields)
 }
 
 // One struct member. An array keeps its element type and length; a nested aggregate is referenced
@@ -5943,7 +5955,7 @@ fn register_agg(m: &IrModule, ctx: &LowerCtx, ty: &Ty) AggType? {
     }
     let sd = tn(ctx, ty.*) match {
         NNominal(n) => ctx.result.nominals.get(n.id).* match {
-            NomStruct(d) => d
+            NomStruct(d) => move d
             _ => return null
         }
         _ => return null
@@ -5969,7 +5981,7 @@ fn register_agg(m: &IrModule, ctx: &LowerCtx, ty: &Ty) AggType? {
     }
 
     const a = h.unwrap()
-    m.add_agg(AggDef { name = a.name, size = a.size, align = a.align, fields = fields })
+    m.add_agg(AggDef { name = a.name, size = a.size, align = a.align, fields = move fields })
     return h
 }
 
@@ -6195,13 +6207,12 @@ fn intern_string(ctx: &LowerCtx, raw: String) StrData? {
 }
 
 // Move every minted global into the module once the walk is done, preserving creation order. Part
-// of `lower_module` / `lower_program`, split out so both share it.
+// of `lower_module` / `lower_program`, split out so both share it. The two tables stay alive until
+// the caller drops the context: they are its to free, and only the caller holds it by value.
 fn flush_globals(m: &IrModule, ctx: &LowerCtx) {
     for i in 0..ctx.globals.len {
         m.add_global(ctx.globals[i])
     }
-    ctx.globals.deinit()
-    ctx.strings.deinit()
 }
 
 // `null` is `Option.None` of the node's type. The niche form is the null pointer; the tagged form
@@ -6322,7 +6333,7 @@ fn lower_operator_binary(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, b: &Binar
     args.push(lower_operand(ctx, bb, env, b.lhs, chain, 0usize, op.lhs_hops as usize, &g.params[0]))
     args.push(lower_operand(ctx, bb, env, b.rhs, chain, op.lhs_hops as usize, op.rhs_hops as usize,
             &g.params[1]))
-    let res = emit_call(ctx, bb, sym.unwrap(), &g, args)
+    let res = emit_call(ctx, bb, sym.unwrap(), g, args)
 
     if op.cmp_derived_op.is_some() {
         // `op_cmp` returns Ord - an aggregate; its address came back from the sret path. The
@@ -6742,7 +6753,7 @@ fn op_symbol(ctx: &LowerCtx, o: &ResolvedOperator) String? {
     }
 }
 
-fn op_sig(ctx: &LowerCtx, o: &ResolvedOperator) FnSig? {
+fn op_sig(ctx: &LowerCtx, o: &ResolvedOperator) &FnSig? {
     return o.spec_id match {
         Some(sid) => ctx.syms.spec_sig(sid)
         None => ctx.syms.sig_of(o.function_id)
@@ -6793,7 +6804,7 @@ fn call_has_named(call: &CallExpr) bool {
 
 // The complete parameter-ordered argument list for the call at `id` (M12), through the active
 // overlay first like every table read.
-fn ctx_arg_list(ctx: &LowerCtx, id: NodeId) &List(Expr)? {
+fn ctx_arg_list(ctx: &LowerCtx, id: NodeId) &List(&Expr)? {
     ctx.overlay match {
         Some(ov) => {
             let a = ov.arg_lists.get_ref(id)
@@ -6806,7 +6817,7 @@ fn ctx_arg_list(ctx: &LowerCtx, id: NodeId) &List(Expr)? {
     return ctx.result.get_arg_list(id)
 }
 
-fn ctx_default_args(ctx: &LowerCtx, id: NodeId) &List(Expr)? {
+fn ctx_default_args(ctx: &LowerCtx, id: NodeId) &List(&Expr)? {
     ctx.overlay match {
         Some(ov) => {
             let d = ov.default_args.get_ref(id)
@@ -7328,8 +7339,7 @@ test "lowers a function over parameters into an add and a return" {
     assert_eq(f.params.len, 2 as usize, "two parameters")
     assert_eq(f.blocks.len, 1 as usize, "single straight-line block")
 
-    let term = f.blocks[0].terminator
-    let is_ret = term match { Ret(_) => true, _ => false }
+    let is_ret = f.blocks[0].terminator match { Ret(_) => true, _ => false }
     assert_true(is_ret, "block ends in a return")
 
     let has_add = false

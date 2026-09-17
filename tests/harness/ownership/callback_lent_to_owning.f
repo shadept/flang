@@ -20,11 +20,11 @@ fn each(s: $T[], f: $F) {
     }
 }
 
-fn release(h: move FileHandle) {}
+fn dispose(h: move FileHandle) {}
 
-// `each` lends `s[i]`; `release` needs ownership. Reported here, not inside `each`.
+// `each` lends `s[i]`; `dispose` needs ownership. Reported here, not inside `each`.
 pub fn main() i32 {
     let xs: [FileHandle; 2] = [open(3), open(4)]
-    each(xs, release)              // error E2125
+    each(xs, dispose)              // error E2125
     return 0
 }

@@ -7,7 +7,7 @@ type Handle = struct {
     owned fd: i32
 }
 
-fn deinit(self: move Handle) {
+pub fn deinit(self: move Handle) {
 }
 
 pub fn op_cmp(a: &Handle, b: &Handle) Ord {

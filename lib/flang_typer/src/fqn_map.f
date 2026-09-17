@@ -34,14 +34,13 @@ pub type FqnMap = struct(V) {
 //
 // - `allocator`: kept for the map's whole life. Null is the global allocator.
 pub fn fqn_map(allocator: &Allocator? = null) FqnMap($V) {
-    let out: FqnMap(V)
-    out.allocator = allocator.or_global()
-    out.names = string_pool(out.allocator)
-    return out
+    const alloc = allocator.or_global()
+    let entries: UnmanagedDict(StrId, V)
+    return .{ entries = move entries, names = string_pool(alloc), allocator = alloc }
 }
 
 // Frees the table and the name pool. The values are not deinited: the map never owned them.
-pub fn deinit(self: &FqnMap($V)) {
+pub fn deinit(self: move FqnMap($V)) {
     self.entries.deinit(self.allocator)
     self.names.deinit()
 }
@@ -57,7 +56,7 @@ pub fn contains(self: &FqnMap($V), fqn: String) bool {
 // Registers `value` under `fqn`, replacing a value already there. Takes ownership of `fqn`: the
 // name is copied into the pool and `fqn` is freed, whether or not it was already interned. Panics
 // when the pool or the table cannot grow.
-pub fn register(self: &FqnMap($V), fqn: move OwnedString, value: V) {
+pub fn register(self: &FqnMap($V), fqn: move OwnedString, value: move V) {
     const id = self.names.intern(fqn.view)
     fqn.deinit()
     self.entries.set(id, value, self.allocator)
@@ -105,12 +104,19 @@ pub type FqnHit = struct(V) {
 // that must cite which name won. A dotted or exact name matches itself; a bare name matches the
 // current module's, then the first visible module's, in table order.
 pub fn lookup_entry(self: &FqnMap($V), name: String, vis: &Visibility) FqnHit($V)? {
+    return self.lookup_id(name, vis) match {
+        Some(id) => Some(.{ fqn = self.names.get(id), value = self.entries.get(id).unwrap() })
+        None => null
+    }
+}
+
+// The name id `name` resolves to in `vis`'s scope, or null. What both lookups are built on: an
+// exact or dotted name matches itself, a bare name the current module's, then the first visible
+// module's, in table order.
+pub fn lookup_id(self: &FqnMap($V), name: String, vis: &Visibility) StrId? {
     const exact = self.names.find(name)
-    if exact.is_some() {
-        const hit = self.entries.get(exact.unwrap())
-        if hit.is_some() {
-            return Some(.{ fqn = self.names.get(exact.unwrap()), value = hit.unwrap() })
-        }
+    if exact.is_some() and self.entries.get_ref(exact.unwrap()).is_some() {
+        return exact
     }
 
     if vis.current_module.is_some() {
@@ -118,11 +124,8 @@ pub fn lookup_entry(self: &FqnMap($V), name: String, vis: &Visibility) FqnHit($V
         let qualified = $"{cur}.{name}"
         defer qualified.deinit()
         const own = self.names.find(qualified.view)
-        if own.is_some() {
-            const hit = self.entries.get(own.unwrap())
-            if hit.is_some() {
-                return Some(.{ fqn = self.names.get(own.unwrap()), value = hit.unwrap() })
-            }
+        if own.is_some() and self.entries.get_ref(own.unwrap()).is_some() {
+            return own
         }
     }
 
@@ -133,7 +136,7 @@ pub fn lookup_entry(self: &FqnMap($V), name: String, vis: &Visibility) FqnHit($V
             continue
         }
         if vis.allows(module_of(fqn, dot)) {
-            return Some(.{ fqn = fqn, value = entry.value })
+            return Some(entry.key)
         }
     }
     return null
@@ -143,6 +146,14 @@ pub fn lookup_entry(self: &FqnMap($V), name: String, vis: &Visibility) FqnHit($V
 pub fn lookup(self: &FqnMap($V), name: String, vis: &Visibility) V? {
     return self.lookup_entry(name, vis) match {
         Some(h) => Some(h.value)
+        None => null
+    }
+}
+
+// `lookup`, lending the value: the map keeps it, and an owning `V` is read where it lies.
+pub fn lookup_ref(self: &FqnMap($V), name: String, vis: &Visibility) &V? {
+    return self.lookup_id(name, vis) match {
+        Some(id) => self.entries.get_ref(id)
         None => null
     }
 }

@@ -96,9 +96,12 @@ pub fn deinit(self: move Project) {
     self.source.deinit()
     self.output.deinit()
     self.deps.deinit()
-    deinit_platform(&self.windows)
-    deinit_platform(&self.linux)
-    deinit_platform(&self.macos)
+    const windows = move self.windows
+    deinit_platform(windows)
+    const linux = move self.linux
+    deinit_platform(linux)
+    const macos = move self.macos
+    deinit_platform(macos)
     self.global_imports.deinit()
     self.fmt.deinit()
 }
@@ -160,7 +163,7 @@ fn new_platform(alloc: &Allocator?) PlatformConfig {
     }
 }
 
-fn deinit_platform(self: &PlatformConfig) {
+fn deinit_platform(self: move PlatformConfig) {
     self.headers.deinit()
     self.libs.deinit()
     self.cflags.deinit()

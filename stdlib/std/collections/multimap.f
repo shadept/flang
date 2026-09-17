@@ -117,7 +117,8 @@ pub fn remove_key(self: &MultiMap($K, $V), key: K) usize {
     let cur = gone.unwrap().first
     while cur != NONE {
         const slot = &self.pool[cur as usize]
-        slot.value.deinit()
+        let v = move slot.value
+        release(v)
         cur = slot.next
     }
     self.dead = self.dead + gone.unwrap().count as usize
@@ -144,19 +145,20 @@ pub fn compact(self: &MultiMap($K, $V)) {
         }
         chain.last = (fresh.len - 1) as u32
     }
-    self.pool.deinit(self.allocator)
-    self.pool = fresh
+    let old = replace(&self.pool, fresh)
+    old.deinit(self.allocator)
     self.dead = 0
 }
 
 // Deinits every value and key, then frees the pool and the key table. Idempotent: a second call is
 // a no-op.
-pub fn deinit(self: &MultiMap($K, $V)) {
+pub fn deinit(self: move MultiMap($K, $V)) {
     for e in self.chains {
         let cur = e.value.first
         while cur != NONE {
             const slot = &self.pool[cur as usize]
-            slot.value.deinit()
+            let v = move slot.value
+            release(v)
             cur = slot.next
         }
     }

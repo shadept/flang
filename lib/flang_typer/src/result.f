@@ -44,11 +44,11 @@ pub type TypeCheckResult = struct {
     synth_strings: List(OwnedString)
     // M11: per call site, the callee's default expressions for omitted parameters, in parameter
     // order - see InferenceResults.default_args.
-    default_args: Dict(NodeId, List(Expr))
+    default_args: Dict(NodeId, List(&Expr))
     // M12: per call site, the complete parameter-ordered argument list for calls whose AST order is
     // not their argument order (named arguments, variadic packing) - see
     // InferenceResults.arg_lists.
-    arg_lists: Dict(NodeId, List(Expr))
+    arg_lists: Dict(NodeId, List(&Expr))
     // Per UFCS call site, the op_deref hops the receiver resolved through - see
     // InferenceResults.receiver_derefs.
     receiver_derefs: Dict(NodeId, List(ResolvedTarget))
@@ -132,7 +132,7 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
 
 // Free everything the snapshot owns. The desugars' AST blocks are global-allocator boxes
 // deliberately leaked (see checker.f synth helpers).
-pub fn deinit(self: &TypeCheckResult) {
+pub fn deinit(self: move TypeCheckResult) {
     self.node_types.deinit()
     self.interner.deinit()
     self.resolved_ops.deinit()
@@ -159,47 +159,32 @@ pub fn deinit(self: &TypeCheckResult) {
 // (`take_interner`), the desugar blocks are leaked global boxes, and `phases` is plain data, so
 // none are touched.
 pub fn slim_retire(self: &TypeCheckResult) {
-    self.node_types.deinit()
-    self.resolved_ops.deinit()
-    self.resolved_targets.deinit()
-    self.instantiated_types.deinit()
-    self.specializations.deinit()
-    self.desugars.deinit()
-    self.default_args.deinit()
-    self.arg_lists.deinit()
-    self.receiver_derefs.deinit()
-    self.arg_derefs.deinit()
-    self.nominals.deinit()
-    self.functions.deinit()
-    self.lambdas.deinit()
-    self.closures.deinit()
-    self.spans.deinit()
-    self.file_paths.deinit()
-    self.node_types = dict()
-    self.resolved_ops = dict()
-    self.resolved_targets = dict()
-    self.instantiated_types = list(0)
-    self.specializations = specialization_registry()
-    self.desugars = dict()
-    self.default_args = dict()
-    self.arg_lists = dict()
-    self.receiver_derefs = dict()
-    self.arg_derefs = dict()
-    self.nominals = nominal_registry()
-    self.functions = function_registry()
-    self.lambdas = dict()
-    self.closures = dict()
-    self.spans = dict()
-    self.file_paths = list(0)
+    // Each table is swapped for a fresh empty one and the old one released: the struct stays valid
+    // for a later `deinit`.
+    install(&self.node_types, dict())
+    install(&self.resolved_ops, dict())
+    install(&self.resolved_targets, dict())
+    install(&self.instantiated_types, list(0))
+    install(&self.specializations, specialization_registry())
+    install(&self.desugars, dict())
+    install(&self.default_args, dict())
+    install(&self.arg_lists, dict())
+    install(&self.receiver_derefs, dict())
+    install(&self.arg_derefs, dict())
+    install(&self.nominals, nominal_registry())
+    install(&self.functions, function_registry())
+    install(&self.lambdas, dict())
+    install(&self.closures, dict())
+    install(&self.spans, dict())
+    install(&self.file_paths, list(0))
 }
 
 // Move the type table out of the snapshot, leaving a zero-capacity stand-in. The next demand adopts
 // the table so the handles its carried registry holds stay resolvable; this snapshot's own handles
 // remain valid in the table wherever it now lives, but no longer resolve through this struct.
 pub fn take_interner(self: &TypeCheckResult) TypeInterner {
-    let out = self.interner
-    self.interner = type_interner(out.allocator, 0)
-    return out
+    const alloc = self.interner.allocator
+    return replace(&self.interner, type_interner(alloc, 0))
 }
 
 // Move the specialization registry out of the snapshot so the next demand carries it forward -
@@ -210,9 +195,8 @@ pub fn take_specs(self: &TypeCheckResult, keep: bool = false) SpecializationRegi
     if keep {
         return self.specializations.carried_copy(self.specializations.allocator)
     }
-    let out = self.specializations
-    self.specializations = specialization_registry(out.allocator)
-    return out
+    const alloc = self.specializations.allocator
+    return replace(&self.specializations, specialization_registry(alloc))
 }
 
 pub fn get_type(self: &TypeCheckResult, id: NodeId) Ty? {
@@ -252,11 +236,11 @@ pub fn get_lambda(self: &TypeCheckResult, id: NodeId) &LambdaInfo? {
     return self.lambdas.get_ref(id)
 }
 
-pub fn get_default_args(self: &TypeCheckResult, id: NodeId) &List(Expr)? {
+pub fn get_default_args(self: &TypeCheckResult, id: NodeId) &List(&Expr)? {
     return self.default_args.get_ref(id)
 }
 
-pub fn get_arg_list(self: &TypeCheckResult, id: NodeId) &List(Expr)? {
+pub fn get_arg_list(self: &TypeCheckResult, id: NodeId) &List(&Expr)? {
     return self.arg_lists.get_ref(id)
 }
 
