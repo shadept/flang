@@ -1722,8 +1722,8 @@ pub fn discover_compiler(allocator: &Allocator? = null) Result(CompilerInfo, Bui
                 kind = CompilerKind.Msvc,
                 name = from_view("cl.exe", allocator),
                 path = from_view("cl.exe", allocator),
-                extra_env_keys = env_keys,
-                extra_env_vals = env_vals,
+                extra_env_keys = move env_keys,
+                extra_env_vals = move env_vals,
                 allocator = allocator,
             })
         }
