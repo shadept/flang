@@ -43,4 +43,5 @@ Type: language, compiler, stdlib, tooling.
 | [030](030-reference-form-operator-dispatch.md) | Reference-form operator dispatch | language | superseded | 2026-09-01 |  |
 | [031](031-owned-generic-consolidation.md) | `OwnedString`, a `String` that owns its buffer | stdlib | implemented | 2026-09-01 | 2026-09-16 |
 | [033](033-parameter-declared-ownership.md) | Parameter-declared ownership | language | implemented | 2026-09-14 | 2026-10-10 |
+| [034](034-typed-slice-intrinsics.md) | Typed slice intrinsics | language | implemented | 2026-10-10 | 2026-10-10 |
 | [099](099-stack-only-types-and-bindings.md) | `#stack` types and stack-only bindings | language | deferred | 2026-08-27 |  |

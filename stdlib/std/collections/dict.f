@@ -18,7 +18,7 @@
 // trick): 0 is EMPTY, 1 is a tombstone, and >= 2 is an occupied slot holding the key's hash.
 // `hash_key` remaps the two reserved values (`h < 2` becomes `h + 2`), a negligible dent in a
 // 64-bit hash space, and the state byte - and its alignment padding - disappears from every entry.
-// A zeroed table is all-empty, so `alloc_table` and `clear` stay a plain memset.
+// A table is all-empty once every hash reads 0 (`mark_empty`).
 
 import std.allocator
 import std.mem
@@ -134,13 +134,20 @@ fn next_pow2_min8(v: usize) usize {
     return n
 }
 
-// Install a zeroed table of `cap` slots (all states empty). `cap` must be a power of two.
+// Install a table of `cap` empty slots. `cap` must be a power of two.
 fn alloc_table(self: &UnmanagedDict($K, $V), cap: usize, allocator: &Allocator) {
     const alloc_size: usize = cap * size_of(Entry(K, V))
     const raw: u8[] = allocator.alloc(alloc_size, 8).expect("dict: allocation failed")
-    memset(raw.ptr, 0, alloc_size)
     self.entries = raw.ptr as &Entry(K, V)
     self.cap = cap
+    mark_empty(self)
+}
+
+// Every slot empty: an empty slot is its hash alone, and its key and value bytes are never read.
+fn mark_empty(self: &UnmanagedDict($K, $V)) {
+    for i in 0..self.cap {
+        (self.entries + i).hash = HASH_EMPTY
+    }
 }
 
 // Slot for the `i`th linear probe of hash `h`. Capacity is always a power of two (`ensure_capacity`
@@ -367,7 +374,7 @@ fn take_entry(self: &UnmanagedDict($K, $V), found: usize?) V? {
 pub fn clear(self: &UnmanagedDict($K, $V)) {
     if self.cap > 0 {
         self.deinit_entries()
-        memset(self.entries as &u8, 0, self.cap * size_of(Entry(K, V)))
+        mark_empty(self)
     }
     self.length = 0
     self.dead = 0

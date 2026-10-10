@@ -149,7 +149,7 @@ pub fn to_string(sb: &StringBuilder, allocator: &Allocator) OwnedString {
     const buf = allocator.alloc(sb.len + 1, align_of(u8))
         .expect("StringBuilder.to_string: allocation failed")
     if (sb.len > 0) {
-        memcpy(buf.ptr, sb.ptr, sb.len)
+        copy_to(slice_from_raw_parts(sb.ptr, sb.len), slice_from_raw_parts(buf.ptr, sb.len))
     }
     // Null-terminate for C FFI compatibility
     const term = buf.ptr + sb.len
@@ -185,7 +185,7 @@ pub fn append_bytes(sb: &StringBuilder, data: u8[]) {
     }
     sb.reserve(data.len)
     const dest = sb.ptr + sb.len
-    memcpy(dest, data.ptr, data.len)
+    copy_to(slice_from_raw_parts(data.ptr, data.len), slice_from_raw_parts(dest, data.len))
     sb.len = sb.len + data.len
 }
 

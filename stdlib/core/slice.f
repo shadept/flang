@@ -402,7 +402,7 @@ pub fn install(slot: &move $T, value: move T) {
 }
 
 // Fills every element of the slice with `value`.
-pub fn fill(s: $T[], value: T) {
+pub fn fill(s: $T[], value: T) where T: copyable {
     for i in 0..s.len {
         const slot = s.ptr + i
         slot.* = value
@@ -440,12 +440,53 @@ pub fn reverse(s: $T[]) {
 // Copy and reinterpretation
 // =============================================================================
 
-// Copies elements from `src` into `dest`.
-// Copies min(src.len, dest.len) elements and returns the number copied.
-pub fn copy_to(src: $T[], dest: T[]) usize where T: copyable {
-    const len = if src.len < dest.len { src.len } else { dest.len }
-    memmove(dest.ptr, src.ptr, len * size_of(T))
-    return len
+// Copies `src` into the front of `dst`. The two may overlap.
+//
+// Panics when `dst` is shorter than `src`.
+#inline
+pub fn copy_to(src: $T[], dst: T[]) where T: copyable {
+    move_bytes(src, dst)
+}
+
+// Moves the elements of `src` into the front of `dst`, leaving the source slots dead. The two may
+// overlap. For a non-copyable `T` the checker requires `src` to reach storage through an `owned`
+// field of a type the calling module declares, written in the call (spec 3.2); for a copyable `T`
+// it is `copy_to`.
+//
+// Panics when `dst` is shorter than `src`.
+#intrinsic
+#inline
+pub fn move_to(src: $T[], dst: T[]) {
+    move_bytes(src, dst)
+}
+
+#inline
+fn move_bytes(src: $T[], dst: T[]) {
+    if dst.len < src.len {
+        panic("destination shorter than source")
+    }
+    if src.len == 0 {
+        return
+    }
+    memmove(dst.ptr as &u8, src.ptr as &u8, src.len * size_of(T))
+}
+
+// The bytes of `s`, a view over the same memory.
+pub fn as_bytes(s: $T[]) u8[] where T: copyable {
+    return slice_from_raw_parts(s.ptr as &u8, s.len * size_of(T))
+}
+
+// Element-wise equality: the same length and `==` at every index.
+pub fn op_eq(a: $T[], b: T[]) bool {
+    if a.len != b.len {
+        return false
+    }
+    for i in 0..a.len {
+        if !(a[i] == b[i]) {
+            return false
+        }
+    }
+    return true
 }
 
 // Reinterprets a slice of T as a slice of U.

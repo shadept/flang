@@ -463,7 +463,7 @@ pub fn from_view(s: String, allocator: &Allocator? = null) OwnedString {
     const buf = allocator.or_global().alloc(s.len + 1, align_of(u8))
         .expect("OwnedString.from_view: allocation failed")
     if s.len > 0 {
-        memcpy(buf.ptr, s.ptr, s.len)
+        copy_to(slice_from_raw_parts(s.ptr, s.len), slice_from_raw_parts(buf.ptr, s.len))
     }
     const term = buf.ptr + s.len
     term.* = 0

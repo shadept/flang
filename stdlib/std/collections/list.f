@@ -114,10 +114,11 @@ pub fn unmanaged_list(source: $T[], allocator: &Allocator) UnmanagedList(T) wher
         let empty: UnmanagedList(T)
         return empty
     }
-    const bytes = source.len * size_of(T)
-    const buf = allocator.alloc(bytes, align_of(T)).expect("list(copy): allocation failed")
-    memcpy(buf.ptr, source.ptr as &u8, bytes)
-    return .{ ptr = buf.ptr as &T, len = source.len, cap = source.len }
+    const buf = allocator.alloc(source.len * size_of(T), align_of(T))
+        .expect("list(copy): allocation failed")
+    const ptr = buf.ptr as &T
+    copy_to(source, slice_from_raw_parts(ptr, source.len))
+    return .{ ptr = ptr, len = source.len, cap = source.len }
 }
 
 // Creates a list with room for `capacity` elements that allocates through `allocator` for its whole
@@ -212,9 +213,7 @@ pub fn reserve(s: &UnmanagedList($T), capacity: usize, allocator: &Allocator) {
         .expect("reserve(List(T), capacity): allocation failed")
     const new_ptr: &T = new_buf.ptr as &T
 
-    if s.len > 0 {
-        memcpy(new_ptr as &u8, s.ptr as &u8, s.len * elem_size)
-    }
+    move_to(slice_from_raw_parts(s.ptr, s.len), slice_from_raw_parts(new_ptr, s.len))
 
     if s.cap > 0 {
         allocator.free(slice_from_raw_parts(s.ptr, s.cap))
@@ -241,7 +240,7 @@ pub fn push_all(s: &UnmanagedList($T), xs: T[], allocator: &Allocator) where T: 
         return
     }
     s.reserve(s.len + xs.len, allocator)
-    memcpy((s.ptr + s.len) as &u8, xs.ptr as &u8, xs.len * size_of(T))
+    copy_to(xs, slice_from_raw_parts(s.ptr + s.len, xs.len))
     s.len = s.len + xs.len
 }
 
@@ -353,9 +352,8 @@ pub fn set(list: &UnmanagedList($T), index: usize, value: move T) {
         panic("List: index out of bounds")
     }
 
-    // Write value using memcpy
-    let dest: &u8 = (list.ptr + index) as &u8
-    memcpy(dest, &value as &u8, size_of(T))
+    const slot = list.ptr + index
+    slot.* = move value
 }
 
 // Drops every element, deiniting each. The backing storage is kept for reuse.
@@ -774,8 +772,9 @@ pub fn next(self: &Drain($T)) T? {
 // Returns the untaken elements to the front of the list and restores its length as their count.
 pub fn deinit(self: move Drain($T)) {
     const left = self.count - self.taken
-    if left > 0 and self.taken > 0 and !self.from_back {
-        memmove(self.__list.ptr as &u8, (self.__list.ptr + self.taken) as &u8, left * size_of(T))
+    if self.taken > 0 and !self.from_back {
+        move_to(slice_from_raw_parts(self.__list.ptr + self.taken, left),
+            slice_from_raw_parts(self.__list.ptr, left))
     }
     self.__list.len = left
 }

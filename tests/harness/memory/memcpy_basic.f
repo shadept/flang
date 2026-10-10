@@ -1,19 +1,13 @@
 //! TEST: memcpy_basic
 //! STDOUT: 456
 
-// Test memcpy - copy data between two buffers
+// `copy_to` copies one buffer into another; it lowers to the byte copy `memcpy` used to spell.
 
 import std.io.print
-import std.mem
 
 pub fn main() {
-    // Source array
     let src: [i32; 3] = [123, 456, 789]
-
-    // Destination array
     let dst: [i32; 3]
-
-    memcpy(dst.ptr as &u8, src.ptr as &u8, 12)
-
+    copy_to(src, dst)
     println(dst[1])
 }

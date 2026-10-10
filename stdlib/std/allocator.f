@@ -407,7 +407,8 @@ fn fixed_realloc(impl: &u8, memory: u8[], alignment: usize, new_size: usize) u8[
 
     // Copy old data
     let copy_size = if memory.len < new_size { memory.len } else { new_size }
-    memcpy(new_mem.ptr, memory.ptr, copy_size)
+    copy_to(slice_from_raw_parts(memory.ptr, copy_size), slice_from_raw_parts(new_mem.ptr,
+            copy_size))
     return Some(new_mem)
 }
 
@@ -566,7 +567,8 @@ fn arena_realloc(impl: &u8, memory: u8[], alignment: usize, new_size: usize) u8[
 
     let copy_size = if memory.len < new_size { memory.len } else { new_size }
     if copy_size > 0 {
-        memcpy(new_mem.unwrap().ptr, memory.ptr, copy_size)
+        copy_to(slice_from_raw_parts(memory.ptr, copy_size),
+            slice_from_raw_parts(new_mem.unwrap().ptr, copy_size))
     }
     return new_mem
 }

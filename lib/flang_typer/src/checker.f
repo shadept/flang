@@ -9860,7 +9860,27 @@ fn own_through_owned_field(self: &Checker, e: &Expr) bool {
         Dereference(d) => own_through_owned_field(self, d.operand)
         Binary(b) => own_through_owned_field(self, b.lhs) or own_through_owned_field(self, b.rhs)
         Cast(c) => own_through_owned_field(self, c.operand)
+        Call(c) => own_raw_parts_of(&c) match {
+            Some(ptr) => own_through_owned_field(self, ptr)
+            None => false
+        }
         _ => false
+    }
+}
+
+// The pointer of a `slice_from_raw_parts(ptr, len)` call: the slice spans the storage `ptr`
+// reaches.
+fn own_raw_parts_of(c: &CallExpr) &Expr? {
+    const named = c.callee.* match {
+        Identifier(id) => id.name == "slice_from_raw_parts"
+        _ => false
+    }
+    if !named or c.args.len != 2 {
+        return null
+    }
+    return c.args[0] match {
+        Positional(e) => Some(e)
+        Named(_) => null
     }
 }
 
@@ -9992,6 +10012,8 @@ type OwnCallee = struct {
     payload: bool
     // The function value's name, for `OwnPass.taker`.
     name: String
+    // `core.slice.move_to`: its source is a place it takes elements out of (RFC-034).
+    relocates: bool
 }
 
 type OwnMode = struct {
@@ -10040,7 +10062,10 @@ fn own_call(self: &Checker, p: &OwnPass, c: &CallExpr) {
             Named(n) => own_arg(self, p, &callee, n.value, 0usize, n.name, &uses)
         }
     }
-    own_overlaps(self, p, &uses)
+    // A shift is `move_to` over overlapping ranges of one buffer.
+    if !callee.relocates {
+        own_overlaps(self, p, &uses)
+    }
 }
 
 fn own_callee(self: &Checker, c: &CallExpr) OwnCallee {
@@ -10052,6 +10077,7 @@ fn own_callee(self: &Checker, c: &CallExpr) OwnCallee {
         ufcs = false,
         payload = false,
         name = "",
+        relocates = false,
     }
     const target = self.results.resolved_targets.get(node)
     const fid: u32? = target match {
@@ -10064,6 +10090,7 @@ fn own_callee(self: &Checker, c: &CallExpr) OwnCallee {
     }
     if fid.is_some() {
         out.decl = self.fn_decl_params.get_ref(fid.unwrap())
+        out.relocates = is_move_to(self, fid.unwrap())
         out.ufcs = c.callee.* match { MemberAccess(_) => true, _ => false }
         const callee_is_receiver = self.results.receiver_derefs.get_ref(node).is_some()
         if out.ufcs or callee_is_receiver {
@@ -10089,6 +10116,42 @@ fn own_callee(self: &Checker, c: &CallExpr) OwnCallee {
         _ => ""
     }
     return out
+}
+
+fn is_move_to(self: &Checker, id: u32) bool {
+    const overloads = self.functions.by_name.get_ref("move_to")
+    if overloads.is_none() {
+        return false
+    }
+    for &f in overloads.unwrap() {
+        if f.id == id and f.module match { Some(m) => m == "core.slice", None => false } {
+            return true
+        }
+    }
+    return false
+}
+
+// `move_to`'s source: a non-copyable element leaves it, so it is held to the rule `move` is.
+fn own_relocate(self: &Checker, p: &OwnPass, src: &Expr) {
+    own_expr(self, p, src, own_read())
+    if own_slice_elem_copyable(self, expr_span(src)) or own_through_owned_field(self, src) {
+        return
+    }
+    own_no_place(self, p, expr_span(src),
+        "`move_to` takes non-copyable elements only out of an `owned` field this module declares")
+}
+
+fn own_slice_elem_copyable(self: &Checker, span: SourceSpan) bool {
+    const t = own_type(self, span)
+    if t.is_none() {
+        return true
+    }
+    const elem = ty_node(self, peel_refs(self, t.unwrap())) match {
+        NNominal(n) => if n.args.len == 1 { Some(self.engine.interner.child_at(n.args,
+                    0)) } else { null }
+        _ => null
+    }
+    return elem.is_none() or self.engine.is_copyable(elem.unwrap())
 }
 
 fn own_param_mode(self: &Checker, callee: &OwnCallee, idx: usize, name: String) OwnMode {
@@ -10130,6 +10193,10 @@ fn own_param_index(decl: &List(FunctionParam), idx: usize, name: String) usize {
 
 // The receiver flows into the first parameter; returns how it reached it, for rule 9.
 fn own_receiver(self: &Checker, p: &OwnPass, callee: &OwnCallee, r: &Expr) u8 {
+    if callee.relocates {
+        own_relocate(self, p, r)
+        return USE_READ
+    }
     const mode = own_param_mode(self, callee, 0usize, "")
     if mode.moves {
         own_take(self, p, callee, r)
@@ -10159,6 +10226,7 @@ fn own_protocol(self: &Checker, p: &OwnPass, node_span: SourceSpan, operand: &Ex
         ufcs = true,
         payload = false,
         name = "",
+        relocates = false,
     }
     const _kind = own_receiver(self, p, &callee, operand)
 }
@@ -10170,6 +10238,12 @@ fn own_arg(self: &Checker, p: &OwnPass, callee: &OwnCallee, arg: &Expr, idx: usi
         return
     }
     const e = own_strip_move(arg)
+    const is_src = (name.len == 0 and idx == 0) or name == "src"
+    if callee.relocates and is_src {
+        own_relocate(self, p, e)
+        uses.push(OwnUse { expr = e, kind = USE_READ })
+        return
+    }
     const mode = own_param_mode(self, callee, idx, name)
     if mode.moves {
         own_take(self, p, callee, e)

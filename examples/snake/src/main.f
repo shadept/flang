@@ -195,7 +195,7 @@ pub fn main() i32 {
 
         // --- Render ---
         // Populate grid
-        memset(grid.ptr, 0, 300)
+        fill(grid, 0u8)
         grid[(food_y * BOARD_W + food_x) as usize] = CELL_FOOD
         for i in 1..slen {
             grid[(sy[i as usize] * BOARD_W + sx[i as usize]) as usize] = CELL_BODY

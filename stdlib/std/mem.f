@@ -10,13 +10,3 @@
 
 // Free memory allocated by malloc
 #foreign pub fn free(ptr: &u8?)
-
-// Copy memory from source to destination
-// dst and src must not overlap (use memmove for overlapping regions)
-#foreign pub fn memcpy(dst: &u8, src: &u8, len: usize)
-
-// Fill memory region with a byte value
-#foreign pub fn memset(ptr: &u8, value: u8, len: usize)
-
-// Copy memory from source to destination (handles overlapping regions)
-#foreign pub fn memmove(dst: &u8, src: &u8, len: usize)

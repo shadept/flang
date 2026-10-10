@@ -76,20 +76,15 @@ fn reserve(self: &UnmanagedDeque($T), required: usize, allocator: &Allocator) {
         new_cap = required
     }
 
-    const elem_size = size_of(T)
-    const bytes = new_cap * elem_size
-    const buf = allocator.alloc(bytes, align_of(T)).expect("deque: allocation failed")
+    const buf = allocator.alloc(new_cap * size_of(T),
+        align_of(T)).expect("deque: allocation failed")
     const new_ptr: &T = buf.ptr as &T
 
-    if self.len > 0 {
-        // Copy live window in logical order, flattening to start at index 0.
-        const first_seg_len = if self.head + self.len <= self.cap { self.len } else { self.cap - self.head }
-        memcpy(new_ptr as &u8, (self.ptr + self.head) as &u8, first_seg_len * elem_size)
-        if first_seg_len < self.len {
-            const second_seg_len = self.len - first_seg_len
-            memcpy((new_ptr + first_seg_len) as &u8, self.ptr as &u8, second_seg_len * elem_size)
-        }
-    }
+    // The live window moves in logical order, flattened to start at index 0.
+    const first = if self.head + self.len <= self.cap { self.len } else { self.cap - self.head }
+    move_to(slice_from_raw_parts(self.ptr + self.head, first), slice_from_raw_parts(new_ptr, first))
+    const second = self.len - first
+    move_to(slice_from_raw_parts(self.ptr, second), slice_from_raw_parts(new_ptr + first, second))
     if self.cap > 0 {
         allocator.free(slice_from_raw_parts(self.ptr, self.cap))
     }

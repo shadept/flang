@@ -27,7 +27,7 @@ fn read(self: &MemReader, buf: u8[]) usize {
     }
     let avail = self.data.len - self.pos
     let n = if buf.len < avail { buf.len } else { avail }
-    memcpy(buf.ptr, self.data.ptr + self.pos, n)
+    copy_to(slice_from_raw_parts(self.data.ptr + self.pos, n), slice_from_raw_parts(buf.ptr, n))
     self.pos = self.pos + n
     return n
 }

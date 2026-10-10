@@ -42,10 +42,6 @@ fn _order(a: &$T, b: &T, cmp: $F) Ord {
     return o
 }
 
-fn _move_to(dst: &$T, src: &T) {
-    memcpy(dst as &u8, src as &u8, size_of(T))
-}
-
 // =============================================================================
 // Insertion sort
 // =============================================================================
@@ -231,6 +227,46 @@ fn _powersort_impl(s: $T[], cmp: $F) {
         _insertion_sort_range(s, 0, n, cmp)
         return
     }
+    #if type_info(T).copyable {
+        _powersort_staged(s, cmp)
+    } else {
+        _powersort_owning(s, cmp)
+    }
+}
+
+// An owning element cannot be staged in scratch: the order is found over indices, then applied in
+// place by swaps, so every element keeps exactly one slot throughout.
+fn _powersort_owning(s: $T[], cmp: $F) {
+    const n = s.len
+    const alloc = global()
+    const bytes = alloc.alloc(n * size_of(usize), align_of(usize))
+        .expect("powersort: index allocation failed")
+    const order: usize[] = .{ ptr = bytes.ptr as &usize, len = n }
+    defer alloc.dealloc(bytes, align_of(usize))
+    for i in 0..n {
+        order[i] = i
+    }
+    _powersort_impl(order, fn(a: usize, b: usize) Ord { return _order(&s[a], &s[b], cmp) })
+    _apply_order(s, order)
+}
+
+// Rearranges `s` so that `s[k]` holds what `s[order[k]]` held, following each cycle of the
+// permutation with swaps. `order` is consumed: each index is reset to itself once placed.
+fn _apply_order(s: $T[], order: usize[]) {
+    for i in 0..s.len {
+        let cur = i
+        while order[cur] != i {
+            const next = order[cur]
+            swap(&s[cur], &s[next])
+            order[cur] = cur
+            cur = next
+        }
+        order[cur] = cur
+    }
+}
+
+fn _powersort_staged(s: $T[], cmp: $F) where T: copyable {
+    const n = s.len
 
     // The merges stage the left run in `scratch`, sized to the input. On this frame when it fits
     // and `T` needs no more than word alignment; from the heap otherwise.
@@ -257,7 +293,7 @@ fn _powersort_impl(s: $T[], cmp: $F) {
 //
 // - `scratch`: at least `s.len` elements of storage the caller owns; its contents on entry are
 //   ignored and on exit unspecified.
-fn _powersort_with(s: $T[], scratch: T[], cmp: $F) {
+fn _powersort_with(s: $T[], scratch: T[], cmp: $F) where T: copyable {
     const n = s.len
 
     // Run stack. Bounded by the number of distinct powers, which for any practical n fits in ~40
@@ -374,16 +410,15 @@ fn _node_power(n: usize, start_a: usize, start_b: usize, end_b: usize) u32 {
 }
 
 // Stable merge of s[lo..mid] and s[mid..hi] using `scratch` as staging.
-fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: $F) {
+fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: $F) where T: copyable {
     if lo >= mid or mid >= hi {
         return
     }
 
-    // Move the left half into scratch and stream results back into s. Elements move as bytes, so an
-    // owning one is never duplicated: each has exactly one live slot once the merge ends. The right
-    // half stays put - we only race to overwrite it once its elements have been consumed, and that
-    // pointer (r) never lags behind the write head (w).
-    memcpy(&scratch[lo] as &u8, &s[lo] as &u8, (mid - lo) * size_of(T))
+    // Copy the left half into scratch and stream results back into s. The right half stays put - we
+    // only race to overwrite it once its elements have been consumed, and that pointer (r) never
+    // lags behind the write head (w).
+    copy_to(s[lo..mid], scratch[lo..mid])
 
     let l = lo
     let r = mid
@@ -392,19 +427,17 @@ fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: $F) {
         // `!= Less` (i.e. left <= right) keeps the merge stable: equal keys from the left half
         // always go first.
         if _order(&s[r], &scratch[l], cmp) == Ord.Less {
-            _move_to(&s[w], &s[r])
+            s[w] = s[r]
             r = r + 1
         } else {
-            _move_to(&s[w], &scratch[l])
+            s[w] = scratch[l]
             l = l + 1
         }
         w = w + 1
     }
 
     // Move any leftover left half. A leftover right half is already in place.
-    if l < mid {
-        memcpy(&s[w] as &u8, &scratch[l] as &u8, (mid - l) * size_of(T))
-    }
+    copy_to(scratch[l..mid], s[w..hi])
 }
 
 // =============================================================================

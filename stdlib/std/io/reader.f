@@ -2,7 +2,7 @@
 //
 // Reader is a vtable interface for raw byte input (read: fn(buf: u8[]) usize). BufferedReader wraps
 // a Reader with a caller-provided linear buffer. The buffer auto-refills when exhausted. Explicit
-// compact shifts remaining data via memmove.
+// compact shifts remaining data to the front.
 //
 // Building block for File, stdin, network streams, etc. The caller owns the backing storage;
 // BufferedReader is a borrowed view.
@@ -25,7 +25,7 @@ import std.test
 // Buffered reader over caller-provided storage.
 // Data is read from the OS into buf[0..end] in chunks. The consumer reads from buf[pos..end]. When
 // pos == end (all consumed), the buffer refills from the OS. If pos > 0 on refill, remaining data
-// is compacted to the front via memmove.
+// is compacted to the front.
 pub type BufferedReader = struct {
     inner: Reader
     buf: u8[]
@@ -87,7 +87,7 @@ pub fn read(r: &BufferedReader, dst: u8[]) usize {
     if r.pos < r.end {
         let avail = r.end - r.pos
         let n = if dst.len < avail { dst.len } else { avail }
-        memcpy(dst.ptr, r.buf.ptr + r.pos, n)
+        copy_to(slice_from_raw_parts(r.buf.ptr + r.pos, n), slice_from_raw_parts(dst.ptr, n))
         r.pos = r.pos + n
         return n
     }
@@ -106,7 +106,7 @@ pub fn read(r: &BufferedReader, dst: u8[]) usize {
 
     let avail = r.end - r.pos
     let n = if dst.len < avail { dst.len } else { avail }
-    memcpy(dst.ptr, r.buf.ptr + r.pos, n)
+    copy_to(slice_from_raw_parts(r.buf.ptr + r.pos, n), slice_from_raw_parts(dst.ptr, n))
     r.pos = r.pos + n
     return n
 }
@@ -132,7 +132,8 @@ fn fill(r: &BufferedReader) {
     if r.pos > 0 {
         if r.end > r.pos {
             let leftover = r.end - r.pos
-            memmove(r.buf.ptr, r.buf.ptr + r.pos, leftover)
+            copy_to(slice_from_raw_parts(r.buf.ptr + r.pos, leftover),
+                slice_from_raw_parts(r.buf.ptr, leftover))
             r.pos = 0
             r.end = leftover
         } else {

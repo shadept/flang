@@ -141,7 +141,8 @@ fn history_add(h: &History, line: String) {
         // Shift everything down by removing the oldest entry
         const first_len = h.entries[0] as usize
         const remove = 1 + first_len
-        memcpy(&h.entries[0], &h.entries[remove], h.buf_used - remove)
+        copy_to(slice_from_raw_parts(&h.entries[remove], h.buf_used - remove),
+            slice_from_raw_parts(&h.entries[0], h.buf_used - remove))
         h.buf_used = h.buf_used - remove
         // Shift offsets
         for i in 0..(h.count - 1) {
@@ -236,7 +237,8 @@ fn enable_raw(rl: &Readline) {
 
         // Copy and modify
         let raw = [0u8; 72]
-        memcpy(&raw[0], &rl.raw_buf[0], TERMIOS_SIZE)
+        copy_to(slice_from_raw_parts(&rl.raw_buf[0], TERMIOS_SIZE), slice_from_raw_parts(&raw[0],
+                TERMIOS_SIZE))
 
         // Clear ECHO, ICANON, ISIG from c_lflag
         let lflag = read_u64(&raw[LFLAG_OFFSET])
@@ -406,7 +408,8 @@ pub fn read_line(rl: &Readline) String? {
                 write_str("\r\n")
                 disable_raw(rl)
                 // Copy into persistent buffer so the returned String outlives this call
-                memcpy(&rl.line_buf[0], &buf[0], len)
+                copy_to(slice_from_raw_parts(&buf[0], len), slice_from_raw_parts(&rl.line_buf[0],
+                        len))
                 const line = slice_from_raw_parts(&rl.line_buf[0], len) as String
                 if len > 0 {
                     history_add(&rl.hist, line)
@@ -490,7 +493,8 @@ pub fn read_line(rl: &Readline) String? {
                 if rl.hist.count > 0 {
                     if hist_index == -1 {
                         // Save current input
-                        memcpy(&saved_buf[0], &buf[0], len)
+                        copy_to(slice_from_raw_parts(&buf[0], len),
+                            slice_from_raw_parts(&saved_buf[0], len))
                         saved_len = len
                         hist_index = rl.hist.count as isize - 1
                     } else if hist_index > 0 {
@@ -499,7 +503,8 @@ pub fn read_line(rl: &Readline) String? {
                         continue
                     }
                     const entry = history_get(&rl.hist, hist_index as usize)
-                    memcpy(&buf[0], entry.ptr, entry.len)
+                    copy_to(slice_from_raw_parts(entry.ptr, entry.len),
+                        slice_from_raw_parts(&buf[0], entry.len))
                     len = entry.len
                     cursor = len
                     refresh_line(rl, buf, len, cursor)
@@ -512,12 +517,14 @@ pub fn read_line(rl: &Readline) String? {
                     if hist_index as usize >= rl.hist.count {
                         // Restore saved input
                         hist_index = -1
-                        memcpy(&buf[0], &saved_buf[0], saved_len)
+                        copy_to(slice_from_raw_parts(&saved_buf[0], saved_len),
+                            slice_from_raw_parts(&buf[0], saved_len))
                         len = saved_len
                         cursor = len
                     } else {
                         const entry = history_get(&rl.hist, hist_index as usize)
-                        memcpy(&buf[0], entry.ptr, entry.len)
+                        copy_to(slice_from_raw_parts(entry.ptr, entry.len),
+                            slice_from_raw_parts(&buf[0], entry.len))
                         len = entry.len
                         cursor = len
                     }

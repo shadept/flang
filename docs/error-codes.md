@@ -3905,6 +3905,10 @@ stays in its container, and the value behind a reference stays with its owner, s
 be a second owner. Inside a generic body - a combinator calling back a function that takes
 ownership - the error is reported at the instantiation and names the callback parameter.
 
+`move_to(src, dst)` (RFC-034) holds `src` to the same rule when its elements are not copyable: the
+slice is formed in the call, through `slice_from_raw_parts` or a range, from an `owned` field of a
+type this module declares.
+
 `move` itself takes a binding, a field of a binding the function owns, or a place reached through
 an `owned` field of a type the current module declares. That is the scoped-mutability right a
 container has over the storage it releases (spec 3.4.1): `std.collections.list` takes an element

@@ -174,7 +174,8 @@ fn process_chunk(data: u8[], data_len: usize, options: &CsvOptions, state: &Pars
     let chunk_buf: [u8; 16] = [0; 16]
     let chunk_ptr = data.ptr
     if data_len < 16 {
-        memcpy(&chunk_buf[0], data.ptr, data_len)
+        copy_to(slice_from_raw_parts(data.ptr, data_len), slice_from_raw_parts(&chunk_buf[0],
+                data_len))
         chunk_ptr = &chunk_buf[0]
     }
 
@@ -752,7 +753,8 @@ fn parse_all(self: &CsvReader) {
             // SIMD classify
             let chunk_buf: [u8; 16] = [0; 16]
             if chunk_size < 16 {
-                memcpy(&chunk_buf[0], data_ptr + pos, chunk_size)
+                copy_to(slice_from_raw_parts(data_ptr + pos, chunk_size),
+                    slice_from_raw_parts(&chunk_buf[0], chunk_size))
             }
             const cptr = if chunk_size < 16 { &chunk_buf[0] } else { data_ptr + pos }
             const masks = classify_chunk(cptr, self.options.delimiter, self.options.quote)
@@ -827,7 +829,8 @@ fn parse_all(self: &CsvReader) {
         const chunk_size = if is_partial { remaining } else { 16usize }
         let cptr = data_ptr + pos
         if is_partial {
-            memcpy(&pad_buf[0], cptr, chunk_size)
+            copy_to(slice_from_raw_parts(cptr, chunk_size), slice_from_raw_parts(&pad_buf[0],
+                    chunk_size))
             cptr = &pad_buf[0]
         }
 

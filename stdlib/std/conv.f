@@ -299,7 +299,7 @@ pub fn format_f64_hex(val: f64, buf: u8[]) Result(usize, ConvError) {
     if buf.len < pos {
         return Err(ConvError.BufferTooSmall)
     }
-    let _n = copy_to(tmp[0..pos], buf)
+    copy_to(tmp[0..pos], buf)
     return Ok(pos)
 }
 
@@ -445,7 +445,7 @@ pub fn format_f64_exp(val: f64, buf: u8[], precision: usize = 6,
     if buf.len < pos {
         return Err(ConvError.BufferTooSmall)
     }
-    let _n = copy_to(tmp[0..pos], buf)
+    copy_to(tmp[0..pos], buf)
     return Ok(pos)
 }
 

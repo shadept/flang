@@ -122,14 +122,16 @@ pub fn write(w: &BufferedWriter, data: u8[]) usize {
 
         if remaining <= space {
             // Fits in buffer without flushing
-            memcpy(w.buf.ptr + w.pos, data.ptr + written, remaining)
+            copy_to(slice_from_raw_parts(data.ptr + written, remaining),
+                slice_from_raw_parts(w.buf.ptr + w.pos, remaining))
             w.pos = w.pos + remaining
             written = written + remaining
             break
         }
 
         // Fill the rest of the buffer and flush
-        memcpy(w.buf.ptr + w.pos, data.ptr + written, space)
+        copy_to(slice_from_raw_parts(data.ptr + written, space),
+            slice_from_raw_parts(w.buf.ptr + w.pos, space))
         w.pos = w.buf.len
         w.flush_all()
         written = written + space
