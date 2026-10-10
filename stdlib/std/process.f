@@ -61,7 +61,7 @@ pub type Command = struct {
 }
 
 pub type Child = struct {
-    __handle: usize // OS-specific (PID on POSIX, HANDLE bits on Windows)
+    owned __handle: usize // OS-specific (PID on POSIX, HANDLE bits on Windows)
     __stdin_fd: i32 // -1 when not piped or already taken
     __stdout_fd: i32
     __stderr_fd: i32
@@ -69,9 +69,9 @@ pub type Child = struct {
     __exit_code: i32
 }
 
-pub type ChildStdout = struct { __fd: i32 }
-pub type ChildStderr = struct { __fd: i32 }
-pub type ChildStdin = struct { __fd: i32 }
+pub type ChildStdout = struct { owned __fd: i32 }
+pub type ChildStderr = struct { owned __fd: i32 }
+pub type ChildStdin = struct { owned __fd: i32 }
 
 // =============================================================================
 // Foreign ABI
@@ -276,18 +276,16 @@ pub fn kill(self: &Child) Result((), ProcessError) {
     return Ok(())
 }
 
-pub fn deinit(self: &Child) {
+// Closes the pipes still held, reaps the process if `wait` has not, and releases the handle.
+pub fn deinit(self: move Child) {
     if self.__stdin_fd >= 0 {
         __flang_proc_close_fd(self.__stdin_fd)
-        self.__stdin_fd = -1
     }
     if self.__stdout_fd >= 0 {
         __flang_proc_close_fd(self.__stdout_fd)
-        self.__stdout_fd = -1
     }
     if self.__stderr_fd >= 0 {
         __flang_proc_close_fd(self.__stderr_fd)
-        self.__stderr_fd = -1
     }
     if !self.__finished {
         // Reap any zombie state silently.
@@ -306,7 +304,7 @@ pub fn stdout(self: &Child) ChildStdout? {
     }
     const s = ChildStdout { __fd = self.__stdout_fd }
     self.__stdout_fd = -1
-    return Some(s)
+    return Some(move s)
 }
 
 pub fn stderr(self: &Child) ChildStderr? {
@@ -315,7 +313,7 @@ pub fn stderr(self: &Child) ChildStderr? {
     }
     const s = ChildStderr { __fd = self.__stderr_fd }
     self.__stderr_fd = -1
-    return Some(s)
+    return Some(move s)
 }
 
 pub fn stdin(self: &Child) ChildStdin? {
@@ -324,7 +322,7 @@ pub fn stdin(self: &Child) ChildStdin? {
     }
     const s = ChildStdin { __fd = self.__stdin_fd }
     self.__stdin_fd = -1
-    return Some(s)
+    return Some(move s)
 }
 
 // =============================================================================
@@ -368,23 +366,20 @@ fn write(self: &ChildStdin, data: u8[]) usize {
 #implement(ChildStderr, Reader)
 #implement(ChildStdin, Writer)
 
-pub fn close(self: &ChildStdout) {
+pub fn close(self: move ChildStdout) {
     if self.__fd >= 0 {
         __flang_proc_close_fd(self.__fd)
-        self.__fd = -1
     }
 }
 
-pub fn close(self: &ChildStderr) {
+pub fn close(self: move ChildStderr) {
     if self.__fd >= 0 {
         __flang_proc_close_fd(self.__fd)
-        self.__fd = -1
     }
 }
 
-pub fn close(self: &ChildStdin) {
+pub fn close(self: move ChildStdin) {
     if self.__fd >= 0 {
         __flang_proc_close_fd(self.__fd)
-        self.__fd = -1
     }
 }

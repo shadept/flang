@@ -223,7 +223,7 @@ pub type RawDirEntry = struct {
 }
 
 pub type RawDir = struct {
-    handle: usize
+    owned handle: usize
     name_buf: [u8; 256]
     current_name_len: usize
     current_kind: i32
@@ -239,7 +239,7 @@ pub fn raw_dir_open(path: String) Result(RawDir, FsError) {
     d.current_kind = 0
     d.last_error = null
     d.done = false
-    return Ok(d)
+    return Ok(move d)
 }
 
 pub fn iter(self: &RawDir) &RawDir {
@@ -272,10 +272,9 @@ pub fn err(self: &RawDir) FsError? {
     return self.last_error
 }
 
-pub fn deinit(self: &RawDir) {
+pub fn deinit(self: move RawDir) {
     if self.handle != 0 {
         const _closed = raw_closedir(self.handle)
-        self.handle = 0
     }
 }
 

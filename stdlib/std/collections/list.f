@@ -1206,10 +1206,9 @@ test "search utilities: find, find_index, any, all" {
     assert_true(empty.all(test_is_even), "all is vacuously true on empty")
 }
 
-test "a container's deinit consumes it, and a reusable one stays idempotent" {
-    // A container releases once: `deinit` takes the value, so a second call is E2123 rather than a
-    // run-time no-op. What is reused rather than consumed - a `StringBuilder` - keeps the
-    // idempotent form.
+test "an owning value's deinit consumes it" {
+    // A value releases once: `deinit` takes it, so a second call is E2123 rather than a run-time
+    // no-op.
     let xs: List(OwnedString) = list(2)
     xs.push(from_view("alpha"))
     xs.push(from_view("beta"))
@@ -1221,7 +1220,6 @@ test "a container's deinit consumes it, and a reusable one stays idempotent" {
 
     let sb = string_builder(8)
     sb.append("x")
-    sb.deinit()
     sb.deinit()
 
     // An option releases like anything else: the payload goes and the option with it.

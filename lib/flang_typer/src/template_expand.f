@@ -500,12 +500,12 @@ fn emitted_for(state: &TemplateState, allocator: &Allocator?, origin_path: Strin
     text.append("// Generated from ")
     text.append(base_name(origin_path))
     text.append("\n\n")
-    state.emitted.push(EmittedFile { origin_path = origin_path, text = text, lines = 2 })
+    state.emitted.push(EmittedFile { origin_path = origin_path, text = move text, lines = 2 })
     return &state.emitted[state.emitted.len - 1]
 }
 
 fn base_name(p: String) String {
-    return path(p).file_name() ?? p
+    return file_name(p) ?? p
 }
 
 // `foo.f` → `foo.generated.f`

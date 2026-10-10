@@ -175,7 +175,7 @@ Three types with explicit ownership. All share layout `{ ptr: &u8, len: usize }`
 
 **OwnedString** — owns its buffer: `struct { view: String, allocator: &Allocator? }`. Must be freed via `deinit()`. Follows allocator pattern. Produced by `StringBuilder.to_string()`, `from_view()`. Every `String` read reaches `view` through `op_deref` (`s.len`, `s.starts_with(p)`, `s == t`); `hash` is declared, since the catch-all `hash($T)` would take it as written. A dict or set keyed by `OwnedString` is looked up by `String` (RFC-031).
 
-**StringBuilder** — owning, mutable, growable buffer. `append()` adds content. `to_string()` transfers buffer to OwnedString (move semantics — builder resets). `as_view()` returns non-owning String view.
+**StringBuilder** — owning, mutable, growable buffer (`owned ptr`, so non-copyable: a builder reaches a struct with `move` and a function through `&StringBuilder`). `append()` adds content. `to_string()` transfers buffer to OwnedString (move semantics — builder resets). `as_view()` returns non-owning String view.
 
 | From            | To            | Method                    | Cost                  |
 | --------------- | ------------- | ------------------------- | --------------------- |
@@ -467,15 +467,16 @@ Zero initialization covers the whole allocation, not just the named fields: aggr
 **Control block layout**: `RcInner(T) = { ref_count: usize, value: T }`. Single heap allocation — no separate allocation for the control block.
 
 **Construction**:
-- `rc(value, allocator?)` / `arc(value, allocator?)` — copies value into a new heap allocation.
+- `rc(value, allocator?)` / `arc(value, allocator?)` — moves value into a new heap allocation.
 - `rc_alloc(allocator?)` / `arc_alloc(allocator?)` — zero-initializes for in-place fill via `op_deref`.
 
 **Operations**:
-- `.clone()` — explicit refcount bump. Returns a new handle to the same value. Shallow copy of an Rc/Arc is an alias (no hidden costs).
-- `.deinit()` — decrements refcount. At zero, calls `T.deinit()` (statically dispatched via monomorphization — no function pointer in the control block) then frees the allocation.
+- `.retain()` — explicit refcount bump. Returns a new handle to the same value. A handle holds one count, so it is not copyable (`owned __inner`): `let r2 = r` is E2124.
+- `.clone()` — not a bump: it peels through `op_deref` to `T`'s own `clone` and yields an independent `T`.
+- `.deinit()` — consumes the handle and gives its count back. At zero, releases the value (`release`, statically dispatched via monomorphization — no function pointer in the control block) then frees the allocation.
 - `.op_deref()` — returns `&T`, enabling transparent field access: `rc.field` instead of `rc.borrow().field`.
 
-**Arc atomics**: `Arc.clone()` uses `atomic_fetch_add`, `Arc.deinit()` uses `atomic_fetch_sub`. Backed by C11 `<stdatomic.h>` via `std.atomic`.
+**Arc atomics**: `Arc.retain()` uses `atomic_fetch_add`, `Arc.deinit()` uses `atomic_fetch_sub`. Backed by C11 `<stdatomic.h>` via `std.atomic`.
 
 **Conventions**: Internal fields use `__` prefix (`__inner`, `__allocator`). No `Weak` references yet — `RcInner` stays opaque for future addition.
 

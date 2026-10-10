@@ -67,7 +67,7 @@ pub fn project_module(cst: CstNode, file_id: i32, allocator: &Allocator? = null,
     return Module {
         span = p.span_from(cst),
         decls = move decls,
-        arena = arena,
+        arena = move arena,
     }
 }
 

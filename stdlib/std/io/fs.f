@@ -147,6 +147,10 @@ type WalkFrame = struct {
     path_len_before: usize // length of path_buf before this frame's segment
 }
 
+pub fn deinit(self: move WalkFrame) {
+    self.dir.deinit()
+}
+
 pub type WalkIter = struct {
     stack: Stack(WalkFrame)
     path_buf: StringBuilder
@@ -170,7 +174,7 @@ pub fn walk_dir(root: String, allocator: &Allocator? = null) Result(WalkIter, Fs
 
     let stack: Stack(WalkFrame) = stack(8, allocator)
     stack.push(WalkFrame {
-        dir = root_iter,
+        dir = move root_iter,
         path_len_before = root_len,
     })
 
@@ -202,10 +206,10 @@ pub fn next(self: &WalkIter) WalkEntry? {
             if top.dir.last_error.is_some() and self.last_error.is_none() {
                 self.last_error = top.dir.last_error
             }
-            // Restore path_buf to this frame's prefix, then pop.
+            // Restore path_buf to this frame's prefix, then pop and close it.
             self.path_buf.truncate(top.path_len_before)
-            top.dir.deinit()
-            const _popped = self.stack.pop()
+            let done_frame = self.stack.pop().unwrap()
+            done_frame.deinit()
             continue
         }
         const entry = entry_opt.unwrap()
@@ -249,11 +253,6 @@ pub fn err(self: &WalkIter) FsError? {
 }
 
 pub fn deinit(self: move WalkIter) {
-    while !self.stack.is_empty() {
-        const top: &WalkFrame = self.stack.peek_ref().unwrap()
-        top.dir.deinit()
-        const _popped = self.stack.pop()
-    }
     self.stack.deinit()
     self.path_buf.deinit()
 }
@@ -296,7 +295,7 @@ pub fn glob(pattern: String, allocator: &Allocator? = null) Result(GlobIter, FsE
 
     return Ok(GlobIter {
         walk = move walk,
-        pattern = pat_buf,
+        pattern = move pat_buf,
         done = false,
     })
 }
@@ -505,7 +504,8 @@ test "to_absolute leaves an absolute path alone and roots a relative one" {
 test "canonicalize requires the target to exist" {
     let missing = path("definitely_not_here.toml")
     defer missing.deinit()
-    assert_true(canonicalize(&missing).is_err(), "missing path fails")
+    const failed = canonicalize(&missing)
+    assert_true(failed.is_err(), "missing path fails")
 
     let real = path("flang.toml")
     defer real.deinit()

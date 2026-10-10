@@ -3,7 +3,7 @@
 //! STDOUT: [  ab][cd  ]
 
 // The spec-taking `OwnedString` and `StringBuilder` appends pad like `String` does. The OwnedString
-// overload consumes its argument, as the unspecced one already did.
+// overload consumes its argument, as the unspecced one already did; a builder is lent.
 
 import std.io.print
 import std.string
@@ -21,7 +21,7 @@ pub fn main() i32 {
     inner.append("cd")
 
     out.append("][")
-    out.append(inner, "<4")
+    out.append(&inner, "<4")
     out.append("]")
 
     println(out.as_view())

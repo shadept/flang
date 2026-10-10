@@ -77,7 +77,7 @@ fn to_dir_error(e: FsError) DirError {
 
 pub fn open_dir(path: String) Result(Dir, DirError) {
     const raw = raw_dir_open(path).map_err(to_dir_error)?
-    return Ok(Dir { path = path, raw = raw })
+    return Ok(Dir { path = path, raw = move raw })
 }
 
 // Borrowing rather than copying means `d.err()` still reports what happened after `for entry in d`
@@ -103,7 +103,7 @@ pub fn err(self: &Dir) DirError? {
     return self.raw.err().map(to_dir_error)
 }
 
-pub fn deinit(self: &Dir) {
+pub fn deinit(self: move Dir) {
     self.raw.deinit()
 }
 

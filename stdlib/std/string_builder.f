@@ -15,7 +15,7 @@ import std.string
 import std.test
 
 pub type StringBuilder = struct {
-    ptr: &u8
+    owned ptr: &u8
     len: usize
     cap: usize
     allocator: &Allocator?
@@ -61,14 +61,11 @@ pub fn string_builder_with_capacity_and_allocator(capacity: usize,
     return string_builder(capacity, allocator)
 }
 
-// Free the backing storage. The builder should not be used after this.
-pub fn deinit(sb: &StringBuilder) {
-    if (sb.cap > 0) {
-        sb.allocator.or_global().free(slice_from_raw_parts(sb.ptr, sb.cap))
+// Frees the backing storage, consuming the builder.
+pub fn deinit(self: move StringBuilder) {
+    if self.cap > 0 {
+        self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.cap))
     }
-    sb.ptr = 0usize as &u8
-    sb.len = 0
-    sb.cap = 0
 }
 
 // Ensure the builder has room for at least `additional` more bytes.
@@ -196,7 +193,7 @@ pub fn append_bytes(sb: &StringBuilder, data: u8[]) {
 // format
 // =============================================================================
 
-pub fn format(self: StringBuilder, w: Writer, spec: String) {
+pub fn format(self: &StringBuilder, w: Writer, spec: String) {
     self.as_view().format(w, spec)
 }
 
@@ -215,6 +212,16 @@ pub fn append(sb: &StringBuilder, s: move OwnedString) {
 pub fn append(sb: &StringBuilder, s: move OwnedString, spec: String) {
     s.format(sb.writer(), spec)
     s.deinit()
+}
+
+// Appends another builder's contents, which stays the caller's. `sb.append(&other)`: a builder is
+// not copyable, so it is lent rather than read through the generic overload.
+pub fn append(sb: &StringBuilder, other: &StringBuilder) {
+    sb.append(other.as_view())
+}
+
+pub fn append(sb: &StringBuilder, other: &StringBuilder, spec: String) {
+    sb.append(other.as_view(), spec)
 }
 
 pub fn append(sb: &StringBuilder, val: $T) {
@@ -396,6 +403,6 @@ test "append owned and builder with a spec" {
     inner.append("cd")
 
     sb.append(from_view("ab"), ">4")
-    sb.append(inner, "<4")
+    sb.append(&inner, "<4")
     assert_true(sb.as_view() == "  abcd  ", "both pad; the owned temporary is freed by append")
 }

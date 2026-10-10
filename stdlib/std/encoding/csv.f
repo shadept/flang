@@ -511,7 +511,7 @@ pub fn skip_value(self: &CsvDecoder) bool {
 
 pub fn has_error(self: &CsvDecoder) bool { return self.error.is_some() }
 
-pub fn deinit(self: &CsvDecoder) {
+pub fn deinit(self: move CsvDecoder) {
     self.field_buf.deinit()
     self.header_buf.deinit()
 }
@@ -929,7 +929,7 @@ pub fn row_count(self: &CsvReader) usize {
     return self.rows.len
 }
 
-pub fn deinit(self: &CsvReader) {
+pub fn deinit(self: move CsvReader) {
     self.buffer.deinit()
 }
 
@@ -957,8 +957,8 @@ pub fn csv_table(r: Reader, options: CsvOptions = csv_options(),
     })
 }
 
-pub fn deinit(table: &CsvTable) {
-    table.buffer.deinit()
+pub fn deinit(self: move CsvTable) {
+    self.buffer.deinit()
 }
 
 pub fn row_count(table: &CsvTable) usize {

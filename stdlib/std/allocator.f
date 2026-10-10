@@ -466,7 +466,10 @@ pub type ArenaAllocator = struct {
     page_size: usize
     // Size of the next page to allocate; doubles per page, capped.
     next_size: usize
-    first_page: &ArenaPage?
+    // The page chain the arena frees in `deinit`. It owns the pages, not the allocations inside
+    // them: those are plain references, valid until the arena is reset or released.
+    owned first_page: &ArenaPage?
+    // A cursor into that chain, owning nothing.
     current_page: &ArenaPage?
 }
 
@@ -589,20 +592,18 @@ pub fn arena_allocator(backing: &Allocator, page_size: usize = 4096) ArenaAlloca
     }
 }
 
-// Free all pages through the backing allocator.
-pub fn deinit(state: &ArenaAllocator) {
+// Frees every page through the backing allocator, consuming the arena.
+pub fn deinit(self: move ArenaAllocator) {
     const header_size = size_of(ArenaPage)
-    let page = state.first_page
+    let page = self.first_page
     while page.is_some() {
         let p = page.unwrap()
         let next = p.next
         let total = p.size + header_size
         let raw = slice_from_raw_parts(p as &u8, total)
-        state.backing.dealloc(raw, ARENA_PAGE_ALIGN)
+        self.backing.dealloc(raw, ARENA_PAGE_ALIGN)
         page = next
     }
-    state.first_page = null
-    state.current_page = null
 }
 
 // Bytes held across every page, headers included: what the arena took from its backing allocator,

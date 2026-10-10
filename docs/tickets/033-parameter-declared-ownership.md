@@ -530,6 +530,37 @@ promote, then use.
      (`let x = move self.f` then `self.f = fresh`) into `replace(&self.f, fresh)`, made dict take
      through `(self.entries + i)` by index instead of a lent `&Entry`, and gave builders that end in
      `finish` a consuming `move self`.
+
+     `StringBuilder` followed on 2026-09-17 (`owned ptr`). The fallout was small: the
+     `#string_reader` forwarders and `format` take the builder by reference, builders move into
+     `Path` and the fs walkers, and `file_name` gained a `String` form so nothing builds a
+     temporary `Path` to read one component. Its `deinit` then became consuming like every other,
+     and with it the types that hold a builder: `Path` (non-copyable through `__sb`, nothing else
+     to change) and the CSV decoder, reader and table.
+
+     `RawDir` then took `owned handle` with a consuming `deinit`, which makes `Dir`, the walk frames
+     and the walk and glob iterators non-copyable. A walk frame declares its own `deinit`, so the
+     walker closes a finished directory by popping it and releasing it, and `WalkIter.deinit` is
+     the stack's own release. `Command` was already non-copyable through its argument lists and
+     already consumed in `deinit`; a harness test now pins both it and `Dir`.
+
+     `Child` owns its process handle the way `FileHandle` owns its descriptor (`owned __handle`),
+     and the pipes taken from it own theirs (`owned __fd`). `Child.deinit` and each pipe's `close`
+     consume: a copy used to keep the descriptor numbers after one copy closed them, so a second
+     release could close an unrelated, reused descriptor.
+
+     `Rc` and `Arc` hold `owned __inner` (no longer optional: a consuming `deinit` never leaves a
+     released handle behind, so `is_released` is gone). The count bump is `retain`, as the spec's
+     ownership vocabulary names it, and `rc.clone()` now peels through `op_deref` to the value's
+     own `clone`. `UnmanagedDeque` holds `owned ptr`, the last raw container buffer; the other
+     collections are built on `List` and `Dict`.
+
+     `ArenaAllocator` owns its page chain (`owned first_page`; `current_page` is a cursor) and its
+     `deinit` consumes. It owns the pages, not the allocations inside them, which stay plain
+     references. The sweep caught a regression from the container change: `Module.append_decls`
+     had become `install(&self.decls, merged)`, which releases the old list through the allocator
+     it was built with - a view of the projection's stack-local arena, dead by then. The old list
+     is now swapped out with `replace` and left for the arena, as the code did before.
 7. **Compiler libraries.** Sweep `lib/*`, `tools/*`, `compiler/`.
 8. **Docs.** Spec §3.2, §3.6, §4.1, §7.2, §7.3 and the stdlib callback convention; RFC-028 and
    RFC-030 status and cross-references.

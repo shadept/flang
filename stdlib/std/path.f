@@ -66,7 +66,7 @@ fn is_drive_letter(b: u8) bool {
 pub fn path(s: String, allocator: &Allocator? = null) Path {
     let sb = string_builder(s.len + 1, allocator)
     sb.append(s)
-    return .{ __sb = sb }
+    return .{ __sb = move sb }
 }
 
 // Takes ownership of `s` - the OwnedString is deinitialized on return. OwnedString and
@@ -78,14 +78,14 @@ pub fn path_from_owned(s: move OwnedString) Path {
     let sb = string_builder(s.len + 1, alloc)
     sb.append(s.view)
     s.deinit()
-    return .{ __sb = sb }
+    return .{ __sb = move sb }
 }
 
 // =============================================================================
 // Lifecycle
 // =============================================================================
 
-pub fn deinit(self: &Path) {
+pub fn deinit(self: move Path) {
     self.__sb.deinit()
 }
 
@@ -179,7 +179,11 @@ pub fn parent(self: &Path) String? {
 // Returns the final component as a String view, or null if the path ends in a separator or is
 // empty.
 pub fn file_name(self: &Path) String? {
-    const v = self.as_view()
+    return file_name(self.as_view())
+}
+
+// `file_name` over a path spelled as a string, without building a `Path`: the view points into `v`.
+pub fn file_name(v: String) String? {
     if v.len == 0 {
         return null
     }
@@ -329,7 +333,7 @@ pub fn join(self: &Path, other: String) Path {
     }
     sb.append(other[other_start..])
 
-    return .{ __sb = sb }
+    return .{ __sb = move sb }
 }
 
 // =============================================================================
@@ -374,7 +378,7 @@ pub fn from_slash(s: String, allocator: &Allocator? = null) Path {
             sb.append_byte(if s[i] == '/' { sep() } else { s[i] })
             i = i + 1
         }
-        return .{ __sb = sb }
+        return .{ __sb = move sb }
     } else {
         return path(s, allocator)
     }
@@ -419,7 +423,7 @@ pub fn with_extension(self: &Path, ext: String) Path {
         sb.append_byte('.')
         sb.append(ext)
     }
-    return .{ __sb = sb }
+    return .{ __sb = move sb }
 }
 
 // Pure lexical normalization. Collapses "./" and resolves "../" against the preceding component
@@ -517,7 +521,7 @@ pub fn normalize(self: &Path) Path {
         sb.append_byte('.')
     }
 
-    return .{ __sb = sb }
+    return .{ __sb = move sb }
 }
 
 // Returns true if `s` (without constructing a Path) is an absolute path.
@@ -655,7 +659,7 @@ pub fn to_relative(self: &Path, base: String, allocator: &Allocator? = null) Pat
     if sb.len == 0 {
         sb.append(".")
     }
-    return Some(.{ __sb = sb })
+    return Some(.{ __sb = move sb })
 }
 
 // Platform-aware path equality: case-insensitive and separator-agnostic on Windows, exact on POSIX
@@ -769,7 +773,7 @@ pub fn with_file_name(self: &Path, name: String) Path {
         }
     }
     sb.append(name)
-    return .{ __sb = sb }
+    return .{ __sb = move sb }
 }
 
 // =============================================================================
@@ -1008,11 +1012,15 @@ test "to_relative on an identical path is dot" {
 test "to_relative refuses to mix absolute and relative" {
     let abs = path("/src/a")
     defer abs.deinit()
-    assert_true(abs.to_relative("src").is_none(), "absolute target, relative base")
+    const from_abs = abs.to_relative("src")
+    assert_true(from_abs.is_none(), "absolute target, relative base")
+    from_abs.deinit()
 
     let rel = path("src/a")
     defer rel.deinit()
-    assert_true(rel.to_relative("/src").is_none(), "relative target, absolute base")
+    const from_rel = rel.to_relative("/src")
+    assert_true(from_rel.is_none(), "relative target, absolute base")
+    from_rel.deinit()
 }
 
 test "push appends a component and absolute input replaces" {

@@ -16,7 +16,7 @@ import std.test
 // and `deinit` take one as their last argument, and the same allocator must be passed every time. A
 // zero-initialised value is a valid empty deque. Elements are owned: `deinit` deinits each.
 pub type UnmanagedDeque = struct(T) {
-    ptr: &T
+    owned ptr: &T
     cap: usize // backing buffer capacity (in elements)
     head: usize // index of the front element when len > 0
     len: usize
@@ -56,10 +56,8 @@ pub fn unmanaged_deque(capacity: usize, allocator: &Allocator) UnmanagedDeque($T
 //
 // - `allocator`: kept for the deque's whole life. Null is the global allocator.
 pub fn deque(capacity: usize, allocator: &Allocator? = null) Deque($T) {
-    let out: Deque(T)
-    out.allocator = allocator.or_global()
-    out.__storage = unmanaged_deque(capacity, out.allocator)
-    return out
+    const alloc = allocator.or_global()
+    return .{ __storage = unmanaged_deque(capacity, alloc), allocator = alloc }
 }
 
 // =============================================================================

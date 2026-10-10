@@ -53,7 +53,9 @@ pub fn append_decls(self: &Module, decls: &List(Decl)) {
     let merged: List(Decl) = list(self.decls.len + decls.len)
     merged.push_all(self.decls.as_slice())
     merged.push_all(decls.as_slice())
-    install(&self.decls, merged)
+    // Swapped out, never released: releasing would free through the dead allocator above, and the
+    // buffer is the arena's to reclaim.
+    const _stale = replace(&self.decls, merged)
 }
 
 pub fn set_decls(self: &Module, decls: move List(Decl)) {
