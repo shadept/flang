@@ -81,11 +81,6 @@ pub type CaptureRec = struct {
     ty: Ty
 }
 
-pub fn deinit(self: &CaptureRec) {
-    // name is a source view; ty is engine-owned structure shared with the type tables - neither is
-    // ours to free.
-}
-
 // One checked lambda literal, keyed by the LambdaExpr's node id in `InferenceResults.lambdas`.
 // Overlay-scoped on purpose: a lambda inside a generic template gets one record - with its own
 // types, captures, and symbol - per instantiation. Empty `captures` = bare function pointer;

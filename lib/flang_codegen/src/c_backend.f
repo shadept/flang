@@ -2107,12 +2107,9 @@ fn write_c_file(path: String, contents: String, allocator: &Allocator?) Result((
     defer pbuf.deinit()
     pbuf.append(path)
     nul_term(&pbuf)
-    let f = open_file(pbuf.as_view(), FileMode.Write) match {
-        Ok(v) => move v
-        Err(e) => return Err(e)
-    }
+    let f = open_file(pbuf.as_view(), FileMode.Write)?
     const w = write(&f, contents)
-    const c = close_file(&f)
+    const c = close_file(f)
     if w.is_err() {
         return Err(w.unwrap_err())
     }

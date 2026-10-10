@@ -18,11 +18,8 @@ import flang_core.render
 
 // Read a source file whole.
 pub fn read_source(path: String) Result(OwnedString, FileError) {
-    let file = open_file(path, FileMode.Read) match {
-        Ok(v) => move v
-        Err(e) => return Err(e)
-    }
-    defer close_file(&file)
+    let file = open_file(path, FileMode.Read)?
+    defer close_file(file)
     return read_all(&file)
 }
 

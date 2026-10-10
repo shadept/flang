@@ -562,6 +562,15 @@ promote, then use.
      it was built with - a view of the projection's stack-local arena, dead by then. The old list
      is now swapped out with `replace` and left for the arena, as the code did before.
 7. **Compiler libraries.** Sweep `lib/*`, `tools/*`, `compiler/`.
+
+   Done 2026-10-10. Most of it landed with 6c, since owned buffers reached the compiler at once.
+   What was left: `close_file` consumes its `File`, as a pipe's `close` does, so a closed file is
+   no longer reachable; the two call sites that only re-raised `open_file`'s error use `?`; the
+   diagnostic moves drain instead of copying out a slice and freeing it; and the remaining
+   `deinit(self: &T)` became `move self` on the non-copyable types (`BlockExpr`, `PendingSpec`,
+   `FunctionScheme`, FIR's `Instr` and `Terminator`) and went away on the copyable ones, which
+   `release` never calls. `Instr` and `Terminator` had freed payload lists bound out of a lent
+   `self.*`, the pattern-binding gap in docs/known-issues.md.
 8. **Docs.** Spec §3.2, §3.6, §4.1, §7.2, §7.3 and the stdlib callback convention; RFC-028 and
    RFC-030 status and cross-references.
 

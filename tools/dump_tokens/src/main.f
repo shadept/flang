@@ -44,7 +44,7 @@ pub fn main() i32 {
         }
     }
     const read_result = read_all(&file)
-    close_file(&file)
+    close_file(file)
     if read_result.is_err() {
         const msg = $"dump_tokens: read failed: {path}"
         defer msg.deinit()

@@ -1,4 +1,4 @@
-import std.envx
+import std.env
 import std.io.print
 import std.readline
 

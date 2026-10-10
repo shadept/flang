@@ -113,7 +113,7 @@ pub fn main() i32 {
             let words = 0
             let bytes_count = 0
             count(file.reader(), &lines, &words, &bytes_count)
-            close_file(&file)
+            close_file(file)
             print_counts(&sb, lines, words, bytes_count, show_lines, show_words, show_bytes, a)
             total_lines = total_lines + lines
             total_words = total_words + words

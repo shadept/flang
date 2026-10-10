@@ -38,9 +38,9 @@ pub fn parse_doc(text: String, allocator: &Allocator? = null) ParsedDoc {
     let module = project_module(cst, 0i32, allocator, Some(&diagnostics))
     const cctx = host_ctx()
     flatten_module_decls(&module, &cctx, &diagnostics, allocator)
-    const taken = p.diagnostics.to_owned_slice()
-    diagnostics.push_all(taken.0)
-    taken.1.free(taken.0)
+    for d in p.diagnostics.drain() {
+        diagnostics.push(d)
+    }
     p.deinit()
     return .{ module = move module, diagnostics = move diagnostics }
 }

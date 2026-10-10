@@ -1108,7 +1108,7 @@ fn fmt_file(path: String, cfg: &FmtConfig, check: bool) FmtStatus {
     open_file(path, FileMode.Write) match {
         Ok(handle) => {
             wrote = !write(&handle, formatted.view).is_err()
-            const _closed = close_file(&handle)
+            const _closed = close_file(handle)
         }
         Err(_) => {}
     }

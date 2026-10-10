@@ -102,8 +102,6 @@ type SigTypeParam = struct {
     var_id: VarId
 }
 
-pub fn deinit(self: &SigTypeParam) {}
-
 // An unsuffixed numeric literal's fresh var, held for the post-inference sweep: still unresolved
 // once everything has settled means no context ever pinned the literal - E2001, matching the
 // reference.
@@ -113,8 +111,6 @@ type PendingLit = struct {
     text: String
     is_float: bool
 }
-
-pub fn deinit(self: &PendingLit) {}
 
 // An anonymous `.{ ... }` literal awaiting its nominal. The literal types as a fresh var the
 // surrounding context binds; once inference settles, each field initializer unifies against the
@@ -173,7 +169,7 @@ type PendingSpec = struct {
 
 // The drain owns `tp_binds` and `inst_params`: it frees them when a pick is processed and carries
 // them into the next pass when one is deferred, so dropping the queue must not touch them.
-pub fn deinit(self: &PendingSpec) {}
+pub fn deinit(self: move PendingSpec) {}
 
 // One instantiation frame's reuse bookkeeping (RFC-022 5e), pushed alongside `spec_callers`. The
 // counters at frame start plus what nested work minted give the frame's OWN burns; `deps` collects
@@ -401,8 +397,6 @@ pub type SigNodeFact = struct {
     span: SourceSpan
     ty: Ty?
 }
-
-pub fn deinit(self: &SigNodeFact) {}
 
 // What one module's signature pass produced, cached for demands that skip the pass. `var_burn` is
 // how many engine variables the pass minted - a skipping demand mints the same count so every later

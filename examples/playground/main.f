@@ -1,7 +1,7 @@
-import std.io.file
-import std.io.print
 import std.char
 import std.derive
+import std.io.file
+import std.io.print
 import std.iter
 import std.rc
 import std.result
@@ -16,7 +16,7 @@ type Vector2 = struct {
 
 pub fn main() i32 {
     const file = open_file("test.f", FileMode.Read).except("Failed to open file")
-    defer close_file(&file).except("Failed to close file")
+    defer close_file(file).except("Failed to close file")
 
     print("Open fd: ")
     println(file.handle.fd)
@@ -27,7 +27,7 @@ pub fn main() i32 {
     print("File size: ")
 
     let sb = string_builder(content.len)
-    let writer = sb.buffered_writer()  // example using writer
+    let writer = sb.buffered_writer() // example using writer
     for c in content.chars().map(fn(c) { c.upper() }) {
         writer.write(c as u8)
     }
@@ -35,7 +35,7 @@ pub fn main() i32 {
     println("Uppercase content:")
     println(sb.as_view())
 
-    const some_point = rc(Vector2{x=1f32, y=2})
+    const some_point = rc(Vector2 { x = 1f32, y = 2 })
     defer some_point.deinit()
 
     print("ref_count: ")
@@ -43,7 +43,7 @@ pub fn main() i32 {
 
     const p = some_point.*
     print("value: ")
-    println(p)  // from derive(debug)
+    println(p) // from derive(debug)
     print("hash: ")
     println(p.hash()) // from derive(hash)
 

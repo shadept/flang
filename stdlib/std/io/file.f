@@ -98,7 +98,7 @@ pub fn open_file(path: String, mode: FileMode, encoding: FileEncoding) Result(Fi
     })
 }
 
-pub fn close_file(file: &File) Result((), FileError) {
+pub fn close_file(file: move File) Result((), FileError) {
     return raw_close(file.handle.fd).map_err(to_file_error)
 }
 
@@ -240,7 +240,7 @@ test "write, read back, and remove a file" {
     assert_true(opened.is_ok(), "open for write")
     let w = opened.unwrap()
     assert_true(write(&w, "hello flang").is_ok(), "write")
-    assert_true(close_file(&w).is_ok(), "close after write")
+    assert_true(close_file(w).is_ok(), "close after write")
 
     const reopened = open_file(p, FileMode.Read)
     assert_true(reopened.is_ok(), "open for read")
@@ -250,7 +250,7 @@ test "write, read back, and remove a file" {
     let owned_text = text.unwrap()
     assert_eq(owned_text.view, "hello flang", "round-trip")
     owned_text.deinit()
-    assert_true(close_file(&r).is_ok(), "close after read")
+    assert_true(close_file(r).is_ok(), "close after read")
 
     assert_true(remove_file(p).is_ok(), "remove")
     assert_true(remove_file(p).is_err(), "second remove fails")
@@ -261,17 +261,17 @@ test "write truncates an existing file" {
 
     let a = open_file(p, FileMode.Write).unwrap()
     assert_true(write(&a, "long original contents").is_ok(), "first write")
-    assert_true(close_file(&a).is_ok(), "close")
+    assert_true(close_file(a).is_ok(), "close")
 
     let b = open_file(p, FileMode.Write).unwrap()
     assert_true(write(&b, "short").is_ok(), "second write")
-    assert_true(close_file(&b).is_ok(), "close")
+    assert_true(close_file(b).is_ok(), "close")
 
     let c = open_file(p, FileMode.Read).unwrap()
     const text = read_all(&c).unwrap()
     assert_eq(text.view, "short", "old tail is gone")
     text.deinit()
-    assert_true(close_file(&c).is_ok(), "close")
+    assert_true(close_file(c).is_ok(), "close")
     assert_true(remove_file(p).is_ok(), "cleanup")
 }
 
@@ -280,16 +280,16 @@ test "append adds to the end instead of truncating" {
 
     let a = open_file(p, FileMode.Write).unwrap()
     assert_true(write(&a, "one").is_ok(), "write")
-    assert_true(close_file(&a).is_ok(), "close")
+    assert_true(close_file(a).is_ok(), "close")
 
     let b = open_file(p, FileMode.Append).unwrap()
     assert_true(write(&b, "-two").is_ok(), "append")
-    assert_true(close_file(&b).is_ok(), "close")
+    assert_true(close_file(b).is_ok(), "close")
 
     let c = open_file(p, FileMode.Read).unwrap()
     const text = read_all(&c).unwrap()
     assert_eq(text.view, "one-two", "appended")
     text.deinit()
-    assert_true(close_file(&c).is_ok(), "close")
+    assert_true(close_file(c).is_ok(), "close")
     assert_true(remove_file(p).is_ok(), "cleanup")
 }

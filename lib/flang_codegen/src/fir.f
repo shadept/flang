@@ -579,8 +579,8 @@ pub fn deinit(self: move Block) {
     self.terminator.deinit()
 }
 
-pub fn deinit(self: &Instr) {
-    self.* match {
+pub fn deinit(self: move Instr) {
+    self match {
         Call(c) => {
             c.args.deinit()
             c.variadic_arg_types.deinit()
@@ -594,8 +594,8 @@ pub fn deinit(self: &Instr) {
     }
 }
 
-pub fn deinit(self: &Terminator) {
-    self.* match {
+pub fn deinit(self: move Terminator) {
+    self match {
         Br(t) => t.args.deinit()
         BrIf(b) => {
             b.then_target.args.deinit()
@@ -607,10 +607,6 @@ pub fn deinit(self: &Terminator) {
 
 pub fn deinit(self: move ForeignDecl) {
     self.param_types.deinit()
-}
-
-pub fn deinit(self: &Global) {
-    // init_bytes and relocs are borrowed (caller owns); nothing to free here.
 }
 
 // ─────────────────────────────────────────────────────────────────────────

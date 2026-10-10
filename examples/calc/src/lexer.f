@@ -57,7 +57,7 @@ pub fn next_token(self: &Lexer) Token {
         '0'..='9' | '.' => {
             const remaining = self.input[self.pos..self.input.len]
             parse_f64(remaining) match {
-                Ok( (value, consumed)) => {
+                Ok((value, consumed)) => {
                     self.pos = self.pos + consumed
                     Token.Number(value)
                 }

@@ -32,8 +32,12 @@ type Entry = struct {
     kind: FileKind
 }
 
-fn entry_cmp(a: Entry, b: Entry) Ord {
-    return op_cmp(a.name.as_view(), b.name.as_view())
+pub fn deinit(self: move Entry) {
+    self.name.deinit()
+}
+
+fn entry_cmp(a: &Entry, b: &Entry) Ord {
+    return op_cmp(a.name.view, b.name.view)
 }
 
 type State = struct {
@@ -107,13 +111,6 @@ fn append_human_size(sb: &StringBuilder, n: u64) {
     }
 }
 
-fn free_entries(entries: &List(Entry)) {
-    for i in 0..entries.len {
-        entries[i].name.deinit()
-    }
-    entries.deinit()
-}
-
 // -----------------------------------------------------------------------------
 // Directory listing
 // -----------------------------------------------------------------------------
@@ -138,20 +135,19 @@ fn collect_entries(path: String, state: &State) Result(List(Entry), DirError) {
 
         // `e.name` is a view into the iterator's internal buffer - invalidated on the next next()
         // call, so take an owning copy.
-        const owned = from_view(e.name)
-        entries.push(Entry { name = owned, kind = e.kind })
+        entries.push(Entry { name = from_view(e.name), kind = e.kind })
     }
 
     it.err() match {
         Some(e) => {
-            free_entries(&entries)
+            entries.deinit()
             return Err(e)
         }
         None => {}
     }
 
     entries.sort(entry_cmp)
-    return Ok(entries)
+    return Ok(move entries)
 }
 
 // -----------------------------------------------------------------------------
@@ -186,7 +182,7 @@ fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state
         }
     }
 
-    sb.append(entry.name.as_view())
+    sb.append(entry.name.view)
 
     if state.classify and entry.kind == FileKind.Dir {
         sb.append("/")
@@ -195,7 +191,7 @@ fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state
     if state.show_size and entry.kind != FileKind.Dir {
         let stat_sb = string_builder(path.len + entry.name.len + 2)
         defer stat_sb.deinit()
-        append_join(&stat_sb, path, entry.name.as_view())
+        append_join(&stat_sb, path, entry.name.view)
 
         const info_r = stat(stat_sb.as_view())
         let size = 0
@@ -231,7 +227,7 @@ fn walk(path: String, prefix: String, depth: usize, state: &State) {
     }
 
     let entries = entries_r.unwrap()
-    defer free_entries(&entries)
+    defer entries.deinit()
 
     for i in 0..entries.len {
         const is_last = i + 1 == entries.len
@@ -246,7 +242,7 @@ fn walk(path: String, prefix: String, depth: usize, state: &State) {
             if can_descend {
                 let child_path = string_builder(path.len + entry_ref.name.len + 2)
                 defer child_path.deinit()
-                append_join(&child_path, path, entry_ref.name.as_view())
+                append_join(&child_path, path, entry_ref.name.view)
 
                 let child_prefix = string_builder(prefix.len + 8)
                 defer child_prefix.deinit()

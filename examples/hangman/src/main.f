@@ -173,7 +173,7 @@ fn first_letter(line: String) char? {
 
 fn load_dictionary() Result(OwnedString, FileError) {
     const f = open_file(DICT_PATH, FileMode.Read)?
-    defer close_file(&f)
+    defer close_file(f)
     return read_all(&f)
 }
 
@@ -182,7 +182,7 @@ pub fn main() i32 {
 
     let dict = load_dictionary().ok()
     const word = dict match {
-        Some(text) => { pick_word(text.as_view(), &rng) }
+        Some(text) => { pick_word(text, &rng) }
         None => { FALLBACK_WORD }
     }
 

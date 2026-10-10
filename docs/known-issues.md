@@ -27,16 +27,12 @@ yet:
   { Some(v) => move v, ... } }` compiles for a non-copyable payload: `v` is an ordinary binding, so
   the payload leaves a value the function only reads and the caller keeps a second owner. Rule 3
   holds for the parameter's own name, not for names bound out of it.
-- **The stdlib's own types are still copyable.** Consuming parameters take `move T` (plan step 6a),
-  but `List`, `Dict`, `OwnedString` and the rest own their buffers only from step 6c, and `deinit`
-  and `close_file` still take `&self` until then. Compiler and tool sources still take a `File` out
-  of its `Result` with the `match` form step 1 needed; step 7 returns them to `unwrap`.
 - **Unannotated callbacks never take ownership.** A lambda's unannotated parameter, and a call
   through a function variable whose type is still open, infer `fn(T)`; a slot typed `fn(move T)`
   does not unify with it. Write `fn(v: move T)`.
 
-**Solution:** plan steps 6c and 7; the pattern-binding case needs the pass to treat names bound
-out of a lent scrutinee as lent.
+**Solution:** the pattern-binding case needs the pass to treat names bound out of a lent scrutinee
+as lent.
 
 ---
 

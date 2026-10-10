@@ -221,13 +221,13 @@ fn run_count(file_path: String) i32 {
     }
     let file = result.unwrap()
     const data = read_all(&file)
-    close_file(&file)
+    close_file(file)
     if data.is_err() {
         println("fcsv: read failed")
         return 1
     }
     let owned = data.unwrap()
-    const n = simd_count_byte(owned.as_view(), '\n')
+    const n = simd_count_byte(owned, '\n')
     let sb = string_builder(32)
     sb.append(n)
     println(sb.as_view())
@@ -287,7 +287,7 @@ pub fn main() i32 {
         if file_path.len == 0 and columns_arg.len == 0 {
             const probe = open_file(argv, FileMode.Read)
             if probe.is_ok() {
-                close_file(&probe.unwrap())
+                close_file(probe.unwrap())
                 file_path = argv
             } else {
                 columns_arg = argv
@@ -318,7 +318,7 @@ pub fn main() i32 {
         const code = run(&reader, columns_arg, range_start, range_end, has_range, tail_count,
             has_tail)
         reader.deinit()
-        close_file(&file)
+        close_file(file)
         return code
     } else {
         let reader: CsvReader

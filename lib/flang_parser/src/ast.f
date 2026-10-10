@@ -704,7 +704,7 @@ pub type BlockExpr = struct {
 
 // The statement list lives in the module arena, which `Module.deinit` frees in one go; walking the
 // tree element-wise would free through allocator pointers into a view that no longer exists.
-pub fn deinit(self: &BlockExpr) {}
+pub fn deinit(self: move BlockExpr) {}
 
 // `if cond { then } else { else }` and `if cond { then } else if … { … }`.
 // Else-if is encoded as `else_branch` being another `If` - there is no separate "else-if" node.

@@ -234,12 +234,11 @@ pub fn error_count(self: &AnalyzedUnit) usize {
     return count_errors(&self.diagnostics)
 }
 
-// Move every diagnostic from `src` into `dst`, which owns their message buffers afterwards. The
-// elements travel out of `src` in its backing buffer, leaving it empty; only that buffer is freed.
+// Move every diagnostic from `src` into `dst`, leaving `src` empty.
 fn drain_diagnostics(dst: &List(Diagnostic), src: &List(Diagnostic)) {
-    const taken = src.to_owned_slice()
-    dst.push_all(taken.0)
-    taken.1.free(taken.0)
+    for d in src.drain() {
+        dst.push(d)
+    }
 }
 
 fn count_errors(diags: &List(Diagnostic)) usize {
@@ -750,7 +749,7 @@ pub fn write_generated(self: &AnalyzedProject) usize {
             Err(_) => continue
         }
         const w = f.write(e.text.as_view())
-        const _c = close_file(&f)
+        const _c = close_file(f)
         if w.is_ok() {
             written = written + 1
         }

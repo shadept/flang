@@ -15,7 +15,7 @@ fn write_fixture(path: String) bool {
         Err(_) => return false
     }
     const w = write(&f, "doomed")
-    const c = close_file(&f)
+    const c = close_file(f)
     return w.is_ok() and c.is_ok()
 }
 

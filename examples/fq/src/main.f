@@ -110,7 +110,7 @@ pub fn main() i32 {
 
     let file = opened.unwrap()
     const parsed = parse(file.reader())
-    close_file(&file)
+    close_file(file)
 
     if parsed.is_err() {
         print("fq: failed to parse JSON: ")

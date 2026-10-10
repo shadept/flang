@@ -99,7 +99,7 @@ fn read_source(path: String) OwnedString? {
         }
     }
     const read_result = read_all(&file)
-    close_file(&file)
+    close_file(file)
     if read_result.is_err() {
         const msg = $"cst_explorer: read failed `{path}`"
         defer msg.deinit()
