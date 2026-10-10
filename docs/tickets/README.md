@@ -38,9 +38,9 @@ Type: language, compiler, stdlib, tooling.
 | [025](025-built-in-profiler.md) | Built-in profiler | tooling | provisional | 2026-08-27 |  |
 | [026](026-copy-on-write-parameters.md) | Copy-on-write parameters - elide the shadow when nothing writes or escapes | compiler | implemented | 2026-08-29 | 2026-08-30 |
 | [027](027-diagnostic-rendering.md) | Diagnostic rendering - source snippets, carets and color | tooling | implemented | 2026-08-30 | 2026-08-30 |
-| [028](028-owned-fields-and-move.md) | `owned` fields, non-copyable types, and `move` | language | accepted | 2026-08-30 |  |
+| [028](028-owned-fields-and-move.md) | `owned` fields, non-copyable types, and `move` | language | superseded | 2026-08-30 |  |
 | [029](029-checking-uninstantiated-generic-bodies.md) | Checking uninstantiated generic bodies | compiler | deferred | 2026-09-01 |  |
-| [030](030-reference-form-operator-dispatch.md) | Reference-form operator dispatch | language | draft | 2026-09-01 |  |
+| [030](030-reference-form-operator-dispatch.md) | Reference-form operator dispatch | language | superseded | 2026-09-01 |  |
 | [031](031-owned-generic-consolidation.md) | `OwnedString`, a `String` that owns its buffer | stdlib | implemented | 2026-09-01 | 2026-09-16 |
-| [033](033-parameter-declared-ownership.md) | Parameter-declared ownership | language | draft | 2026-09-14 |  |
+| [033](033-parameter-declared-ownership.md) | Parameter-declared ownership | language | implemented | 2026-09-14 | 2026-10-10 |
 | [099](099-stack-only-types-and-bindings.md) | `#stack` types and stack-only bindings | language | deferred | 2026-08-27 |  |

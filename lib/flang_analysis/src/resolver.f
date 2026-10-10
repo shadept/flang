@@ -110,7 +110,7 @@ pub fn deinit(self: move ResolveCtx) {
 
 // Resolve a dotted import to an existing file path, or null when no rule matches an existing file.
 // The returned string is owned by the caller.
-pub fn resolve_import(ctx: &ResolveCtx, segs: &List(String),
+pub fn resolve_import(ctx: &ResolveCtx, segs: String[],
     allocator: &Allocator? = null) OwnedString? {
     // Project rule: first segment is the project name.
     if segs.len > 1 and segs[0] == ctx.project_name.view {
@@ -183,7 +183,7 @@ pub fn module_fqn(ctx: &ResolveCtx, path: String, allocator: &Allocator? = null)
 }
 
 // `base/seg.../tail.f` from import segments, joining with forward slashes.
-pub fn join_module_path(base: String, segs: &List(String), start: usize,
+pub fn join_module_path(base: String, segs: String[], start: usize,
     allocator: &Allocator? = null) OwnedString {
     let sb = string_builder(0, allocator)
     defer sb.deinit()
@@ -574,11 +574,11 @@ test "join_module_path: builds base/seg/seg.f from segments" {
     segs.push("io")
     segs.push("file")
     defer segs.deinit()
-    let p = join_module_path("stdlib", &segs, 0)
+    let p = join_module_path("stdlib", segs.as_slice(), 0)
     defer p.deinit()
     assert_true(p.view == "stdlib/std/io/file.f", "include-rule path")
 
-    let p2 = join_module_path("dep/src", &segs, 1)
+    let p2 = join_module_path("dep/src", segs.as_slice(), 1)
     defer p2.deinit()
     assert_true(p2.view == "dep/src/io/file.f", "skips leading segment")
 }

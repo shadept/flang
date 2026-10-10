@@ -139,7 +139,7 @@ pub fn register(self: &NominalRegistry, def: move NominalDef,
 
 // Replace the fqn field on a NominalDef with a stable view. Used by `register` to repoint def.fqn
 // from a caller-temporary view to the view owned by `self.owned_fqns`.
-fn with_fqn(def: NominalDef, new_fqn: String) NominalDef {
+fn with_fqn(def: move NominalDef, new_fqn: String) NominalDef {
     return def match {
         NomStruct(s) => NominalDef.NomStruct(StructDef {
             fqn = new_fqn,
@@ -221,7 +221,7 @@ fn clone_def(def: &NominalDef, allocator: &Allocator?) NominalDef {
             is_pub = e.is_pub,
             type_params = clone_list(&e.type_params, allocator),
             variants = clone_variants(&e.variants, allocator),
-            tag_values = clone_tags(e.tag_values, allocator),
+            tag_values = clone_tags(&e.tag_values, allocator),
             decl_span = e.decl_span,
             deprecation = e.deprecation,
         })
@@ -246,16 +246,17 @@ fn clone_variants(xs: &List(VariantDef), allocator: &Allocator?) List(VariantDef
     return out
 }
 
-fn clone_tags(tags: move Dict(String, i64)?, allocator: &Allocator?) Dict(String, i64)? {
-    if tags.is_none() {
-        return null
+fn clone_tags(tags: &Option(Dict(String, i64)), allocator: &Allocator?) Dict(String, i64)? {
+    return tags.* match {
+        Some(t) => {
+            let out: Dict(String, i64) = dict(allocator)
+            for e in t {
+                out.set(e.key, e.value)
+            }
+            Some(move out)
+        }
+        None => null
     }
-    let out: Dict(String, i64) = dict(allocator)
-    const __tags_v = tags.unwrap()
-    for e in __tags_v {
-        out.set(e.key, e.value)
-    }
-    return Some(move out)
 }
 
 // Free the lists a resolved body owns: type params, fields, variant payloads, tag values. The

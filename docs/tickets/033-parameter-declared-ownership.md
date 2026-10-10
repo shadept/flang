@@ -1,8 +1,10 @@
 ---
-status: draft
+status: implemented
 type: language
 created: 2026-09-14
-relates: [RFC-028, RFC-030, RFC-026, RFC-019, RFC-014]
+implemented: 2026-10-10
+supersedes: [RFC-012, RFC-028, RFC-030]
+relates: [RFC-026, RFC-019, RFC-014]
 ---
 
 # RFC-033: Parameter-declared ownership
@@ -573,6 +575,28 @@ promote, then use.
    `self.*`, the pattern-binding gap in docs/known-issues.md.
 8. **Docs.** Spec §3.2, §3.6, §4.1, §7.2, §7.3 and the stdlib callback convention; RFC-028 and
    RFC-030 status and cross-references.
+
+   Done 2026-10-10. §3.2 already carried the modes from step 1. §3.6 states what the ownership
+   check enforces, §4.1 replaces idempotent `deinit` with a consuming one, §7.2 lists `move T` as
+   a receiver, and §7.3 makes callbacks read-mode for every element type, with `sort`'s comparator
+   and `sort_by`'s key the reference-mode ones. RFC-028 and RFC-030 are superseded by this RFC.
+
+   A soundness review after step 8 found four ways to duplicate an owner, each reproduced as a
+   double free, and closed them the same day:
+   - Bitwise copies the checker cannot see. `push_all`, `list(source)`, `unmanaged_list(source)`
+     and `copy_to` take `where T: copyable`; `flat_map` drains each part. The compiler leaned on
+     `push_all` to share AST nodes, which were non-copyable only because their child lists were
+     owning `List`s in an arena: those fields became `T[]` slices (`frozen`), so every AST type is
+     copyable and sharing is a plain copy. `FunctionScheme` lookups lend `&FunctionScheme` and a
+     carried registry clones, which also ends the scheme-set leak.
+   - A pattern binding moved out of storage the function does not own. A binding names part of
+     its scrutinee (spec 7.5), so it owns only when the scrutinee does; under a parameter without
+     `move` it also only reads (E2131). The compiler did this in `nominal_registry` and `clone_tags`.
+   - `??` on an owned binding handed out its payload and left the binding live. A kept result now
+     consumes the left operand.
+   - `Drain` was copyable. It and `DictDrain` hold a zero-size `NoCopy` marker (`core.deinit`),
+     their `iter` takes `move self`, and a `for` loop owns its iterator: a non-copyable state, or a
+     non-copyable temporary iterable `iter` borrowed, is released on every exit (spec 7.4).
 
 ## Port to every branch
 

@@ -10,3 +10,16 @@ pub fn release(value: move $T) {
         value.deinit()
     }
 }
+
+// A zero-size field that makes the type holding it non-copyable: for a value that carries a release
+// obligation but owns no storage to mark `owned`, such as a drain.
+pub type NoCopy = struct {
+    owned __marker: ()
+}
+
+pub fn no_copy() NoCopy {
+    return .{ __marker = () }
+}
+
+// Nothing to release: the holder's own `deinit` meets the obligation.
+pub fn deinit(self: move NoCopy) {}

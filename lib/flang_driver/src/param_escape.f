@@ -60,7 +60,7 @@ pub fn needs_shadow(name: String, body: &BlockExpr, result: &TypeCheckResult,
 
 fn block_escapes(b: &BlockExpr, al: &List(String), r: &TypeCheckResult,
     ov: &InferenceResults?) bool {
-    if stmts_escape(&b.stmts, al, r, ov) {
+    if stmts_escape(b.stmts, al, r, ov) {
         return true
     }
     b.trailing match {
@@ -70,8 +70,7 @@ fn block_escapes(b: &BlockExpr, al: &List(String), r: &TypeCheckResult,
     return false
 }
 
-fn stmts_escape(xs: &List(Stmt), al: &List(String), r: &TypeCheckResult,
-    ov: &InferenceResults?) bool {
+fn stmts_escape(xs: Stmt[], al: &List(String), r: &TypeCheckResult, ov: &InferenceResults?) bool {
     for &x in xs {
         if stmt_escapes(x, al, r, ov) {
             return true
@@ -112,8 +111,8 @@ fn stmt_escapes(s: &Stmt, al: &List(String), r: &TypeCheckResult, ov: &Inference
         While(w) => expr_escapes(w.condition, al, r, ov) or block_escapes(w.body, al, r, ov)
         Loop(l) => block_escapes(l.body, al, r, ov)
         // Bare statement lists, not blocks: `#if` introduces no scope.
-        IfDirective(d) => stmts_escape(&d.then_stmts, al, r, ov) or stmts_escape(&d.else_stmts, al,
-            r, ov)
+        IfDirective(d) => stmts_escape(d.then_stmts, al, r, ov) or stmts_escape(d.else_stmts, al, r,
+            ov)
     }
 }
 
@@ -320,11 +319,11 @@ fn mentions(e: &Expr, al: &List(String)) bool {
         Lit(_) => false
         InterpolatedString(s) => mentions_interpolation(&s, al)
         ArrayLit(a) => a.kind match {
-            Elements(es) => mentions_any_expr_list(&es, al)
+            Elements(es) => mentions_any_expr_list(es, al)
             Repeat(rp) => mentions(rp.value, al) or mentions(rp.count, al)
         }
-        TupleLit(t) => mentions_any_expr_list(&t.elements, al)
-        StructLit(s) => mentions_struct_fields(&s.fields, al)
+        TupleLit(t) => mentions_any_expr_list(t.elements, al)
+        StructLit(s) => mentions_struct_fields(s.fields, al)
         MemberAccess(ma) => mentions(ma.receiver, al)
         AddressOf(a) => mentions(a.operand, al)
         Move(m) => mentions(m.operand, al)
@@ -377,7 +376,7 @@ fn mentions(e: &Expr, al: &List(String)) bool {
 }
 
 fn mentions_block(b: &BlockExpr, al: &List(String)) bool {
-    if mentions_stmts(&b.stmts, al) {
+    if mentions_stmts(b.stmts, al) {
         return true
     }
     return b.trailing match {
@@ -403,11 +402,11 @@ fn mentions_stmt(s: &Stmt, al: &List(String)) bool {
         For(f) => mentions(f.iterable, al) or mentions_block(f.body, al)
         While(w) => mentions(w.condition, al) or mentions_block(w.body, al)
         Loop(l) => mentions_block(l.body, al)
-        IfDirective(d) => mentions_stmts(&d.then_stmts, al) or mentions_stmts(&d.else_stmts, al)
+        IfDirective(d) => mentions_stmts(d.then_stmts, al) or mentions_stmts(d.else_stmts, al)
     }
 }
 
-fn mentions_stmts(xs: &List(Stmt), al: &List(String)) bool {
+fn mentions_stmts(xs: Stmt[], al: &List(String)) bool {
     for &x in xs {
         if mentions_stmt(x, al) {
             return true
@@ -429,7 +428,7 @@ fn mentions_if(f: &IfExpr, al: &List(String)) bool {
 // expressions of their own.
 fn mentions_interpolation(s: &InterpolatedStringExpr, al: &List(String)) bool {
     const in_target = s.target match {
-        NewString(args) => mentions_any_expr_list(&args, al)
+        NewString(args) => mentions_any_expr_list(args, al)
         IntoBuilder(b) => mentions(b, al)
     }
     if in_target {
@@ -449,7 +448,7 @@ fn mentions_interpolation(s: &InterpolatedStringExpr, al: &List(String)) bool {
 
 // Struct literal fields. Shorthand (`.{ x }`) has no value expression: the field name is the
 // identifier being read.
-fn mentions_struct_fields(fs: &List(StructFieldInit), al: &List(String)) bool {
+fn mentions_struct_fields(fs: StructFieldInit[], al: &List(String)) bool {
     for &f in fs {
         const hit = f.value match {
             Some(v) => mentions(v, al)
@@ -462,7 +461,7 @@ fn mentions_struct_fields(fs: &List(StructFieldInit), al: &List(String)) bool {
     return false
 }
 
-fn mentions_any_expr_list(xs: &List(Expr), al: &List(String)) bool {
+fn mentions_any_expr_list(xs: Expr[], al: &List(String)) bool {
     for &x in xs {
         if mentions(x, al) {
             return true

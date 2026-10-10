@@ -135,9 +135,6 @@ type WorkItem = struct {
     generation: u32
 }
 
-// `inv` is an AST node the arena owns (see `deinit(Decl)`).
-pub fn deinit(self: move WorkItem) {}
-
 type Outcome = enum {
     Expanded
     UnknownType
@@ -236,9 +233,8 @@ fn index_module(state: &TemplateState, module: &Module, m: usize, decl_base: usi
     for &d in module.decls {
         d.* match {
             GenDef(g) => {
-                // The entry shares the definition's parameter list, which the arena owns.
                 let params: List(GenParam) = list(g.params.len, state.allocator)
-                params.push_all(g.params.as_slice())
+                params.push_all(g.params)
                 state.defs[$"{g.name}"] = GenDefEntry {
                     name = g.name,
                     params = move params,
@@ -249,7 +245,7 @@ fn index_module(state: &TemplateState, module: &Module, m: usize, decl_base: usi
             }
             GenInvoke(inv) => { work.push(WorkItem {
                     module = m,
-                    inv = move inv,
+                    inv = inv,
                     generation = generation,
                 }) }
             Type(td) => {
@@ -415,7 +411,7 @@ fn bind_arg(chk: &Checker, env: &CtEnv, param: &GenParam, arg: &GenArg, gen_name
                 const named: TypeExpr = TypeExpr.Named(NamedType {
                     span = id.span,
                     name = id.name,
-                    generic_args = list(0, Some(a)),
+                    generic_args = frozen(list(0, Some(a))),
                 })
                 Ok(CtValue.TypeInfo(type_info_of(env, box(a, named))))
             }

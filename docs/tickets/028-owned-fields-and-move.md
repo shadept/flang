@@ -1,11 +1,16 @@
 ---
-status: accepted
+status: superseded
 type: language
 created: 2026-08-30
+superseded-by: RFC-033
 relates: [RFC-026, RFC-020, RFC-016]
 ---
 
 # RFC-028: `owned` fields, non-copyable types, and `move`
+
+> Superseded by RFC-033 for parameters and call sites: `x: T` reads, `x: move T` takes ownership,
+> and a call site carries no `move`. `owned`, the derived bit and `move` as an expression stand as
+> written here; RFC-033 builds on them.
 
 ## Summary
 

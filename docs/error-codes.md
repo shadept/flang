@@ -4090,6 +4090,11 @@ value in its place: `replace(&self.field, fresh)`.
 A closure's captures are references to the enclosing bindings: the closure may read and write
 them, and moving one out is refused. A capture of a parameter without `move` stays read-only.
 
+A pattern binding names part of its scrutinee (spec 7.5), so it is owned only when the scrutinee
+is. Out of storage the function does not own - a parameter without `move`, an element, a value
+behind a reference - a binding cannot be moved out, and under a parameter without `move` it also
+only reads. `??` on such a value, with a kept result, is the same move.
+
 #### Example
 
 ```flang
@@ -4103,6 +4108,13 @@ fn reset(r: Route) {
 
 fn steal(s: &Session) i32 {
     return close(s.conn)        // error[E2131]: `s` is reached through a reference
+}
+
+fn take(o: Option(OwnedString)) OwnedString {
+    return o match {
+        Some(v) => v            // error[E2131]: `v` names part of `o`, which is not owned here
+        None => from_view("")
+    }
 }
 
 fn steal_too(s: &Session) i32 {

@@ -460,7 +460,7 @@ fn add_function_symbol(self: &SymbolBuilder, decl: &FunctionDecl, fqn: String) {
         return
     }
     let s = sig.unwrap()
-    const foreign = is_foreign_directive(&decl.directives)
+    const foreign = is_foreign_directive(decl.directives)
     let sym = mangle_symbol(self.interner, fqn, decl.name, foreign, &s.params, self.nominals,
         self.allocator)
     const sym_view = sym.view

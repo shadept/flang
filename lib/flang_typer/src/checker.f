@@ -798,11 +798,7 @@ fn retire_names(self: &Checker, retiring: &Set(String)) {
 // carried bodies stay valid only while the name set they resolved against holds still. The alias
 // registry holds the body the module arena owns.
 fn register_alias(self: &Checker, fqn_owned: move OwnedString, body: &TypeExpr) {
-    let one: List(TypeExpr) = list(1, self.allocator)
-    one.push_all(slice_from_raw_parts(body, 1))
-    const shared = one.remove_at(0).unwrap()
-    one.deinit()
-    self.aliases.register(fqn_owned, shared)
+    self.aliases.register(fqn_owned, body.*)
 }
 
 fn register_collected(self: &Checker, def: move NominalDef, fqn_owned: move OwnedString) NominalId {
@@ -1417,7 +1413,7 @@ fn collect_edges(m: &Module, paths: &List(String), imps: &List(String), reexps: 
     for &d in m.decls {
         d.* match {
             Import(id) => {
-                let dotted = dot_join(&id.path, alloc)
+                let dotted = dot_join(id.path, alloc)
                 let fv = find_fqn(paths, dotted.view)
                 dotted.deinit()
                 if fv.is_some() {
@@ -1466,7 +1462,7 @@ fn compute_visible(idx: usize, paths: &List(String), imports: &List(List(String)
     work.deinit()
 }
 
-pub fn dot_join(segs: &List(String), alloc: &Allocator?) OwnedString {
+pub fn dot_join(segs: String[], alloc: &Allocator?) OwnedString {
     let sb = string_builder(0, alloc)
     defer sb.deinit()
     for i in 0..segs.len {
@@ -1597,13 +1593,13 @@ fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedStr
         type_params = move empty_params,
         fields = move empty_fields,
         decl_span = td.span,
-        deprecation = deprecation_of(&td.directives),
+        deprecation = deprecation_of(td.directives),
         // `#simd` over-aligns the type; `#foreign` locks its layout to the C ABI (spec 2.4 / 10).
         // Dropping these left every struct on the `Repr.Auto` path, so a `#foreign struct` was
         // reordered by descending alignment like any other - exactly the layout the marker exists
         // to opt out of.
-        is_simd = is_simd_directive(&td.directives),
-        is_foreign = is_foreign_directive(&td.directives),
+        is_simd = is_simd_directive(td.directives),
+        is_foreign = is_foreign_directive(td.directives),
     }
     const _id = register_collected(self, NominalDef.NomStruct(move sd), fqn)
 }
@@ -1619,7 +1615,7 @@ fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedStrin
         variants = move empty_variants,
         tag_values = null,
         decl_span = td.span,
-        deprecation = deprecation_of(&td.directives),
+        deprecation = deprecation_of(td.directives),
     }
     const _id = register_collected(self, NominalDef.NomEnum(move ed), fqn)
 }
@@ -1634,7 +1630,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let id = id_opt.unwrap()
 
     let anon_opt = td.body match {
-        AnonStruct(a) => Some(move a)
+        AnonStruct(a) => Some(a)
         _ => null
     }
     if anon_opt.is_none() {
@@ -1908,7 +1904,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let id = id_opt.unwrap()
 
     let anon_opt = td.body match {
-        AnonEnum(a) => Some(move a)
+        AnonEnum(a) => Some(a)
         _ => null
     }
     if anon_opt.is_none() {
@@ -2054,7 +2050,7 @@ fn duplicate_overload(self: &Checker, name: String, sig: &Scheme) bool {
     let cands = found.unwrap()
     defer cands.deinit()
     let here = self.current_module.unwrap_or("")
-    for &c in cands {
+    for c in cands {
         let same_module = c.module match {
             Some(m) => m == here
             None => false
@@ -2133,11 +2129,11 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
         signature = move scheme,
         module = self.current_module,
         is_pub = fd.is_pub,
-        is_foreign = is_foreign_directive(&fd.directives),
+        is_foreign = is_foreign_directive(fd.directives),
         required_params = required,
         has_variadic = fd.params.len > 0 and fd.params[fd.params.len - 1].is_variadic,
         decl_span = fd.span,
-        deprecation = deprecation_of(&fd.directives),
+        deprecation = deprecation_of(fd.directives),
         id = 0u32, // filled in by registry.register
         retired = false,
     }
@@ -2156,11 +2152,10 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     // materialize the default expressions (`materialize_default_args`); named-argument calls read
     // the same table for the parameter NAMES, so every function records, not just the defaulted
     // ones.
-    // The table shares the declaration's parameter list, which the module arena owns.
     let decl_params: List(FunctionParam) = list(fd.params.len, self.allocator)
-    decl_params.push_all(fd.params.as_slice())
+    decl_params.push_all(fd.params)
     self.fn_decl_params.set(id, DeclParams { params = move decl_params })
-    deprecation_of(&fd.directives) match {
+    deprecation_of(fd.directives) match {
         Some(msg) => self.fn_deprecations.set(id, msg)
         None => {}
     }
@@ -2173,7 +2168,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
         Some(old) => old.tps.deinit()
         None => {}
     }
-    check_bound_decls(self, &fd.bounds, &self.sig_tps)
+    check_bound_decls(self, fd.bounds, &self.sig_tps)
     if quantified_count > 0 {
         // The template shares the declaration the module arena owns.
         self.templates.set(id, GenericTemplate {
@@ -2332,7 +2327,7 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
         push_diag_e(self, fd.span, E_MISSING_RETURN, $"function `{fd.name}` must return a value")
     }
 
-    own_check_body(self, body, Some(&fd.params), !ret_is_void and !ret_is_never)
+    own_check_body(self, body, Some(fd.params), !ret_is_void and !ret_is_never)
 
     let _r = self.fn_stack.pop()
     self.engine.exit_level()
@@ -2474,7 +2469,7 @@ fn directive_nominal(self: &Checker, name: String) Ty? {
 fn directive_branch_returns(self: &Checker, ifd: &IfDirectiveStmt) bool {
     directive_outcome(self, ifd) match {
         Active(active) => {
-            const stmts: &List(Stmt) = if active { &ifd.then_stmts } else { &ifd.else_stmts }
+            const stmts = if active { ifd.then_stmts } else { ifd.else_stmts }
             for i in 0..stmts.len {
                 if stmt_returns(self, &stmts[i]) {
                     return true
@@ -2578,7 +2573,7 @@ fn drain_pending_specs(self: &Checker, report: bool = true) {
 }
 
 // `copyable` is the only bound, and it constrains one of the signature's own `$T`s.
-fn check_bound_decls(self: &Checker, bounds: &List(TypeBound), tps: &List(SigTypeParam)) {
+fn check_bound_decls(self: &Checker, bounds: TypeBound[], tps: &List(SigTypeParam)) {
     for &b in bounds {
         if b.bound != BOUND_COPYABLE {
             push_diag_e(self, b.span, E_BAD_BOUND,
@@ -3354,12 +3349,12 @@ fn parse_decimal(s: String) usize? {
 //
 fn check_interpolation(self: &Checker, interp: &InterpolatedStringExpr) Ty {
     return interp.target match {
-        NewString(args) => check_interp_owned(self, interp, &args)
+        NewString(args) => check_interp_owned(self, interp, args)
         IntoBuilder(t) => check_interp_into(self, interp, t)
     }
 }
 
-fn check_interp_owned(self: &Checker, interp: &InterpolatedStringExpr, given: &List(Expr)) Ty {
+fn check_interp_owned(self: &Checker, interp: &InterpolatedStringExpr, given: Expr[]) Ty {
     // The synthesized AST stores the name as a view; the buffer parks with the result tables, which
     // the desugar shares a lifetime with.
     const name = self.results.add_synth_string(fresh_builder_name(self))
@@ -3386,7 +3381,7 @@ fn check_interp_owned(self: &Checker, interp: &InterpolatedStringExpr, given: &L
     const done = synth_method_call(self, name, "to_string", empty_args)
     let block = box(or_global(self.allocator), BlockExpr {
         span = synth_span(self),
-        stmts = move stmts,
+        stmts = frozen(stmts),
         trailing = Some(synth_box(self, done)),
     })
     const ty = check_block(self, block)
@@ -3418,7 +3413,7 @@ fn check_interp_into(self: &Checker, interp: &InterpolatedStringExpr, target: &E
     push_append_stmts(self, &stmts, tname, interp)
     let block = box(or_global(self.allocator), BlockExpr {
         span = synth_span(self),
-        stmts = move stmts,
+        stmts = frozen(stmts),
         trailing = null,
     })
     const ty = check_block(self, block)
@@ -3481,7 +3476,7 @@ fn synth_hole_format(self: &Checker, name: String, place: &Expr, spec_lit: move 
     const ma = Expr.MemberAccess(MemberAccessExpr { span = synth_span(self), receiver = place,
         member = "format" })
     return Expr.Call(CallExpr { span = synth_span(self), callee = synth_box(self, ma),
-        args = move args })
+        args = frozen(args) })
 }
 
 fn push_expr_stmt(self: &Checker, stmts: &List(Stmt), e: move Expr) {
@@ -3490,7 +3485,7 @@ fn push_expr_stmt(self: &Checker, stmts: &List(Stmt), e: move Expr) {
 }
 
 // `$(…)` args onto `string_builder(capacity, allocator)`, full arity.
-fn builder_ctor_args(self: &Checker, given: &List(Expr)) List(CallArgument) {
+fn builder_ctor_args(self: &Checker, given: Expr[]) List(CallArgument) {
     // The arguments stay the interpolation's: each is shared into the synthesized call as the arena
     // node it already is.
     let cap: &Expr? = null
@@ -3598,14 +3593,14 @@ fn synth_method_call(self: &Checker, recv_name: String, method: String,
         member = method,
     })
     return Expr.Call(CallExpr { span = synth_span(self), callee = synth_box(self, ma),
-        args = move args })
+        args = frozen(args) })
 }
 
 fn synth_free_call(self: &Checker, name: String, args: move List(CallArgument)) Expr {
     return Expr.Call(CallExpr {
         span = synth_span(self),
         callee = synth_box(self, synth_ident(self, name)),
-        args = move args,
+        args = frozen(args),
     })
 }
 
@@ -3750,12 +3745,12 @@ fn pattern_is_catch_all(self: &Checker, pat: &Pattern, e: &EnumDef) bool {
     return pat.* match {
         Wildcard(_) => true
         Variable(v) => !variant_named(&e.variants, v.name)
-        Or(o) => any_catch_all(self, &o.alternatives, e)
+        Or(o) => any_catch_all(self, o.alternatives, e)
         _ => false
     }
 }
 
-fn any_catch_all(self: &Checker, alts: &List(Pattern), e: &EnumDef) bool {
+fn any_catch_all(self: &Checker, alts: Pattern[], e: &EnumDef) bool {
     for i in 0..alts.len {
         if pattern_is_catch_all(self, &alts[i], e) {
             return true
@@ -3894,14 +3889,14 @@ fn check_tuple_pattern(self: &Checker, t: &TuplePattern, expected: Ty) {
         _ => null
     }
     if elems.is_none() {
-        bind_unconstrained(self, &t.elements)
+        bind_unconstrained(self, t.elements)
         return
     }
     let es = elems.unwrap()
     if es.len != t.elements.len {
         push_diag_e(self, t.span, E_MATCH_ARITY,
             $"tuple pattern has {t.elements.len} element(s), the value has {es.len}")
-        bind_unconstrained(self, &t.elements)
+        bind_unconstrained(self, t.elements)
         return
     }
     for i in 0..t.elements.len {
@@ -3909,7 +3904,7 @@ fn check_tuple_pattern(self: &Checker, t: &TuplePattern, expected: Ty) {
     }
 }
 
-fn bind_unconstrained(self: &Checker, pats: &List(Pattern)) {
+fn bind_unconstrained(self: &Checker, pats: Pattern[]) {
     for i in 0..pats.len {
         check_pattern(self, &pats[i], self.engine.fresh_var())
     }
@@ -3929,7 +3924,7 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
         _ => null
     }
     if nr.is_none() {
-        bind_unconstrained(self, &ev.payloads)
+        bind_unconstrained(self, ev.payloads)
         return
     }
     let n = nr.unwrap()
@@ -3939,7 +3934,7 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
         _ => null
     }
     if ed.is_none() {
-        bind_unconstrained(self, &ev.payloads)
+        bind_unconstrained(self, ev.payloads)
         return
     }
     let e = ed.unwrap()
@@ -3955,7 +3950,7 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
     if !found {
         push_diag_e(self, ev.span, E_UNKNOWN_VARIANT,
             $"unknown variant `{ev.name}` for type `{e.fqn}`")
-        bind_unconstrained(self, &ev.payloads)
+        bind_unconstrained(self, ev.payloads)
         return
     }
     self.results.record_target(self.node_of(ev.span), ResolvedTarget.RtEnumVariant(n.id, vnum))
@@ -3964,7 +3959,7 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
     if payloads.len != ev.payloads.len {
         push_diag_e(self, ev.span, E_MATCH_ARITY,
             $"variant `{ev.name}` expects {payloads.len} binding(s), got {ev.payloads.len}")
-        bind_unconstrained(self, &ev.payloads)
+        bind_unconstrained(self, ev.payloads)
         return
     }
 
@@ -4827,7 +4822,7 @@ fn operator_pick(self: &Checker, name: String, args: &List(Ty), span: SourceSpan
     // supersede.
     let viable = false
     for i in 0..candidates.len {
-        if probe_candidate(self, &candidates[i], args).is_some() {
+        if probe_candidate(self, candidates[i], args).is_some() {
             viable = true
         }
     }
@@ -5101,7 +5096,7 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
 
     // Try function registry.
     let look = self.functions.lookup(id.name, &vis)
-    let found: List(FunctionScheme)? = look match {
+    let found: List(&FunctionScheme)? = look match {
         FnLookFound(candidates) => Some(move candidates)
         _ => null
     }
@@ -5109,7 +5104,7 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
         let candidates = found.unwrap()
         defer candidates.deinit()
         if candidates.len == 1 {
-            let c = &candidates[0]
+            let c = candidates[0]
             self.results.record_target(self.node_of(id.span), ResolvedTarget.RtFunction(c.id))
             return self.engine.specialize(&c.signature)
         }
@@ -5434,7 +5429,7 @@ fn check_stmt(self: &Checker, stmt: &Stmt) bool {
 fn check_if_directive_stmt(self: &Checker, ifd: &IfDirectiveStmt) bool {
     directive_outcome(self, ifd) match {
         Active(active) => {
-            const stmts: &List(Stmt) = if active { &ifd.then_stmts } else { &ifd.else_stmts }
+            const stmts = if active { ifd.then_stmts } else { ifd.else_stmts }
             let diverges = false
             for i in 0..stmts.len {
                 if check_stmt(self, &stmts[i]) {
@@ -5552,6 +5547,8 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         rhs_hops = 0u32,
     })
     note_pending(self, fs.span, true, &n)
+    const borrows = p.hops == 0 and p.params.len > 0 and is_ref_ty(self, p.params[0])
+    record_iter_release(self, fs, iter_owned(self, fs, z, state, borrows))
 
     let nret = self.engine.resolve(n.ret)
     let inner = option_inner(self, nret)
@@ -5563,6 +5560,54 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         Some(t) => t
         None => self.engine.fresh_var()
     }
+}
+
+// What the loop owns and must release: a non-copyable state `iter` handed it, as `for_each(it: move
+// $I, body)` would own it, or else a non-copyable temporary iterable `iter` only borrowed, which
+// nothing past the statement holds. Null when it owns neither.
+fn iter_owned(self: &Checker, fs: &ForStmt, iterable: Ty, state: Ty, borrows: bool) Ty? {
+    if !self.engine.is_copyable(state) {
+        return Some(state)
+    }
+    if !own_is_place(fs.iterable) and borrows and !self.engine.is_copyable(iterable) {
+        return Some(iterable)
+    }
+    return null
+}
+
+// The loop's release: `deinit` on what `iter_owned` named, recorded on the loop variable's node and
+// run on every exit from the loop.
+fn is_ref_ty(self: &Checker, t: Ty) bool {
+    return ty_node(self, self.engine.resolve(t)) match {
+        NRef(_) => true
+        _ => false
+    }
+}
+
+fn record_iter_release(self: &Checker, fs: &ForStmt, owned: Ty?) {
+    if owned.is_none() {
+        return
+    }
+    const state = owned.unwrap()
+    let no_args: List(Ty) = list(0, self.allocator)
+    defer no_args.deinit()
+    const dp = receiver_pick(self, "deinit", state, &no_args, fs.span, fs.var_span)
+    if dp.is_none() {
+        push_diag_e(self, fs.span, E_NO_OVERLOAD,
+            from_view("the loop owns its iterator, which is not copyable and declares no `deinit`"))
+        return
+    }
+    const d = dp.unwrap()
+    self.results.record_operator(self.node_of(fs.var_span), ResolvedOperator {
+        function_id = d.id,
+        negate_result = false,
+        cmp_derived_op = null,
+        is_ref_form = false,
+        spec_id = null,
+        lhs_hops = 0u32,
+        rhs_hops = 0u32,
+    })
+    note_pending(self, fs.var_span, true, &d)
 }
 
 fn check_range_bounds(self: &Checker, r: &RangeExpr) Ty {
@@ -6421,7 +6466,7 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
 
 // One overload-resolution attempt with `recv` prepended as the first argument. `alt_recv` is its
 // adapted value <-> &T shape, competing in the same ranked set.
-fn receiver_overload(self: &Checker, candidates: &List(FunctionScheme), recv: Ty,
+fn receiver_overload(self: &Checker, candidates: &List(&FunctionScheme), recv: Ty,
     arg_tys: &List(Ty), span: SourceSpan, alt_recv: Ty? = null, named: &NamedArgs? = null,
     peel: &PeelCtx? = null, arg_spans: &List(SourceSpan)? = null) OverloadPick? {
     let full = list(arg_tys.len + 1, self.allocator)
@@ -6472,7 +6517,7 @@ fn receiver_pick(self: &Checker, name: String, recv: Ty, extra: &List(Ty), span:
 
 // The `op_deref` overloads visible to the current function, for `PeelCtx`; null when there are
 // none, so `resolve_overload` skips the peel outright.
-fn deref_candidates(self: &Checker, vis: &Visibility) List(FunctionScheme)? {
+fn deref_candidates(self: &Checker, vis: &Visibility) List(&FunctionScheme)? {
     return self.functions.lookup("op_deref", vis) match {
         FnLookFound(c) => Some(move c)
         _ => null
@@ -6546,8 +6591,9 @@ fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &Over
 // counts toward the winner's parameter arity but not toward `n_args`, which feeds the user-facing
 // diagnostic). `recv` is that receiver's type, and names it in the failure - which method is
 // missing matters far less than which type is missing it.
-fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize, span: SourceSpan,
-    recv_extra: usize, pos_exprs: &List(&Expr), named: &NamedArgs?, recv: Ty? = null) Ty {
+fn commit_pick(self: &Checker, pick: move OverloadPick?, name: String, n_args: usize,
+    span: SourceSpan, recv_extra: usize, pos_exprs: &List(&Expr), named: &NamedArgs?,
+    recv: Ty? = null) Ty {
     return pick match {
         Some(p) => {
             self.results.record_target(self.node_of(span), ResolvedTarget.RtFunction(p.id))
@@ -6561,7 +6607,9 @@ fn commit_pick(self: &Checker, pick: OverloadPick?, name: String, n_args: usize,
             } else {
                 materialize_default_args(self, &p, n_args + recv_extra, span)
             }
-            p.ret
+            const ret = p.ret
+            p.deinit()
+            ret
         }
         None => {
             let sb = string_builder(96, self.allocator)
@@ -6659,8 +6707,10 @@ fn park_call(self: &Checker, call: &CallExpr, name: String, arg_tys: &List(Ty),
 // ambiguous case and reports (E2011) rather than picking by declaration order.
 fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
     let parked: List(PendingCall) = list(self.pending_calls.len - from, self.allocator)
-    parked.push_all(self.pending_calls.as_slice()[from..self.pending_calls.len])
-    self.pending_calls.truncate(from)
+    while self.pending_calls.len > from {
+        parked.push(self.pending_calls.pop().unwrap())
+    }
+    parked.reverse()
     const was_resolving = self.resolving_parked
     self.resolving_parked = true
     defer self.resolving_parked = was_resolving
@@ -6844,12 +6894,12 @@ fn synth_variadic_pack(self: &Checker, pos_exprs: &List(&Expr), from: usize, par
     span: SourceSpan) Expr {
     // The pack shares the argument nodes the module arena owns.
     let elems: List(Expr) = list(pos_exprs.len - from, self.allocator)
-    for i in from..pos_exprs.len {
-        elems.push_all(slice_from_raw_parts(pos_exprs[i], 1))
+    for e in pos_exprs.as_slice()[from..pos_exprs.len] {
+        elems.push(e.*)
     }
     const arr = Expr.ArrayLit(ArrayLiteralExpr {
         span = synth_span(self),
-        kind = ArrayLiteralKind.Elements(move elems),
+        kind = ArrayLiteralKind.Elements(frozen(elems)),
     })
     const at = check_expr(self, &arr)
     // The parameter is `Slice(T)`; unify the literal's element type with `T` so the arguments
@@ -7228,7 +7278,7 @@ pub fn deinit(self: move PickInst) {
 // concrete type constructor is a constraint the arguments satisfied - `Dict($K,$V)` beats the
 // catch-all `$T`), then lower total cost (receiver adaptation, omitted defaults), then fewer
 // quantified vars, then registration order.
-fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: &List(Ty),
+fn resolve_overload(self: &Checker, candidates: &List(&FunctionScheme), arg_tys: &List(Ty),
     span: SourceSpan, alt_recv: Ty? = null, named: &NamedArgs? = null, ufcs_offset: usize = 0usize,
     report_ambiguity: bool = false, peel: &PeelCtx? = null,
     arg_spans: &List(SourceSpan)? = null) OverloadPick? {
@@ -7250,7 +7300,7 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
 
     let st: List(CandProbe) = list(candidates.len, self.allocator)
     defer st.deinit()
-    for &c in candidates {
+    for c in candidates {
         const probed = probe_candidate(self, c, arg_tys, named, ufcs_offset, peel, span)
         const spec = if probed.is_some() { scheme_specificity(self, &c.signature,
                 arg_tys) } else { 0u32 }
@@ -7258,8 +7308,8 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     }
     if alts.len > 0 and peel_needed(&st) {
         for ci in 0..candidates.len {
-            const ap = probe_candidate(self, &candidates[ci], &alt_args[0], named, ufcs_offset,
-                peel, span)
+            const ap = probe_candidate(self, candidates[ci], &alt_args[0], named, ufcs_offset, peel,
+                span)
             if ap.is_some() {
                 st[ci].cost = Some(ProbeCost { coercions = ap.unwrap().coercions,
                     penalty = ap.unwrap().penalty + alts[0].penalty })
@@ -7281,7 +7331,7 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
                 continue
             }
             for ai in first..alts.len {
-                let ap = probe_candidate(self, &candidates[ci], &alt_args[ai], named, ufcs_offset,
+                let ap = probe_candidate(self, candidates[ci], &alt_args[ai], named, ufcs_offset,
                     peel, span)
                 if ap.is_some() {
                     st[ci].cost = Some(ProbeCost { coercions = ap.unwrap().coercions,
@@ -7303,7 +7353,7 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
     let var_ambiguous = false
 
     for ci in 0..candidates.len {
-        let c = &candidates[ci]
+        let c = candidates[ci]
         let probed = st[ci].cost
         if probed.is_some() {
             const p = probed.unwrap()
@@ -7359,7 +7409,7 @@ fn resolve_overload(self: &Checker, candidates: &List(FunctionScheme), arg_tys: 
         return null
     }
 
-    let w = &candidates[best.unwrap()]
+    let w = candidates[best.unwrap()]
     let binds: Dict(VarId, Ty) = dict(self.allocator)
     let inst_ty = self.engine.resolve(self.engine.specialize_capture(&w.signature, &binds))
     let ft = ty_node(self, inst_ty) match {
@@ -7515,7 +7565,7 @@ type TieBreaker = enum {
     TieByShape
 }
 
-fn tie_breaker(self: &Checker, candidates: &List(FunctionScheme), a: usize, b: usize,
+fn tie_breaker(self: &Checker, candidates: &List(&FunctionScheme), a: usize, b: usize,
     arg_tys: &List(Ty)) TieBreaker {
     let fa = scheme_fn_ty(self, &candidates[a].signature)
     let fb = scheme_fn_ty(self, &candidates[b].signature)
@@ -8866,8 +8916,20 @@ type OwnPass = struct {
     // `&move T` parameters, by declaration node: the body may take the value out of each, and must
     // leave one behind before it returns (RFC-033).
     slots: List(NodeId)
+    // Names a pattern bound into storage the function does not own (spec 7.5: an aggregate binding
+    // names the scrutinee's storage). None may be moved out; under a lent parameter they also only
+    // read, like `lent`.
+    borrowed: List(BorrowedRec)
     // The function value a `move` argument is being handed to, "" for a declared function.
     taker: String
+}
+
+type BorrowedRec = struct {
+    decl: NodeId
+    // The scrutinee's root name, "" when it has none (an element, storage behind a reference).
+    from: String
+    // Bound under a parameter without `move`: no share or write either.
+    read_only: bool
 }
 
 // Liveness over the body's control flow. Runs once the body is checked, so every node has a type
@@ -8878,7 +8940,7 @@ type OwnPass = struct {
 //
 // `params` are the body's parameters, null for a `test {}` block; `returns` says whether the body's
 // trailing expression is the function's value.
-fn own_check_body(self: &Checker, body: &BlockExpr, params: &List(FunctionParam)?, returns: bool) {
+fn own_check_body(self: &Checker, body: &BlockExpr, params: FunctionParam[]?, returns: bool) {
     let lent: List(NodeId) = list(0, self.allocator)
     let slots: List(NodeId) = list(0, self.allocator)
     params match {
@@ -8891,7 +8953,7 @@ fn own_check_body(self: &Checker, body: &BlockExpr, params: &List(FunctionParam)
     own_run(self, body, lent, list(0, self.allocator), returns, slots)
 }
 
-fn own_collect_slots(self: &Checker, slots: &List(NodeId), params: &List(FunctionParam)) {
+fn own_collect_slots(self: &Checker, slots: &List(NodeId), params: FunctionParam[]) {
     for &prm in params {
         if prm.is_slot {
             slots.push(self.node_of(prm.span))
@@ -8941,6 +9003,7 @@ fn own_run(self: &Checker, body: &BlockExpr, lent: move List(NodeId), captured: 
         lent = move lent,
         captured = move captured,
         slots = move slots,
+        borrowed = list(0, self.allocator),
         taker = "",
     }
     own_block(self, &p, body, if returns { own_returning() } else { own_read() })
@@ -8950,7 +9013,7 @@ fn own_run(self: &Checker, body: &BlockExpr, lent: move List(NodeId), captured: 
     own_deinit(p)
 }
 
-fn own_collect_lent(self: &Checker, lent: &List(NodeId), params: &List(FunctionParam)) {
+fn own_collect_lent(self: &Checker, lent: &List(NodeId), params: FunctionParam[]) {
     for &prm in params {
         if !prm.is_move and !prm.is_variadic {
             lent.push(self.node_of(prm.span))
@@ -8978,7 +9041,7 @@ fn own_lambda(self: &Checker, p: &OwnPass, lam: &LambdaExpr) {
     }
     let lent: List(NodeId) = list(captures.len, self.allocator)
     let captured: List(NodeId) = list(captures.len, self.allocator)
-    own_collect_lent(self, &lent, &lam.params)
+    own_collect_lent(self, &lent, lam.params)
     for &cap in captures {
         if own_is_lent(p, cap.decl) {
             lent.push(cap.decl)
@@ -9001,10 +9064,24 @@ fn own_deinit(p: move OwnPass) {
     p.lent.deinit()
     p.captured.deinit()
     p.slots.deinit()
+    p.borrowed.deinit()
 }
 
 fn own_is_lent(p: &OwnPass, decl: NodeId) bool {
-    return own_list_has(&p.lent, decl)
+    if own_list_has(&p.lent, decl) {
+        return true
+    }
+    const b = own_borrowed(p, decl)
+    return b.is_some() and b.unwrap().read_only
+}
+
+fn own_borrowed(p: &OwnPass, decl: NodeId) BorrowedRec? {
+    for b in p.borrowed {
+        if b.decl == decl {
+            return Some(b)
+        }
+    }
+    return null
 }
 
 fn own_is_captured(p: &OwnPass, decl: NodeId) bool {
@@ -9172,6 +9249,66 @@ fn own_unmark_pattern(self: &Checker, p: &OwnPass, pat: &Pattern) {
     }
 }
 
+// A pattern binds in place, so a scrutinee the function does not own - a parameter without `move`,
+// an element, storage behind a reference - lends its bindings. Null when the function owns it or it
+// is a temporary.
+fn own_is_place(e: &Expr) bool {
+    return e.* match {
+        Identifier(_) => true
+        MemberAccess(_) => true
+        Index(_) => true
+        Dereference(_) => true
+        _ => false
+    }
+}
+
+fn own_unowned_scrutinee(self: &Checker, p: &OwnPass, e: &Expr) BorrowedRec? {
+    if !own_is_place(e) or own_owned_base(self, p, e) {
+        return null
+    }
+    const lent = own_lent_root(self, p, e)
+    const root = lent ?? own_chain_root(self, e)
+    const from = root match {
+        Some(id) => id.name
+        None => ""
+    }
+    return Some(BorrowedRec { decl = self.node_of(expr_span(e)), from = from,
+        read_only = lent.is_some() })
+}
+
+fn own_borrow_pattern(self: &Checker, p: &OwnPass, pat: &Pattern, from: BorrowedRec) {
+    pat.* match {
+        Variable(v) => p.borrowed.push(BorrowedRec { decl = self.node_of(v.span), from = from.from,
+            read_only = from.read_only })
+        EnumVariant(ev) => {
+            for &sub in ev.payloads {
+                own_borrow_pattern(self, p, sub, from)
+            }
+        }
+        Or(o) => {
+            for &sub in o.alternatives {
+                own_borrow_pattern(self, p, sub, from)
+            }
+        }
+        Struct(st) => {
+            for &f in st.fields {
+                f.binding match {
+                    Some(sub) => own_borrow_pattern(self, p, sub, from)
+                    None => p.borrowed.push(BorrowedRec { decl = self.node_of(f.span),
+                        from = from.from,
+                        read_only = from.read_only })
+                }
+            }
+        }
+        Tuple(t) => {
+            for &sub in t.elements {
+                own_borrow_pattern(self, p, sub, from)
+            }
+        }
+        _ => {}
+    }
+}
+
 fn own_snapshot(self: &Checker, src: &List(MovedRec)) List(MovedRec) {
     let out: List(MovedRec) = list(src.len, self.allocator)
     out.push_all(src.as_slice())
@@ -9285,6 +9422,12 @@ fn own_lent_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr, what: String
     if !own_claim(p, self.node_of(id.span)) {
         return
     }
+    const d = own_local_decl(self, self.node_of(id.span))
+    const b = if d.is_some() { own_borrowed(p, d.unwrap()) } else { null }
+    if b.is_some() {
+        own_borrowed_error(self, p, id, b.unwrap(), what)
+        return
+    }
     let sb = string_builder(160, self.allocator)
     sb.append($"`{id.name}` is not owned here: {what}; declare `{id.name}: move ")
     own_type(self, id.span) match {
@@ -9293,6 +9436,19 @@ fn own_lent_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr, what: String
         None => {}
     }
     sb.append("` to own it")
+    own_taker_note(p, &sb)
+    own_report(self, id.span, E_NOT_OWNED, sb.to_string())
+}
+
+fn own_borrowed_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr, b: BorrowedRec,
+    what: String) {
+    let sb = string_builder(160, self.allocator)
+    if b.from.len > 0 {
+        sb.append($"`{id.name}` names part of `{b.from}`, which is not owned here")
+    } else {
+        sb.append($"`{id.name}` names storage this function does not own")
+    }
+    sb.append($": {what}")
     own_taker_note(p, &sb)
     own_report(self, id.span, E_NOT_OWNED, sb.to_string())
 }
@@ -9382,8 +9538,10 @@ fn own_expr(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) {
         }
         Unary(u) => own_expr(self, p, u.operand, own_read())
         Cast(c) => own_expr(self, p, c.operand, own_read())
+        // `a ?? b` hands out `a`'s payload: a kept result consumes `a`, with no marker, as an
+        // operand of a `move` parameter would be; a result only read leaves `a` in place.
         Coalesce(c) => {
-            own_expr(self, p, c.lhs, own_owning())
+            own_expr(self, p, c.lhs, if own_needs_value(slot) { own_consuming() } else { slot })
             own_expr(self, p, c.rhs, slot)
         }
         Try(t) => own_protocol(self, p, t.span, t.operand)
@@ -9408,6 +9566,10 @@ fn own_ident(self: &Checker, p: &OwnPass, id: &IdentifierExpr, slot: OwnSlot) {
         return
     }
     if !own_needs_value(slot) or own_rvalue_name(self, node) or own_is_copyable(self, id.span) {
+        return
+    }
+    if d.is_some() and own_borrowed(p, d.unwrap()).is_some() {
+        own_lent_error(self, p, id, "moving it out needs ownership of the matched value")
         return
     }
     if d.is_some() and own_is_lent(p, d.unwrap()) {
@@ -9608,6 +9770,7 @@ fn own_owned_base(self: &Checker, p: &OwnPass, e: &Expr) bool {
 fn own_owned_decl(self: &Checker, p: &OwnPass, id: &IdentifierExpr) bool {
     const d = own_local_decl(self, self.node_of(id.span))
     return d.is_some() and !own_is_lent(p, d.unwrap()) and !own_is_captured(p, d.unwrap())
+        and own_borrowed(p, d.unwrap()).is_none()
 }
 
 // The lent parameter at the root of a place reached without a reference, when its type is
@@ -10400,7 +10563,14 @@ fn own_stmt(self: &Checker, p: &OwnPass, st: &Stmt) {
         Break(_) => own_escape(self, p, true)
         Continue(_) => own_escape(self, p, false)
         For(fs) => {
-            own_protocol(self, p, fs.body.span, fs.iterable)
+            // A temporary iterable is the loop's own once `record_iter_release` gave it a release.
+            const loop_owned = self.results.resolved_ops.get(self.node_of(fs.var_span)).is_some()
+                and !own_is_place(fs.iterable)
+            if loop_owned {
+                own_expr(self, p, fs.iterable, own_owning())
+            } else {
+                own_protocol(self, p, fs.body.span, fs.iterable)
+            }
             own_loop(self, p, fs.body, Some(self.node_of(fs.var_span)))
         }
         While(ws) => {
@@ -10553,6 +10723,7 @@ fn own_if(self: &Checker, p: &OwnPass, ife: &IfExpr, slot: OwnSlot) {
 
 fn own_match(self: &Checker, p: &OwnPass, m: &MatchExpr, slot: OwnSlot) {
     own_expr(self, p, m.scrutinee, own_owning())
+    const from = own_unowned_scrutinee(self, p, m.scrutinee)
     let entry = own_snapshot(self, &p.moved)
     defer entry.deinit()
     // Seeded empty, not from `entry`: an arm that reinitializes a moved binding leaves it live, and
@@ -10564,6 +10735,9 @@ fn own_match(self: &Checker, p: &OwnPass, m: &MatchExpr, slot: OwnSlot) {
     for &arm in m.arms {
         own_restore(&p.moved, &entry)
         own_unmark_pattern(self, p, arm.pattern)
+        if from.is_some() {
+            own_borrow_pattern(self, p, arm.pattern, from.unwrap())
+        }
         p.diverged = false
         arm.guard match {
             Some(g) => own_expr(self, p, g, own_read())
@@ -10588,7 +10762,7 @@ fn own_match(self: &Checker, p: &OwnPass, m: &MatchExpr, slot: OwnSlot) {
 fn own_if_directive(self: &Checker, p: &OwnPass, ifd: &IfDirectiveStmt) {
     directive_outcome(self, ifd) match {
         Active(active) => {
-            const stmts: &List(Stmt) = if active { &ifd.then_stmts } else { &ifd.else_stmts }
+            const stmts = if active { ifd.then_stmts } else { ifd.else_stmts }
             for i in 0..stmts.len {
                 if p.diverged {
                     return

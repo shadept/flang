@@ -211,7 +211,7 @@ fn parse_interpolation(self: &TemplateParser, i: usize, out: &List(TemplateNode)
         return j
     }
     self.cursor = self.tokens[j].offset + 1
-    out.push(TemplateNode.Interp(TemplateInterp { expr = move e, in_string = false }))
+    out.push(TemplateNode.Interp(TemplateInterp { expr = e, in_string = false }))
     return j + 1
 }
 
@@ -232,7 +232,7 @@ fn parse_for(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
     const iterable = project_expression(cst, self.file_id, self.alloc)
     let body: List(TemplateNode) = list(0, Some(self.alloc))
     const after = self.parse_braced_body(self.parser.token_index(), &body)
-    out.push(TemplateNode.Loop(TemplateFor { var_name = var_name, iterable = move iterable,
+    out.push(TemplateNode.Loop(TemplateFor { var_name = var_name, iterable = iterable,
         body = move body }))
     return after
 }
@@ -254,7 +254,7 @@ fn parse_if(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
         self.cursor = self.tokens[after].offset
         after = self.parse_braced_body(after + 2, &else_body)
     }
-    out.push(TemplateNode.Cond(TemplateIf { cond = move cond, body = move body,
+    out.push(TemplateNode.Cond(TemplateIf { cond = cond, body = move body,
         else_body = move else_body }))
     return after
 }
@@ -311,7 +311,7 @@ fn parse_string_holes(self: &TemplateParser, tok: Token, out: &List(TemplateNode
             }))
         }
         self.shift_from(&p.diagnostics)
-        out.push(TemplateNode.Interp(TemplateInterp { expr = move e, in_string = true }))
+        out.push(TemplateNode.Interp(TemplateInterp { expr = e, in_string = true }))
         local = close_end - tok.offset
     }
     if local < text.len {

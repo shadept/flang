@@ -155,7 +155,7 @@ fn emit_function_decl(sb: &StringBuilder, fn_decl: &FunctionDecl) {
     emit_kv_bool(sb, "is_pub", fn_decl.is_pub)
     emit_kv_string(sb, "name", fn_decl.name)
     sb.append(",\"directives\":")
-    emit_attributes(sb, &fn_decl.directives)
+    emit_attributes(sb, fn_decl.directives)
     sb.append(",\"params\":[")
     for i in 0..fn_decl.params.len {
         if i > 0 {
@@ -191,7 +191,7 @@ fn emit_function_param(sb: &StringBuilder, p: &FunctionParam) {
     sb.append("}")
 }
 
-fn emit_attributes(sb: &StringBuilder, attrs: &List(DeclAttribute)) {
+fn emit_attributes(sb: &StringBuilder, attrs: DeclAttribute[]) {
     sb.append("[")
     for i in 0..attrs.len {
         if i > 0 {
@@ -231,7 +231,7 @@ fn emit_type_decl(sb: &StringBuilder, td: &TypeDecl) {
     emit_kv_bool(sb, "is_pub", td.is_pub)
     emit_kv_string(sb, "name", td.name)
     sb.append(",\"directives\":")
-    emit_attributes(sb, &td.directives)
+    emit_attributes(sb, td.directives)
     sb.append(",\"body\":")
     emit_type_expr(sb, td.body)
     sb.append("}")

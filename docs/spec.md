@@ -171,7 +171,7 @@ Three types with explicit ownership. All share layout `{ ptr: &u8, len: usize }`
 
 **Containers own their buffers.** `UnmanagedList.ptr` and `UnmanagedDict.entries` are `owned`, so every container - `List`, `Dict`, `Set`, `Deque`, `Stack` and anything holding one by value - is non-copyable (RFC-028's derived bit). A container reaches a second place through `move`, a `&T` parameter, or `clone`; reading one out of a table is `get_ref` / `lookup_ref`, and a loop over a non-copyable element is `for &x in xs`.
 
-**Container iteration and ownership.** The iterator protocol is defined for copyable elements; an owning element type moves through a container's `drain` (`for x in xs.drain()` hands each element over, and the untaken tail stays in the container). A dict lends each entry (`for e in d` binds `&Entry`), since an entry may hold owning keys or values; a set iterates by value and adds `iter_ref`, the split `List` already has. `swap` exchanges two values in place through `&move` slots (§3.2), so an owning `T` moves between two places with no copy, and the sorts compare an owning element by reference (`fn(&T, &T) Ord`). What is deliberately not settled yet: the loop does not own its iterator, and an iterator's own `iter` copies rather than consumes, so iterating an owning state is the container's business rather than the protocol's (docs/known-issues.md).
+**Container iteration and ownership.** The iterator protocol is defined for copyable elements; an owning element type moves through a container's `drain` (`for x in xs.drain()` hands each element over; a drain is not copyable, and the loop releases it on exit, which puts the untaken tail back, §7.4). A dict lends each entry (`for e in d` binds `&Entry`), since an entry may hold owning keys or values; a set iterates by value and adds `iter_ref`, the split `List` already has. `swap` exchanges two values in place through `&move` slots (§3.2), so an owning `T` moves between two places with no copy, and the sorts compare an owning element by reference (`fn(&T, &T) Ord`). What is deliberately not settled yet: relocating owning elements through an adapter chain (docs/known-issues.md).
 
 **OwnedString** — owns its buffer: `struct { view: String, allocator: &Allocator? }`. Must be freed via `deinit()`. Follows allocator pattern. Produced by `StringBuilder.to_string()`, `from_view()`. Every `String` read reaches `view` through `op_deref` (`s.len`, `s.starts_with(p)`, `s == t`); `hash` is declared, since the catch-all `hash($T)` would take it as written. A dict or set keyed by `OwnedString` is looked up by `String` (RFC-031).
 
@@ -401,13 +401,13 @@ Variables are valid from declaration to end of enclosing block. A binding of a c
 
 ### 3.6 Safety Model
 
-The compiler does not enforce memory safety beyond scoped mutability (planned). The following are the programmer's responsibility:
+The compiler enforces two things: scoped mutability (§8) and the ownership of non-copyable values (§3.2, §3.5). For a non-copyable value, a moved binding is not used again (E2123), a live one is not overwritten (E2126), so a consuming `deinit` or `close` cannot run twice; a temporary reaches an owner (E2132); and one call cannot release or grow a value that another of its arguments reads (E2133). The following are the programmer's responsibility:
 
-- Double-free
-- Use-after-free
-- Aliased mutation
+- Double-free and use-after-free of copyable data, and of storage reached through a reference (`&T` is not tracked)
+- Aliased mutation with no owned state in the overlap
 - Data races
-- Dangling references (String views must not outlive backing data)
+- Dangling references (String views and `&T` must not outlive the storage they point into; a closure must not outlive its captures, §7.3)
+- Inside a module's own `owned` storage, reading a slot again after moving out of it (§3.2)
 
 ---
 
@@ -439,11 +439,11 @@ pub type AllocatorVTable = struct {
 3. All allocation/realloc/free go through the allocator — never raw `malloc`/`free`.
 3a. **Every entry point carries the alignment**, next to the `memory` it finishes describing and ahead of any new size, and `realloc`/`dealloc` must be given the one the matching `alloc` was: an allocator cannot recover it from a pointer, a block that moves has to land on it, and a platform whose over-aligned blocks need their own release path has to know which kind it holds. The typed helpers (`free(&T)`, `free(T[])`) derive `align_of(T)`; raw byte-slice callers pass it explicitly.
 3b. **`MAX_ALIGN` (16) is the global allocator's ceiling, not the interface's.** It is what `malloc`/`realloc`/`free` guarantee. An allocator built on them declines a request above it — returning null, never memory that does not meet it — and satisfying one means `aligned_alloc`/`_aligned_malloc` with a matching release path. The bump allocators (arena, fixed buffer) align their own cursor and have no such limit.
-4. Types that allocate provide `deinit()` for deterministic cleanup.
+4. Types that allocate hold their storage in an `owned` field, which makes them non-copyable, and provide `deinit(self: move T)` for deterministic cleanup.
 5. Callers use `defer x.deinit()` for scope-based cleanup, registered right after the value is created.
-6. **Every `deinit()` is idempotent**: the first call nulls the value's owning state (pointer/cap/payload), so a second call is a no-op — never a double free. A type either only calls deinits that are themselves safe, or resets its own state so later calls no-op.
-7. **Containers cascade**: `List.deinit`, `Dict.deinit`, `Option.deinit`, etc. release their live elements (keys and values for dicts) through `release` (§Ownership vocabulary) before freeing their storage, so an owning element type must declare a `deinit` and it must be `pub` - the container instantiates where the type is not in scope. Do not hand-loop element deinits before a container deinit — and never deinit values obtained from container *iteration* or by-value indexing, which yield copies whose cleanup leaves the stored element pointing at freed memory. Mutate stored values in place through `get_ref`/`op_index_ref`.
-8. **`Dict.set` on an existing key deinits the overwritten value** (and the unused new key for owned-key dicts). The read-copy-modify-`set` pattern is therefore unsound for owned values; update through `get_ref` instead.
+6. **`deinit` consumes its value.** The binding is dead after the call, so a second `deinit` is E2123 at compile time, never a run-time double free. No released value is left behind, so there is no released state to test for.
+7. **Containers cascade**: `List.deinit`, `Dict.deinit`, `Option.deinit`, etc. release their live elements (keys and values for dicts) through `release` (§Ownership vocabulary) before freeing their storage, so an owning element type must declare a `deinit` and it must be `pub` - the container instantiates where the type is not in scope. Do not hand-loop element deinits before a container deinit. An element leaves its container only through `pop`, `remove` or a drain; handing a stored element to a `move` parameter is E2125. Read and mutate stored values in place through `for &x in xs`, `get_ref` or `op_index_ref`.
+8. **`Dict.set` on an existing key releases the value it replaces**, and the new key too, since the entry keeps the one it has.
 
 ```
 let sb = string_builder(64)
@@ -452,7 +452,7 @@ defer sb.deinit()
 
 This enables arena-based bulk deallocation: allocate many objects into an arena, free them all by resetting the arena.
 
-**Defer ordering on `return`.** A `return expr` evaluates `expr` first, then fires the active defers in LIFO order, then transfers control. This lets `defer x.deinit()` coexist with a return expression that reads `x` (`return x.as_view().len`, `return sb.to_string()`, etc.) — the read observes `x`'s pre-deinit state, and the deferred call sees whatever state the return expression left behind (e.g. `to_string` zeroes the builder so the deferred `deinit` is a no-op). Returning `x` itself by value while a `defer x.deinit()` is active still frees the buffer the copy points at — defer fires after the copy is materialised but before the function returns. Don't defer-deinit a value you're returning by value; drop the defer in that case.
+**Defer ordering on `return`.** A `return expr` evaluates `expr` first, then fires the active defers in LIFO order, then transfers control. This lets `defer x.deinit()` coexist with a return expression that reads `x` (`return x.as_view().len`, `return sb.to_string()`, etc.) — the read observes `x`'s pre-deinit state, and the deferred call sees whatever state the return expression left behind (e.g. `to_string` zeroes the builder so the deferred `deinit` is a no-op). Returning `x` itself moves it, so a `defer x.deinit()` still active would release a moved value: that is E2123 at the defer. Drop the defer for a value you return.
 
 ### 4.2 Zero Initialization
 
@@ -580,7 +580,7 @@ Operators on primitive types are compiler built-ins, resolved and emitted direct
 
 **`op_deref`**: When `x.field` fails to resolve on type `X`, the compiler looks for `fn op_deref(self: &X) &T`. If found, resolution retries on `T`. Chains through multiple layers: `Rc(Wrapper(Point)).x` resolves through two `op_deref` calls. Own fields on `X` always take priority — for field access `op_deref` is only consulted when direct resolution fails. For a UFCS call `x.method()` the peel is the last receiver tier of overload ranking (§Imports): it is tried only when no overload takes `x` as written or adapted to `&x`, and then the fewest hops win. An overload matching `X` itself, a catch-all `$T` included, always wins over one reached through a hop, so a wrapper that wants the inner type's reader under a catch-all declares that reader itself. Binary operators peel the same way: when no operator function matches the operands as written, each operand is tried through its `op_deref` chain, fewest hops first and the left side first at a tie, so `owned == "text"` reaches `String`'s `op_eq`. Only nominal operand pairs dispatch, peeled or not: a wrapped primitive never reaches an operator function or a builtin operation. Indexing and `for` are that same resolution, since they are method calls in disguise: `xs[i]` resolves `op_index_ref`/`op_index`, `xs[i] = v` resolves `op_set_index`, and `for x in xs` resolves `iter` (or `iter_ref` for `for &x`) exactly as `xs.iter()` would, so `for` over a wrapper compiles to the same code as its desugaring. This is a general-purpose language feature, not specific to smart pointers: `List` reaches its `UnmanagedList` storage through it (§9.4), indexing and iteration included.
 
-`op_deref` itself only ever turns a reference into another reference, `&W → &I`. It applies to the receiver and, per RFC-020, to every argument of a call, spelled either way (`w.f()` and `f(&w)` resolve the same). An argument that does not fit its parameter as written is retried through the chain and takes the first shape that fits: `&I`, or `I` by value when `I` is copyable - the decay of an owner to the view it holds (`OwnedString → String`, `List(T) → T[]`). Peeling to a non-copyable value is refused, since it would hand one resource to two owners, and nothing yields a reference from a value outside the UFCS sugar (§7.2). Each hop costs in ranking, so an overload taking the argument as written always wins.
+`op_deref` itself only ever turns a reference into another reference, `&W → &I`. It applies to the receiver and, per RFC-020, to every argument of a call, spelled either way (`w.f()` and `f(&w)` resolve the same). An argument that does not fit its parameter as written is retried through the chain and takes the first shape that fits: `&I`, or `I` by value when `I` is copyable - the decay of an owner to the view it holds (`OwnedString → String`). `List(T)` does not decay to `T[]`: its chain ends at `&UnmanagedList(T)`, which holds no slice; pass `xs.as_slice()`. Peeling to a non-copyable value is refused, since it would hand one resource to two owners, and nothing yields a reference from a value outside the UFCS sugar (§7.2). Each hop costs in ranking, so an overload taking the argument as written always wins.
 
 **Indexing (`[]`)** — two mutually exclusive patterns for user-defined types:
 
@@ -610,7 +610,7 @@ Operators on primitive types are compiler built-ins, resolved and emitted direct
 
 ### 5.3 Null Operators
 
-**Null-coalescing `??`**: If `a` is `Option(T)` with a value, yields unwrapped `T`; otherwise yields `b`. Right-associative, chainable: `a ?? b ?? c`.
+**Null-coalescing `??`**: If `a` is `Option(T)` with a value, yields unwrapped `T`; otherwise yields `b`. Right-associative, chainable: `a ?? b ?? c`. It hands out `a`'s payload, so a result that is kept - bound, stored, passed to a `move` parameter, returned - consumes `a` with no marker, as an argument to a `move` parameter is consumed; a result only read (`(a ?? b).len`) leaves `a` in place. A non-copyable `a` the function does not own cannot be consumed (E2131).
 
 **Safe member access `?.`**: `opt?.field` yields `Option(field_type)` — the field value if present, `null` otherwise. Chainable: `a?.b?.c`.
 
@@ -702,11 +702,11 @@ Two names are exempt and keep their source spelling, because something outside t
 
 ### 7.2 UFCS
 
-Any function with first parameter `T` or `&T` can be called as `value.func(args)`. The dot is sugar for two rewrites, tried in order: `x.f(y)` is `f(x, y)`, and when that does not resolve, `f(&x, y)`. This is how methods work — no `impl` blocks.
+Any function with first parameter `T`, `move T` or `&T` can be called as `value.func(args)`. The dot is sugar for two rewrites, tried in order: `x.f(y)` is `f(x, y)`, and when that does not resolve, `f(&x, y)`. This is how methods work — no `impl` blocks.
 
 **That rewrite is the only implicit reference in the language.** A free call passing `x` where the parameter is `&x` is an error, not an auto-reference; a reference is never implicitly dereferenced to a value; and the coercion ladder (§9.2) is closed to user types. The one user-defined adaptation, `op_deref` (§7.1), turns a reference into another reference and nothing else. Keeping both directions out is what keeps this from becoming C++'s implicit conversions.
 
-**The receiver follows the first parameter** (§3.2). `h.close()` with `close(self: move FileHandle)` moves `h`; `xs.len()` with `len(self: List(T))` reads. A `move self` parameter of a non-copyable type is not reachable through a `&T` receiver or an `op_deref` hop (E2128): the value behind the reference stays with its owner.
+**The receiver follows the first parameter** (§3.2). `f.close_file()` with `close_file(file: move File)` moves `f`; `xs.len()` with `len(self: List(T))` reads. A `move self` parameter of a non-copyable type is not reachable through a `&T` receiver or an `op_deref` hop (E2128): the value behind the reference stays with its owner.
 
 ### 7.3 Lambdas
 
@@ -728,7 +728,7 @@ Any function with first parameter `T` or `&T` can be called as `value.func(args)
 
 A no-context lambda is an error — diagnostic recommends adding annotations to the parameters or the binding site. One inference-order consequence of the `$F` path: a value whose type is pinned *only* through the instantiation (e.g. `fold`'s seed when `f` is duck-typed) cannot resolve a bare numeric literal — write `xs.fold(0i32, fn(a, x) { a + x })`, not `fold(0, …)`.
 
-**Stdlib callback convention.** Standard-library combinators (`List`/`Dict`/`Set` utilities, the `std.iter` adapters and consumers, `sort`'s comparator) type their callbacks as duck-typed generic parameters (`f: $F`), never as concrete `fn(...)` types: any callable fits — bare functions, non-capturing lambdas, and capturing closures — and monomorphization makes the dispatch direct. Callbacks are **value-mode**: combinators invoke `f(element)` with values, and §3.2's implicit-reference copy-on-write ABI makes that copy-free for read-only callbacks. Ref-mode callbacks (`fn(&T)`) do not adapt to value invocation (and vice versa); argument-adaptation rules are a deliberate open design point (docs/tickets/019).
+**Stdlib callback convention.** Standard-library combinators (`List`/`Dict`/`Set` utilities, the `std.iter` adapters and consumers, `sort`'s comparator) type their callbacks as duck-typed generic parameters (`f: $F`), never as concrete `fn(...)` types: any callable fits — bare functions, non-capturing lambdas, and capturing closures — and monomorphization makes the dispatch direct. Callbacks **read** the element: combinators invoke `f(s[i])`, and a callback parameter `x: T` takes it in read mode (§3.2) for every element type, copyable or not, with no copy. A callback that takes ownership (`fn(v: move T)`) fits only where elements are handed over, as from a drain; passed where the element is lent, it is E2125. `sort`'s comparator and `sort_by`'s key are the reference-mode callbacks: over a non-copyable element they take `&T`.
 
 **Lazy-fallback convention.** A function whose parameter is a fallback - a value used only when the primary one is absent - comes in two forms under two names: the plain name takes the value, an `_else` suffix takes something that produces it.
 
@@ -766,6 +766,8 @@ A `for` loop comes in two forms. They differ in what the loop variable binds, an
 | `for &x in xs` | `iter_ref(&xs)` | `x: &T` — aliased into the collection's storage | `fn iter_ref(self: &T) RefIterator` and `fn next(self: &RefIterator) &E?` |
 
 `for x in xs.iter_ref()` is the reference form spelled out.
+
+**The loop owns what it iterates with**, as `for_each(it: move $I, body)` would: the state `iter` returned, when that state is not copyable (a drain), or else a non-copyable temporary iterable that `iter` only borrowed (`for e in walk_dir(p)?`). The loop releases it on every exit - the end of the iteration, `break`, `return`, `?` - with its `deinit`. An iterator's own `iter` that takes `move self` consumes a named iterator: `for x in d` leaves `d` dead. A copyable state, or an iterable named by a binding and borrowed, is not the loop's to release.
 
 **A collection is not modified while it is being iterated.** An iterator is a snapshot of the
 storage as it was when `iter` ran: a `List`'s iterator is the slice iterator over its elements at
@@ -821,6 +823,8 @@ pub fn as_object(self: &JsonValue) &Dict(OwnedString, JsonValue)? {
 ```
 
 A binding bound to a *scalar* is a copy in its own slot, so an arm body may assign to it without touching the scrutinee.
+
+**Ownership of bindings** follows the scrutinee, since an aggregate binding names its storage. Matching storage the function owns - a local, a `move` parameter - lets an arm move a binding out (`Some(v) => move v`), which empties that part of the scrutinee. Storage it does not own keeps its parts: under a reference or in an element, a binding may be read, shared and written, not moved out; under a parameter without `move` it may only be read, as the parameter itself (§3.2). Moving such a binding is E2131: taking the payload out of `o` needs `o: move Option(T)`. A temporary scrutinee belongs to the `match`, so its bindings own.
 
 ### 7.6 Directives
 
@@ -1088,9 +1092,9 @@ one set of unmanaged functions plus a generator (`#managed_list`, `#managed_dict
 forwarding overloads for each carrier; a transformation on either carrier returns a `List`/`Dict`,
 since a new collection needs storage of its own. Only the building blocks come in two flavours.
 
-**Ownership vocabulary (RFC-028).** Three names, used the same way on every type. `clone(self: &T, allocator: &Allocator? = null) T` is the explicit, allocating, deep duplicate: the only way to duplicate a non-copyable value, and the unmanaged flavour requires the allocator. Elements go through `#if type_info(T).copyable` (§7.7): copyable ones are copied, the rest cloned; there is no blanket `clone($T)`. There is no `copy` function anywhere: "copy" is the language's word for the bitwise duplicate that `move` replaces. `deinit(self: T)` takes its value by value and consumes it (`deinit(move x)`); the unmanaged flavour is `deinit(self: T, allocator: &Allocator)`, and no other shape exists in the standard library - anything else a value needs to release itself, it carries. `retain(self: &Rc(T)) Rc(T)` is the reference-count bump on `Rc` / `Arc`, so that `rc.clone()` peels through `op_deref` to `T`'s own `clone` and yields a `T`.
+**Ownership vocabulary (RFC-028, RFC-033).** Three names, used the same way on every type. `clone(self: &T, allocator: &Allocator? = null) T` is the explicit, allocating, deep duplicate: the only way to duplicate a non-copyable value, and the unmanaged flavour requires the allocator. Elements go through `#if type_info(T).copyable` (§7.7): copyable ones are copied, the rest cloned; there is no blanket `clone($T)`. There is no `copy` function anywhere: "copy" is the language's word for the bitwise duplicate that `move` replaces. `deinit(self: move T)` consumes its value; the unmanaged flavour is `deinit(self: move T, allocator: &Allocator)`, and no other shape exists in the standard library - anything else a value needs to release itself, it carries. `retain(self: &Rc(T)) Rc(T)` is the reference-count bump on `Rc` / `Arc`, so that `rc.clone()` peels through `op_deref` to `T`'s own `clone` and yields a `T`.
 
-There is no blanket `deinit` either. A container releases an element through `release(value: move T)` (core.deinit), which is nothing for a copyable `T` and the type's own `deinit` otherwise - so a non-copyable type that declares none is a compile error at the container holding it, not a leak nothing reports. A type whose storage is released elsewhere - an arena, a registry that frees bodies of its own - says so by declaring an empty `deinit`, where the decision is visible and attributed.
+There is no blanket `deinit` either. A container releases an element through `release(value: move T)` (core.deinit), which is nothing for a copyable `T` and the type's own `deinit` otherwise - so a non-copyable type that declares none is a compile error at the container holding it, not a leak nothing reports. A type whose storage is released elsewhere - an arena, a registry that frees bodies of its own - says so by declaring an empty `deinit`, where the decision is visible and attributed. A type that carries a release obligation but owns no storage to mark `owned` holds a `NoCopy` (core.deinit): a zero-size field with an `owned` unit inside, so the derived bit stays derived. A drain holds one; its own `deinit` meets the obligation.
 A composite built on them is managed only, storing its allocator once: `Journal(T)` (std.journal),
 an undo log with nested checkpoints whose two buffers are reused across regions; `MultiMap(K, V)`
 (std.multimap), a key-to-many-values table whose values share one pool, chained per key, so the

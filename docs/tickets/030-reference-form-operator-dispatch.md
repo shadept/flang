@@ -1,11 +1,15 @@
 ---
-status: draft
+status: superseded
 type: language
 created: 2026-09-01
+superseded-by: RFC-033
 relates: [RFC-028, RFC-026, RFC-020]
 ---
 
 # RFC-030: Reference-form operator dispatch
+
+> Superseded by RFC-033: an operator's `T` parameters read a non-copyable operand in place
+> (`op_eq(a: Option($T), b: Option(T))` over an owning payload), so no reference form is needed.
 
 ## Summary
 

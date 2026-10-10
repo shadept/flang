@@ -531,11 +531,11 @@ fn probe_spec(function_id: u32, name: String) Specialization {
     let decl = FunctionDecl {
         span = none_span(),
         is_pub = false,
-        directives = move no_dirs,
+        directives = frozen(no_dirs),
         name = name,
-        params = move no_decl_params,
+        params = frozen(no_decl_params),
         return_type = null,
-        bounds = list(0),
+        bounds = frozen(list(0)),
         body = null,
     }
     let it = type_interner()

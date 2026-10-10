@@ -105,13 +105,11 @@ pub fn unmanaged_list(capacity: usize, allocator: &Allocator) UnmanagedList($T) 
     return .{ ptr = buf.ptr as &T, len = 0usize, cap = capacity }
 }
 
-// Creates an unmanaged list holding a copy of `source`, in fresh storage sized to its length.
-//
-// Elements are copied bitwise: an element that owns something is now owned twice, and only one copy
-// may be deinited. An empty source allocates nothing. Panics when the allocation fails.
+// Creates an unmanaged list holding a copy of `source`, in fresh storage sized to its length. An
+// empty source allocates nothing. Panics when the allocation fails.
 //
 // - `allocator`: grows and frees the storage. Pass the same one to every allocating call.
-pub fn unmanaged_list(source: $T[], allocator: &Allocator) UnmanagedList(T) {
+pub fn unmanaged_list(source: $T[], allocator: &Allocator) UnmanagedList(T) where T: copyable {
     if source.len == 0 {
         let empty: UnmanagedList(T)
         return empty
@@ -148,11 +146,11 @@ pub fn list(source: List($T), allocator: &Allocator? = null) List(T) {
     return list(source.as_slice(), allocator)
 }
 
-// Creates a list holding a copy of `source`, in fresh storage sized to fit. Elements are copied
-// bitwise; an empty source allocates nothing. Panics when the allocation fails.
+// Creates a list holding a copy of `source`, in fresh storage sized to fit. An empty source
+// allocates nothing. Panics when the allocation fails.
 //
 // - `allocator`: kept for the list's whole life. Null is the global allocator.
-pub fn list(source: $T[], allocator: &Allocator? = null) List(T) {
+pub fn list(source: $T[], allocator: &Allocator? = null) List(T) where T: copyable {
     const alloc = allocator.or_global()
     return .{ __storage = unmanaged_list(source, alloc), allocator = alloc }
 }
@@ -238,7 +236,7 @@ pub fn push(s: &UnmanagedList($T), value: move T, allocator: &Allocator) {
 //
 // - `xs`: must not alias the list's own storage. Growth may move and free that storage before the
 //   copy, so no copy primitive makes self-append safe.
-pub fn push_all(s: &UnmanagedList($T), xs: T[], allocator: &Allocator) {
+pub fn push_all(s: &UnmanagedList($T), xs: T[], allocator: &Allocator) where T: copyable {
     if xs.len == 0 {
         return
     }
@@ -730,6 +728,8 @@ pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) {
 // what the drain does not take goes back when it is released.
 pub type Drain = struct(T) {
     __list: &UnmanagedList(T)
+    // A copy would hand the elements out twice.
+    __unique: NoCopy
     taken: usize
     count: usize
     // Which end the next element comes from. The back is the order `pop` yields, which is what a
@@ -739,7 +739,8 @@ pub type Drain = struct(T) {
 
 // Takes the list's elements: it reads as empty until the drain is released.
 pub fn drain(self: &UnmanagedList($T)) Drain(T) {
-    let out: Drain(T) = .{ __list = self, taken = 0, count = self.len, from_back = false }
+    let out: Drain(T) = .{ __list = self, taken = 0, count = self.len, from_back = false,
+        __unique = no_copy() }
     self.len = 0
     return out
 }
@@ -747,14 +748,15 @@ pub fn drain(self: &UnmanagedList($T)) Drain(T) {
 // Takes the list's elements last to first, the order `pop` yields them in. The untaken ones are
 // already at the front, so releasing this drain moves nothing.
 pub fn drain_rev(self: &UnmanagedList($T)) Drain(T) {
-    let out: Drain(T) = .{ __list = self, taken = 0, count = self.len, from_back = true }
+    let out: Drain(T) = .{ __list = self, taken = 0, count = self.len, from_back = true,
+        __unique = no_copy() }
     self.len = 0
     return out
 }
 
 // A drain is its own iterable: `for x in xs.drain()`.
-pub fn iter(self: &Drain($T)) Drain(T) {
-    return self.*
+pub fn iter(self: move Drain($T)) Drain(T) {
+    return self
 }
 
 // Moves the next element out of the list, from the end this drain takes from, or null when every
@@ -770,7 +772,7 @@ pub fn next(self: &Drain($T)) T? {
 }
 
 // Returns the untaken elements to the front of the list and restores its length as their count.
-pub fn deinit(self: &Drain($T)) {
+pub fn deinit(self: move Drain($T)) {
     const left = self.count - self.taken
     if left > 0 and self.taken > 0 and !self.from_back {
         memmove(self.__list.ptr as &u8, (self.__list.ptr + self.taken) as &u8, left * size_of(T))
@@ -801,7 +803,7 @@ pub fn deinit(self: &Drain($T)) {
     }
 
     // Appends every element of `xs`, in order. `xs` must not alias the list's own storage.
-    pub fn push_all(self: &#(Self)($T), xs: T[]) {
+    pub fn push_all(self: &#(Self)($T), xs: T[]) where T: copyable {
         self.__storage.push_all(xs, self.allocator)
     }
 
@@ -913,7 +915,9 @@ pub fn flat_map(self: &List($T), f: $F, allocator: &Allocator? = null) List($U) 
     let out: List(U) = list(self.len, allocator ?? self.allocator)
     for i in 0..self.len {
         let part = f(self[i])
-        out.push_all(part.as_slice())
+        for v in part.drain() {
+            out.push(v)
+        }
         part.deinit()
     }
     return out

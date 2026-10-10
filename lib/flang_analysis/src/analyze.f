@@ -193,17 +193,17 @@ fn decl_span(decl: &Decl) SourceSpan? {
 
 fn names_code(decl: &Decl, code: String) bool {
     return decl.* match {
-        Function(f) => directives_allow(&f.directives, code)
-        Type(t) => directives_allow(&t.directives, code)
-        Test(t) => directives_allow(&t.directives, code)
+        Function(f) => directives_allow(f.directives, code)
+        Type(t) => directives_allow(t.directives, code)
+        Test(t) => directives_allow(t.directives, code)
         _ => false
     }
 }
 
-fn directives_allow(ds: &List(DeclAttribute), code: String) bool {
+fn directives_allow(ds: DeclAttribute[], code: String) bool {
     for &d in ds {
         const hit = d.* match {
-            Allow(codes) => contains_code(&codes, code)
+            Allow(codes) => contains_code(codes, code)
             _ => false
         }
         if hit {
@@ -213,7 +213,7 @@ fn directives_allow(ds: &List(DeclAttribute), code: String) bool {
     return false
 }
 
-fn contains_code(codes: &List(String), code: String) bool {
+fn contains_code(codes: String[], code: String) bool {
     for i in 0..codes.len {
         if codes[i] == code {
             return true
@@ -650,7 +650,7 @@ fn collect_edges(ctx: &ResolveCtx, modules: &List(Module), edge_from: &List(usiz
         for &d in modules[i].decls {
             d match {
                 Import(id) => {
-                    const r = resolve_import(ctx, &id.path, alloc)
+                    const r = resolve_import(ctx, id.path, alloc)
                     if r.is_some() {
                         edge_from.push(i)
                         edge_to.push(r.unwrap())
@@ -784,7 +784,7 @@ fn enqueue_imports(ctx: &ResolveCtx, m: &Module, from: usize, queue: &List(Owned
     for &d in m.decls {
         d.* match {
             Import(id) => {
-                let r = resolve_import(ctx, &id.path, alloc)
+                let r = resolve_import(ctx, id.path, alloc)
                 r match {
                     Some(p) => {
                         edge_from.push(from)
@@ -806,7 +806,7 @@ fn seed_globals(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(OwnedStr
     diags: &List(Diagnostic), alloc: &Allocator?) {
     for &g in ctx.global_imports {
         let segs = split(g.view, '.')
-        let r = resolve_import(ctx, &segs, alloc)
+        let r = resolve_import(ctx, segs.as_slice(), alloc)
         segs.deinit()
         r match {
             Some(p) => enqueue_owned(queue, seen, p)
@@ -823,7 +823,7 @@ fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(OwnedStr
     let segs: List(String) = list(2, alloc)
     segs.push("core")
     segs.push("prelude")
-    let r = resolve_import(ctx, &segs, alloc)
+    let r = resolve_import(ctx, segs.as_slice(), alloc)
     segs.deinit()
     r match {
         Some(p) => enqueue_owned(queue, seen, p)
@@ -869,7 +869,7 @@ fn shadowed_by_project(ctx: &ResolveCtx, stdlib_file: String, alloc: &Allocator?
     }
     let segs = split(rel.unwrap(), '/')
     defer segs.deinit()
-    const r = resolve_import(ctx, &segs, alloc)
+    const r = resolve_import(ctx, segs.as_slice(), alloc)
     if r.is_none() {
         return false
     }
@@ -963,7 +963,7 @@ fn mark_seen(seen: &Set(OwnedString), path: String) bool {
 }
 
 fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl, alloc: &Allocator?) {
-    let dotted = dot_join(&id.path, alloc)
+    let dotted = dot_join(id.path, alloc)
     const msg = $"unresolved import `{dotted.view}`"
     dotted.deinit()
     diags.push(error("E0001", msg, id.span))

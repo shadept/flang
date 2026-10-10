@@ -23,16 +23,16 @@ When you discover a bug or limitation:
 The checker implements parameter-declared ownership (RFC-033 plan step 1). What it does not cover
 yet:
 
-- **Pattern bindings of a lent parameter own.** `fn unwrap(self: Option($T)) T { return self match
-  { Some(v) => move v, ... } }` compiles for a non-copyable payload: `v` is an ordinary binding, so
-  the payload leaves a value the function only reads and the caller keeps a second owner. Rule 3
-  holds for the parameter's own name, not for names bound out of it.
+- **A read-only container cannot be iterated.** `fn total(xs: List(i32)) i32 { for x in xs { ... } }`
+  is E2131: `for` resolves `iter(&xs)`, and sharing a parameter without `move` is refused. The same
+  holds for a binding under one (`o match { Some(l) => for x in l ... }`). The stdlib's readers
+  take `&self`; RFC-033's read mode wants them to take `self: List(T)`, which a read-only argument
+  reaches as written.
 - **Unannotated callbacks never take ownership.** A lambda's unannotated parameter, and a call
   through a function variable whose type is still open, infer `fn(T)`; a slot typed `fn(move T)`
   does not unify with it. Write `fn(v: move T)`.
 
-**Solution:** the pattern-binding case needs the pass to treat names bound out of a lent scrutinee
-as lent.
+**Solution:** readers (`iter`, `len`, `contains`, the lookups) take `self` in read mode.
 
 ---
 
@@ -222,9 +222,11 @@ field, or a container element. Those positions need a materialized string.
 
 ---
 
-### `FunctionScheme` Leaks Its Quantified Set
+### `FunctionScheme` Leaks Its Quantified Set - RESOLVED
 
-**Status:** Open
+**Status:** Resolved 2026-10-10. `lookup` hands back `&FunctionScheme` borrows, valid until the next
+registration (every function registers in the signature phase, before any body is checked), a
+carried registry clones its schemes, and `deinit` frees the set.
 **Affected:** `lib/flang_typer/src/function_registry.f`
 
 `FunctionScheme.signature.quantified` is a `Set(VarId)` the entry owns, and `deinit` does not free
@@ -246,30 +248,28 @@ message.
 
 ### Iterators Are For Copyable Elements
 
-**Status:** Open by decision (2026-09-16)
+**Status:** Partly resolved 2026-10-10: the loop owns its iterator and a drain is not copyable. Open
+by decision (2026-09-16): relocating owning elements through an adapter chain.
 **Affected:** `stdlib/core/slice.f`, `stdlib/std/collections/*`, `stdlib/std/iter.f`
 
 The iterator protocol is defined for copyable elements. An owning element type moves through a
 container's `drain` instead, and the gaps that follow are accepted rather than closed:
 
-- **The loop does not own its iterator.** A `break` part way through a drain leaves the untaken
-  tail in the list with the length the drain set, and nothing releases the drain. Every drain in the
-  tree runs to completion.
-- **`iter` on an iterator copies it.** The protocol's `iter(self: &It) It` returns `self.*`, so
-  `let i = xs.iter()` followed by two loops iterates twice from the start, and a copied drain would
-  take from one buffer twice.
-- **Iterators that own** (`WalkIter`, `GlobIter`, `Dir`) are released by hand: `for e in
-  walk_dir(p)?` leaks the walk's stack and its OS handles.
+- **Resolved: the loop owns its iterator** (spec 7.4). A non-copyable state, or a non-copyable
+  temporary iterable `iter` only borrowed, is released on every exit, so a `break` part way through
+  a drain puts the untaken tail back, and `for e in walk_dir(p)?` releases the walk.
+- **Resolved for drains: `iter` on an iterator copies it.** `Drain` and `DictDrain` hold a
+  `NoCopy` marker and their `iter` takes `move self`. A copyable iterator's
+  `iter(self: &It) It` still returns `self.*`, so `let i = xs.iter()` followed by two loops iterates
+  twice from the start.
 
 Sorting and reversing owning elements do work: `swap` takes `&move` slots (spec 3.2), so an owning
 element moves between two places with no copy.
 
-Closing these is one decision and two rules: an iterator's own `iter` consumes (`move self`), and a
-`for` loop releases a non-copyable iterator state on every exit path - the shape RFC-032 took on
-`client_ownership_semantics`. Deferred until a concrete need makes the design decidable, notably
-what a terminal that relocates owning elements (`files.filter(p).drain()`) looks like: draining is a
-write to the source's storage, so only a selection chain over one container can offer it, and only
-through the container's own module.
+Still deferred until a concrete need makes the design decidable: what a terminal that relocates
+owning elements (`files.filter(p).drain()`) looks like. Draining is a write to the source's storage,
+so only a selection chain over one container can offer it, and only through the container's own
+module.
 
 ---
 

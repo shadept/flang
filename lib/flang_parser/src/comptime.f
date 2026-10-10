@@ -1162,17 +1162,17 @@ fn pascal_case(env: &CtEnv, text: String) String {
 pub fn flatten_module_decls(m: &Module, ctx: &ComptimeCtx, diags: &List(Diagnostic),
     allocator: &Allocator? = null) {
     let flattened: List(Decl) = list(m.decls.len, allocator)
-    splice_decls(&m.decls, ctx, diags, &flattened)
+    splice_decls(m.decls.as_slice(), ctx, diags, &flattened)
     m.set_decls(flattened)
 }
 
-fn splice_decls(decls: &List(Decl), ctx: &ComptimeCtx, diags: &List(Diagnostic), out: &List(Decl)) {
-    for i in 0..decls.len {
-        decls[i] match {
+fn splice_decls(decls: Decl[], ctx: &ComptimeCtx, diags: &List(Diagnostic), out: &List(Decl)) {
+    for d in decls {
+        d match {
             IfDirective(ifd) => {
                 eval_condition(ctx, ifd.condition) match {
                     Active(active) => {
-                        const branch: &List(Decl) = if active { &ifd.then_decls } else { &ifd.else_decls }
+                        const branch = if active { ifd.then_decls } else { ifd.else_decls }
                         splice_decls(branch, ctx, diags, out)
                     }
                     Invalid(err) => {
@@ -1187,8 +1187,7 @@ fn splice_decls(decls: &List(Decl), ctx: &ComptimeCtx, diags: &List(Diagnostic),
                     }
                 }
             }
-            // Shared with the module the declaration came from, as the arena model wants.
-            _ => { out.push_all(decls.as_slice()[i..(i + 1)]) }
+            _ => out.push(d)
         }
     }
 }

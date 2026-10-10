@@ -125,11 +125,11 @@ type LowerCtx = struct {
     const_blobs: List(List(u8))
     const_relocs: List(List(Reloc))
     // Defer schedule, mirroring the reference's per-function stack + per-scope marks: `defers`
-    // holds every pending deferred expression (copies of the AST nodes - their children stay in the
-    // module's arena), `defer_marks` the stack depth at each open block scope. Normal scope exit
-    // emits and pops its own suffix; `return`, `break`, `continue` and `?` emit down to their
-    // target depth WITHOUT popping - they traverse scopes the owning blocks still close themselves.
-    defers: List(&Expr)
+    // holds every pending deferred action (a `defer`'s expression, or a `for` loop's iterator
+    // release), `defer_marks` the stack depth at each open block scope. Normal scope exit emits and
+    // pops its own suffix; `return`, `break`, `continue` and `?` emit down to their target depth
+    // WITHOUT popping - they traverse scopes the owning blocks still close themselves.
+    defers: List(DeferItem)
     defer_marks: List(usize)
     // True while a defer flush is being emitted. An escaping construct inside a deferred expression
     // (`defer { return }`, `?` in a defer - E2091 in the reference) would recurse into the flush
@@ -273,6 +273,18 @@ type LoopFrame = struct {
     defer_depth: usize
 }
 
+type DeferItem = enum {
+    Code(&Expr)
+    Release(IterRelease)
+}
+
+// A `for` loop's call of its iterator's `deinit`: the loop owns the state `iter` returned.
+type IterRelease = struct {
+    sym: String
+    sig: &FnSig
+    state: Operand
+}
+
 // Lexical environment: a stack of bindings, innermost last. A block marks the stack on entry and
 // pops back to the mark on exit, so a `let` inside a branch or loop body cannot outlive it and an
 // inner binding shadows an outer one of the same name. Linear scan - function scopes are small, and
@@ -388,7 +400,7 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult,
     let globals: List(Global) = list(0, allocator)
     let const_blobs: List(List(u8)) = list(0, allocator)
     let const_relocs: List(List(Reloc)) = list(0, allocator)
-    let defer_stack: List(&Expr) = list(0, allocator)
+    let defer_stack: List(DeferItem) = list(0, allocator)
     let defer_marks: List(usize) = list(0, allocator)
     let ctx = LowerCtx {
         result = result,
@@ -458,7 +470,7 @@ pub fn lower_program(modules: &List(Module), fqns: &List(OwnedString), result: &
     let globals: List(Global) = list(0, allocator)
     let const_blobs: List(List(u8)) = list(0, allocator)
     let const_relocs: List(List(Reloc)) = list(0, allocator)
-    let defer_stack: List(&Expr) = list(0, allocator)
+    let defer_stack: List(DeferItem) = list(0, allocator)
     let defer_marks: List(usize) = list(0, allocator)
     // The BUILD's compile-time context, not the host's: a cross-target build (`--target-os`) must
     // lower the same `#if` branch the checker checked, or the emitted C is the host's branch of a
@@ -1349,7 +1361,9 @@ fn wire_const_inits(m: &IrModule, ctx: &LowerCtx) {
         if !(m.functions[i].name == "main") {
             continue
         }
-        calls.push_all(m.functions[i].blocks[0].instrs.as_slice())
+        for ins in m.functions[i].blocks[0].instrs.drain() {
+            calls.push(ins)
+        }
         set_instrs(&m.functions[i].blocks[0], calls)
         live.deinit()
         return
@@ -1618,18 +1632,16 @@ fn lower_pending_lambdas(m: &IrModule, ctx: &LowerCtx) {
 }
 
 fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
-    let empty_dirs: List(DeclAttribute) = list(0, ctx.allocator)
-    // The synthesized declaration shares the lambda's parameter list, which the arena owns.
-    let lam_params: List(FunctionParam) = list(pl.lam.params.len, ctx.allocator)
-    lam_params.push_all(pl.lam.params.as_slice())
+    let empty_dirs: DeclAttribute[]
+    let no_bounds: TypeBound[]
     let decl = FunctionDecl {
         span = pl.lam.span,
         is_pub = false,
-        directives = move empty_dirs,
+        directives = empty_dirs,
         name = pl.info.symbol.view,
-        params = move lam_params,
+        params = pl.lam.params,
         return_type = pl.lam.return_type,
-        bounds = list(0, ctx.allocator),
+        bounds = no_bounds,
         body = Some(pl.lam.body),
     }
     let sig_params: List(Ty) = list(pl.info.params.len, ctx.allocator)
@@ -1910,9 +1922,20 @@ fn emit_defers_down_to(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, target: usi
     let i = ctx.defers.len
     while i > target {
         i = i - 1
-        let _v = lower_expr(ctx, bb, env, ctx.defers[i])
+        ctx.defers[i] match {
+            Code(e) => {
+                let _v = lower_expr(ctx, bb, env, e)
+            }
+            Release(r) => emit_release(ctx, bb, r)
+        }
     }
     ctx.flushing = prev
+}
+
+fn emit_release(ctx: &LowerCtx, bb: &BlockBuilder, r: IterRelease) {
+    let args: List(Operand) = list(1, ctx.allocator)
+    args.push(r.state)
+    let _v = emit_call(ctx, bb, r.sym, r.sig, args)
 }
 
 // A block in expression position: its value, or the placeholder when it yields nothing.
@@ -1944,7 +1967,7 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
         // `defer expr` - registered on the schedule; it fires at the enclosing scope's exit and at
         // every escaping jump that passes through it (`return`, `break`, `continue`, `?`). The
         // schedule holds the arena's `&Expr` directly, so registering a defer copies nothing.
-        Defer(d) => ctx.defers.push(d.expr)
+        Defer(d) => ctx.defers.push(DeferItem.Code(d.expr))
 
         // Not lowered yet - named rather than caught by a wildcard, so adding a `Stmt` variant is a
         // compile error here instead of a silent skip.
@@ -1956,7 +1979,7 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
             const lookup: CtLookup = .{ ctx = ctx as &u8, resolve = no_lookup, name = lower_name }
             eval_condition_with(&ctx.comptime, lookup, ifd.condition) match {
                 Active(active) => {
-                    const stmts: &List(Stmt) = if active { &ifd.then_stmts } else { &ifd.else_stmts }
+                    const stmts = if active { ifd.then_stmts } else { ifd.else_stmts }
                     for i in 0..stmts.len {
                         if lower_stmt(ctx, bb, env, &stmts[i]) {
                             return true
@@ -2424,6 +2447,11 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
         }
     }
 
+    // Below the loop frame's depth, so `break` and `continue` leave it for the exit block; `return`
+    // and `?` flush it with everything else.
+    const release_at = ctx.defers.len
+    push_iter_release(ctx, f, state, recv, &ig.ret)
+
     let fb = bb.fb
     let head = fb.block(fb.fresh_label("fit_head"))
     let body = fb.block(fb.fresh_label("fit_body"))
@@ -2476,6 +2504,29 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
     }
 
     bb.move_to(&exit)
+    emit_defers_down_to(ctx, bb, env, release_at)
+    while ctx.defers.len > release_at {
+        let _d = ctx.defers.pop()
+    }
+}
+
+// The checker's `deinit` pick for what the loop owns, recorded on the loop variable: the state
+// `iter` returned when the pick takes that type, else the temporary iterable `iter` borrowed.
+fn push_iter_release(ctx: &LowerCtx, f: &ForStmt, state: Operand, recv: Operand, state_ty: &Ty) {
+    const dop = ctx_operator(ctx, node_id_of(f.var_span))
+    if dop.is_none() {
+        return
+    }
+    const d = dop.unwrap()
+    const sym = op_symbol(ctx, &d)
+    const sig = op_sig(ctx, &d)
+    if sym.is_none() or sig.is_none() {
+        let _u = unlowerable_why(ctx, "for-iter without its iterator's deinit symbol")
+        return
+    }
+    const s = sig.unwrap()
+    const owned = if s.params.len > 0 and s.params[0] == state_ty.* { state } else { recv }
+    ctx.defers.push(DeferItem.Release(IterRelease { sym = sym.unwrap(), sig = s, state = owned }))
 }
 
 fn lower_for_range(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt, rng: &RangeExpr) {

@@ -37,7 +37,7 @@ pub fn module_binders(m: &Module, allocator: &Allocator? = null) List(Binder) {
     for &d in m.decls {
         d.* match {
             Function(f) => {
-                push_params(&out, &f.params, f.span)
+                push_params(&out, f.params, f.span)
                 f.body match {
                     Some(b) => walk_block(&out, b, f.span)
                     None => {}
@@ -113,7 +113,7 @@ pub fn live_hint_sites(live_text: String, analyzed: &Module,
     return out
 }
 
-fn push_params(out: &List(Binder), params: &List(FunctionParam), owner: SourceSpan) {
+fn push_params(out: &List(Binder), params: FunctionParam[], owner: SourceSpan) {
     for &p in params {
         out.push(.{
             name = p.name,
@@ -307,7 +307,7 @@ fn walk_expr(out: &List(Binder), e: &Expr, owner: SourceSpan) {
             }
         }
         Lambda(l) => {
-            push_params(out, &l.params, owner)
+            push_params(out, l.params, owner)
             walk_block(out, l.body, owner)
         }
         Error(_) => {}

@@ -442,7 +442,7 @@ pub fn reverse(s: $T[]) {
 
 // Copies elements from `src` into `dest`.
 // Copies min(src.len, dest.len) elements and returns the number copied.
-pub fn copy_to(src: $T[], dest: T[]) usize {
+pub fn copy_to(src: $T[], dest: T[]) usize where T: copyable {
     const len = if src.len < dest.len { src.len } else { dest.len }
     memmove(dest.ptr, src.ptr, len * size_of(T))
     return len

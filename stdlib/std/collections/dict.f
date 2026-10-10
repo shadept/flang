@@ -601,18 +601,21 @@ pub type DictDrain = struct(K, V) {
     current: usize
     taken: usize
     count: usize
+    // A copy would hand the entries out twice.
+    __unique: NoCopy
 }
 
 // Starts a drain. The dict reads as empty while it runs; `deinit` puts back what was not taken.
 pub fn drain(self: &UnmanagedDict($K, $V)) DictDrain(K, V) {
-    let out: DictDrain(K, V) = .{ __dict = self, current = 0, taken = 0, count = self.length }
+    let out: DictDrain(K, V) = .{ __dict = self, current = 0, taken = 0, count = self.length,
+        __unique = no_copy() }
     self.length = 0
     return out
 }
 
 // A drain is its own iterable: `for (k, v) in d.drain()`.
-pub fn iter(self: &DictDrain($K, $V)) DictDrain(K, V) {
-    return self.*
+pub fn iter(self: move DictDrain($K, $V)) DictDrain(K, V) {
+    return self
 }
 
 // Moves the next key and value out of the dict, in table order, or null when every entry has been
@@ -634,7 +637,7 @@ pub fn next(self: &DictDrain($K, $V)) (K, V)? {
 }
 
 // Puts the count back: what the drain did not take is still in the table.
-pub fn deinit(self: &DictDrain($K, $V)) {
+pub fn deinit(self: move DictDrain($K, $V)) {
     self.__dict.length = self.count - self.taken
     self.__dict.dead = self.__dict.dead + self.taken
 }

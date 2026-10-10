@@ -544,7 +544,7 @@ pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &L
             d.* match {
                 Import(id) => {
                     if id.is_pub {
-                        let dotted = dotted_name(&id.path, allocator)
+                        let dotted = dotted_name(id.path, allocator)
                         const to = index_of.get(dotted.view)
                         dotted.deinit()
                         if to.is_some() {
@@ -634,7 +634,7 @@ fn check_import(id: &ImportDecl, from: usize, fqns: &List(String), index_of: &Di
     if id.span.file_id != from as i32 {
         return
     }
-    let dotted = dotted_name(&id.path, allocator)
+    let dotted = dotted_name(id.path, allocator)
     if dotted.view == "core.prelude" or index_of.get(dotted.view).is_none() {
         dotted.deinit()
         return
@@ -786,7 +786,7 @@ fn add_ty_modules(result: &TypeCheckResult, t: Ty, used: &Set(String), memo: &Di
     }
 }
 
-fn dotted_name(segs: &List(String), allocator: &Allocator?) OwnedString {
+fn dotted_name(segs: String[], allocator: &Allocator?) OwnedString {
     let sb = string_builder(0, allocator)
     defer sb.deinit()
     for i in 0..segs.len {

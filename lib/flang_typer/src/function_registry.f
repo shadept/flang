@@ -43,23 +43,38 @@ pub type FunctionScheme = struct {
     retired: bool
 }
 
-// Does NOT free `signature.quantified`, the entry's one piece of heap, and so leaks it. `FnLookup`
-// hands a caller a COPY of the candidate list, every overload resolution drops that copy, and a
-// scheme that freed on drop would take the registry's set with it. Freeing here means making lookup
-// hand back a borrow first. See docs/known-issues.md on scheme ownership.
-pub fn deinit(self: move FunctionScheme) {}
+pub fn deinit(self: move FunctionScheme) {
+    self.signature.deinit()
+}
+
+// An independent copy, owning its own quantified set.
+pub fn clone(self: &FunctionScheme, allocator: &Allocator? = null) FunctionScheme {
+    return FunctionScheme {
+        name = self.name,
+        signature = self.signature.clone(allocator),
+        module = self.module,
+        is_pub = self.is_pub,
+        is_foreign = self.is_foreign,
+        required_params = self.required_params,
+        has_variadic = self.has_variadic,
+        decl_span = self.decl_span,
+        deprecation = self.deprecation,
+        id = self.id,
+        retired = self.retired,
+    }
+}
 
 // Multi-payload variants where one payload is a generic-typed value (`List(FunctionScheme)`)
 // confuse the FLang parser - the comma inside the generic argument list is ambiguous with the
 // variant-payload separator. Wrapping the multi-payload case in its own struct keeps the variant
 // payload list unambiguous.
 pub type FnLookHiddenInfo = struct {
-    candidates: List(FunctionScheme)
+    candidates: List(&FunctionScheme)
     module: String
 }
 
 pub type FnLookup = enum {
-    FnLookFound(List(FunctionScheme))
+    FnLookFound(List(&FunctionScheme))
     FnLookHidden(FnLookHiddenInfo)
     FnLookMissing
 }
@@ -208,30 +223,23 @@ pub fn purge_retired(self: &FunctionRegistry) List(u32) {
     for name in names {
         let lst = self.by_name.get_ref(name).unwrap()
         let keep: List(FunctionScheme) = list(lst.len, self.allocator)
-        let any_dead = false
-        for j in 0..lst.len {
-            if lst[j].retired {
-                dropped.push(lst[j].id)
-                any_dead = true
+        for f in lst.drain() {
+            if f.retired {
+                dropped.push(f.id)
+                f.deinit()
                 continue
             }
-            keep.push_all(lst.as_slice()[j..(j + 1)])
+            keep.push(f)
         }
-        if !any_dead {
-            keep.deinit()
-            continue
-        }
-        lst.clear()
-        lst.push_all(keep.as_slice())
-        keep.deinit()
+        replace(lst, keep).deinit()
     }
     return dropped
 }
 
 // A copy of every live entry at the id and list position it holds, for the checker to carry into
-// the next demand while the snapshot keeps the original. Entry structs are copied by value: names,
-// modules and deprecations are views into buffers that outlive both registries, and the quantifier
-// sets are shared read-only (nothing ever frees a scheme's set).
+// the next demand while the snapshot keeps the original. Each scheme is cloned, so the two
+// registries own their quantified sets apart; names, modules and deprecations are views into
+// buffers that outlive both.
 pub fn carried_copy(self: &FunctionRegistry, allocator: &Allocator? = null) FunctionRegistry {
     let out = function_registry(allocator)
     fill_fn_carried(&out, self, allocator)
@@ -240,10 +248,10 @@ pub fn carried_copy(self: &FunctionRegistry, allocator: &Allocator? = null) Func
 
 fn fill_fn_carried(out: &FunctionRegistry, src: &FunctionRegistry, allocator: &Allocator?) {
     for entry in src.by_name {
-        // The carried registry shares each scheme's own buffers, as the previous demand's tables do
-        // throughout; only the overload list itself is fresh.
         let cl: List(FunctionScheme) = list(entry.value.len, allocator)
-        cl.push_all(entry.value.as_slice())
+        for &f in entry.value {
+            cl.push(f.clone(allocator))
+        }
         out.by_name.set(entry.key, cl)
     }
     out.next_id = src.next_id
@@ -264,7 +272,8 @@ pub fn find_by_id(self: &FunctionRegistry, id: u32) &FunctionScheme? {
 
 // Resolve `name` in the caller's visibility scope. Returns the candidates that are reachable; if
 // nothing is reachable but some hidden overloads exist, returns one of them along with its module
-// for the diagnostic hint.
+// for the diagnostic hint. The candidates point into the registry and stay valid until the next
+// `register`, `retire_module` or `purge_retired`.
 pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup {
     let overloads_opt = self.by_name.get_ref(name)
     if overloads_opt.is_none() {
@@ -272,7 +281,7 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
     }
     let overloads = overloads_opt.unwrap()
 
-    let visible: List(FunctionScheme) = list(0, self.allocator)
+    let visible: List(&FunctionScheme) = list(0, self.allocator)
     let hidden_module: String? = null
     let hidden_at: usize = 0
     for j in 0..overloads.len {
@@ -282,9 +291,7 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
             continue
         }
         if visibility_for(f, vis) {
-            // The lookup lends the registry's schemes: the candidate list shares their buffers and
-            // is released by the caller without touching them.
-            visible.push_all(overloads.as_slice()[j..(j + 1)])
+            visible.push(f)
         } else {
             if hidden_module.is_none() {
                 f.module match {
@@ -301,8 +308,8 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
         return FnLookup.FnLookFound(move visible)
     }
     if hidden_module.is_some() {
-        let one: List(FunctionScheme) = list(1, self.allocator)
-        one.push_all(overloads.as_slice()[hidden_at..(hidden_at + 1)])
+        let one: List(&FunctionScheme) = list(1, self.allocator)
+        one.push(&overloads[hidden_at])
         return FnLookup.FnLookHidden(FnLookHiddenInfo {
             candidates = move one,
             module = hidden_module.unwrap(),

@@ -156,6 +156,11 @@ touching a disk. The two functions that did read the world, `cwd` and
   `Expr`'s floor is now `InterpolatedStringExpr` (96) and `Stmt`'s is
   `IfDirectiveStmt` (96); both are `List`-shaped, so the next move on either is
   the list header, not another box.
+- **Child collections are `T[]` slices into the module arena.** The projector
+  builds each list in the arena and freezes it (`frozen`), so a node holds no
+  owning container and every AST type is copyable: the module, its chunk
+  modules, the checker's tables and synthetic nodes share nodes by plain copy.
+  Only `Module.decls` stays a `List`, since the module owns it and appends to it.
 
 ## Type System
 
