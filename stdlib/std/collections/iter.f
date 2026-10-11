@@ -698,7 +698,7 @@ pub fn each(it: move $I, f: move $F) where I: Iterator, F: fn(I.Item) {
 }
 
 // Number of elements. Consumes the iterator.
-pub fn count(it: move $I) usize where I: Iterator {
+pub fn count(it: move Iterator) usize {
     let n: usize = 0
     for item in it {
         n = n + 1
@@ -851,6 +851,20 @@ pub fn max_by(it: move $I, key: $F) I.Item? where I: Iterator(Item: copyable),
         }
     }
     return Some(best)
+}
+
+// Appends every element `it` yields to the list, in order.
+pub fn extend(self: &List($T), it: move Iterator(Item = T)) {
+    for item in it {
+        self.push(item)
+    }
+}
+
+// Appends every element `it` yields to the list, in order.
+pub fn extend(self: &UnmanagedList($T), it: move Iterator(Item = T), allocator: &Allocator) {
+    for item in it {
+        self.push(item, allocator)
+    }
 }
 
 // Collect into a fresh List.
@@ -1195,6 +1209,16 @@ test "uniq collapses consecutive runs" {
     defer out.deinit()
     assert_eq(out.len, 3 as usize, "1, 2, 1")
     assert_eq(out[2], 1i32, "the later 1 is not a duplicate of the earlier one")
+}
+
+test "extend appends what an iterator yields" {
+    let xs = list123()
+    defer xs.deinit()
+    const ys = list123()
+    xs.extend(ys.iter().filter(fn(x) { x != 2 }))
+    ys.deinit()
+    assert_eq(xs.len, 5usize, "two of the three appended")
+    assert_eq(xs[4], 3i32, "in order")
 }
 
 test "nth, once and repeat" {
