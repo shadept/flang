@@ -67,7 +67,7 @@ pub fn multimap(allocator: &Allocator) MultiMap($K, $V) {
 // - `key`: stored on first sight; a later `add` of an equal key reuses the stored one, so an owned
 //   key passed again is the caller's to deinit.
 // - `value`: owned by the map from here; deinited by `remove_key` or `deinit`.
-pub fn add(self: &MultiMap($K, $V), key: move K, value: move V) {
+pub fn add(self: &MultiMap($K, $V), key: move K, value: move V) where K: Hash + Eq {
     const idx = self.pool.len as u32
     self.pool.push(Slot(V) { value = move value, next = NONE }, self.allocator)
     const chain = self.chains.get_or_insert_with(key, fn() { Chain { first = NONE, last = NONE,
@@ -83,7 +83,7 @@ pub fn add(self: &MultiMap($K, $V), key: move K, value: move V) {
 }
 
 // Returns the number of values under `key`; zero for a key never added or since removed.
-pub fn count(self: &MultiMap($K, $V), key: K) usize {
+pub fn count(self: &MultiMap($K, $V), key: K) usize where K: Hash + Eq {
     return self.chains.get(key) match {
         Some(c) => c.count as usize
         None => 0usize
@@ -91,7 +91,7 @@ pub fn count(self: &MultiMap($K, $V), key: K) usize {
 }
 
 // Returns whether `key` has any values.
-pub fn contains(self: &MultiMap($K, $V), key: K) bool {
+pub fn contains(self: &MultiMap($K, $V), key: K) bool where K: Hash + Eq {
     return self.chains.contains(key)
 }
 
@@ -109,7 +109,7 @@ pub fn total(self: &MultiMap($K, $V)) usize {
 //
 // The values' slots stay in the pool, unreachable, until `compact` reclaims them; `total` no longer
 // counts them. Returns how many values were removed, zero for an absent key.
-pub fn remove_key(self: &MultiMap($K, $V), key: K) usize where V: copyable {
+pub fn remove_key(self: &MultiMap($K, $V), key: K) usize where V: copyable, K: Hash + Eq {
     const gone = self.chains.remove(key)
     if gone.is_none() {
         return 0
@@ -169,7 +169,7 @@ pub type ValuesIter = struct(V) {
 }
 
 // Iterates the values under `key` by value, in insertion order; nothing for an absent key.
-pub fn values(self: &MultiMap($K, $V), key: K) ValuesIter(V) {
+pub fn values(self: &MultiMap($K, $V), key: K) ValuesIter(V) where K: Hash + Eq {
     const first = self.chains.get(key) match {
         Some(c) => c.first
         None => NONE
@@ -201,7 +201,8 @@ pub type ValuesRefIter = struct(V) {
 }
 
 // Iterates the values under `key` by reference, in insertion order; nothing for an absent key.
-pub fn values_ref(self: &MultiMap($K, $V), key: K) ValuesRefIter(V) where V: copyable {
+pub fn values_ref(self: &MultiMap($K, $V), key: K) ValuesRefIter(V) where V: copyable,
+K: Hash + Eq {
     const first = self.chains.get(key) match {
         Some(c) => c.first
         None => NONE

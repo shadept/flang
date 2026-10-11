@@ -10,12 +10,12 @@ type Handle = struct {
 pub fn deinit(self: move Handle) {
 }
 
-pub fn op_cmp(a: &Handle, b: &Handle) Ord {
+pub fn op_cmp(a: Handle, b: Handle) Ord {
     return op_cmp(a.fd, b.fd)
 }
 
 // Sorting moves elements through `swap`, whose `&move` slots take from one place and refill it from
-// the other - no copy, and no byte-level helper.
+// the other - no copy, and no byte-level helper. `op_cmp` reads its operands where they lie.
 pub fn main() i32 {
     let xs: List(Handle) = list(3)
     xs.push(Handle { fd = 9 })

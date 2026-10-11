@@ -117,7 +117,7 @@ pub fn last(s: $T[]) T? where T: copyable {
 // =============================================================================
 
 // Returns true if the slice contains `value`.
-pub fn contains(s: $T[], value: T) bool {
+pub fn contains(s: $T[], value: T) bool where T: Eq {
     for i in 0..s.len {
         if s[i] == value {
             return true
@@ -127,7 +127,7 @@ pub fn contains(s: $T[], value: T) bool {
 }
 
 // Returns the index of the first occurrence of `value`, or null if not found.
-pub fn index_of(s: $T[], value: T) usize? {
+pub fn index_of(s: $T[], value: T) usize? where T: Eq {
     for i in 0..s.len {
         if s[i] == value {
             return Some(i)
@@ -137,7 +137,7 @@ pub fn index_of(s: $T[], value: T) usize? {
 }
 
 // Returns the index of the last occurrence of `value`, or null if not found.
-pub fn last_index_of(s: $T[], value: T) usize? {
+pub fn last_index_of(s: $T[], value: T) usize? where T: Eq {
     let i = s.len
     for _i in 0..s.len {
         i = i - 1
@@ -230,7 +230,7 @@ pub fn partition_point(s: $T[], pred: $F) usize {
 // could be inserted and keep `s` sorted. `s.len` when every element is smaller.
 //
 // - `s`: must be sorted ascending.
-pub fn lower_bound(s: $T[], value: T) usize {
+pub fn lower_bound(s: $T[], value: T) usize where T: Ordered {
     return s.partition_point(fn(x) { x < value })
 }
 
@@ -238,14 +238,14 @@ pub fn lower_bound(s: $T[], value: T) usize {
 // could be inserted and keep `s` sorted. `upper_bound - lower_bound` counts the copies of `value`.
 //
 // - `s`: must be sorted ascending.
-pub fn upper_bound(s: $T[], value: T) usize {
+pub fn upper_bound(s: $T[], value: T) usize where T: Ordered {
     return s.partition_point(fn(x) { !(value < x) })
 }
 
 // Returns the index of `value`, or null when absent; with duplicates, the first.
 //
 // - `s`: must be sorted ascending; the result is meaningless otherwise.
-pub fn binary_search(s: $T[], value: T) usize? {
+pub fn binary_search(s: $T[], value: T) usize? where T: Ordered {
     const i = s.lower_bound(value)
     if i < s.len and s[i] == value {
         return Some(i)
@@ -477,7 +477,7 @@ pub fn as_bytes(s: $T[]) u8[] where T: copyable {
 }
 
 // Element-wise equality: the same length and `==` at every index.
-pub fn op_eq(a: $T[], b: T[]) bool {
+pub fn op_eq(a: $T[], b: T[]) bool where T: Eq {
     if a.len != b.len {
         return false
     }

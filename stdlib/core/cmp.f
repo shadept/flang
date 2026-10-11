@@ -21,6 +21,18 @@ pub type Ord = enum {
     Greater = 1
 }
 
+// A type `==` applies to: an `op_eq` of its own, the built-in operator of a primitive or a
+// payload-less enum, or one derived from `op_ne` or `op_cmp`.
+pub type Eq = contract {
+    fn op_eq(a: Self, b: Self) bool
+}
+
+// A totally ordered type: `op_cmp` of its own (every primitive and `String` have one), and the `==`
+// it derives. `<`, `>`, `<=`, `>=` derive from `op_cmp` (spec 5.2).
+pub type Ordered = Eq + contract {
+    fn op_cmp(a: Self, b: Self) Ord
+}
+
 // Equality on Ord so `cmp(a, b) == Ord.Less` etc. works. `op_ne` auto-derives.
 pub fn op_eq(a: Ord, b: Ord) bool {
     return a match {

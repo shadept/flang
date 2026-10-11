@@ -377,18 +377,18 @@ pub fn truncate(list: &UnmanagedList($T), n: usize) {
     }
 }
 
-// Sorts in place, ascending by `<`.
-pub fn sort(list: &UnmanagedList($T)) {
+// Sorts in place, ascending by `op_cmp`.
+pub fn sort(list: &UnmanagedList($T)) where T: Ordered {
     sort(list.as_slice())
 }
 
-// Sorts in place by `cmp`, an `fn(T, T) Ord`.
-pub fn sort(list: &UnmanagedList($T), cmp: $F) {
+// Sorts in place by `cmp`.
+pub fn sort(list: &UnmanagedList($T), cmp: $F) where F: fn(T, T) Ord {
     sort(list.as_slice(), cmp)
 }
 
 // Sorts in place by `key(x)` ascending, keeping the order of equal keys.
-pub fn sort_by(self: &UnmanagedList($T), key: $F) {
+pub fn sort_by(self: &UnmanagedList($T), key: $F) where F: fn(T) $K, K: Ordered {
     self.as_slice().sort_by(key)
 }
 
@@ -491,17 +491,17 @@ pub fn binary_search(self: &UnmanagedList($T), value: T) usize? {
 }
 
 // Returns whether any element equals `value`.
-pub fn contains(self: &UnmanagedList($T), value: T) bool {
+pub fn contains(self: &UnmanagedList($T), value: T) bool where T: Eq {
     return self.as_slice().contains(value)
 }
 
 // Returns the index of the first element equal to `value`, or null.
-pub fn index_of(self: &UnmanagedList($T), value: T) usize? {
+pub fn index_of(self: &UnmanagedList($T), value: T) usize? where T: Eq {
     return self.as_slice().index_of(value)
 }
 
 // Returns the index of the last element equal to `value`, or null.
-pub fn last_index_of(self: &UnmanagedList($T), value: T) usize? {
+pub fn last_index_of(self: &UnmanagedList($T), value: T) usize? where T: Eq {
     return self.as_slice().last_index_of(value)
 }
 
@@ -797,80 +797,80 @@ pub fn deinit(self: move Drain($T)) {
 // `to_owned_slice` and `flat_map` are `List`'s alone.
 // =============================================================================
 
-#define(managed_list, Self: Ident) {
+#define(managed_list, Name: Ident) {
     // Ensures room for at least `capacity` elements. Panics when the allocation fails.
-    pub fn reserve(self: &#(Self)($T), capacity: usize) {
+    pub fn reserve(self: &#(Name)($T), capacity: usize) {
         self.__storage.reserve(capacity, self.allocator)
     }
 
     // Appends `value`, growing when full. Panics when the allocation fails.
-    pub fn push(self: &#(Self)($T), value: move T) {
+    pub fn push(self: &#(Name)($T), value: move T) {
         self.__storage.push(value, self.allocator)
     }
 
     // Appends every element of `xs`, in order. `xs` must not alias the list's own storage.
-    pub fn push_all(self: &#(Self)($T), xs: T[]) where T: copyable {
+    pub fn push_all(self: &#(Name)($T), xs: T[]) where T: copyable {
         self.__storage.push_all(xs, self.allocator)
     }
 
     // Inserts `value` at `index`, shifting everything at and after it one slot toward the end.
     // `index == len` appends. Panics past the end. Takes the element at `index` out, shifting what
     // follows toward the front. Null past the end.
-    pub fn remove_at(self: &#(Self)($T), index: usize) T? {
+    pub fn remove_at(self: &#(Name)($T), index: usize) T? {
         return self.__storage.remove_at(index)
     }
 
-    pub fn insert(self: &#(Self)($T), index: usize, value: move T) {
+    pub fn insert(self: &#(Name)($T), index: usize, value: move T) {
         self.__storage.insert(index, value, self.allocator)
     }
 
     // Returns a new list of `f(x)` for every element, in order.
-    pub fn map(self: &#(Self)($T), f: $F, allocator: &Allocator? = null) List($U) {
+    pub fn map(self: &#(Name)($T), f: $F, allocator: &Allocator? = null) List($U) {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.map(f, alloc), allocator = alloc }
     }
 
     // Returns a new list of the elements `keep` accepts, in order.
-    pub fn filter(self: &#(Self)($T), keep: $F, allocator: &Allocator? = null) List(T) where T: copyable {
+    pub fn filter(self: &#(Name)($T), keep: $F, allocator: &Allocator? = null) List(T) where T: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.filter(keep, alloc), allocator = alloc }
     }
 
     // Returns a new list of the elements `drop` rejects, in order: `filter` with the predicate
     // negated.
-    pub fn remove(self: &#(Self)($T), drop: $F, allocator: &Allocator? = null) List(T) where T: copyable {
+    pub fn remove(self: &#(Name)($T), drop: $F, allocator: &Allocator? = null) List(T) where T: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.remove(drop, alloc), allocator = alloc }
     }
 
     // Returns a new list of everything after the first `n` elements; empty when `n` exceeds the
     // length.
-    pub fn drop_first(self: &#(Self)($T), n: usize, allocator: &Allocator? = null) List(T) where T: copyable {
+    pub fn drop_first(self: &#(Name)($T), n: usize, allocator: &Allocator? = null) List(T) where T: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.drop_first(n, alloc), allocator = alloc }
     }
 
     // Returns a reversed copy.
-    pub fn reversed(self: &#(Self)($T), allocator: &Allocator? = null) List(T) where T: copyable {
+    pub fn reversed(self: &#(Name)($T), allocator: &Allocator? = null) List(T) where T: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.reversed(alloc), allocator = alloc }
     }
 
     // Returns a new list of the last `n` elements, or all of them when `n` exceeds the length.
-    pub fn take_last(self: &#(Self)($T), n: usize, allocator: &Allocator? = null) List(T) where T: copyable {
+    pub fn take_last(self: &#(Name)($T), n: usize, allocator: &Allocator? = null) List(T) where T: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.take_last(n, alloc), allocator = alloc }
     }
 
     // Returns a new list pairing elements positionally with `other`, stopping at the shorter.
-    pub fn zip(self: &#(Self)($T), other: &#(Self)($B), allocator: &Allocator? = null) List((T,
+    pub fn zip(self: &#(Name)($T), other: &#(Name)($B), allocator: &Allocator? = null) List((T,
             B)) where T: copyable, B: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.zip(other.op_deref(), alloc), allocator = alloc }
     }
 
     // Splits into two new lists, (accepted, rejected) by `pred`, each in order.
-    pub fn partition(self: &#(Self)($T), pred: $F,
+    pub fn partition(self: &#(Name)($T), pred: $F,
         allocator: &Allocator? = null) (List(T), List(T)) where T: copyable {
         const alloc = allocator ?? self.allocator
         let parts = self.__storage.partition(pred, alloc)
@@ -880,14 +880,14 @@ pub fn deinit(self: move Drain($T)) {
 
     // Returns a new list of every inner list's elements, in order, in one allocation sized from the
     // inner lengths. The inner lists are left untouched.
-    pub fn flatten(self: &#(Self)(List($T)), allocator: &Allocator? = null) List(T) where T: copyable {
+    pub fn flatten(self: &#(Name)(List($T)), allocator: &Allocator? = null) List(T) where T: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.flatten(alloc), allocator = alloc }
     }
 
     // Returns a copy with runs of consecutive `==` duplicates collapsed to one element, `sort |
     // uniq` style: sort first for whole-list uniqueness.
-    pub fn uniq(self: &#(Self)($T), allocator: &Allocator? = null) List(T) where T: copyable {
+    pub fn uniq(self: &#(Name)($T), allocator: &Allocator? = null) List(T) where T: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.uniq(alloc), allocator = alloc }
     }

@@ -2,6 +2,7 @@ pub import core.cmp
 pub import core.deinit
 pub import core.hash
 pub import core.math
+pub import core.ops
 pub import core.option
 pub import core.panic
 pub import core.range

@@ -807,8 +807,8 @@ fn contains_index(xs: &List(usize), v: usize) bool {
     return false
 }
 
-// By reference: `ImportSite` owns its name, and an owning element is compared where it lies.
-fn cmp_site(a: &ImportSite, b: &ImportSite) Ord {
+// Reads both sites in place: `ImportSite` owns its name, so neither is copied.
+fn cmp_site(a: ImportSite, b: ImportSite) Ord {
     if a.span.file_id != b.span.file_id {
         return op_cmp(a.span.file_id, b.span.file_id)
     }

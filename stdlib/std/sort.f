@@ -2,11 +2,11 @@
 //
 // All algorithms share the same generalized signature:
 //
-//     pub fn <algo>(s: $T[])                           -- uses op_cmp
-//     pub fn <algo>(s: $T[], cmp: $F)  -- custom comparator: any callable fn(T, T) Ord
+//     pub fn <algo>(s: $T[]) where T: Ordered                -- uses op_cmp
+//     pub fn <algo>(s: $T[], cmp: $F) where F: fn(T, T) Ord   -- custom comparator
 //
-// The comparator takes elements by value when `T` is copyable and by reference, fn(&T, &T) Ord,
-// when it is not. The comparator-less forms call op_cmp the same way.
+// Comparison reads: `op_cmp` and the comparator take both elements in read mode (spec 3.2), so an
+// owning element is compared where it lies, never copied or consumed.
 //
 // `sort` aliases `powersort` (stable, O(n log n), fast on partially sorted input). Direct algorithm
 // calls remain available when a specific behavior is desired:
@@ -29,32 +29,14 @@ import std.test
 const INSERTION_CUTOFF: usize = 24
 
 // =============================================================================
-// Element access
-// =============================================================================
-
-fn _order(a: &$T, b: &T, cmp: $F) Ord {
-    let o = Ord.Equal
-    #if type_info(T).copyable {
-        o = cmp(a.*, b.*)
-    } else {
-        o = cmp(a, b)
-    }
-    return o
-}
-
-// =============================================================================
 // Insertion sort
 // =============================================================================
 
-pub fn insertion_sort(s: $T[]) {
-    #if type_info(T).copyable {
-        _insertion_sort_range(s, 0, s.len, fn(a: T, b: T) Ord { return op_cmp(a, b) })
-    } else {
-        _insertion_sort_range(s, 0, s.len, fn(a: &T, b: &T) Ord { return op_cmp(a, b) })
-    }
+pub fn insertion_sort(s: $T[]) where T: Ordered {
+    _insertion_sort_range(s, 0, s.len, fn(a: T, b: T) Ord { return op_cmp(a, b) })
 }
 
-pub fn insertion_sort(s: $T[], cmp: $F) {
+pub fn insertion_sort(s: $T[], cmp: $F) where F: fn(T, T) Ord {
     _insertion_sort_range(s, 0, s.len, cmp)
 }
 
@@ -79,7 +61,7 @@ fn _insertion_sort_range(s: $T[], lo: usize, hi: usize, cmp: $F) {
         // An owning element cannot be held in a temporary, so it walks down by swaps.
         for i in (lo + 1)..hi {
             let j = i
-            while j > lo and cmp(&s[j], &s[j - 1]) == Ord.Less {
+            while j > lo and cmp(s[j], s[j - 1]) == Ord.Less {
                 swap(&s[j], &s[j - 1])
                 j = j - 1
             }
@@ -91,15 +73,11 @@ fn _insertion_sort_range(s: $T[], lo: usize, hi: usize, cmp: $F) {
 // Quicksort
 // =============================================================================
 
-pub fn quicksort(s: $T[]) {
-    #if type_info(T).copyable {
-        _quicksort_range(s, 0, s.len, fn(a: T, b: T) Ord { return op_cmp(a, b) })
-    } else {
-        _quicksort_range(s, 0, s.len, fn(a: &T, b: &T) Ord { return op_cmp(a, b) })
-    }
+pub fn quicksort(s: $T[]) where T: Ordered {
+    _quicksort_range(s, 0, s.len, fn(a: T, b: T) Ord { return op_cmp(a, b) })
 }
 
-pub fn quicksort(s: $T[], cmp: $F) {
+pub fn quicksort(s: $T[], cmp: $F) where F: fn(T, T) Ord {
     _quicksort_range(s, 0, s.len, cmp)
 }
 
@@ -150,11 +128,11 @@ fn _partition(s: $T[], lo: usize, hi: usize, cmp: $F) usize {
         // Scan up from the left past elements strictly less than pivot. Stops at pivot_slot at the
         // latest (s[pivot_slot] == pivot).
         i = i + 1
-        while _order(&s[i], pivot, cmp) == Ord.Less { i = i + 1 }
+        while cmp(s[i], pivot.*) == Ord.Less { i = i + 1 }
         // Scan down from the right past elements strictly greater than pivot. Stops at `lo` at the
         // latest (s[lo] <= pivot from median-of-three).
         j = j - 1
-        while _order(&s[j], pivot, cmp) == Ord.Greater { j = j - 1 }
+        while cmp(s[j], pivot.*) == Ord.Greater { j = j - 1 }
         if i >= j {
             break
         }
@@ -169,13 +147,13 @@ fn _partition(s: $T[], lo: usize, hi: usize, cmp: $F) usize {
 // Sorts s[a], s[b], s[c] in ascending order under cmp. Three comparisons, up to three swaps -
 // classical 3-element insertion sort.
 fn _sort3(s: $T[], a: usize, b: usize, c: usize, cmp: $F) {
-    if _order(&s[b], &s[a], cmp) == Ord.Less {
+    if cmp(s[b], s[a]) == Ord.Less {
         swap(&s[a], &s[b])
     }
-    if _order(&s[c], &s[b], cmp) == Ord.Less {
+    if cmp(s[c], s[b]) == Ord.Less {
         swap(&s[b], &s[c])
     }
-    if _order(&s[b], &s[a], cmp) == Ord.Less {
+    if cmp(s[b], s[a]) == Ord.Less {
         swap(&s[a], &s[b])
     }
 }
@@ -198,15 +176,11 @@ fn _sort3(s: $T[], a: usize, b: usize, c: usize, cmp: $F) {
 // Reference: Munro & Wild, "Nearly-Optimal Mergesorts: Fast, Practical Sorting Methods That
 // Optimally Adapt to Existing Runs" (ESA 2018).
 
-pub fn powersort(s: $T[]) {
-    #if type_info(T).copyable {
-        _powersort_impl(s, fn(a: T, b: T) Ord { return op_cmp(a, b) })
-    } else {
-        _powersort_impl(s, fn(a: &T, b: &T) Ord { return op_cmp(a, b) })
-    }
+pub fn powersort(s: $T[]) where T: Ordered {
+    _powersort_impl(s, fn(a: T, b: T) Ord { return op_cmp(a, b) })
 }
 
-pub fn powersort(s: $T[], cmp: $F) {
+pub fn powersort(s: $T[], cmp: $F) where F: fn(T, T) Ord {
     _powersort_impl(s, cmp)
 }
 
@@ -246,7 +220,7 @@ fn _powersort_owning(s: $T[], cmp: $F) {
     for i in 0..n {
         order[i] = i
     }
-    _powersort_impl(order, fn(a: usize, b: usize) Ord { return _order(&s[a], &s[b], cmp) })
+    _powersort_impl(order, fn(a: usize, b: usize) Ord { return cmp(s[a], s[b]) })
     _apply_order(s, order)
 }
 
@@ -348,13 +322,13 @@ fn _next_run(s: $T[], lo: usize, hi: usize, cmp: $F) usize {
         return hi
     }
     let end = lo + 1
-    if _order(&s[end], &s[lo], cmp) == Ord.Less {
+    if cmp(s[end], s[lo]) == Ord.Less {
         // Strictly descending - scan, then reverse in place.
-        while end < hi and _order(&s[end], &s[end - 1], cmp) == Ord.Less { end = end + 1 }
+        while end < hi and cmp(s[end], s[end - 1]) == Ord.Less { end = end + 1 }
         _reverse_range(s, lo, end)
     } else {
         // Non-descending.
-        while end < hi and _order(&s[end], &s[end - 1], cmp) != Ord.Greater { end = end + 1 }
+        while end < hi and cmp(s[end], s[end - 1]) != Ord.Greater { end = end + 1 }
     }
     // Force every run to at least INSERTION_CUTOFF elements. The existing run is already sorted, so
     // insertion sort just folds in the tail efficiently.
@@ -426,7 +400,7 @@ fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: $F) whe
     while l < mid and r < hi {
         // `!= Less` (i.e. left <= right) keeps the merge stable: equal keys from the left half
         // always go first.
-        if _order(&s[r], &scratch[l], cmp) == Ord.Less {
+        if cmp(s[r], scratch[l]) == Ord.Less {
             s[w] = s[r]
             r = r + 1
         } else {
@@ -444,11 +418,11 @@ fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: $F) whe
 // Default sort (= powersort)
 // =============================================================================
 
-pub fn sort(s: $T[]) {
+pub fn sort(s: $T[]) where T: Ordered {
     powersort(s)
 }
 
-pub fn sort(s: $T[], cmp: $F) {
+pub fn sort(s: $T[], cmp: $F) where F: fn(T, T) Ord {
     powersort(s, cmp)
 }
 
@@ -659,14 +633,12 @@ fn sort_test_owned(key: i32, tag: i32) SortTestOwned {
     return .{ key = key, tag = tag }
 }
 
-fn op_cmp(a: &SortTestOwned, b: &SortTestOwned) Ord {
+fn op_cmp(a: SortTestOwned, b: SortTestOwned) Ord {
     return op_cmp(a.key, b.key)
 }
 
 // Sorts `s` in place by `key(x)` ascending, keeping the order of equal keys.
-//
-// - `key`: its result type needs `<`.
-pub fn sort_by(s: $T[], key: $F) {
+pub fn sort_by(s: $T[], key: $F) where F: fn(T) $K, K: Ordered {
     sort(s, fn(a, b) {
         let ka = key(a)
         let kb = key(b)

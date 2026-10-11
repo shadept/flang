@@ -67,18 +67,18 @@ pub fn sign(x: $T) i8 {
 }
 
 // Returns the smaller of a and b.
-pub fn min(a: $T, b: T) T where T: copyable {
+pub fn min(a: $T, b: T) T where T: copyable + Ordered {
     return if a < b { a } else { b }
 }
 
 // Returns the larger of a and b.
-pub fn max(a: $T, b: T) T where T: copyable {
+pub fn max(a: $T, b: T) T where T: copyable + Ordered {
     return if a < b { b } else { a }
 }
 
 // Clamps x to the inclusive range [lower, upper].
 // Returns lower if x < lower, upper if x > upper, otherwise x.
-pub fn clamp(x: $T, lower: T, upper: T) T where T: copyable {
+pub fn clamp(x: $T, lower: T, upper: T) T where T: copyable + Ordered {
     return max(lower, min(x, upper))
 }
 

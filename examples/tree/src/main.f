@@ -36,7 +36,7 @@ pub fn deinit(self: move Entry) {
     self.name.deinit()
 }
 
-fn entry_cmp(a: &Entry, b: &Entry) Ord {
+fn entry_cmp(a: Entry, b: Entry) Ord {
     return op_cmp(a.name.view, b.name.view)
 }
 

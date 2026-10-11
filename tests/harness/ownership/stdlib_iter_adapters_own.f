@@ -1,6 +1,5 @@
 //! TEST: stdlib_iter_adapters_own
 //! EXIT: 6
-//! SKIP: std.collections.iter is disabled until RFC-019 contracts constrain `$I`
 
 import std.collections.iter
 
@@ -13,6 +12,8 @@ type Gen = struct {
 fn gen(n: i32) Gen {
     return .{ id = 7, left = n }
 }
+
+pub fn deinit(self: move Gen) {}
 
 pub fn iter(self: move Gen) Gen {
     return self
