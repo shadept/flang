@@ -275,7 +275,7 @@ pub fn add(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V,
 // The reference is valid until the next insert, which may move the table. Panics when the table
 // cannot grow.
 pub fn get_or_insert_with(self: &UnmanagedDict($K, $V), key: move K, make: $F,
-    allocator: &Allocator) &V {
+    allocator: &Allocator) &V where F: fn() V {
     const found = self.find_entry(key)
     if found.is_some() {
         const entry = found.unwrap()
@@ -393,7 +393,7 @@ pub fn clear(self: &UnmanagedDict($K, $V)) {
 // Mutate the value for `key` in place via `f(&value)`. Returns whether the key was present.
 // In-place mutation (not get-modify-set) is the only sound shape for owned values: `set` deinits
 // the value it overwrites.
-pub fn update(self: &UnmanagedDict($K, $V), key: K, f: $F) bool {
+pub fn update(self: &UnmanagedDict($K, $V), key: K, f: $F) bool where F: fn(&V) {
     let r = self.get_ref(key)
     if r.is_none() {
         return false
@@ -515,7 +515,8 @@ pub fn get_or(self: &UnmanagedDict($K, $V), key: K, fallback: move V) V where V:
 
 // The value for `key`, or `make()` when absent - the lazy counterpart of `get_or`, for fallbacks
 // that are expensive (or effectful) to build.
-pub fn get_or_else(self: &UnmanagedDict($K, $V), key: K, make: $F) V where V: copyable {
+pub fn get_or_else(self: &UnmanagedDict($K, $V), key: K, make: $F) V where V: copyable,
+    F: fn() V {
     let v = self.get(key)
     if v.is_some() {
         return v.unwrap()
@@ -524,14 +525,14 @@ pub fn get_or_else(self: &UnmanagedDict($K, $V), key: K, make: $F) V where V: co
 }
 
 // Calls `f(key, value)` on every entry, in unspecified order.
-pub fn each(self: &UnmanagedDict($K, $V), f: $F) {
+pub fn each(self: &UnmanagedDict($K, $V), f: $F) where F: fn(K, V) {
     for e in self.iter() {
         f(e.key, e.value)
     }
 }
 
 // Returns whether any entry satisfies `pred(key, value)`. False when empty.
-pub fn any(self: &UnmanagedDict($K, $V), pred: $F) bool {
+pub fn any(self: &UnmanagedDict($K, $V), pred: $F) bool where F: fn(K, V) bool {
     for e in self.iter() {
         if pred(e.key, e.value) {
             return true
@@ -541,7 +542,7 @@ pub fn any(self: &UnmanagedDict($K, $V), pred: $F) bool {
 }
 
 // Returns whether every entry satisfies `pred(key, value)`. True when empty.
-pub fn all(self: &UnmanagedDict($K, $V), pred: $F) bool {
+pub fn all(self: &UnmanagedDict($K, $V), pred: $F) bool where F: fn(K, V) bool {
     for e in self.iter() {
         let ok: bool = pred(e.key, e.value)
         if !ok {
@@ -552,7 +553,7 @@ pub fn all(self: &UnmanagedDict($K, $V), pred: $F) bool {
 }
 
 // Returns how many entries satisfy `pred(key, value)`.
-pub fn count(self: &UnmanagedDict($K, $V), pred: $F) usize {
+pub fn count(self: &UnmanagedDict($K, $V), pred: $F) usize where F: fn(K, V) bool {
     let n: usize = 0
     for e in self.iter() {
         if pred(e.key, e.value) {
@@ -705,7 +706,7 @@ pub fn values(self: &UnmanagedDict($K, $V)) ValuesIter(K, V) {
 // Returns a new dict with the same keys and `f(key, value)` as each value. Keys are copied bitwise;
 // an owned key is then owned by both dicts, and only one may deinit it.
 pub fn map_values(self: &UnmanagedDict($K, $V), f: $F, allocator: &Allocator) UnmanagedDict(K,
-    $U) where K: copyable {
+    $U) where K: copyable, F: fn(K, V) U {
     let out: UnmanagedDict(K, U)
     for e in self.iter() {
         out.set(e.key, f(e.key, e.value), allocator)
@@ -716,7 +717,7 @@ pub fn map_values(self: &UnmanagedDict($K, $V), f: $F, allocator: &Allocator) Un
 // Returns a new dict of the entries `pred(key, value)` accepts. Keys and values are copied bitwise;
 // an owned key or value is then owned by both dicts, and only one may deinit it.
 pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) UnmanagedDict(K,
-    V) where K: copyable, V: copyable {
+    V) where K: copyable, V: copyable, F: fn(K, V) bool {
     let out: UnmanagedDict(K, V)
     for e in self.iter() {
         if pred(e.key, e.value) {
@@ -767,7 +768,7 @@ pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) Unm
 
     // Returns a reference to the value for `key`, inserting `make()` under it first when the key is
     // absent. `make` runs only on a miss. The reference is valid until the next insert.
-    pub fn get_or_insert_with(self: &#(Name)($K, $V), key: move K, make: $F) &V {
+    pub fn get_or_insert_with(self: &#(Name)($K, $V), key: move K, make: $F) &V where F: fn() V {
         return self.__storage.get_or_insert_with(key, make, self.allocator)
     }
 
@@ -780,14 +781,14 @@ pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) Unm
 
     // Returns a new dict with the same keys and `f(key, value)` as each value; keys are copied
     // bitwise. The result is on `allocator`, or on the receiver's when null.
-    pub fn map_values(self: &#(Name)($K, $V), f: $F, allocator: &Allocator? = null) Dict(K, $U) where K: copyable {
+    pub fn map_values(self: &#(Name)($K, $V), f: $F, allocator: &Allocator? = null) Dict(K, $U) where K: copyable, F: fn(K, V) U {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.map_values(f, alloc), allocator = alloc }
     }
 
     // Returns a new dict of the entries `pred(key, value)` accepts, copied bitwise. The result is
     // on `allocator`, or on the receiver's when null.
-    pub fn filter(self: &#(Name)($K, $V), pred: $F, allocator: &Allocator? = null) Dict(K, V) where K: copyable, V: copyable {
+    pub fn filter(self: &#(Name)($K, $V), pred: $F, allocator: &Allocator? = null) Dict(K, V) where K: copyable, V: copyable, F: fn(K, V) bool {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.filter(pred, alloc), allocator = alloc }
     }

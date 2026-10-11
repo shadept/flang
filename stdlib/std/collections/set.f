@@ -74,7 +74,7 @@ pub fn deinit(self: move UnmanagedSet($T), allocator: &Allocator) {
 // Returns a new set of the elements `pred` accepts, copied bitwise: an owned element is then owned
 // by both sets, and only one may deinit it.
 pub fn filter(self: &UnmanagedSet($T), pred: $F,
-    allocator: &Allocator) UnmanagedSet(T) where T: copyable {
+    allocator: &Allocator) UnmanagedSet(T) where T: copyable, F: fn(T) bool {
     let out: UnmanagedSet(T)
     for x in self.iter() {
         if pred(x) {
@@ -135,14 +135,14 @@ pub fn clear(self: &UnmanagedSet($T)) {
 }
 
 // Calls `f` on every element, in unspecified order.
-pub fn each(self: &UnmanagedSet($T), f: $F) where T: copyable {
+pub fn each(self: &UnmanagedSet($T), f: $F) where T: copyable, F: fn(T) {
     for x in self.iter() {
         f(x)
     }
 }
 
 // Returns whether any element satisfies `pred`. False when empty.
-pub fn any(self: &UnmanagedSet($T), pred: $F) bool where T: copyable {
+pub fn any(self: &UnmanagedSet($T), pred: $F) bool where T: copyable, F: fn(T) bool {
     for x in self.iter() {
         if pred(x) {
             return true
@@ -152,7 +152,7 @@ pub fn any(self: &UnmanagedSet($T), pred: $F) bool where T: copyable {
 }
 
 // Returns whether every element satisfies `pred`. True when empty.
-pub fn all(self: &UnmanagedSet($T), pred: $F) bool where T: copyable {
+pub fn all(self: &UnmanagedSet($T), pred: $F) bool where T: copyable, F: fn(T) bool {
     for x in self.iter() {
         let ok: bool = pred(x)
         if !ok {
@@ -241,7 +241,8 @@ pub fn deinit(self: move Set($T)) {
 
 // Returns a new set of the elements `pred` accepts, copied bitwise. The result is on `allocator`,
 // or on the receiver's when null.
-pub fn filter(self: &Set($T), pred: $F, allocator: &Allocator? = null) Set(T) where T: copyable {
+pub fn filter(self: &Set($T), pred: $F, allocator: &Allocator? = null) Set(T) where T: copyable,
+    F: fn(T) bool {
     const alloc = allocator ?? self.allocator
     return .{ __storage = self.__storage.filter(pred, alloc), allocator = alloc }
 }

@@ -53,7 +53,7 @@ pub fn err(self: move Result($T, $E)) E? {
 // Apply `f` to an Ok value, leaving `Err` untouched. Transforms what a result holds without
 // unwrapping and re-wrapping; `f` never runs on `Err`. When `f` itself returns a Result, use
 // `and_then` so the result does not nest.
-pub fn map(self: move Result($T, $E), f: $F) Result($U, E) {
+pub fn map(self: move Result($T, $E), f: $F) Result($U, E) where F: fn(move T) U {
     return self match {
         Ok(v) => Ok(f(v))
         Err(e) => Err(move e)
@@ -67,7 +67,7 @@ pub fn map(self: move Result($T, $E), f: $F) Result($U, E) {
 //
 // which is the whole point - `?` requires the error types to match, and without `map_err` every
 // call site has to spell out an is_err / unwrap_err / re-wrap dance instead.
-pub fn map_err(self: move Result($T, $E), f: $F) Result(T, $U) {
+pub fn map_err(self: move Result($T, $E), f: $F) Result(T, $U) where F: fn(move E) U {
     return self match {
         Ok(v) => Ok(move v)
         Err(e) => Err(f(e))
@@ -77,7 +77,7 @@ pub fn map_err(self: move Result($T, $E), f: $F) Result(T, $U) {
 // `map` for a function that itself yields a Result, flattening the result. Chains a fallible step
 // onto a fallible one; passing such a function to `map` would give `Result(Result(U, E), E)`. `Err`
 // short-circuits and `f` never runs.
-pub fn and_then(self: move Result($T, $E), f: $F) Result($U, E) {
+pub fn and_then(self: move Result($T, $E), f: $F) Result($U, E) where F: fn(move T) Result(U, E) {
     return self match {
         Ok(v) => f(v)
         Err(e) => Err(move e)

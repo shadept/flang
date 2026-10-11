@@ -66,7 +66,7 @@ pub fn unwrap_or(self: move Option($T), fallback: move T) T {
 }
 
 // The payload, or the result of calling `make`. `make` runs only when the option is empty.
-pub fn unwrap_or_else(self: move Option($T), make: $F) T {
+pub fn unwrap_or_else(self: move Option($T), make: $F) T where F: fn() T {
     return self match {
         Some(v) => v
         None => make()
@@ -76,7 +76,7 @@ pub fn unwrap_or_else(self: move Option($T), make: $F) T {
 // Apply `f` to a present value, leaving `None` untouched. Use it to transform what an optional
 // holds without unwrapping and re-wrapping; `f` never runs on `None`. When `f` itself returns an
 // `Option`, use `flat_map` so the result does not nest.
-pub fn map(self: move Option($T), f: $F) Option($U) {
+pub fn map(self: move Option($T), f: $F) Option($U) where F: fn(move T) U {
     return self match {
         Some(v) => Some(f(v))
         None => None
@@ -86,7 +86,7 @@ pub fn map(self: move Option($T), f: $F) Option($U) {
 // `map` for a function that itself yields an `Option`, flattening the result. Chains a fallible
 // step onto a fallible one: passing such a function to `map` would give `Option(Option(U))`,
 // whereas this stays one level deep. `None` short-circuits and `f` never runs.
-pub fn flat_map(self: move Option($T), f: $F) Option($U) {
+pub fn flat_map(self: move Option($T), f: $F) Option($U) where F: fn(move T) Option(U) {
     return self match {
         Some(v) => f(v)
         None => None
@@ -99,7 +99,7 @@ pub fn flat_map(self: move Option($T), f: $F) Option($U) {
 //
 // Chains where each step is a separate reason to give up read as one expression rather than a stack
 // of early returns.
-pub fn filter(self: move Option($T), pred: $F) Option(T) {
+pub fn filter(self: move Option($T), pred: $F) Option(T) where F: fn(T) bool {
     return self match {
         Some(v) => if pred(v) { self } else { None }
         None => None

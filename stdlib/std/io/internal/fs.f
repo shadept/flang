@@ -94,7 +94,7 @@ fn to_c_path(path: String, buf: u8[]) bool {
 // through here, so the copy happens in one place and no entry point can forget it. Generic over
 // what `op` produces: the ones that only report success return `()`, the ones that hand back a
 // handle, an fd or a stat return that.
-fn with_c_path(path: String, op: $F) Result($T, FsError) {
+fn with_c_path(path: String, op: $F) Result($T, FsError) where F: fn(&u8) Result(T, FsError) {
     if path.len == 0 {
         return Err(FsError.InvalidArgument)
     }
