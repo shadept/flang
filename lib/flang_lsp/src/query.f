@@ -317,6 +317,7 @@ pub fn target_decl_span(result: &TypeCheckResult, target: &ResolvedTarget) Sourc
             None => null
         }
         RtLocal(n) => span_of_node(result, n)
+        RtType(n) => span_of_node(result, n)
         RtStructField(nom, idx) => field_span(result, nom, idx)
         RtEnumVariant(nom, idx) => variant_span(result, nom, idx)
         RtSpecialized(sid) => result.specializations.specs.get_ref(sid) match {
@@ -488,6 +489,7 @@ pub fn same_target(a: &ResolvedTarget, b: &ResolvedTarget) bool {
     return a.* match {
         RtFunction(x) => b.* match { RtFunction(y) => x == y, _ => false }
         RtLocal(x) => b.* match { RtLocal(y) => x == y, _ => false }
+        RtType(x) => b.* match { RtType(y) => x == y, _ => false }
         RtStructField(xn, xi) => b.* match {
             RtStructField(yn, yi) => xn == yn and xi == yi
             _ => false

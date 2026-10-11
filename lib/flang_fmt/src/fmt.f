@@ -539,7 +539,7 @@ fn stmt_has_semicolon(stmt: &CstNode) bool {
 //
 //   trailing_comma - lists whose commas the grammar requires between
 //   elements but leaves optional after the last one: call args, params,
-//   array literals, struct construction, generic argument lists. The
+//   array literals, struct construction, type argument and parameter lists. The
 //   comma before the closer is the only one at stake.
 //
 //   separators - positions where a newline already separates and the
@@ -678,7 +678,7 @@ fn is_comma_list(kind: NodeKind) bool {
         or kind == NodeKind.EnumVariant or kind == NodeKind.EnumVariantPattern
         or kind == NodeKind.TupleType or kind == NodeKind.TuplePattern
         or kind == NodeKind.ArrayLiteralExpr or kind == NodeKind.StructConstructionExpr
-        or kind == NodeKind.AnonymousStructExpr
+        or kind == NodeKind.AnonymousStructExpr or kind == NodeKind.TypeParamList
 }
 
 fn list_closer(kind: NodeKind) TokenKind {

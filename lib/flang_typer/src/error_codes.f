@@ -141,6 +141,7 @@ pub const E_RVALUE_NO_OWNER: String = "E2132"
 pub const E_MOVE_AND_LEND: String = "E2133"
 // A call binds a type parameter to a type its `where` bound rejects: a contract requirement that
 // does not resolve, a callable of the wrong shape, a non-copyable type under `copyable` (RFC-035).
+// Also a bounded type applied to arguments its parameters' bounds reject (RFC-036).
 pub const E_BOUND_UNSATISFIED: String = "E2134"
 // A `where` entry that is not a contract on one of the function's own type parameters, or a
 // contract applied to the wrong number of arguments, or a `+` operand that is not a contract.
@@ -154,6 +155,16 @@ pub const E_SELF_OUTSIDE: String = "E2139"
 pub const E_SELF_DECLARED: String = "E2140"
 // A contract requirement whose parameters and return type never mention `Self`.
 pub const E_REQUIREMENT_NO_SELF: String = "E2141"
+// A projection `X.Item` that no contract bounding `X` declares, or on something other than a type
+// parameter (RFC-036).
+pub const E_UNKNOWN_ASSOC: String = "E2142"
+// `Name(Item = T)` or `Name(Item: B)` naming an associated type the contract does not declare, the
+// same one twice, or written outside a bound.
+pub const E_BAD_ASSOC_ARG: String = "E2143"
+// A type parameter's bound naming a later parameter of the same list.
+pub const E_LATER_PARAM: String = "E2144"
+// `where` on a type declaration: a type's bounds sit on its parameters. Raised by the parser.
+pub const E_WHERE_ON_TYPE: String = "E2145"
 
 // A `&move T` parameter outside `core`: the one mode that takes a value out of storage its caller
 // keeps is the core library's alone (RFC-033).

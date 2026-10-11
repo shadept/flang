@@ -142,15 +142,44 @@ pub fn enum_layout(it: &TypeInterner, def: &EnumDef, args: &List(Ty), reg: &Nomi
 
 // The declared type of field `index` with the instantiation's type arguments substituted in (the
 // raw definition stores generic fields against the declaration's type parameters).
-pub fn field_ty(it: &TypeInterner, def: &StructDef, index: usize, args: &List(Ty)) Ty {
-    return subst(it, def.fields[index].ty, &def.type_params, args)
+pub fn field_ty(it: &TypeInterner, def: &StructDef, index: usize, args: &List(Ty),
+    reg: &NominalRegistry) Ty {
+    return member_ty(it, reg, def.fqn, &def.type_params, &def.assoc_params, args,
+        def.fields[index].ty)
 }
 
 // The declared type of variant `vnum`'s payload `index` with the instantiation's type arguments
 // substituted in - the enum-side mirror of `field_ty`.
 pub fn variant_payload_ty(it: &TypeInterner, def: &EnumDef, vnum: usize, index: usize,
-    args: &List(Ty)) Ty {
-    return subst(it, def.variants[vnum].payloads[index], &def.type_params, args)
+    args: &List(Ty), reg: &NominalRegistry) Ty {
+    return member_ty(it, reg, def.fqn, &def.type_params, &def.assoc_params, args,
+        def.variants[vnum].payloads[index])
+}
+
+// A field or payload type of the definition `fqn` instantiated at `args`. The associated types its
+// fields name (`I.Item`, RFC-036) take what the checker solved them to for that instance.
+fn member_ty(it: &TypeInterner, reg: &NominalRegistry, fqn: String, params: &List(VarId),
+    assoc: &List(VarId), args: &List(Ty), ty: Ty) Ty {
+    if assoc.len == 0 {
+        return subst(it, ty, params, args)
+    }
+    const id = reg.by_fqn.get(fqn)
+    if id.is_none() {
+        return subst(it, ty, params, args)
+    }
+    const solved = reg.assoc_solved.get_ref(it.nominal_of(id.unwrap(), args))
+    if solved.is_none() or solved.unwrap().len != assoc.len {
+        return subst(it, ty, params, args)
+    }
+    let ps: List(VarId) = list(params.len + assoc.len)
+    defer ps.deinit()
+    ps.push_all(params.as_slice())
+    ps.push_all(assoc.as_slice())
+    let xs: List(Ty) = list(args.len + assoc.len)
+    defer xs.deinit()
+    xs.push_all(args.as_slice())
+    xs.push_all(solved.unwrap().as_slice())
+    return subst(it, ty, &ps, &xs)
 }
 
 // Core walk
@@ -345,7 +374,8 @@ fn struct_layout_impl(it: &TypeInterner, def: &StructDef, args: &List(Ty), reg: 
     cache: &LayoutCache?, alloc: &Allocator?) StructLayout {
     let tys: List(Ty) = list(def.fields.len, alloc)
     for i in 0..def.fields.len {
-        tys.push(subst(it, def.fields[i].ty, &def.type_params, args))
+        tys.push(member_ty(it, reg, def.fqn, &def.type_params, &def.assoc_params, args,
+                def.fields[i].ty))
     }
     let sl = fields_layout(it, &tys, repr_of(def), reg, cache, alloc)
     tys.deinit()
@@ -365,7 +395,8 @@ pub fn variant_payload_offsets(it: &TypeInterner, def: &EnumDef, vnum: usize, ar
     let v = &def.variants[vnum]
     let ptys: List(Ty) = list(v.payloads.len, allocator)
     for j in 0..v.payloads.len {
-        ptys.push(subst(it, v.payloads[j], &def.type_params, args))
+        ptys.push(member_ty(it, reg, def.fqn, &def.type_params, &def.assoc_params, args,
+                v.payloads[j]))
     }
     let pl = fields_layout(it, &ptys, Repr.Auto, reg, cache, allocator)
     ptys.deinit()
@@ -401,7 +432,8 @@ fn enum_layout_impl(it: &TypeInterner, def: &EnumDef, args: &List(Ty), reg: &Nom
         any_payload = true
         let ptys: List(Ty) = list(v.payloads.len, alloc)
         for j in 0..v.payloads.len {
-            ptys.push(subst(it, v.payloads[j], &def.type_params, args))
+            ptys.push(member_ty(it, reg, def.fqn, &def.type_params, &def.assoc_params, args,
+                    v.payloads[j]))
         }
         let pl = fields_layout(it, &ptys, Repr.Auto, reg, cache, alloc)
         ptys.deinit()
@@ -608,6 +640,7 @@ test "auto layout reorders fields by alignment to minimise padding" {
         module = "",
         is_pub = true,
         type_params = list(0),
+        assoc_params = list(0),
         fields = move fields,
         decl_span = none_span(),
         deprecation = null,
@@ -641,6 +674,7 @@ test "C repr keeps declaration order and C padding" {
         module = "",
         is_pub = true,
         type_params = list(0),
+        assoc_params = list(0),
         fields = move fields,
         decl_span = none_span(),
         deprecation = null,
@@ -681,6 +715,7 @@ test "generic struct substitutes type parameters" {
         module = "",
         is_pub = true,
         type_params = move params,
+        assoc_params = list(0),
         fields = move fields,
         decl_span = none_span(),
         deprecation = null,
@@ -714,6 +749,7 @@ test "tagged enum reserves a tag plus the largest payload" {
         module = "",
         is_pub = true,
         type_params = list(0),
+        assoc_params = list(0),
         variants = move variants,
         tag_values = null,
         decl_span = none_span(),
@@ -739,6 +775,7 @@ test "payloadless enum is just the tag" {
         module = "",
         is_pub = true,
         type_params = list(0),
+        assoc_params = list(0),
         variants = move variants,
         tag_values = null,
         decl_span = none_span(),
@@ -786,6 +823,7 @@ test "Option of a reference uses the pointer niche" {
         module = "core.option",
         is_pub = true,
         type_params = move params,
+        assoc_params = list(0),
         variants = move variants,
         tag_values = null,
         decl_span = none_span(),

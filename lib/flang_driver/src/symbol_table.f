@@ -329,7 +329,7 @@ fn c_layout_agrees(it: &TypeInterner, ty: Ty, sd: &StructDef, reg: &NominalRegis
     if ok {
         let off: usize = 0
         for i in 0..sd.fields.len {
-            const ft = field_ty(it, sd, i, &args)
+            const ft = field_ty(it, sd, i, &args, reg)
             const fl = layout_of(it, ft, reg)
             let al = fl.align
             if i == 0 and whole.align > al {

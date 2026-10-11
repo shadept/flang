@@ -491,7 +491,8 @@ fn blame_nominal(self: &Engine, ty: Ty, nn: &NNominalNode, out: &List(CopyBlame)
 }
 
 fn blame_struct(self: &Engine, ty: Ty, sd: &StructDef, nn: &NNominalNode, out: &List(CopyBlame)) {
-    let subst = param_subst(&self.interner, &sd.type_params, nn.args, self.allocator)
+    let subst = self.nominals.unwrap().instance_subst(ty, &sd.type_params, &sd.assoc_params,
+        nn.args, &self.interner, self.allocator)
     defer subst.deinit()
     for i in 0..sd.fields.len {
         if sd.fields[i].owned {
@@ -520,7 +521,8 @@ fn blame_struct(self: &Engine, ty: Ty, sd: &StructDef, nn: &NNominalNode, out: &
 }
 
 fn blame_enum(self: &Engine, ty: Ty, ed: &EnumDef, nn: &NNominalNode, out: &List(CopyBlame)) {
-    let subst = param_subst(&self.interner, &ed.type_params, nn.args, self.allocator)
+    let subst = self.nominals.unwrap().instance_subst(ty, &ed.type_params, &ed.assoc_params,
+        nn.args, &self.interner, self.allocator)
     defer subst.deinit()
     for vi in 0..ed.variants.len {
         for pi in 0..ed.variants[vi].payloads.len {
@@ -1322,6 +1324,7 @@ fn cp_struct(params: move List(VarId), fields: move List(Field)) StructDef {
         module = "m",
         is_pub = true,
         type_params = move params,
+        assoc_params = list(0),
         fields = move fields,
         decl_span = none_span(),
         deprecation = null,
@@ -1466,6 +1469,7 @@ test "an enum variant payload propagates the bit" {
         module = "m",
         is_pub = true,
         type_params = list(0),
+        assoc_params = list(0),
         variants = move variants,
         tag_values = null,
         decl_span = none_span(),

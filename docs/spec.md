@@ -66,11 +66,12 @@ FLang is a statically-typed compiled language designed for explicit control, str
 fn identity(x: $T) T { return x }
 ```
 
-Generic structs and enums use parentheses on the `struct` / `enum` keyword:
+Generic structs and enums use parentheses on the `struct` / `enum` keyword. A parameter may carry a bound there, on the parameter it constrains (§2.3.2):
 
 ```
 type Pair = struct(T) { first: T, second: T }
 type Result = enum(T, E) { Ok(T), Err(E) }
+type UnmanagedSet = struct(T: Hash + Eq) { __inner: UnmanagedDict(T, u8) }
 ```
 
 **Instantiation uses parentheses**: `Option(i32)`, `List(String)`, `Result(JsonValue, JsonError)`.
@@ -79,30 +80,42 @@ Inference is multi-phase: constraints flow bidirectionally from return positions
 
 A type parameter in scope **shadows** any nominal of the same name: inside `fn wrap(e: $E) Result(T, E)`, `E` is the parameter even if a type named `E` is visible.
 
-**Bounds.** A `where` clause after the parameters (and return type) bounds a function's type parameters by contracts (§2.3.2): `fn max(s: $T[]) T? where T: copyable`, `fn filter(it: move $I, f: move $F) FilterIter(I, F) where I: Iterator($T), F: fn(T) bool`. A bound is checked at each call that binds its parameter, reported there with the requirement that failed (E2134; for `copyable`, with the derivation chain), and the body is not instantiated for a call that fails it. A bound on something other than one of the function's own type parameters, or one that is not a contract, is E2135. `where` is contextual: it opens a clause only as `where Name :`.
+**Bounds.** A `where` clause after the parameters (and return type) bounds a function's type parameters by contracts (§2.3.2): `fn max(s: $T[]) T? where T: copyable`, `fn fold(it: move $I, init: move $A, f: move $F) A where I: Iterator, F: fn(A, I.Item) A`. An entry may bound an associated type by its path: `where I: Iterator, I.Item: Hash`. A bound is checked at each call that binds its parameter, reported there with the requirement that failed (E2134; for `copyable`, with the derivation chain), and the body is not instantiated for a call that fails it. A bound on something other than one of the function's own type parameters, or one that is not a contract, is E2135. `where` is contextual: it opens a clause only as `where Name :` or `where Name.Item :`.
+
+**A bound sits where its parameter is declared** (RFC-036). A function introduces its type parameters with `$` inside value parameters, so its bounds go in `where`; a struct, enum or contract declares its parameters in a list, so their bounds go on the list: `struct(I: Iterator, F: fn(I.Item) bool)`. A later parameter's bound may name an earlier parameter and its associated types, never a later one (E2144). `where` on a type declaration is refused (E2145).
+
+**Where a type's bounds hold.** A struct's or enum's parameter bounds hold wherever the type does:
+
+- *Written in a body*, a bounded type applied to settled arguments (`let s: Set(Point)`) is checked at the type expression (E2134). One whose arguments are still type parameters is checked at the instantiation that settles them, and reported at the call that chose them.
+- *Named in a signature*, its bounds are **implied**: a function that takes or returns `FilterIter($I, $F)` assumes `I: Iterator` and `F: fn(I.Item) bool`, and `I.Item` is in scope. This holds through nesting (`Holder(Source($I))` implies `Source`'s bounds on `I`). The function's own `where` adds to them; a call checks the implied bounds with the rest, so `fn filter(it: move $I, f: move $F) FilterIter(I, F)` needs no `where` of its own.
+- *A literal* (`FilterIter { it, f }`) is checked through the type it is written against: the annotation, the parameter or the return type it lands in.
 
 **A generic body copies a type parameter only under the bound.** Each generic function is checked once against its own type parameters, each a rigid type that unifies with nothing else and is non-copyable unless `where T: copyable` says otherwise (RFC-029, RFC-033 6b): `T`, `Box(T)`, `(T, T)` copy only when `T` does. A copy, a move out of storage the body does not own, or a call to a function that requires `T: copyable`, is refused at the declaration, with no instantiation anywhere (E2124, E2131, E2134). Only the ownership findings come from this check: whatever is dispatched on `T` - a member call, an operator, an overload pick - waits for an instantiation, as does the liveness of a value handed to a call the check could not resolve. `#if type_info(T).copyable` reads the rigid `T` as not copyable, so the copyable branch is checked at the instantiations that take it. A template the check refused skips the ownership pass at its instantiations, so each error is reported once.
 
 #### 2.3.2 Contracts
 
-A contract (RFC-035) names a set of functions a type must have. It is declared as a type, takes parameters on its keyword as `struct` does, and holds requirements (function declarations without a body) and associated types:
+A contract (RFC-035) names a set of functions a type must have. It is declared as a type, takes parameters on its keyword as `struct` does (bounded the same way, `contract(T: copyable)`), and holds requirements (function declarations without a body) and associated types:
 
 ```
-pub type Iterator = contract(T) {
-    fn next(self: &Self) T?
+pub type Iterator = contract {
+    type Item
+    fn next(self: &Self) Item?
 }
 
-pub type Iterable = contract(T) {
-    type S: Iterator(T)
-    fn iter(self: &Self) S
+pub type Iterable = contract {
+    type Iter: Iterator
+    type Item = Iter.Item
+    fn iter(self: &Self) Iter
 }
 
 pub type Key = copyable + Hash + Eq
 ```
 
-- **`Self`** is the type being constrained, the `I` in `where I: Iterator(T)`. Every requirement mentions it (E2141).
+- **`Self`** is the type being constrained, the `I` in `where I: Iterator`. Every requirement mentions it (E2141).
 - **A requirement is satisfied when the call it describes resolves**, as a method call on its first parameter - overload ranking, `op_deref` peeling and a reference receiver read as its value included - and returns exactly the declared type. A by-value receiver is never adapted to a reference: `hash(self: Self)` is not met by a `hash(&T)`. The call resolves as the instantiated body would (§2.3.0): in the generic's defining module, with what the calling module makes visible unioned in - so a private `op_cmp` in the caller does not satisfy `Ordered` on `core`'s `max`, whose body could not call it. `OwnedString` is `Eq` through `String`'s `op_eq`; a payload-less enum is `Eq` through its built-in `==`, and a type with only `op_cmp` through the derived one (§5.2).
-- **An associated type** (`type S: Bound`) is solved from the requirements, then held to its own bound.
+- **An associated type** is a type the bound solves rather than takes (RFC-036): `type Item` is solved from the requirements, `type Item: Bound` is solved and then held to its bound, and `type Item = TypeExpr` is derived, an alias inside the contract over `Self`, its parameters and its other associated types. An associated type is a function of the bounded type: it is known exactly when that type is, solved when the call commits. An output belongs in an associated type; a contract parameter is for an input the type is not determined by (`contract(T) { fn from(x: T) Self }`).
+- **Projection.** `X.Item` names the associated type `Item` of the contract bounding `X`, in any type position where `X` is a type parameter bounded by a contract that declares `Item` (directly, through `+`, or through a name), `Self` inside a contract, or itself a projection: `C.Iter.Item` reads through `Iterable` to its `Iterator`. Inside a generic body `I.Item` is a type known by name and by its bounds alone: two uses are the same type, copyable only under `I.Item: copyable`. Two contracts on one parameter that both declare `Item` name one type. A projection no bound declares, or on a concrete type (`Counter.Item`: write the type itself), is E2142.
+- **Pinning and bounding an associated type.** A contract applied with a named argument constrains one: `I: Iterator(Item = i32)` pins it, `I: Iterator(Item: Hash + Eq)` bounds it - sugar for `I: Iterator, I.Item: Hash + Eq`. `=` pins and `:` bounds, as `let x = ...` against `x: T`. Named arguments follow positional ones; one the contract does not declare, the same one twice, or one outside a bound (`List(Item = i32)`) is E2143.
 - **`+`** combines contracts; a type satisfies the combination when it satisfies every part. `copyable` is the built-in contract RFC-028's derived bit satisfies.
 - **A function type in bound position is a contract**: `F: fn(T, U) R` holds for a function value, a closure, or a type with a matching `op_call`. A callable fits a bound that asks no more of it than its own signature does: a reading parameter fits a `&T` or a `move T` slot; a `move` parameter fits only a `move` slot, and a `&T` parameter only a `&T` slot (E2134).
 - **At the use site the sigil does what it does in a signature**: `Iterator($T)` introduces `T` and the contract solves it (a name only a bound introduces may name the return type); `Iterator(String)` requires it. An anonymous contract is written in place: `where B: contract { fn get(self: &Self) $T }`.
@@ -110,7 +123,7 @@ pub type Key = copyable + Hash + Eq
 - **Overloads.** A candidate whose bound fails is dropped from the call's overload set; when no other candidate fits, the bounded one is reported with its failing requirement. Between candidates of the same shape, the one with more requirements seen to hold wins: a bound adds specificity against an unbounded type parameter, never against a concrete type.
 - **A contract has no values.** Where a type is needed - a parameter, a field, a payload, a type argument, a local - it is E2138; bound a type parameter instead.
 
-`core` declares `Eq` (`fn op_eq(a: Self, b: Self) bool`), `Hash` (`fn hash(self: Self) usize`) and `Ordered` (`Eq` plus `fn op_cmp(a: Self, b: Self) Ord`), which `core`'s own slice, hash and math functions use; `std.collections.iter` declares `Iterator(T)` and `Iterable(T)`. The hashed containers bound their keys `K: Hash + Eq` (`Dict`, `Set`, `MultiMap`), the searches by value (`contains`, `index_of`, `last_index_of` on slices and lists, slice `==`) bound their element `Eq`, and what orders values (`min`, `max`, `clamp`, the binary searches, `std.iter`'s `min`/`max`/`min_by`/`max_by`) bounds it `Ordered`, so a key without `==` or `hash` is refused at the call, naming the contract (E2134).
+`core` declares `Eq` (`fn op_eq(a: Self, b: Self) bool`), `Hash` (`fn hash(self: Self) usize`) and `Ordered` (`Eq` plus `fn op_cmp(a: Self, b: Self) Ord`), which `core`'s own slice, hash and math functions use; `std.collections.iter` declares `Iterator(T)` and `Iterable(T)`, still with the element type as a parameter until the seed carries RFC-036 and they move to the associated-type form above. The hashed containers bound their keys `K: Hash + Eq` (`Dict`, `Set`, `MultiMap`), the searches by value (`contains`, `index_of`, `last_index_of` on slices and lists, slice `==`) bound their element `Eq`, and what orders values (`min`, `max`, `clamp`, the binary searches, `std.iter`'s `min`/`max`/`min_by`/`max_by`) bounds it `Ordered`, so a key without `==` or `hash` is refused at the call, naming the contract (E2134).
 
 Not yet: a contract in a parameter's type as sugar for a bounded type parameter (`src: Reader`), a call on a value of an open type parameter typed through its bounds inside the generic body, the ambiguity check for a requirement that resolves two ways, mode pinning (a lambda taking `move` from a `fn(move T)` bound), `type_info` of a contract, and `dyn` (docs/known-issues.md).
 
@@ -152,6 +165,7 @@ Structs are always declared as a `type` alias whose RHS is a `struct(...) { ... 
 - Anonymous construction: `.{ x = 10, y = 20 }` (type from context).
 - Field shorthand: `.{ x, y = 20 }` equivalent to `.{ x = x, y = 20 }`.
 - **Strict construction**: every field must be assigned. `Point { x = 10 }` errors with E2050 ("struct literal missing field `<name>`") if `Point` has more fields. `Marker { }` is valid only when `Marker` has zero fields. Context-less `.{}` is invalid.
+- **Bounded parameters**: `struct(I: Iterator, F: fn(I.Item) bool)` - see §2.3, *Where a type's bounds hold*. A field may name a parameter's associated type: `type Peekable = struct(I: Iterator) { it: I, peeked: I.Item? }` stores an `i64?` in `Peekable(Counter)` when `Counter` yields `i64`. Each instance's associated types are solved from its arguments, as a call solves a function's.
 - **`Self`** inside a named struct or enum body is the type applied to its own parameters: in `type Node = struct(T) { value: T, next: &Self? }`, `Self` is `Node(T)`. By value it is the infinite-size error a by-value self-reference is (E2035). `Self` is a predeclared type name, not a keyword: valid only inside a named struct, enum or contract body (E2139), and nothing may be declared with it - a type, a `$Self`, a generic parameter (E2140).
 
 #### Memory layout
@@ -181,7 +195,7 @@ type JsonError = enum { UnexpectedChar, UnexpectedEnd }
 
 Enums are always declared as a `type` alias whose RHS is an `enum(...) { ... }` builder. The legacy `enum Name { ... }` form has been removed (RFC-008, error E1051).
 
-Variants can carry zero or more payload types. Tags assigned sequentially starting at 0 (first variant = 0, next = 1, ...).
+Variants can carry zero or more payload types. Tags assigned sequentially starting at 0 (first variant = 0, next = 1, ...). Parameters take bounds as a struct's do: `type Tree = enum(T: Ordered) { Leaf, Node(&Self, T, &Self) }` (§2.3).
 
 **Naked enums** (C-style): when any variant has `= value`, all variants are integer-tagged with no payloads. Tags auto-increment from previous value.
 

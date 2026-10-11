@@ -41,7 +41,7 @@ pub fn is_copyable_ty(it: &TypeInterner, reg: &NominalRegistry, ty: Ty, alloc: &
         NArray(arr) => is_copyable_ty(it, reg, arr.elem, alloc, rigid)
         NTuple(span) => copyable_span(it, reg, span, alloc, rigid)
         NRecord(rec) => copyable_span(it, reg, rec.tys, alloc, rigid)
-        NNominal(nn) => copyable_nominal(it, reg, &nn, alloc, rigid)
+        NNominal(nn) => copyable_nominal(it, reg, ty, &nn, alloc, rigid)
         _ => true
     }
 }
@@ -56,22 +56,22 @@ fn copyable_span(it: &TypeInterner, reg: &NominalRegistry, span: ChildSpan, allo
     return true
 }
 
-fn copyable_nominal(it: &TypeInterner, reg: &NominalRegistry, nn: &NNominalNode, alloc: &Allocator?,
-    rigid: &Dict(VarId, bool)?) bool {
+fn copyable_nominal(it: &TypeInterner, reg: &NominalRegistry, ty: Ty, nn: &NNominalNode,
+    alloc: &Allocator?, rigid: &Dict(VarId, bool)?) bool {
     return reg.get(nn.id).* match {
-        NomStruct(sd) => copyable_struct(it, reg, &sd, nn, alloc, rigid)
-        NomEnum(ed) => copyable_enum(it, reg, &ed, nn, alloc, rigid)
+        NomStruct(sd) => copyable_struct(it, reg, ty, &sd, nn, alloc, rigid)
+        NomEnum(ed) => copyable_enum(it, reg, ty, &ed, nn, alloc, rigid)
     }
 }
 
-fn copyable_struct(it: &TypeInterner, reg: &NominalRegistry, sd: &StructDef, nn: &NNominalNode,
-    alloc: &Allocator?, rigid: &Dict(VarId, bool)?) bool {
+fn copyable_struct(it: &TypeInterner, reg: &NominalRegistry, ty: Ty, sd: &StructDef,
+    nn: &NNominalNode, alloc: &Allocator?, rigid: &Dict(VarId, bool)?) bool {
     for i in 0..sd.fields.len {
         if sd.fields[i].owned {
             return false
         }
     }
-    let subst = param_subst(it, &sd.type_params, nn.args, alloc)
+    let subst = reg.instance_subst(ty, &sd.type_params, &sd.assoc_params, nn.args, it, alloc)
     defer subst.deinit()
     for i in 0..sd.fields.len {
         const ft = it.substitute(sd.fields[i].ty, &subst, alloc)
@@ -82,9 +82,9 @@ fn copyable_struct(it: &TypeInterner, reg: &NominalRegistry, sd: &StructDef, nn:
     return true
 }
 
-fn copyable_enum(it: &TypeInterner, reg: &NominalRegistry, ed: &EnumDef, nn: &NNominalNode,
+fn copyable_enum(it: &TypeInterner, reg: &NominalRegistry, ty: Ty, ed: &EnumDef, nn: &NNominalNode,
     alloc: &Allocator?, rigid: &Dict(VarId, bool)?) bool {
-    let subst = param_subst(it, &ed.type_params, nn.args, alloc)
+    let subst = reg.instance_subst(ty, &ed.type_params, &ed.assoc_params, nn.args, it, alloc)
     defer subst.deinit()
     for vi in 0..ed.variants.len {
         for pi in 0..ed.variants[vi].payloads.len {
@@ -95,20 +95,4 @@ fn copyable_enum(it: &TypeInterner, reg: &NominalRegistry, ed: &EnumDef, nn: &NN
         }
     }
     return true
-}
-
-// A declaration's field types are written against its own type parameters, so the instantiation's
-// arguments have to go in before the walk sees `&FileHandle` where the source says `&$T`. A
-// partially-applied nominal (fewer arguments than parameters) maps only what it has; the rest stay
-// variables, which the walk treats as leaves.
-pub fn param_subst(it: &TypeInterner, params: &List(VarId), args: ChildSpan,
-    alloc: &Allocator?) Dict(VarId, Ty) {
-    let subst: Dict(VarId, Ty) = dict(params.len, alloc)
-    for i in 0..params.len {
-        if i >= args.len {
-            break
-        }
-        subst.set(params[i], it.child_at(args, i))
-    }
-    return subst
 }

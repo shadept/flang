@@ -19,6 +19,7 @@ import std.test
 
 import flang_core.span
 
+import flang_typer.interner
 import flang_typer.type
 import flang_typer.visibility
 
@@ -39,6 +40,9 @@ pub type StructDef = struct {
     module: String
     is_pub: bool
     type_params: List(VarId)
+    // The associated-type variables its fields name through a projection (`I.Item`, RFC-036),
+    // solved per instantiation: see `instance_args`.
+    assoc_params: List(VarId)
     fields: List(Field)
     decl_span: SourceSpan
     deprecation: String?
@@ -51,6 +55,8 @@ pub type EnumDef = struct {
     module: String
     is_pub: bool
     type_params: List(VarId)
+    // As `StructDef.assoc_params`, for the payloads.
+    assoc_params: List(VarId)
     variants: List(VariantDef)
     // Naked enums (every variant payload-less, explicit integer tags). `null` for standard
     // tagged-union enums.
@@ -95,6 +101,9 @@ pub type NominalRegistry = struct {
     // owned here. The buffers themselves are heap-allocated by `OwnedString` and do not move when
     // the list re-allocates, so the views stay valid for the registry's life.
     owned_fqns: List(OwnedString)
+    // A ground instantiation of a definition with `assoc_params` -> the types they solve to there,
+    // in `assoc_params` order. Filled by the checker, read by every field substitution.
+    assoc_solved: Dict(Ty, List(Ty))
     allocator: &Allocator?
 }
 
@@ -102,11 +111,13 @@ pub fn nominal_registry(allocator: &Allocator? = null) NominalRegistry {
     let defs: Dict(NominalId, NominalDef) = dict(allocator)
     let by_fqn: Dict(String, NominalId) = dict(allocator)
     let owned_fqns: List(OwnedString) = list(0, allocator)
+    let solved: Dict(Ty, List(Ty)) = dict(allocator)
     return .{
         defs = move defs,
         next_id = 0 as NominalId,
         by_fqn = move by_fqn,
         owned_fqns = move owned_fqns,
+        assoc_solved = move solved,
         allocator = allocator,
     }
 }
@@ -115,6 +126,39 @@ pub fn deinit(self: move NominalRegistry) {
     self.defs.deinit()
     self.by_fqn.deinit()
     self.owned_fqns.deinit()
+    self.assoc_solved.deinit()
+}
+
+/// Substitute the instance `inst`'s arguments into a field or payload type of its definition.
+///
+/// `params` and `assoc` are the definition's `type_params` and `assoc_params`; `args` the
+/// instance's own arguments. An associated type maps to what the instance solved it to, and stays
+/// a variable when the instance is not solved (not ground, or not seen by the checker).
+pub fn instance_subst(self: &NominalRegistry, inst: Ty, params: &List(VarId), assoc: &List(VarId),
+    args: ChildSpan, it: &TypeInterner, alloc: &Allocator?) Dict(VarId, Ty) {
+    let subst: Dict(VarId, Ty) = dict(params.len + assoc.len, alloc)
+    for i in 0..params.len {
+        if i >= args.len {
+            break
+        }
+        subst.set(params[i], it.child_at(args, i))
+    }
+    if assoc.len == 0 {
+        return subst
+    }
+    const solved = self.assoc_solved.get_ref(inst)
+    if solved.is_none() or solved.unwrap().len != assoc.len {
+        return subst
+    }
+    for i in 0..assoc.len {
+        subst.set(assoc[i], solved.unwrap()[i])
+    }
+    return subst
+}
+
+// Forget every solved instantiation: a check recomputes them against its own definitions.
+pub fn clear_solved(self: &NominalRegistry) {
+    self.assoc_solved.clear()
 }
 
 // Register a new nominal. The caller transfers ownership of `fqn_owned` to the registry - the heap
@@ -146,6 +190,7 @@ fn with_fqn(def: move NominalDef, new_fqn: String) NominalDef {
             module = s.module,
             is_pub = s.is_pub,
             type_params = move s.type_params,
+            assoc_params = move s.assoc_params,
             fields = move s.fields,
             decl_span = s.decl_span,
             deprecation = s.deprecation,
@@ -157,6 +202,7 @@ fn with_fqn(def: move NominalDef, new_fqn: String) NominalDef {
             module = e.module,
             is_pub = e.is_pub,
             type_params = move e.type_params,
+            assoc_params = move e.assoc_params,
             variants = move e.variants,
             tag_values = move e.tag_values,
             decl_span = e.decl_span,
@@ -209,6 +255,7 @@ fn clone_def(def: &NominalDef, allocator: &Allocator?) NominalDef {
             module = s.module,
             is_pub = s.is_pub,
             type_params = clone_list(&s.type_params, allocator),
+            assoc_params = clone_list(&s.assoc_params, allocator),
             fields = clone_list(&s.fields, allocator),
             decl_span = s.decl_span,
             deprecation = s.deprecation,
@@ -220,6 +267,7 @@ fn clone_def(def: &NominalDef, allocator: &Allocator?) NominalDef {
             module = e.module,
             is_pub = e.is_pub,
             type_params = clone_list(&e.type_params, allocator),
+            assoc_params = clone_list(&e.assoc_params, allocator),
             variants = clone_variants(&e.variants, allocator),
             tag_values = clone_tags(&e.tag_values, allocator),
             decl_span = e.decl_span,
@@ -266,10 +314,12 @@ pub fn free_body(def: move NominalDef) {
     def match {
         NomStruct(s) => {
             s.type_params.deinit()
+            s.assoc_params.deinit()
             s.fields.deinit()
         }
         NomEnum(e) => {
             e.type_params.deinit()
+            e.assoc_params.deinit()
             for v in e.variants.drain() {
                 v.payloads.deinit()
             }
@@ -572,6 +622,7 @@ fn probe_struct() StructDef {
         module = "m",
         is_pub = true,
         type_params = move no_params,
+        assoc_params = list(0),
         fields = move no_fields,
         decl_span = none_span(),
         deprecation = null,

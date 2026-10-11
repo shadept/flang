@@ -3,7 +3,7 @@ status: provisional
 type: language
 created: 2026-10-11
 implemented: 2026-10-11
-relates: [RFC-019, RFC-029, RFC-033, RFC-014]
+relates: [RFC-019, RFC-029, RFC-033, RFC-014, RFC-036]
 ---
 
 # RFC-035: Contracts
@@ -25,6 +25,10 @@ A bound is checked at the call and feeds inference: `F: fn(T) bool` gives a lamb
 parameter type before its body is checked. Contracts combine with `+`, `copyable` is one of them,
 and a contract-typed parameter is sugar for a bounded type parameter. This RFC replaces the design
 notes of RFC-019 §2 and is what `std.collections.iter` waits on.
+
+RFC-036 supersedes three parts of this design: the element type as a contract parameter
+(`Iterator(T)` becomes `Iterator` with `type Item`, read as `I.Item`), `where` on a contract's own
+parameters, and the restriction of bounds to functions. The rest stands.
 
 ## Motivation
 
@@ -264,7 +268,8 @@ returns can break them.
 A concrete type never becomes its contract and is never converted to one; a bound checks and binds,
 nothing more. Two contracts are equal when their requirement sets are (see Identity), and
 `type_info(A) == type_info(B)` agrees. A contract's own parameters are bounded as a function's are,
-`contract(T) where T: copyable { ... }`.
+`contract(T) where T: copyable { ... }`. *(Superseded by RFC-036: the bound sits on the parameter,
+`contract(T: copyable)`, and `where` on a type declaration is refused.)*
 
 `dyn C` (see the last section) is the one form that gives a contract values, and with them the
 rows marked `dyn C` above. Everything else in the table holds for it unchanged.
@@ -424,7 +429,7 @@ not count; partially overlapping bounds rank by how many requirements held.
 - **Parameter names in requirements:** optional, as function types allow (`fn next(&Self) T?`),
   or required, for copy-paste lockstep with declarations?
 - **Naming an associated type from outside:** `Iterable`'s `S` is not reachable from a function
-  bounded by it. A projection (`I.S`) when something needs it?
+  bounded by it. A projection (`I.S`) when something needs it? *(Answered by RFC-036: `I.Item`.)*
 - **Satisfaction visibility:** the loaded-context union, or the call site alone?
 - **Ranking of two partially overlapping bounds** (neither a superset): ambiguous, or declaration
   order?

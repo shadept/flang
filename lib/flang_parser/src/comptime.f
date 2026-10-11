@@ -1031,6 +1031,11 @@ pub fn spell_type_into(sb: &StringBuilder, te: &TypeExpr) {
                 spell_type_into(sb, part)
             }
         }
+        Projection(p) => {
+            spell_type_into(sb, p.base)
+            sb.append(".")
+            sb.append(p.name)
+        }
         Error(_) => sb.append("<error>")
     }
 }

@@ -95,11 +95,14 @@ pub fn type_param_names(self: &Checker) &Dict(VarId, String) {
     return &self.tp_names
 }
 
-// One `$T` binding created while resolving the current signature - collected by
-// `resolve_generic_bind`, drained by `register_function_sig`.
+// One type-parameter binding created while resolving the current signature - a `$T` collected by
+// `resolve_generic_bind`, or an associated type's path (`I.Item`, RFC-036) bound by its bounds -
+// drained by `register_function_sig`. `ty` is zonked once the signature is done.
 type SigTypeParam = struct {
     name: String
-    var_id: VarId
+    ty: Ty
+    // Where it is declared: the `$T`, or the contract's `type Item`.
+    decl: NodeId
 }
 
 // An unsuffixed numeric literal's fresh var, held for the post-inference sweep: still unresolved
@@ -257,8 +260,43 @@ pub type Checker = struct {
     // M10 - specialization state.
     // fn_id → what instantiation needs (generic functions only).
     templates: Dict(u32, GenericTemplate)
-    // fn_id → its `where` bounds lowered to requirement atoms (RFC-035), for bounded functions only.
+    // fn_id → its `where` bounds lowered to requirement atoms (RFC-035), with the bounds its
+    // signature's types imply (RFC-036), for bounded functions only.
     fn_bounds: Dict(u32, List(BoundAtom))
+    // A struct's or enum's parameter bounds (RFC-036), for bounded types only.
+    nom_bounds: Dict(NominalId, NomBounds)
+    // Associated-type paths (`I.Item`) by their text, each a view of its buffer in `path_bufs`:
+    // binding names, template type-parameter names and `tp_names` entries view them.
+    paths: Dict(String, String)
+    path_bufs: List(OwnedString)
+    // Set while a function signature resolves: a bounded type applied in it implies its bounds
+    // (`sig_implied`), and a projection its bounds have not declared yet gets a placeholder they
+    // must declare by the signature's end (`proj_pending`, checked against `sig_declared`).
+    sig_open: bool
+    sig_implied: List(BoundAtom)
+    sig_declared: List(String)
+    proj_pending: List(PendingProj)
+    // Set while bodies are checked: a bounded type applied to settled arguments is checked at the
+    // type expression.
+    check_apps: bool
+    // Whether some definition's fields name associated types this demand, so a copyability query
+    // solves the instances inside its type first.
+    assoc_defs: bool
+    // Nominal id -> the spelling of its parameters' bounds, for the bounded ones. A collection that
+    // spells them differently sets `bounds_changed`: what other modules' bodies and signatures
+    // implied from the type is stale, as after an alias edit.
+    bound_texts: Dict(NominalId, OwnedString)
+    bounds_changed: bool
+    // Go-to-definition edges `record_type_ref` adds, logged while `ref_logging` is on (the
+    // signature and resolve passes, whose caches replay them). `ref_new` counts the ones that added
+    // a target, which a signature pass's cleanliness check discounts.
+    ref_log: List(TypeRefFact)
+    ref_logging: bool
+    // A named contract's body span (as a node id) -> its declaration's span, which `Self` inside it
+    // names for go-to-definition and hover.
+    self_decls: Dict(NodeId, SourceSpan)
+    sig_refs: List(SigRef)
+    ref_new: usize
     // Nesting depth of bound checks: satisfying a requirement resolves a call, whose candidates may
     // carry bounds of their own.
     bound_depth: usize
@@ -394,9 +432,15 @@ pub type ModuleNomDiags = struct {
     resolve: List(Diagnostic)
     signatures: List(Diagnostic)
     bodies: List(Diagnostic)
+    // Variables the resolve pass minted, when bounds or contract declarations made it mint more
+    // than one per type parameter; a demand carrying the bodies burns as many.
+    resolve_burn: u32?
+    // The go-to-definition edges the resolve pass recorded (projections in fields and bounds).
+    resolve_refs: List(TypeRefFact)
 }
 
 pub fn deinit(self: move ModuleNomDiags) {
+    self.resolve_refs.deinit()
     self.collect.deinit()
     self.resolve.deinit()
     self.signatures.deinit()
@@ -427,6 +471,8 @@ pub type ModuleSigCache = struct {
     // it forces a re-run, which re-anchors the cache.
     vars_at_start: u32
     lit_tys: List(Ty)
+    // The go-to-definition edges the pass recorded (projections).
+    refs: List(TypeRefFact)
     // The source text of each default-value expression, in declaration order. A re-run whose texts
     // differ from the previous run's invalidates every carried body: callers cached the callee's
     // default AST, and a scheme compare cannot see a default's value change. Empty when the caller
@@ -439,6 +485,7 @@ pub type ModuleSigCache = struct {
 
 pub fn deinit(self: move ModuleSigCache) {
     self.facts.deinit()
+    self.refs.deinit()
     self.lit_tys.deinit()
     self.default_texts.deinit()
 }
@@ -657,6 +704,22 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         fn_deprecations = dict(allocator),
         templates = dict(allocator),
         fn_bounds = dict(allocator),
+        nom_bounds = dict(allocator),
+        paths = dict(allocator),
+        path_bufs = list(0, allocator),
+        sig_open = false,
+        sig_implied = list(0, allocator),
+        sig_declared = list(0, allocator),
+        proj_pending = list(0, allocator),
+        check_apps = false,
+        assoc_defs = false,
+        bound_texts = dict(allocator),
+        bounds_changed = false,
+        ref_log = list(0, allocator),
+        ref_logging = false,
+        self_decls = dict(allocator),
+        sig_refs = list(0, allocator),
+        ref_new = 0usize,
         bound_depth = 0usize,
         probe_bound_failed = false,
         tp_names = dict(allocator),
@@ -707,11 +770,12 @@ pub fn checker(allocator: &Allocator? = null) Checker {
 //
 // What survives is what the previous check registered by stable key: the nominal registry -
 // declared names WITH their resolved bodies, the anonymous-record definitions and the map that
-// interns them - the function registry with its schemes, templates, declared parameter lists and
-// deprecations, the constant types, the alias bodies, the retired closure-environment ids awaiting
-// reclamation (`recycled`, see the end of `check_all`), and the per-module caches of the carried
-// tiers (diagnostics and signature facts). The carried `Ty` handles index the type table, which the
-// caller adopts back out of the previous result (`adopt_interner`) so they stay resolvable.
+// interns them - the function registry with its schemes, templates, declared parameter lists,
+// deprecations and bounds, the type-parameter bounds, the associated-type path names, the constant
+// types, the alias bodies, the retired closure-environment ids awaiting reclamation (`recycled`,
+// see the end of `check_all`), and the per-module caches of the carried tiers (diagnostics and
+// signature facts). The carried `Ty` handles index the type table, which the caller adopts back out
+// of the previous result (`adopt_interner`) so they stay resolvable.
 //
 // Everything else a check computes is dropped: it names variables of the engine that inferred it,
 // and that engine goes.
@@ -725,6 +789,11 @@ pub fn begin_demand(self: &Checker) {
     let fns = replace(&self.functions, function_registry(self.allocator))
     let tmpls = replace(&self.templates, dict(self.allocator))
     let bounds = replace(&self.fn_bounds, dict(self.allocator))
+    let nbounds = replace(&self.nom_bounds, dict(self.allocator))
+    let paths = replace(&self.paths, dict(self.allocator))
+    let btexts = replace(&self.bound_texts, dict(self.allocator))
+    let sdecls = replace(&self.self_decls, dict(self.allocator))
+    let path_bufs = replace(&self.path_bufs, list(0, self.allocator))
     let decl_params = replace(&self.fn_decl_params, dict(self.allocator))
     let deprecations = replace(&self.fn_deprecations, dict(self.allocator))
     let anons = replace(&self.anon_structs, dict(self.allocator))
@@ -745,6 +814,11 @@ pub fn begin_demand(self: &Checker) {
     install(&next.functions, fns)
     install(&next.templates, tmpls)
     install(&next.fn_bounds, bounds)
+    install(&next.nom_bounds, nbounds)
+    install(&next.paths, paths)
+    install(&next.bound_texts, btexts)
+    install(&next.self_decls, sdecls)
+    install(&next.path_bufs, path_bufs)
     install(&next.fn_decl_params, decl_params)
     install(&next.fn_deprecations, deprecations)
     install(&next.anon_structs, anons)
@@ -862,6 +936,16 @@ pub fn deinit(self: move Checker) {
     self.pending_calls.deinit()
     self.fn_deprecations.deinit()
     self.fn_bounds.deinit()
+    self.nom_bounds.deinit()
+    self.paths.deinit()
+    self.path_bufs.deinit()
+    self.bound_texts.deinit()
+    self.ref_log.deinit()
+    self.self_decls.deinit()
+    self.sig_refs.deinit()
+    self.sig_implied.deinit()
+    self.sig_declared.deinit()
+    self.proj_pending.deinit()
     self.fn_decl_params.deinit()
     self.anon_structs.deinit()
     self.sig_tps.deinit()
@@ -919,6 +1003,7 @@ pub fn resolve_type_expr(self: &Checker, te: &TypeExpr) Ty {
         AnonStruct(a) => resolve_anon_struct_type(self, &a)
         Contract(c) => contract_value(self, c.span)
         Combined(c) => contract_value(self, c.span)
+        Projection(p) => resolve_projection(self, &p)
         _ => TY_ERROR
     }
 }
@@ -974,6 +1059,7 @@ fn anon_struct_ty(self: &Checker, fields: move List(Field), span: SourceSpan) Ty
         module = "",
         is_pub = true,
         type_params = move empty_tps,
+        assoc_params = list(0, self.allocator),
         fields = move fields,
         decl_span = span,
         deprecation = null,
@@ -985,6 +1071,11 @@ fn anon_struct_ty(self: &Checker, fields: move List(Field), span: SourceSpan) Ty
 }
 
 fn resolve_named(self: &Checker, n: &NamedType) Ty {
+    if n.assoc_args.len > 0 {
+        push_diag_e(self, n.assoc_args[0].span, E_BAD_ASSOC_ARG,
+            from_view("`Name = T` and `Name: Bound` constrain a contract's associated type, and belong in a bound"))
+        return TY_ERROR
+    }
     // Primitive?
     let prim = prim_from_name(n.name)
     if prim.is_some() {
@@ -1006,7 +1097,9 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
     if tp.is_some() {
         let b = tp.unwrap()
         if b.is_type_param {
-            return self.engine.specialize(&b.scheme)
+            const t = self.engine.specialize(&b.scheme)
+            record_type_ref(self, n.span, n.name)
+            return t
         }
     }
 
@@ -1022,6 +1115,7 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
     if found_id.is_some() {
         warn_deprecated_type(self, found_id.unwrap(), n.name, n.span)
         let args = resolve_generic_args(self, n)
+        apply_nominal_bounds(self, found_id.unwrap(), &args, n.name, n.span)
         return mk_nominal(self, found_id.unwrap(), args)
     }
 
@@ -1060,6 +1154,7 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
     if hidden_info.is_some() {
         let info = hidden_info.unwrap()
         let args = resolve_generic_args(self, n)
+        apply_nominal_bounds(self, info.id, &args, n.name, n.span)
         return mk_nominal(self, info.id, args)
     }
 
@@ -1252,7 +1347,7 @@ fn resolve_generic_bind(self: &Checker, g: &GenericBindType) Ty {
     refuse_self_name(self, g.name, g.span)
     let fresh = self.engine.fresh_var()
     let vid = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
-    self.sig_tps.push(SigTypeParam { name = g.name, var_id = vid })
+    self.sig_tps.push(SigTypeParam { name = g.name, ty = fresh, decl = self.node_of(g.span) })
     self.tp_names.set(vid, g.name)
     self.env.bind(g.name, Binding {
         scheme = mono(fresh, self.allocator),
@@ -1589,9 +1684,17 @@ fn collect_one_name(self: &Checker, decl: &Decl, module_path: String) {
             // for an alias body (stored unresolved for lazy expansion at use).
             let kind = nominal_kind_of(td.body)
             kind match {
-                NkStruct => register_struct_placeholder(self, &td, fqn_owned)
-                NkEnum => register_enum_placeholder(self, &td, fqn_owned)
-                NkAlias => register_alias(self, fqn_owned, td.body)
+                NkStruct => note_bound_text(self, register_struct_placeholder(self, &td, fqn_owned),
+                    td.body)
+                NkEnum => note_bound_text(self, register_enum_placeholder(self, &td, fqn_owned),
+                    td.body)
+                NkAlias => {
+                    td.body match {
+                        Contract(c) => self.self_decls.set(node_id_of(c.span), td.span)
+                        _ => {}
+                    }
+                    register_alias(self, fqn_owned, td.body)
+                }
             }
         }
         _ => {}
@@ -1630,7 +1733,44 @@ fn nominal_kind_of(body: &TypeExpr) Nk {
     }
 }
 
-fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedString) {
+// Records how `id`'s parameter bounds spell, and whether that differs from the last collection's.
+fn note_bound_text(self: &Checker, id: NominalId, body: &TypeExpr) {
+    const generics = body.* match {
+        AnonStruct(a) => a.generics
+        AnonEnum(e) => e.generics
+        _ => return
+    }
+    let sb = string_builder(32, self.allocator)
+    let spelled = true
+    for &g in generics {
+        if g.bound.is_none() {
+            continue
+        }
+        sb.append(g.name)
+        sb.append(":")
+        spelled = render_alias_body(g.bound.unwrap(), &sb) and spelled
+        sb.append(";")
+    }
+    const old = self.bound_texts.remove(id)
+    const same = spelled and old match {
+        Some(t) => t.view == sb.as_view()
+        None => sb.len == 0
+    }
+    if !same {
+        self.bounds_changed = true
+    }
+    old match {
+        Some(t) => t.deinit()
+        None => {}
+    }
+    if sb.len == 0 {
+        sb.deinit()
+        return
+    }
+    self.bound_texts.set(id, sb.to_string())
+}
+
+fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedString) NominalId {
     let empty_params: List(VarId) = list(0, self.allocator)
     let empty_fields: List(Field) = list(0, self.allocator)
     // `fqn` field is a placeholder - `register` overwrites it with the stable view it owns. The
@@ -1640,6 +1780,7 @@ fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedStr
         module = self.current_module.unwrap(),
         is_pub = td.is_pub,
         type_params = move empty_params,
+        assoc_params = list(0, self.allocator),
         fields = move empty_fields,
         decl_span = td.span,
         deprecation = deprecation_of(td.directives),
@@ -1650,10 +1791,10 @@ fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedStr
         is_simd = is_simd_directive(td.directives),
         is_foreign = is_foreign_directive(td.directives),
     }
-    const _id = register_collected(self, NominalDef.NomStruct(move sd), fqn)
+    return register_collected(self, NominalDef.NomStruct(move sd), fqn)
 }
 
-fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedString) {
+fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedString) NominalId {
     let empty_params: List(VarId) = list(0, self.allocator)
     let empty_variants: List(VariantDef) = list(0, self.allocator)
     let ed = EnumDef {
@@ -1661,12 +1802,13 @@ fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedStrin
         module = self.current_module.unwrap(),
         is_pub = td.is_pub,
         type_params = move empty_params,
+        assoc_params = list(0, self.allocator),
         variants = move empty_variants,
         tag_values = null,
         decl_span = td.span,
         deprecation = deprecation_of(td.directives),
     }
-    const _id = register_collected(self, NominalDef.NomEnum(move ed), fqn)
+    return register_collected(self, NominalDef.NomEnum(move ed), fqn)
 }
 
 fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
@@ -1706,6 +1848,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
         })
     }
     bind_type_name(self, SELF_NAME, mk_nominal(self, id, self_args), td.span)
+    lower_type_params(self, id, anon.generics)
 
     let fields: List(Field) = list(anon.fields.len, self.allocator)
     for &f in anon.fields {
@@ -1717,9 +1860,18 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
                 $"duplicate field `{f.name}` in struct `{td.name}`")
             continue
         }
-        fields.push(Field { name = f.name, ty = ty, decl_span = f.span, owned = f.owned })
+        fields.push(Field {
+            name = f.name,
+            ty = self.engine.zonk(ty),
+            decl_span = f.span,
+            owned = f.owned,
+        })
     }
     self.env.pop_scope()
+    let assoc_params: List(VarId) = list(0, self.allocator)
+    for &f in fields {
+        collect_assoc_vars(self, f.ty, &assoc_params)
+    }
 
     // Re-write the registry entry with the resolved body, freeing whatever body it held - the empty
     // placeholder lists, or a carried body being resolved over.
@@ -1731,6 +1883,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
                 module = sd.module,
                 is_pub = sd.is_pub,
                 type_params = move type_params,
+                assoc_params = move assoc_params,
                 fields = move fields,
                 decl_span = sd.decl_span,
                 deprecation = sd.deprecation,
@@ -1983,6 +2136,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
         })
     }
     bind_type_name(self, SELF_NAME, mk_nominal(self, id, self_args), td.span)
+    lower_type_params(self, id, anon.generics)
 
     let variants: List(VariantDef) = list(anon.variants.len, self.allocator)
     // Naked-enum tag assignment mirrors C: an explicit `= N` sets the counter, an implicit variant
@@ -2000,7 +2154,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
     for &v in anon.variants {
         let payloads: List(Ty) = list(v.payloads.len, self.allocator)
         for &p in v.payloads {
-            payloads.push(resolve_type_expr(self, p))
+            payloads.push(self.engine.zonk(resolve_type_expr(self, p)))
         }
         if v.payloads.len > 0 {
             has_payload = true
@@ -2037,6 +2191,12 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
         tag_by_name.deinit()
     }
     self.env.pop_scope()
+    let assoc_params: List(VarId) = list(0, self.allocator)
+    for &v in variants {
+        for p in v.payloads {
+            collect_assoc_vars(self, p, &assoc_params)
+        }
+    }
 
     let existing = self.nominals.get(id)
     existing.* match {
@@ -2046,6 +2206,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
                 module = ed.module,
                 is_pub = ed.is_pub,
                 type_params = move type_params,
+                assoc_params = move assoc_params,
                 variants = move variants,
                 tag_values = move tag_values,
                 decl_span = ed.decl_span,
@@ -2137,6 +2298,11 @@ fn register_constant(self: &Checker, cd: &ConstDecl) {
 
 fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     self.sig_tps.clear()
+    self.sig_implied.clear()
+    self.sig_declared.clear()
+    self.proj_pending.clear()
+    self.sig_refs.clear()
+    self.sig_open = true
     self.env.push_scope()
     self.engine.enter_level()
 
@@ -2163,13 +2329,23 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
         Some(rt) => resolve_type_expr(self, rt)
         None => TY_VOID
     }
-    let atoms: List(BoundAtom) = list(fd.bounds.len, self.allocator)
+    // What the signature's types imply comes first: a type's own bounds solve the associated types
+    // a `where` entry may read (`F: fn(I.Item) bool` beside `self: &FilterIter($I, $F)`).
+    let atoms: List(BoundAtom) = list(fd.bounds.len + self.sig_implied.len, self.allocator)
     lower_bounds(self, fd.bounds, &atoms)
+    self.sig_open = false
+    report_undeclared_projections(self)
+    rerecord_sig_refs(self)
+    let implied = replace(&self.sig_implied, list(0, self.allocator))
+    implied.push_all(atoms.as_slice())
+    atoms.deinit()
+    atoms = move implied
     let fn_ty = self.engine.mk_func(params, ret, moves)
 
     self.engine.exit_level()
     let scheme = self.engine.generalize(fn_ty)
     quantify_atoms(self, &atoms, &scheme.quantified)
+    settle_sig_tps(self, &scheme.quantified)
     self.env.pop_scope()
 
     // Trailing defaulted params and the variadic tail may be omitted at call sites.
@@ -2675,6 +2851,9 @@ type BoundAtom = struct {
     // The `where` entry's parameter and the contract it names, for diagnostics.
     param: String
     bound_name: String
+    // The bounded type whose parameter bound this atom is, implied by a signature naming it
+    // (RFC-036); empty for a `where` entry.
+    owner: String
 }
 
 type Verdict = enum {
@@ -2708,39 +2887,304 @@ fn prebind_bound_names(self: &Checker, fd: &FunctionDecl) {
 
 fn lower_bounds(self: &Checker, bounds: TypeBound[], out: &List(BoundAtom)) {
     for &b in bounds {
-        const subject = bound_subject(self, b.param)
+        const path = bound_path(self, b.param, b.path)
+        const subject = path_ty(self, path, b.param, b.span)
         if subject.is_none() {
             push_diag_e(self, b.span, E_BAD_BOUND,
-                $"`{b.param}` is not a type parameter of this function")
+                $"`{path}` is not a type parameter of this function")
             continue
         }
-        lower_bound(self, subject.unwrap(), b.bound, b.param, "", b.span, out, 0usize)
+        lower_with_members(self, subject.unwrap(), b.bound, path, b.span, out)
+        record_subject_refs(self, b)
     }
 }
 
-// The type a `where` entry constrains: a type parameter in scope.
-fn bound_subject(self: &Checker, name: String) Ty? {
+// Go-to-definition edges for a `where` entry's subject, segment by segment as a projection's.
+fn record_subject_refs(self: &Checker, b: &TypeBound) {
+    let path = b.param
+    for k in 0..b.subject_spans.len {
+        if k > 0 {
+            path = intern_path(self, path, b.path[k - 1])
+        }
+        record_type_ref(self, b.subject_spans[k], path)
+    }
+}
+
+// `param`, or `param.a.b` for a `where I.Item: B` entry.
+fn bound_path(self: &Checker, param: String, path: String[]) String {
+    let out = param
+    for name in path {
+        out = intern_path(self, out, name)
+    }
+    return out
+}
+
+// `base.name` as a stable view: binding names, template type-parameter names and `tp_names` entries
+// outlive the strings they were built from.
+fn intern_path(self: &Checker, base: String, name: String) String {
+    let joined = $"{base}.{name}"
+    const known = self.paths.get(joined.view)
+    if known.is_some() {
+        joined.deinit()
+        return known.unwrap()
+    }
+    const view = joined.view
+    self.path_bufs.push(joined)
+    self.paths.set(view, view)
+    return view
+}
+
+// One associated type a bound declares, by its path relative to the bound's subject (`Item`,
+// `Iter.Item`).
+type Member = struct {
+    name: String
+    ty: Ty
+    // The contract's `type Name` declaring it.
+    decl: SourceSpan
+}
+
+fn member_named(members: &List(Member), name: String) Ty? {
+    for &m in members {
+        if m.name == name {
+            return Some(m.ty)
+        }
+    }
+    return null
+}
+
+// A projection's or `where` entry's subject still unpinned when the signature closes.
+type PendingProj = struct {
+    path: String
+    span: SourceSpan
+}
+
+// The type `path` names: a type parameter or associated-type path bound in scope. While a signature
+// resolves, a path under one of its type parameters that no bound has declared yet gets a
+// placeholder, which the declaration unifies with; one never declared is E2142.
+fn path_ty(self: &Checker, path: String, root: String, span: SourceSpan) Ty? {
+    const b = self.env.lookup(path)
+    if b.is_some() and b.unwrap().is_type_param {
+        return Some(self.engine.specialize(&b.unwrap().scheme))
+    }
+    if path == root or !self.sig_open {
+        return null
+    }
+    const r = self.env.lookup(root)
+    if r.is_none() or !r.unwrap().is_type_param {
+        return null
+    }
+    const v = self.engine.fresh_var()
+    bind_member(self, path, v, span, false, span)
+    self.proj_pending.push(PendingProj { path = path, span = span })
+    return Some(v)
+}
+
+// Binds an associated type's path in the current scope, as a `$T` is bound: inside a signature it
+// joins the template's type parameters, so instantiations and the rigid check bind it too. A path
+// already bound names the same type - two contracts declaring `Item` on one parameter declare one
+// type - so the two unify.
+// `decl` is the declaration the path names, for go-to-definition: the contract's `type Item`, or
+// the projection itself for a placeholder, which a later declaration repoints.
+fn bind_member(self: &Checker, path: String, ty: Ty, span: SourceSpan, declared: bool,
+    decl: SourceSpan) {
+    if declared and self.sig_open {
+        self.sig_declared.push(path)
+    }
+    const existing = self.env.lookup(path)
+    if existing.is_some() and existing.unwrap().is_type_param {
+        const have = self.engine.specialize(&existing.unwrap().scheme)
+        if !self.engine.unify_exact(have, ty).is_ok() {
+            push_diag_e(self, span, E_BAD_BOUND, $"`{path}` is fixed to two different types")
+        }
+        if declared {
+            bind_type_name(self, path, have, decl)
+            repoint_sig_tp(self, path, self.node_of(decl))
+        }
+        return
+    }
+    bind_type_name(self, path, ty, decl)
+    ty_node(self, self.engine.resolve(ty)) match {
+        NVar(v) => self.tp_names.set(v.id, path)
+        _ => {}
+    }
+    if self.sig_open {
+        self.sig_tps.push(SigTypeParam { name = path, ty = ty, decl = self.node_of(decl) })
+    }
+}
+
+fn repoint_sig_tp(self: &Checker, name: String, decl: NodeId) {
+    for &tp in self.sig_tps {
+        if tp.name == name {
+            tp.decl = decl
+        }
+    }
+}
+
+// E2142 for each placeholder the signature's bounds never declared.
+fn report_undeclared_projections(self: &Checker) {
+    for &p in self.proj_pending {
+        if !self.sig_declared.contains(p.path) {
+            push_diag_e(self, p.span, E_UNKNOWN_ASSOC,
+                $"no contract bounding this type parameter declares `{p.path}`")
+        }
+    }
+    self.proj_pending.clear()
+}
+
+// `X.Item`, `C.Iter.Item`: the associated type a bound declared, bound by its path.
+fn resolve_projection(self: &Checker, p: &ProjectionType) Ty {
+    const root = projection_root(p.base)
+    const base_path = projection_path(self, p.base)
+    if root.is_none() or base_path.is_none() {
+        push_diag_e(self, p.span, E_UNKNOWN_ASSOC,
+            from_view("a projection reads an associated type of a type parameter: `I.Item`"))
+        return TY_ERROR
+    }
+    const path = intern_path(self, base_path.unwrap(), p.name)
+    const found = path_ty(self, path, root.unwrap(), p.span)
+    if found.is_some() {
+        record_projection_refs(self, p.span, path, p.base)
+        return found.unwrap()
+    }
+    const r = self.env.lookup(root.unwrap())
+    if r.is_none() or !r.unwrap().is_type_param {
+        push_diag_e(self, p.span, E_UNKNOWN_ASSOC,
+            $"`{root.unwrap()}` is not a type parameter - a projection on a concrete type is not a form; write the type itself")
+        return TY_ERROR
+    }
+    push_diag_e(self, p.span, E_UNKNOWN_ASSOC,
+        $"no contract bounding `{base_path.unwrap()}` declares `{p.name}`")
+    return TY_ERROR
+}
+
+// Go-to-definition edges for each segment of a projection: `I.Iter.Item` names the `type Item`
+// declaration, `I.Iter` the `type Iter` one, and `I` its `$I`.
+fn record_projection_refs(self: &Checker, span: SourceSpan, path: String, base: &TypeExpr) {
+    record_type_ref(self, span, path)
+    base.* match {
+        Named(n) => record_type_ref(self, n.span, n.name)
+        Projection(p) => projection_path(self, base) match {
+            Some(bp) => record_projection_refs(self, p.span, bp, p.base)
+            None => {}
+        }
+        _ => {}
+    }
+}
+
+// A use of the type binding `name` at `span`, recorded as a target on the declaration the binding
+// names. The signature and resolve passes log it, so a demand skipping them replays it.
+fn record_type_ref(self: &Checker, span: SourceSpan, name: String) {
     const b = self.env.lookup(name)
-    if b.is_none() {
-        return null
+    if b.is_none() or !b.unwrap().is_type_param {
+        return
     }
-    if !b.unwrap().is_type_param {
-        return null
+    if self.sig_open {
+        self.sig_refs.push(SigRef { span = span, name = name })
     }
-    return Some(self.engine.specialize(&b.unwrap().scheme))
+    const decl = b.unwrap().decl
+    const node = self.node_of(span)
+    // A type parameter read as a value (`size_of(T)`) carries the expression's own target, which
+    // lowering reads; only a type reference's earlier edge is replaced.
+    const prior = self.results.resolved_targets.get(node)
+    const keeps = prior match {
+        Some(t) => t match {
+            RtType(_) => false
+            _ => true
+        }
+        None => false
+    }
+    if keeps {
+        return
+    }
+    if prior.is_none() {
+        self.ref_new = self.ref_new + 1
+    }
+    self.results.record_target(node, ResolvedTarget.RtType(decl))
+    const decl_span = self.results.get_span(decl)
+    if self.ref_logging and decl_span.is_some() {
+        self.ref_log.push(TypeRefFact {
+            node = node,
+            span = span,
+            decl = decl,
+            decl_span = decl_span.unwrap(),
+        })
+    }
+}
+
+// A type reference made while a signature resolves, recorded again once its bounds are lowered: a
+// projection read before the `where` entry declaring it pointed at its placeholder.
+type SigRef = struct {
+    span: SourceSpan
+    name: String
+}
+
+fn rerecord_sig_refs(self: &Checker) {
+    let refs = replace(&self.sig_refs, list(0, self.allocator))
+    defer refs.deinit()
+    for &r in refs {
+        record_type_ref(self, r.span, r.name)
+    }
+}
+
+// One go-to-definition edge a skipped pass replays: the use's node and span, the declaration's.
+pub type TypeRefFact = struct {
+    node: NodeId
+    span: SourceSpan
+    decl: NodeId
+    decl_span: SourceSpan
+}
+
+fn replay_type_refs(self: &Checker, refs: &List(TypeRefFact)) {
+    for &r in refs {
+        self.results.record_span(r.node, r.span)
+        self.results.record_span(r.decl, r.decl_span)
+        self.results.record_target(r.node, ResolvedTarget.RtType(r.decl))
+    }
+}
+
+// The type-parameter name a projection starts from: `I` in `I.Iter.Item`.
+fn projection_root(te: &TypeExpr) String? {
+    return te.* match {
+        Named(n) => if n.generic_args.len == 0 { Some(n.name) } else { null }
+        Projection(p) => projection_root(p.base)
+        _ => null
+    }
+}
+
+fn projection_path(self: &Checker, te: &TypeExpr) String? {
+    return te.* match {
+        Named(n) => if n.generic_args.len == 0 { Some(n.name) } else { null }
+        Projection(p) => projection_path(self, p.base) match {
+            Some(base) => Some(intern_path(self, base, p.name))
+            None => null
+        }
+        _ => null
+    }
+}
+
+// Lowers `te` on `subject` and binds the associated types it declares under `path`.
+fn lower_with_members(self: &Checker, subject: Ty, te: &TypeExpr, path: String, span: SourceSpan,
+    out: &List(BoundAtom)) {
+    let members: List(Member) = list(0, self.allocator)
+    defer members.deinit()
+    lower_bound(self, subject, te, path, "", span, out, &members, 0usize)
+    for &m in members {
+        bind_member(self, intern_path(self, path, m.name), m.ty, span, true, m.decl)
+    }
 }
 
 // `label` is the outermost named contract the atoms come from, for diagnostics: `T: Ordered` rather
-// than the `Eq` or anonymous part that failed. Empty at the top of a `where` entry.
+// than the `Eq` or anonymous part that failed. Empty at the top of a `where` entry. The associated
+// types the bound declares land in `members`.
 fn lower_bound(self: &Checker, subject: Ty, te: &TypeExpr, param: String, label: String,
-    span: SourceSpan, out: &List(BoundAtom), depth: usize) {
+    span: SourceSpan, out: &List(BoundAtom), members: &List(Member), depth: usize) {
     if depth > MAX_CONTRACT_DEPTH {
         push_diag_e(self, span, E_BAD_BOUND,
             from_view("contract nests too deeply - is it defined through itself?"))
         return
     }
     te.* match {
-        Named(n) => lower_named_bound(self, subject, &n, param, label, span, out, depth)
+        Named(n) => lower_named_bound(self, subject, &n, param, label, span, out, members, depth)
         Function(f) => out.push(BoundAtom {
             span = span,
             subject = subject,
@@ -2749,22 +3193,23 @@ fn lower_bound(self: &Checker, subject: Ty, te: &TypeExpr, param: String, label:
             shape = resolve_function(self, &f),
             param = param,
             bound_name = if label.len > 0 { label } else { "fn" },
+            owner = "",
         })
         Combined(c) => {
             for &part in c.parts {
-                lower_bound(self, subject, part, param, label, span, out, depth + 1)
+                lower_bound(self, subject, part, param, label, span, out, members, depth + 1)
             }
         }
         Contract(c) => lower_contract(self, subject, &c, null, param,
-            if label.len > 0 { label } else { "contract" }, span, out, depth)
+            if label.len > 0 { label } else { "contract" }, span, out, members, depth)
         _ => push_diag_e(self, type_expr_span(te), E_BAD_BOUND,
             from_view("a bound is a contract: `copyable`, a contract name, `contract { ... }`, a function type, or a `+` of them"))
     }
 }
 
 fn lower_named_bound(self: &Checker, subject: Ty, n: &NamedType, param: String, label: String,
-    span: SourceSpan, out: &List(BoundAtom), depth: usize) {
-    if n.name == BOUND_COPYABLE and n.generic_args.len == 0 {
+    span: SourceSpan, out: &List(BoundAtom), members: &List(Member), depth: usize) {
+    if n.name == BOUND_COPYABLE and n.generic_args.len == 0 and n.assoc_args.len == 0 {
         out.push(BoundAtom {
             span = span,
             subject = subject,
@@ -2773,6 +3218,7 @@ fn lower_named_bound(self: &Checker, subject: Ty, n: &NamedType, param: String, 
             shape = TY_VOID,
             param = param,
             bound_name = if label.len > 0 { label } else { BOUND_COPYABLE },
+            owner = "",
         })
         return
     }
@@ -2786,17 +3232,69 @@ fn lower_named_bound(self: &Checker, subject: Ty, n: &NamedType, param: String, 
     te.* match {
         Contract(c) => {
             let args = resolve_generic_args(self, n)
-            lower_contract(self, subject, &c, Some(&args), param, own, span, out, depth + 1)
+            let mine: List(Member) = list(c.assoc_types.len, self.allocator)
+            lower_contract(self, subject, &c, Some(&args), param, own, span, out, &mine, depth + 1)
             args.deinit()
+            apply_assoc_args(self, n, param, span, out, &mine, depth)
+            members.push_all(mine.as_slice())
+            mine.deinit()
         }
         _ => {
             if n.generic_args.len > 0 {
                 push_diag_e(self, n.span, E_BAD_BOUND, $"`{n.name}` takes no type arguments")
+            } else if n.assoc_args.len > 0 {
+                push_diag_e(self, n.assoc_args[0].span, E_BAD_ASSOC_ARG,
+                    $"`{n.name}` is not a single contract, so it has no associated types to constrain")
             } else {
-                lower_bound(self, subject, te, param, own, span, out, depth + 1)
+                lower_bound(self, subject, te, param, own, span, out, members, depth + 1)
             }
         }
     }
+}
+
+// `Name(Item = T)` pins an associated type the contract declared; `Name(Item: B)` bounds it, as
+// `where X.Item: B` would. `T` and `B` resolve in the bound's own scope.
+fn apply_assoc_args(self: &Checker, n: &NamedType, param: String, span: SourceSpan,
+    out: &List(BoundAtom), members: &List(Member), depth: usize) {
+    for i in 0..n.assoc_args.len {
+        const a = &n.assoc_args[i]
+        if assoc_named_before(n.assoc_args, i) {
+            push_diag_e(self, a.span, E_BAD_ASSOC_ARG,
+                $"`{a.name}` is constrained twice in one application of `{n.name}`")
+            continue
+        }
+        const m = member_named(members, a.name)
+        if m.is_none() {
+            push_diag_e(self, a.span, E_BAD_ASSOC_ARG,
+                $"`{n.name}` declares no associated type `{a.name}`")
+            continue
+        }
+        if a.pinned {
+            const t = resolve_type_expr(self, a.ty)
+            if !self.engine.unify_exact(m.unwrap(), t).is_ok() {
+                push_diag_e(self, a.span, E_BAD_BOUND,
+                    $"`{param}.{a.name}` is fixed to two different types")
+            }
+            continue
+        }
+        let sub: List(Member) = list(0, self.allocator)
+        lower_bound(self, m.unwrap(), a.ty, intern_path(self, param, a.name), "", span, out, &sub,
+            depth + 1)
+        for &s in sub {
+            members.push(Member { name = intern_path(self, a.name, s.name), ty = s.ty,
+                decl = s.decl })
+        }
+        sub.deinit()
+    }
+}
+
+fn assoc_named_before(args: AssocArg[], i: usize) bool {
+    for j in 0..i {
+        if args[j].name == args[i].name {
+            return true
+        }
+    }
+    return false
 }
 
 // A declared name's body when it can name a contract: a `type` declaration that is not a struct or
@@ -2816,9 +3314,11 @@ fn is_contract_body(te: &TypeExpr) bool {
 }
 
 // One contract applied to `args` on `subject`: `Self` and the contract's parameters bound, each
-// associated type a fresh variable the requirements solve.
+// associated type a fresh variable the requirements solve, each derived one the type it names. The
+// requirements' atoms come first, then the parameters' bounds, then the associated types', which
+// read what the requirements solved. The associated types land in `members`.
 fn lower_contract(self: &Checker, subject: Ty, c: &ContractType, args: &List(Ty)?, param: String,
-    name: String, span: SourceSpan, out: &List(BoundAtom), depth: usize) {
+    name: String, span: SourceSpan, out: &List(BoundAtom), members: &List(Member), depth: usize) {
     const n_args = if args.is_some() { args.unwrap().len } else { 0usize }
     if n_args != c.generics.len {
         push_diag_e(self, span, E_BAD_BOUND,
@@ -2826,16 +3326,48 @@ fn lower_contract(self: &Checker, subject: Ty, c: &ContractType, args: &List(Ty)
         return
     }
     self.env.push_scope()
-    bind_type_name(self, SELF_NAME, subject, c.span)
+    const self_decl = self.self_decls.get(node_id_of(c.span)) ?? c.span
+    bind_type_name(self, SELF_NAME, subject, self_decl)
     for i in 0..c.generics.len {
         const a = args.unwrap()
         bind_type_name(self, c.generics[i].name, a[i], c.generics[i].span)
     }
-    let assoc: List(Ty) = list(c.assoc_types.len, self.allocator)
+    let pre: List(BoundAtom) = list(0, self.allocator)
+    defer pre.deinit()
+    for i in 0..c.generics.len {
+        const g = &c.generics[i]
+        g.bound match {
+            Some(bt) => lower_scoped(self, args.unwrap()[i], bt, g.name, span, &pre, depth + 1)
+            None => {}
+        }
+    }
+    let own: List(Member) = list(c.assoc_types.len, self.allocator)
+    defer own.deinit()
     for &at in c.assoc_types {
-        const v = self.engine.fresh_var()
-        assoc.push(v)
-        bind_type_name(self, at.name, v, at.span)
+        if at.value.is_none() {
+            bind_contract_member(self, at.name, self.engine.fresh_var(), at.span, &own)
+        }
+    }
+    let post: List(BoundAtom) = list(0, self.allocator)
+    defer post.deinit()
+    for &at in c.assoc_types {
+        if at.bound.is_none() {
+            continue
+        }
+        const v = member_named(&own, at.name).unwrap()
+        let sub: List(Member) = list(0, self.allocator)
+        lower_bound(self, v, at.bound.unwrap(), intern_path(self, param, at.name), "", span, &post,
+            &sub, depth + 1)
+        for &s in sub {
+            bind_contract_member(self, intern_path(self, at.name, s.name), s.ty, s.decl, &own)
+        }
+        sub.deinit()
+    }
+    for &at in c.assoc_types {
+        if at.value.is_some() {
+            const t = resolve_type_expr(self, at.value.unwrap())
+            bind_contract_member(self, at.name, t, at.span, &own)
+        }
     }
     for &r in c.requirements {
         out.push(BoundAtom {
@@ -2846,23 +3378,34 @@ fn lower_contract(self: &Checker, subject: Ty, c: &ContractType, args: &List(Ty)
             shape = resolve_function(self, &r.signature),
             param = param,
             bound_name = name,
+            owner = "",
         })
     }
-    for &b in c.bounds {
-        const t = bound_subject(self, b.param)
-        if t.is_some() {
-            lower_bound(self, t.unwrap(), b.bound, b.param, "", span, out, depth + 1)
-        }
-    }
-    for i in 0..c.assoc_types.len {
-        c.assoc_types[i].bound match {
-            Some(bt) => lower_bound(self, assoc[i], bt, c.assoc_types[i].name, "", span, out,
-                depth + 1)
-            None => {}
-        }
-    }
-    assoc.deinit()
+    out.push_all(pre.as_slice())
+    out.push_all(post.as_slice())
+    members.push_all(own.as_slice())
     self.env.pop_scope()
+}
+
+// A contract's associated type, bound inside the contract by its name and as `Self.name`, and
+// recorded for the bound's caller.
+fn bind_contract_member(self: &Checker, name: String, ty: Ty, span: SourceSpan,
+    own: &List(Member)) {
+    bind_type_name(self, name, ty, span)
+    bind_type_name(self, intern_path(self, SELF_NAME, name), ty, span)
+    own.push(Member { name = name, ty = ty, decl = span })
+}
+
+// Lowers `te` on `subject` and binds its associated types under `path` in the current scope alone:
+// a contract parameter's bound, read inside the contract.
+fn lower_scoped(self: &Checker, subject: Ty, te: &TypeExpr, path: String, span: SourceSpan,
+    out: &List(BoundAtom), depth: usize) {
+    let sub: List(Member) = list(0, self.allocator)
+    defer sub.deinit()
+    lower_bound(self, subject, te, path, "", span, out, &sub, depth)
+    for &s in sub {
+        bind_type_name(self, intern_path(self, path, s.name), s.ty, s.decl)
+    }
 }
 
 // E2140: `Self` names the type being declared and cannot be declared itself.
@@ -2883,12 +3426,371 @@ fn bind_type_name(self: &Checker, name: String, ty: Ty, span: SourceSpan) {
 }
 
 // Atoms can mention variables the function type does not - `T` in `I: Iterator($T)` when nothing
-// else names it, an associated type - and each call instantiates those afresh too.
+// else names it, an associated type - and each call instantiates those afresh too. Each atom is
+// stored zonked: a carried signature outlives the engine whose unifications it reflects.
 fn quantify_atoms(self: &Checker, atoms: &List(BoundAtom), q: &Set(VarId)) {
     for &a in atoms {
-        free_vars(&self.engine.interner, self.engine.zonk(a.subject), self.engine.level, q)
-        free_vars(&self.engine.interner, self.engine.zonk(a.shape), self.engine.level, q)
+        a.subject = self.engine.zonk(a.subject)
+        a.shape = self.engine.zonk(a.shape)
+        free_vars(&self.engine.interner, a.subject, self.engine.level, q)
+        free_vars(&self.engine.interner, a.shape, self.engine.level, q)
     }
+}
+
+// Each signature type parameter's type, zonked and quantified like the atoms: an associated type
+// nothing else mentions is still instantiated per call.
+fn settle_sig_tps(self: &Checker, q: &Set(VarId)) {
+    for &tp in self.sig_tps {
+        tp.ty = self.engine.zonk(tp.ty)
+        free_vars(&self.engine.interner, tp.ty, self.engine.level, q)
+    }
+}
+
+// A struct's or enum's parameter bounds (RFC-036): the atoms over its parameters' variables, the
+// associated types they declare by parameter index and path, and the associated types' own
+// variables, minted afresh at each application.
+type NomBounds = struct {
+    atoms: List(BoundAtom)
+    members: List(NomMember)
+    assoc: Set(VarId)
+}
+
+pub fn deinit(self: move NomBounds) {
+    self.atoms.deinit()
+    self.members.deinit()
+    self.assoc.deinit()
+}
+
+type NomMember = struct {
+    param: usize
+    path: String
+    ty: Ty
+    decl: SourceSpan
+}
+
+// Lowers a struct's or enum's parameter bounds (`struct(I: Iterator, F: fn(I.Item) bool)`) on its
+// parameters' variables, bound in the current scope. Each parameter's associated types are bound
+// under its name, for the bounds after it.
+fn lower_type_params(self: &Checker, id: NominalId, generics: GenericParam[]) {
+    self.nom_bounds.remove(id) match {
+        Some(old) => old.deinit()
+        None => {}
+    }
+    let atoms: List(BoundAtom) = list(0, self.allocator)
+    let members: List(NomMember) = list(0, self.allocator)
+    self.engine.enter_level()
+    for i in 0..generics.len {
+        const g = &generics[i]
+        if g.bound.is_none() {
+            continue
+        }
+        if names_later_param(generics, i) {
+            push_diag_e(self, g.span, E_LATER_PARAM,
+                $"the bound on `{g.name}` names a later parameter - a bound reads only the parameters before it")
+            continue
+        }
+        const b = self.env.lookup(g.name)
+        if b.is_none() {
+            continue
+        }
+        const subject = self.engine.specialize(&b.unwrap().scheme)
+        let sub: List(Member) = list(0, self.allocator)
+        lower_bound(self, subject, g.bound.unwrap(), g.name, "", g.span, &atoms, &sub, 0usize)
+        for &s in sub {
+            bind_member(self, intern_path(self, g.name, s.name), s.ty, g.span, true, s.decl)
+            members.push(NomMember { param = i, path = s.name, ty = s.ty, decl = s.decl })
+        }
+        sub.deinit()
+    }
+    self.engine.exit_level()
+    if atoms.len == 0 {
+        atoms.deinit()
+        members.deinit()
+        return
+    }
+    let assoc: Set(VarId) = set(self.allocator)
+    quantify_atoms(self, &atoms, &assoc)
+    for &m in members {
+        m.ty = self.engine.zonk(m.ty)
+        free_vars(&self.engine.interner, m.ty, self.engine.level, &assoc)
+    }
+    self.nom_bounds.set(id, NomBounds { atoms = move atoms, members = move members,
+        assoc = move assoc })
+}
+
+// The associated-type variables a resolved field or payload type names (`I.Item`): the variables
+// deeper than the declaration's own parameters, which `lower_type_params` minted.
+fn collect_assoc_vars(self: &Checker, t: Ty, out: &List(VarId)) {
+    let q: Set(VarId) = set(self.allocator)
+    defer q.deinit()
+    free_vars(&self.engine.interner, self.engine.zonk(t), self.engine.level, &q)
+    for v in q {
+        if !out.contains(v) {
+            out.push(v)
+        }
+    }
+}
+
+// The substitution for a field or payload type of the instance `inst`: its arguments, and the
+// associated types its definition's fields name. A ground instance has them solved; elsewhere an
+// argument that is a type parameter in scope gives its path binding (`I.Item` inside a generic
+// body), and anything else a fresh variable, so a definition's own variables never escape it.
+fn member_subst(self: &Checker, inst: Ty, params: &List(VarId), assoc: &List(VarId),
+    args: ChildSpan) Dict(VarId, Ty) {
+    if assoc.len > 0 {
+        solve_instance(self, inst)
+    }
+    let subst = self.nominals.instance_subst(inst, params, assoc, args, &self.engine.interner,
+        self.allocator)
+    for v in assoc {
+        if !subst.contains(v) {
+            subst.set(v, open_assoc(self, inst, v, args))
+        }
+    }
+    return subst
+}
+
+// An unsolved associated type of `inst`: the path binding of the type parameter it hangs off, or a
+// fresh variable.
+fn open_assoc(self: &Checker, inst: Ty, v: VarId, args: ChildSpan) Ty {
+    const id = ty_node(self, inst) match {
+        NNominal(nn) => nn.id
+        _ => return self.engine.fresh_var()
+    }
+    const nb = self.nom_bounds.get_ref(id)
+    if nb.is_none() {
+        return self.engine.fresh_var()
+    }
+    for &m in nb.unwrap().members {
+        const hit = ty_node(self, self.engine.resolve(m.ty)) match {
+            NVar(mv) => mv.id == v
+            _ => false
+        }
+        if !hit or m.param >= args.len {
+            continue
+        }
+        const arg = self.engine.resolve(self.engine.interner.child_at(args, m.param))
+        const name = ty_node(self, arg) match {
+            NVar(av) => self.tp_names.get(av.id)
+            _ => null
+        }
+        if name.is_none() {
+            break
+        }
+        const b = self.env.lookup(intern_path(self, name.unwrap(), m.path))
+        if b.is_some() and b.unwrap().is_type_param {
+            return self.engine.specialize(&b.unwrap().scheme)
+        }
+        break
+    }
+    return self.engine.fresh_var()
+}
+
+// Records what a ground instance's associated types solve to (RFC-036), by checking its
+// definition's bounds for its arguments, as a call checks a function's. Every substitution of the
+// instance's fields reads the result: the checker's, layout's and lowering's.
+fn solve_instance(self: &Checker, inst: Ty) {
+    const t = self.engine.zonk(inst)
+    if !self.engine.interner.is_ground(t) or self.nominals.assoc_solved.contains(t) {
+        return
+    }
+    const nn = ty_node(self, t) match {
+        NNominal(n) => n
+        _ => return
+    }
+    const assoc = nominal_assoc(self, nn.id)
+    const nb = self.nom_bounds.get_ref(nn.id)
+    if assoc.len == 0 or nb.is_none() or self.bound_depth >= MAX_BOUND_DEPTH {
+        return
+    }
+    const tps = nominal_params(self, nn.id)
+    if tps.len != nn.args.len {
+        return
+    }
+    let binds: Dict(VarId, Ty) = dict(self.allocator)
+    defer binds.deinit()
+    for i in 0..tps.len {
+        binds.set(tps[i], self.engine.interner.child_at(nn.args, i))
+    }
+    for v in nb.unwrap().assoc {
+        binds.set(v, self.engine.fresh_var())
+    }
+    const diags0 = self.diagnostics.len
+    self.bound_depth = self.bound_depth + 1
+    const switched = enter_view(self, nominal_module(self, nn.id))
+    self.engine.push_checkpoint()
+    for &a in nb.unwrap().atoms {
+        const _v = atom_verdict(self, a, Some(&binds))
+    }
+    let solved: List(Ty) = list(assoc.len, self.allocator)
+    for v in assoc {
+        const b = binds.get(v)
+        const x = if b.is_some() { self.engine.zonk(b.unwrap()) } else { TY_ERROR }
+        solved.push(x)
+    }
+    self.engine.rollback()
+    leave_bound_view(self, switched)
+    self.bound_depth = self.bound_depth - 1
+    drop_diags_from(self, diags0)
+    for x in solved {
+        if !self.engine.interner.is_ground(x) or x == TY_ERROR {
+            solved.deinit()
+            return
+        }
+    }
+    self.nominals.assoc_solved.set(t, solved)
+}
+
+fn nominal_assoc(self: &Checker, id: NominalId) &List(VarId) {
+    return self.nominals.get(id).* match {
+        NomStruct(sd) => &sd.assoc_params
+        NomEnum(ed) => &ed.assoc_params
+    }
+}
+
+fn names_later_param(generics: GenericParam[], i: usize) bool {
+    const bound = generics[i].bound.unwrap()
+    for j in (i + 1)..generics.len {
+        if mentions_name(bound, generics[j].name) {
+            return true
+        }
+    }
+    return false
+}
+
+// A bounded type applied to `args` (RFC-036). In a signature its bounds are implied: they join the
+// function's atoms, and an argument that is one of its type parameters gains the associated types
+// they declare (`I.Item` from `FilterIter($I, $F)`). In a body they are checked at the type
+// expression (E2134); an argument still open waits for the instantiation that settles it.
+fn apply_nominal_bounds(self: &Checker, id: NominalId, args: &List(Ty), name: String,
+    span: SourceSpan) {
+    const in_body = self.check_apps and !self.rigid_mode
+    if !self.sig_open and !in_body {
+        return
+    }
+    const nb = self.nom_bounds.get_ref(id)
+    if nb.is_none() {
+        return
+    }
+    const tps = nominal_params(self, id)
+    if tps.len != args.len {
+        return
+    }
+    let binds: Dict(VarId, Ty) = dict(self.allocator)
+    defer binds.deinit()
+    for i in 0..tps.len {
+        binds.set(tps[i], args[i])
+    }
+    for v in nb.unwrap().assoc {
+        binds.set(v, self.engine.fresh_var())
+    }
+    if self.sig_open {
+        imply_bounds(self, nb.unwrap(), &binds, args, name, span)
+    } else {
+        check_app_bounds(self, id, nb.unwrap(), &binds, name, span)
+    }
+}
+
+fn nominal_params(self: &Checker, id: NominalId) &List(VarId) {
+    return self.nominals.get(id).* match {
+        NomStruct(sd) => &sd.type_params
+        NomEnum(ed) => &ed.type_params
+    }
+}
+
+fn nominal_module(self: &Checker, id: NominalId) String {
+    return self.nominals.get(id).* match {
+        NomStruct(sd) => sd.module
+        NomEnum(ed) => ed.module
+    }
+}
+
+fn imply_bounds(self: &Checker, nb: &NomBounds, binds: &Dict(VarId, Ty), args: &List(Ty),
+    owner: String, span: SourceSpan) {
+    for &a in nb.atoms {
+        const subject = atom_inst(self, a.subject, Some(binds))
+        const shape = atom_inst(self, a.shape, Some(binds))
+        // Over concrete types the bound is the body check's, at the type expression.
+        const ground = self.engine.interner.is_ground(subject)
+            and self.engine.interner.is_ground(shape)
+        if ground {
+            continue
+        }
+        self.sig_implied.push(BoundAtom {
+            span = a.span,
+            subject = subject,
+            kind = a.kind,
+            name = a.name,
+            shape = shape,
+            param = a.param,
+            bound_name = a.bound_name,
+            owner = owner,
+        })
+    }
+    for &m in nb.members {
+        const base = sig_param_name(self, args[m.param])
+        if base.is_some() {
+            bind_member(self, intern_path(self, base.unwrap(), m.path), atom_inst(self, m.ty,
+                    Some(binds)), span, true, m.decl)
+        }
+    }
+}
+
+// The signature type parameter `t` is, by name: `I` for `$I`'s variable, `I.Iter` for that path's.
+fn sig_param_name(self: &Checker, t: Ty) String? {
+    const want = ty_node(self, self.engine.resolve(t)) match {
+        NVar(v) => v.id
+        _ => return null
+    }
+    for &tp in self.sig_tps {
+        const hit = ty_node(self, self.engine.resolve(tp.ty)) match {
+            NVar(v) => v.id == want
+            _ => false
+        }
+        if hit {
+            return Some(tp.name)
+        }
+    }
+    return null
+}
+
+// A bounded type applied in a body: its bounds checked in its defining module's view, as a call's
+// are in the callee's, and undone afterwards. Inside an instantiation the failure is reported at
+// the call that chose the arguments.
+fn check_app_bounds(self: &Checker, id: NominalId, nb: &NomBounds, binds: &Dict(VarId, Ty),
+    name: String, span: SourceSpan) {
+    if self.bound_depth >= MAX_BOUND_DEPTH {
+        return
+    }
+    const diags0 = self.diagnostics.len
+    self.bound_depth = self.bound_depth + 1
+    const switched = enter_view(self, nominal_module(self, id))
+    self.engine.push_checkpoint()
+    let failed: BoundAtom? = null
+    let subject = TY_ERROR
+    for &a in nb.atoms {
+        const fails = atom_verdict(self, a, Some(binds)) match {
+            Fails => true
+            _ => false
+        }
+        if fails {
+            failed = Some(a.*)
+            subject = self.engine.zonk(atom_inst(self, a.subject, Some(binds)))
+            break
+        }
+    }
+    self.engine.rollback()
+    leave_bound_view(self, switched)
+    self.bound_depth = self.bound_depth - 1
+    drop_diags_from(self, diags0)
+    if failed.is_none() {
+        return
+    }
+    const a = failed.unwrap()
+    let sb = string_builder(160, self.allocator)
+    sb.append($"`{name}` requires `{a.param}: {a.bound_name}`")
+    append_bound_failure(self, &a, subject, &sb)
+    own_report(self, span, E_BOUND_UNSATISFIED, sb.to_string())
 }
 
 // A contract declaration checked on its own, against a placeholder `Self`: its requirements
@@ -2898,15 +3800,22 @@ fn validate_contract_decl(self: &Checker, td: &TypeDecl) {
     const subject_id = ty_node(self, subject) match { NVar(v) => v.id, _ => 0u32 }
     let scratch: List(BoundAtom) = list(0, self.allocator)
     defer scratch.deinit()
+    let members: List(Member) = list(0, self.allocator)
+    defer members.deinit()
     td.body.* match {
         Contract(c) => {
             let args: List(Ty) = list(c.generics.len, self.allocator)
-            for &g in c.generics {
+            for i in 0..c.generics.len {
+                const g = &c.generics[i]
                 refuse_self_name(self, g.name, g.span)
+                if g.bound.is_some() and names_later_param(c.generics, i) {
+                    push_diag_e(self, g.span, E_LATER_PARAM,
+                        $"the bound on `{g.name}` names a later parameter - a bound reads only the parameters before it")
+                }
                 args.push(self.engine.fresh_var())
             }
             lower_contract(self, subject, &c, Some(&args), SELF_NAME, td.name, td.span, &scratch,
-                0usize)
+                &members, 0usize)
             args.deinit()
             for i in 0..c.requirements.len {
                 if i < scratch.len and !self.engine.occurs_in(subject_id, scratch[i].shape) {
@@ -2915,47 +3824,31 @@ fn validate_contract_decl(self: &Checker, td: &TypeDecl) {
                 }
             }
         }
-        _ => lower_bound(self, subject, td.body, SELF_NAME, "", td.span, &scratch, 0usize)
+        _ => lower_bound(self, subject, td.body, SELF_NAME, "", td.span, &scratch, &members, 0usize)
     }
     self.sig_tps.clear()
 }
 
-// Whether a `where` entry on `name` makes it copyable: `copyable` itself, or a `+` or named
-// combination that includes it.
-fn has_copyable_bound(self: &Checker, fd: &FunctionDecl, name: String) bool {
-    for &b in fd.bounds {
-        if b.param == name and bound_has_copyable(self, b.bound, 0usize) {
-            return true
+// Whether the function `fid`'s bounds make the type parameter `vid` copyable: a `copyable` atom on
+// it, from a `where` entry, a contract that includes `copyable`, or a type its signature names.
+fn copyable_in_bounds(self: &Checker, fid: u32, vid: VarId) bool {
+    const atoms = self.fn_bounds.get_ref(fid)
+    if atoms.is_none() {
+        return false
+    }
+    for &a in atoms.unwrap() {
+        const is_copy = a.kind match {
+            Copyable => true
+            _ => false
         }
-    }
-    return false
-}
-
-fn bound_has_copyable(self: &Checker, te: &TypeExpr, depth: usize) bool {
-    if depth > MAX_CONTRACT_DEPTH {
-        return false
-    }
-    return te.* match {
-        Named(n) => named_has_copyable(self, &n, depth)
-        Combined(c) => any_part_copyable(self, c.parts, depth)
-        _ => false
-    }
-}
-
-fn named_has_copyable(self: &Checker, n: &NamedType, depth: usize) bool {
-    if n.name == BOUND_COPYABLE {
-        return true
-    }
-    const body = contract_body(self, n.name)
-    if body.is_none() {
-        return false
-    }
-    return bound_has_copyable(self, body.unwrap(), depth + 1)
-}
-
-fn any_part_copyable(self: &Checker, parts: TypeExpr[], depth: usize) bool {
-    for &part in parts {
-        if bound_has_copyable(self, part, depth + 1) {
+        if !is_copy {
+            continue
+        }
+        const hit = ty_node(self, self.engine.resolve(a.subject)) match {
+            NVar(v) => v.id == vid
+            _ => false
+        }
+        if hit {
             return true
         }
     }
@@ -2991,7 +3884,7 @@ fn atom_verdict(self: &Checker, a: &BoundAtom, binds: &Dict(VarId, Ty)?) Verdict
         return Verdict.Unsettled
     }
     return a.kind match {
-        Copyable => if self.engine.is_copyable(subject) { Verdict.Holds } else { Verdict.Fails }
+        Copyable => if ty_copyable(self, subject) { Verdict.Holds } else { Verdict.Fails }
         Callable => callable_verdict(self, subject, atom_inst(self, a.shape, binds), a.span)
         Require => require_verdict(self, a.name, atom_inst(self, a.shape, binds), a.span)
     }
@@ -3209,10 +4102,18 @@ fn check_bounds(self: &Checker, fid: u32, binds: &Dict(VarId, Ty)?, keep: bool,
 // cannot call. True when the view was switched; `leave_bound_view` restores it.
 fn enter_bound_view(self: &Checker, fid: u32) bool {
     const template = self.templates.get_ref(fid)
-    if template.is_none() or self.current_module.is_none() {
+    if template.is_none() {
         return false
     }
-    const home = template.unwrap().module
+    return enter_view(self, template.unwrap().module)
+}
+
+// Resolution from `home`, with the current module's view unioned in. True when the view was
+// switched; `leave_bound_view` restores it.
+fn enter_view(self: &Checker, home: String) bool {
+    if self.current_module.is_none() {
+        return false
+    }
     const here = self.current_module.unwrap()
     if home == here {
         return false
@@ -3290,24 +4191,32 @@ fn report_bound(self: &Checker, p: &PendingSpec, a: &BoundAtom) {
     const subject = atom_inst(self, a.subject, Some(&p.tp_binds))
     let sb = string_builder(160, self.allocator)
     sb.append($"`{fname}` requires `{a.param}: {a.bound_name}`")
+    if a.owner.len > 0 {
+        sb.append($" (a bound of `{a.owner}`)")
+    }
+    append_bound_failure(self, a, subject, &sb)
+    own_report(self, p.span, E_BOUND_UNSATISFIED, sb.to_string())
+}
+
+// Why `a` fails on `subject`: the copy blame, or the callable or requirement it lacks.
+fn append_bound_failure(self: &Checker, a: &BoundAtom, subject: Ty, sb: &StringBuilder) {
     a.kind match {
-        Copyable => append_copy_blame(self, subject, &sb)
+        Copyable => append_copy_blame(self, subject, sb)
         Callable => {
             sb.append(": `")
-            append_ty(self, subject, &sb)
+            append_ty(self, subject, sb)
             sb.append("` is not callable as `")
-            append_ty(self, shape_for(self, a, subject), &sb)
+            append_ty(self, shape_for(self, a, subject), sb)
             sb.append("`")
         }
         Require => {
             sb.append(": `")
-            append_ty(self, subject, &sb)
+            append_ty(self, subject, sb)
             sb.append($"` has no `{a.name}` of type `")
-            append_ty(self, shape_for(self, a, subject), &sb)
+            append_ty(self, shape_for(self, a, subject), sb)
             sb.append("`")
         }
     }
-    own_report(self, p.span, E_BOUND_UNSATISFIED, sb.to_string())
 }
 
 // An atom's shape as declared, with its subject replaced by the type it was checked against: the
@@ -3787,9 +4696,10 @@ fn sig_concrete(self: &Checker, params: &List(Ty), ret: Ty) bool {
 // instantiation, so the check runs in scratch tables and keeps the ownership findings alone,
 // including the `copyable` bounds of the generics it calls.
 fn check_template_rigid(self: &Checker, fd: &FunctionDecl) {
-    let names: List(String) = list(4, self.allocator)
-    defer names.deinit()
-    generic_names(fd, &names)
+    const fid = template_id_of(self, fd)
+    if fid.is_none() {
+        return
+    }
 
     const diags0 = self.diagnostics.len
     const calls0 = self.pending_calls.len
@@ -3801,16 +4711,7 @@ fn check_template_rigid(self: &Checker, fd: &FunctionDecl) {
     let saved_fn_names = replace(&self.pending_fn_names, list(0, self.allocator))
 
     self.env.push_scope()
-    for name in names {
-        const rigid = self.engine.fresh_rigid(has_copyable_bound(self, fd, name))
-        rigid_var_name(self, rigid, name)
-        self.env.bind(name, Binding {
-            scheme = mono(rigid, self.allocator),
-            decl = self.node_of(fd.span),
-            is_const = true,
-            is_type_param = true,
-        })
-    }
+    bind_rigid_params(self, fid.unwrap())
     self.rigid_mode = true
     check_function_body(self, fd)
     self.rigid_mode = false
@@ -3836,6 +4737,59 @@ fn check_template_rigid(self: &Checker, fd: &FunctionDecl) {
         pc.pos_exprs.deinit()
     }
     self.engine.clear_rigid()
+}
+
+// The template's type parameters bound to rigid variables, each copyable when its bounds say so; a
+// path its bounds pinned (`Item = List(T)`) binds to the pinned type over those variables.
+fn bind_rigid_params(self: &Checker, fid: u32) {
+    const tps = &self.templates.get_ref(fid).unwrap().tps
+    let rigid: Dict(VarId, Ty) = dict(self.allocator)
+    defer rigid.deinit()
+    for &tp in tps {
+        const vid = ty_node(self, self.engine.resolve(tp.ty)) match {
+            NVar(v) => v.id
+            _ => continue
+        }
+        if rigid.contains(vid) {
+            continue
+        }
+        const r = self.engine.fresh_rigid(copyable_in_bounds(self, fid, vid))
+        rigid_var_name(self, r, tp.name)
+        rigid.set(vid, r)
+    }
+    for &tp in tps {
+        self.env.bind(tp.name, Binding {
+            scheme = mono(self.engine.substitute_shared(self.engine.zonk(tp.ty), &rigid),
+                self.allocator),
+            decl = tp.decl,
+            is_const = true,
+            is_type_param = true,
+        })
+    }
+}
+
+// The registry id of a generic declaration with a template, found by its name and span.
+fn template_id_of(self: &Checker, fd: &FunctionDecl) u32? {
+    let vis = current_visibility(self)
+    defer vis.deinit()
+    let found = self.functions.lookup(fd.name, &vis) match {
+        FnLookFound(c) => Some(move c)
+        _ => null
+    }
+    if found.is_none() {
+        return null
+    }
+    let cands = found.unwrap()
+    defer cands.deinit()
+    for c in cands {
+        const d = c.decl_span
+        const same = d.start == fd.span.start and d.length == fd.span.length
+            and d.file_id == fd.span.file_id
+        if same and self.templates.contains(c.id) {
+            return Some(c.id)
+        }
+    }
+    return null
 }
 
 fn rigid_var_name(self: &Checker, rigid: Ty, name: String) {
@@ -3935,17 +4889,13 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: move OwnedString, params: m
     self.spec_depth = self.spec_depth + 1
 
     // Bind each signature type param to its concrete argument; the body's `$T` / `T` occurrences
-    // resolve to these instead of minting fresh vars.
+    // and `I.Item` projections resolve to these instead of minting fresh vars.
     self.env.push_scope()
     for i in 0..template.tps.len {
-        let bound = p.tp_binds.get(template.tps[i].var_id)
-        let conc = bound match {
-            Some(b) => self.engine.zonk(b)
-            None => TY_ERROR
-        }
+        const conc = atom_inst(self, template.tps[i].ty, Some(&p.tp_binds))
         self.env.bind(template.tps[i].name, Binding {
             scheme = mono(conc, self.allocator),
-            decl = self.node_of(template.decl.span),
+            decl = template.tps[i].decl,
             is_const = true,
             is_type_param = true,
         })
@@ -4766,12 +5716,7 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
 
     // Payload types are written against the enum's own type params; the scrutinee's type arguments
     // give them concrete meaning.
-    let sub = dict(self.allocator)
-    for k in 0..e.type_params.len {
-        if k < n.args.len {
-            sub.set(e.type_params[k], self.engine.interner.child_at(n.args, k))
-        }
-    }
+    let sub = member_subst(self, self.engine.zonk(peeled), &e.type_params, &e.assoc_params, n.args)
     for i in 0..payloads.len {
         let pty = self.engine.substitute_shared(payloads[i], &sub)
         check_pattern(self, &ev.payloads[i], pty, true)
@@ -5051,6 +5996,7 @@ fn check_move(self: &Checker, m: &MoveExpr) Ty {
 fn append_copy_blame(self: &Checker, ty: Ty, sb: &StringBuilder) {
     let hops: List(CopyBlame) = list(2, self.allocator)
     defer hops.deinit()
+    solve_within(self, ty)
     self.engine.copy_blame(ty, &hops)
     for i in 0..hops.len {
         sb.append("; `")
@@ -6130,6 +7076,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
         module = module_name,
         is_pub = true,
         type_params = move empty_tps,
+        assoc_params = list(0, self.allocator),
         fields = move fields,
         decl_span = lam.span,
         deprecation = null,
@@ -6376,10 +7323,10 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
 // $I, body)` would own it, or else a non-copyable temporary iterable `iter` only borrowed, which
 // nothing past the statement holds. Null when it owns neither.
 fn iter_owned(self: &Checker, fs: &ForStmt, iterable: Ty, state: Ty, borrows: bool) Ty? {
-    if !self.engine.is_copyable(state) {
+    if !ty_copyable(self, state) {
         return Some(state)
     }
-    if !own_is_place(fs.iterable) and borrows and !self.engine.is_copyable(iterable) {
+    if !own_is_place(fs.iterable) and borrows and !ty_copyable(self, iterable) {
         return Some(iterable)
     }
     return null
@@ -7465,7 +8412,7 @@ fn check_consuming_receiver(self: &Checker, p: &OverloadPick, name: String, recv
         return
     }
     const slot = self.engine.resolve(p.params[0])
-    if self.engine.is_copyable(slot) {
+    if ty_copyable(self, slot) {
         return
     }
     const through_ref = ty_node(self, self.engine.resolve(recv.unwrap())) match {
@@ -8592,7 +9539,7 @@ fn peel_arg(self: &Checker, arg: Ty, param: Ty, span: SourceSpan, ctx: &PeelCtx,
         if try_unify_arg(self, dret, param) {
             return Some(hops)
         }
-        if self.engine.is_copyable(inner) and try_unify_arg(self, inner, param) {
+        if ty_copyable(self, inner) and try_unify_arg(self, inner, param) {
             return Some(hops)
         }
         current = inner
@@ -9395,6 +10342,9 @@ fn construct_variant(self: &Checker, id: NominalId, vname: String, arg_tys: &Lis
         subst.set(e.type_params[k], fresh)
         args.push(fresh)
     }
+    for v in e.assoc_params {
+        subst.set(v, self.engine.fresh_var())
+    }
     for i in 0..payloads.len {
         let pty = self.engine.substitute_shared(payloads[i], &subst)
         const o = self.engine.unify(arg_tys[i], pty)
@@ -9448,10 +10398,7 @@ fn struct_field_lookup(self: &Checker, recv: Ty, name: String) Ty? {
             if sd.type_params.len == 0 or sd.type_params.len != nr.args.len {
                 return Some(sd.fields[i].ty)
             }
-            let subst = dict(self.allocator)
-            for k in 0..sd.type_params.len {
-                subst.set(sd.type_params[k], self.engine.interner.child_at(nr.args, k))
-            }
+            let subst = member_subst(self, peeled, &sd.type_params, &sd.assoc_params, nr.args)
             let out = self.engine.substitute_shared(sd.fields[i].ty, &subst)
             subst.deinit()
             return Some(out)
@@ -9579,11 +10526,14 @@ fn zonk_closures(self: &Checker) {
                 }
                 let tps: List(VarId) = list(sd.type_params.len, self.allocator)
                 tps.push_all(sd.type_params.as_slice())
+                let aps: List(VarId) = list(sd.assoc_params.len, self.allocator)
+                aps.push_all(sd.assoc_params.as_slice())
                 let updated = StructDef {
                     fqn = sd.fqn,
                     module = sd.module,
                     is_pub = sd.is_pub,
                     type_params = move tps,
+                    assoc_params = move aps,
                     fields = move zfields,
                     decl_span = sd.decl_span,
                     deprecation = sd.deprecation,
@@ -9662,6 +10612,132 @@ fn resolve_fn_name_values(self: &Checker) {
 // skipped (RFC-022 5f): the demand that instantiated one ran this pass over it, and a reuse
 // requires a concrete final signature, so there is nothing left to resolve - the sweep is scoped to
 // the fresh entries instead of the whole program.
+// Solves every ground instance of a definition whose fields name associated types (RFC-036) that
+// layout and lowering can meet: those in the program's and the specializations' tables, and,
+// through the field types of every instance met, those nested inside them.
+fn solve_all_instances(self: &Checker, zonked: &Dict(NodeId, Ty)) {
+    if !any_assoc_defs(self) {
+        return
+    }
+    let work: List(Ty) = list(zonked.len(), self.allocator)
+    defer work.deinit()
+    for e in zonked {
+        work.push(e.value)
+    }
+    for i in 0..(self.specs.next_id as usize) {
+        const found = self.specs.find(i as SpecId)
+        if found.is_none() {
+            continue
+        }
+        const sp = found.unwrap()
+        work.push_all(sp.concrete_params.as_slice())
+        work.push(sp.concrete_return)
+        for e in sp.overlay.node_types {
+            work.push(e.value)
+        }
+    }
+    let seen: Set(Ty) = set(self.allocator)
+    defer seen.deinit()
+    loop {
+        const t = work.pop()
+        if t.is_none() {
+            break
+        }
+        if seen.contains(t.unwrap()) {
+            continue
+        }
+        seen.add(t.unwrap())
+        push_type_children(self, t.unwrap(), &work)
+    }
+}
+
+// `is_copyable`, with the instances inside `t` whose fields name associated types solved first:
+// their fields' types are what the answer depends on.
+fn ty_copyable(self: &Checker, t: Ty) bool {
+    solve_within(self, t)
+    return self.engine.is_copyable(t)
+}
+
+fn solve_within(self: &Checker, t: Ty) {
+    if !self.assoc_defs {
+        return
+    }
+    let work: List(Ty) = list(4, self.allocator)
+    defer work.deinit()
+    work.push(self.engine.zonk(t))
+    let seen: Set(Ty) = set(self.allocator)
+    defer seen.deinit()
+    loop {
+        const next = work.pop()
+        if next.is_none() {
+            break
+        }
+        if seen.contains(next.unwrap()) {
+            continue
+        }
+        seen.add(next.unwrap())
+        push_type_children(self, next.unwrap(), &work)
+    }
+}
+
+fn any_assoc_defs(self: &Checker) bool {
+    for i in 0..(self.nominals.next_id as usize) {
+        const def = self.nominals.find(i as NominalId)
+        if def.is_none() {
+            continue
+        }
+        const n = def.unwrap().* match {
+            NomStruct(sd) => sd.assoc_params.len
+            NomEnum(ed) => ed.assoc_params.len
+        }
+        if n > 0 {
+            return true
+        }
+    }
+    return false
+}
+
+// The types directly inside `t`, a nominal instance's substituted field and payload types included.
+fn push_type_children(self: &Checker, t: Ty, work: &List(Ty)) {
+    ty_node(self, t) match {
+        NRef(inner) => work.push(inner)
+        NArray(a) => work.push(a.elem)
+        NTuple(span) => work.push_all(self.engine.interner.child_ids(span))
+        NRecord(rec) => work.push_all(self.engine.interner.child_ids(rec.tys))
+        NFunc(f) => {
+            work.push_all(self.engine.interner.child_ids(f.params))
+            work.push(f.ret)
+        }
+        NNominal(nn) => push_member_types(self, t, &nn, work)
+        _ => {}
+    }
+}
+
+fn push_member_types(self: &Checker, t: Ty, nn: &NNominalNode, work: &List(Ty)) {
+    work.push_all(self.engine.interner.child_ids(nn.args))
+    if nn.args.len == 0 {
+        return
+    }
+    self.nominals.get(nn.id).* match {
+        NomStruct(sd) => {
+            let subst = member_subst(self, t, &sd.type_params, &sd.assoc_params, nn.args)
+            for &f in sd.fields {
+                work.push(self.engine.substitute_shared(f.ty, &subst))
+            }
+            subst.deinit()
+        }
+        NomEnum(ed) => {
+            let subst = member_subst(self, t, &ed.type_params, &ed.assoc_params, nn.args)
+            for &v in ed.variants {
+                for p in v.payloads {
+                    work.push(self.engine.substitute_shared(p, &subst))
+                }
+            }
+            subst.deinit()
+        }
+    }
+}
+
 fn zonk_specializations(self: &Checker) {
     for i in 0..(self.specs.next_id as usize) {
         let found = self.specs.find(i as SpecId)
@@ -10255,7 +11331,7 @@ fn own_local_decl(self: &Checker, node: NodeId) NodeId? {
 fn own_is_copyable(self: &Checker, span: SourceSpan) bool {
     const t = own_type(self, span)
     return t match {
-        Some(ty) => self.engine.is_copyable(self.engine.resolve(ty))
+        Some(ty) => ty_copyable(self, self.engine.resolve(ty))
         None => true
     }
 }
@@ -11060,7 +12136,7 @@ fn own_slice_elem_copyable(self: &Checker, span: SourceSpan) bool {
                     0)) } else { null }
         _ => null
     }
-    return elem.is_none() or self.engine.is_copyable(elem.unwrap())
+    return elem.is_none() or ty_copyable(self, elem.unwrap())
 }
 
 fn own_param_mode(self: &Checker, callee: &OwnCallee, idx: usize, name: String) OwnMode {
@@ -11434,7 +12510,7 @@ fn own_released(self: &Checker, p: &OwnPass, decl: NodeId, path: String, ty: Ty?
         return false
     }
     const t = self.engine.resolve(ty.unwrap())
-    if self.engine.is_copyable(t) {
+    if ty_copyable(self, t) {
         return true
     }
     if own_moved_below(p, decl, path).is_none() {
@@ -11766,6 +12842,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     demanded: &List(bool)? = null) TypeCheckResult {
     let seq = visit_sequence(self, modules.len, order)
     defer seq.deinit()
+    self.nominals.clear_solved()
     // A new demand generation for the carried specialization registry: entries this demand never
     // touches are swept at the end (RFC-022 5e).
     self.specs.begin_gen()
@@ -11775,6 +12852,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     const visibility_ns = elapsed_ns(visibility_start)
     const collect_start = monotonic_ns()
     self.saw_new_name = false
+    self.bounds_changed = false
     self.defaults_changed = false
     self.functions.reset_changed()
 
@@ -11830,17 +12908,23 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     // and no alias changed underneath a field that expanded it. Any of those and every body
     // resolves from source, as a cold check would.
     const bodies_carry = recollect.is_some() and !self.saw_new_name and !aliases_changed
-        and !removed_names(self)
+        and !self.bounds_changed and !removed_names(self)
     const nominals_start = monotonic_ns()
     for i in seq {
         if bodies_carry and !needs_collect(recollect, i) {
             replay_nominal_diags(self, paths[i], false)
-            burn_type_param_vars(self, &modules[i])
+            burn_type_param_vars(self, &modules[i], paths[i])
             continue
         }
         const diags_from = self.diagnostics.len
+        const vars_from = self.engine.var_counter
+        self.ref_log.clear()
+        self.ref_logging = true
         resolve_nominal_bodies(self, &modules[i], paths[i])
+        self.ref_logging = false
         stash_nominal_diags(self, paths[i], diags_from, false)
+        stash_resolve_burn(self, paths[i], self.engine.var_counter - vars_from,
+            type_param_count(&modules[i]))
     }
     const nominals_ns = elapsed_ns(nominals_start)
     // Whether re-resolution changed what any retiring nominal says. Added and removed names are
@@ -11906,6 +12990,10 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     // Phase 2.5: constant initializers, before any body can observe an unpinned const (see
     // `check_module_constants`).
     const constants_start = monotonic_ns()
+    // Every signature is registered: a bounded type written from here on can be checked where it is
+    // written (RFC-036).
+    self.check_apps = true
+    self.assoc_defs = any_assoc_defs(self)
     for i in seq {
         check_module_constants(self, &modules[i], paths[i])
     }
@@ -11963,6 +13051,7 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     const validate_start = monotonic_ns()
     validate_literals(self, 0, preamble_lits)
     specialize_ns = specialize_ns + elapsed_ns(validate_start)
+    self.check_apps = false
     // Carried specializations nothing demanded this time are gone - a call site an edit removed
     // keeps no entry alive.
     self.specs.sweep()
@@ -11987,6 +13076,8 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     for entry in self.results.node_types {
         zonked.set(entry.key, self.engine.zonk(entry.value))
     }
+    solve_all_instances(self, &zonked)
+    self.assoc_defs = false
     const zonk_ns = elapsed_ns(zonk_start)
 
     // Now that every type is final, fill this demand's signature captures (RFC-022 5c) and body
@@ -12169,9 +13260,10 @@ fn replay_body_diags(self: &Checker, path: String) {
 
 // The module's diag-cache entry, created on first use. Null when there is no entry yet and nothing
 // to stash either - an all-clean module never allocates one.
-fn module_diags_entry(self: &Checker, path: String, from: usize) &ModuleNomDiags? {
+fn module_diags_entry(self: &Checker, path: String, from: usize,
+    force: bool = false) &ModuleNomDiags? {
     if self.nominal_diags.get_ref(path).is_none() {
-        if from == self.diagnostics.len {
+        if from == self.diagnostics.len and !force {
             return null
         }
         const idx = self.nominal_diag_keys.len
@@ -12181,9 +13273,25 @@ fn module_diags_entry(self: &Checker, path: String, from: usize) &ModuleNomDiags
             resolve = list(0, self.allocator),
             signatures = list(0, self.allocator),
             bodies = list(0, self.allocator),
+            resolve_burn = null,
+            resolve_refs = list(0, self.allocator),
         })
     }
     return self.nominal_diags.get_ref(path)
+}
+
+// Records how many variables module `path`'s resolve pass minted, when that is more than its type
+// parameters account for.
+// Also takes the pass's logged go-to-definition edges, replayed with the burn.
+fn stash_resolve_burn(self: &Checker, path: String, minted: u32, params: u32) {
+    const extra = minted != params
+    const found = module_diags_entry(self, path, self.diagnostics.len, extra
+        or self.ref_log.len > 0)
+    if found.is_some() {
+        let entry = found.unwrap()
+        entry.resolve_burn = if extra { Some(minted) } else { null }
+        install(&entry.resolve_refs, replace(&self.ref_log, list(0, self.allocator)))
+    }
 }
 
 fn refill_diags(self: &Checker, dst: &List(Diagnostic), from: usize) {
@@ -12283,9 +13391,13 @@ fn run_signature_pass(self: &Checker, module: &Module, path: String, sources: &L
     const w = sig_watermark(self)
     self.sig_nodes.clear()
     self.sig_capture = true
+    self.ref_log.clear()
+    self.ref_logging = true
+    self.ref_new = 0usize
     const diags_from = self.diagnostics.len
     collect_signatures(self, module, path)
     self.sig_capture = false
+    self.ref_logging = false
     stash_sig_diags(self, path, diags_from)
     finish_sig_capture(self, path, &w, collect_default_texts(self, module, sources))
 }
@@ -12293,7 +13405,7 @@ fn run_signature_pass(self: &Checker, module: &Module, path: String, sources: &L
 fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark,
     default_texts: move List(OwnedString)) {
     const clean = self.next_synth == w.synth and self.next_lambda == w.lambda
-        and self.results.resolved_targets.len() == w.targets
+        and self.results.resolved_targets.len() == w.targets + self.ref_new
         and self.results.resolved_ops.len() == w.ops and self.results.desugars.len() == w.desugars
         and self.results.default_args.len() == w.default_args
         and self.results.arg_lists.len() == w.arg_lists
@@ -12315,6 +13427,7 @@ fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark,
         var_burn = (self.engine.var_counter - w.vars) as usize,
         vars_at_start = w.vars,
         lit_tys = move lit_tys,
+        refs = replace(&self.ref_log, list(0, self.allocator)),
         default_texts = move default_texts,
         cacheable = clean,
         fresh = true,
@@ -12365,6 +13478,7 @@ fn replay_signature_cache(self: &Checker, path: String) {
             None => {}
         }
     }
+    replay_type_refs(self, &c.refs)
     for _k in 0..c.var_burn {
         self.engine.burn_var()
     }
@@ -12404,7 +13518,17 @@ fn harvest_sig_caches(self: &Checker, zonked: &Dict(NodeId, Ty)) {
 // anonymous record whose key renders one - depends on that stream), and the parameter's span node,
 // so the result's span table holds the same entries. The carried bodies keep the variable ids of
 // the demand that resolved them; these stand-ins are never read.
-fn burn_type_param_vars(self: &Checker, module: &Module) {
+fn burn_type_param_vars(self: &Checker, module: &Module, path: String) {
+    const entry = self.nominal_diags.get_ref(path)
+    const recorded = if entry.is_some() { entry.unwrap().resolve_burn } else { null }
+    if entry.is_some() {
+        replay_type_refs(self, &entry.unwrap().resolve_refs)
+    }
+    if recorded.is_some() {
+        for _k in 0..(recorded.unwrap() - type_param_count(module)) {
+            self.engine.burn_var()
+        }
+    }
     for &decl in module.decls {
         decl.* match {
             Type(td) => {
@@ -12427,6 +13551,22 @@ fn burn_type_param_vars(self: &Checker, module: &Module) {
             _ => {}
         }
     }
+}
+
+fn type_param_count(module: &Module) u32 {
+    let n = 0u32
+    for &decl in module.decls {
+        const k = decl.* match {
+            Type(td) => td.body.* match {
+                AnonStruct(a) => a.generics.len
+                AnonEnum(e) => e.generics.len
+                _ => 0usize
+            }
+            _ => 0usize
+        }
+        n = n + k as u32
+    }
+    return n
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -12756,6 +13896,7 @@ fn replay_closure(self: &Checker, f: &ClosureFact) {
         module = f.module,
         is_pub = true,
         type_params = move empty_tps,
+        assoc_params = list(0, self.allocator),
         fields = move fields,
         decl_span = f.decl_span,
         deprecation = null,
@@ -13280,6 +14421,32 @@ fn render_alias_body(t: &TypeExpr, sb: &StringBuilder) bool {
                 }
                 sb.append(")")
             }
+            for &a in n.assoc_args {
+                sb.append(if a.pinned { "|=" } else { "|:" })
+                sb.append(a.name)
+                sb.append(" ")
+                if !render_alias_body(a.ty, sb) {
+                    ok = false
+                }
+            }
+            ok
+        }
+        Combined(c) => {
+            let ok = true
+            for i in 0..c.parts.len {
+                if i > 0 {
+                    sb.append(" + ")
+                }
+                if !render_alias_body(&c.parts[i], sb) {
+                    ok = false
+                }
+            }
+            ok
+        }
+        Projection(p) => {
+            const ok = render_alias_body(p.base, sb)
+            sb.append(".")
+            sb.append(p.name)
             ok
         }
         GenericBind(g) => {

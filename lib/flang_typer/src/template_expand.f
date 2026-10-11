@@ -412,6 +412,7 @@ fn bind_arg(chk: &Checker, env: &CtEnv, param: &GenParam, arg: &GenArg, gen_name
                     span = id.span,
                     name = id.name,
                     generic_args = frozen(list(0, Some(a))),
+                    assoc_args = frozen(list(0, Some(a))),
                 })
                 Ok(CtValue.TypeInfo(type_info_of(env, box(a, named))))
             }

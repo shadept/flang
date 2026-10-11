@@ -1233,7 +1233,7 @@ fn const_struct(ctx: &LowerCtx, lit: &StructLiteralExpr, buf: &List(u8), rel: &L
             return false
         }
         let didx = di as usize
-        let fty = field_ty(tyit(ctx), &st.def, didx, &st.args)
+        let fty = field_ty(tyit(ctx), &st.def, didx, &st.args, &ctx.result.nominals)
         if !const_bytes(ctx, &fty, fi.value.unwrap(), buf, rel, at + st.layout.offsets[didx]) {
             return false
         }
@@ -3403,7 +3403,8 @@ fn field_at(ctx: &LowerCtx, st: &StructTarget, name: String, at: usize) (usize, 
         return null
     }
     let idx = fi as usize
-    return Some((at + st.layout.offsets[idx], field_ty(tyit(ctx), &st.def, idx, &st.args)))
+    return Some((at + st.layout.offsets[idx], field_ty(tyit(ctx), &st.def, idx, &st.args,
+                &ctx.result.nominals)))
 }
 
 // A scalar member, written at the member's own declared width.
@@ -3534,7 +3535,7 @@ fn static_ti_fields(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel: &Li
         let at = fs.layout.size * i
         blob_string_field(ctx, &fs, &ablob, &arel, "name", ts.def.fields[i].name, at)
         blob_int_field(ctx, &fs, &ablob, "offset", ts.layout.offsets[i] as i64, at)
-        let fty = field_ty(tyit(ctx), &ts.def, i, &ts.args)
+        let fty = field_ty(tyit(ctx), &ts.def, i, &ts.args, &ctx.result.nominals)
         static_typeinfo(ctx, fty) match {
             Some(s) => blob_ptr_field(ctx, &fs, &arel, "type_info", s, at)
             None => {}
@@ -3871,7 +3872,7 @@ fn lower_struct_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lit: &StructLi
         // Substituted through the instantiation's arguments - the raw definition stores a generic
         // field against the type parameter, and storing by the parameter's placeholder width
         // corrupts the neighbouring fields.
-        let fty = field_ty(tyit(ctx), &st.def, didx, &st.args)
+        let fty = field_ty(tyit(ctx), &st.def, didx, &st.args, &ctx.result.nominals)
         let v = lower_field_init(ctx, bb, env, fi, &fty)
         let fp = bb.gep(slot, Operand.IntConst(off as i64))
         if is_by_ref(ctx, &fty) {
@@ -4179,7 +4180,7 @@ fn struct_pattern_member(ctx: &LowerCtx, bb: &BlockBuilder, name: String, scrut:
         return null
     }
     let idx = di as usize
-    let fty = field_ty(tyit(ctx), &t.def, idx, &t.args)
+    let fty = field_ty(tyit(ctx), &t.def, idx, &t.args, &ctx.result.nominals)
     let addr = bb.gep(scrut, Operand.IntConst(t.layout.offsets[idx] as i64))
     if is_by_ref(ctx, &fty) {
         return Some((addr, fty))
@@ -4398,7 +4399,8 @@ fn variant_test(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ev: &EnumVariantPa
         if !refutable {
             continue
         }
-        let dty = variant_payload_ty(tyit(ctx), &et.def, vnum.unwrap() as usize, j, &et.args)
+        let dty = variant_payload_ty(tyit(ctx), &et.def, vnum.unwrap() as usize, j, &et.args,
+            &ctx.result.nominals)
         if dty == TY_VOID {
             continue
         }
@@ -4524,7 +4526,8 @@ fn bind_variant_payload(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ev: &EnumV
     for j in 0..ev.payloads.len {
         let sub = &ev.payloads[j]
         // A unit payload (`Ok(())`) has no bytes to read or bind.
-        let dty = variant_payload_ty(tyit(ctx), &et.def, vnum.unwrap() as usize, j, &et.args)
+        let dty = variant_payload_ty(tyit(ctx), &et.def, vnum.unwrap() as usize, j, &et.args,
+            &ctx.result.nominals)
         if dty == TY_VOID {
             continue
         }
@@ -4639,7 +4642,8 @@ fn lower_variant_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallE
             Positional(e) => e
             Named(_) => return unlowerable(ctx)
         }
-        let pty = variant_payload_ty(tyit(ctx), &et.def, vnum as usize, j, &et.args)
+        let pty = variant_payload_ty(tyit(ctx), &et.def, vnum as usize, j, &et.args,
+            &ctx.result.nominals)
         // A unit payload (`Ok(())`) stores nothing - the tag is the value.
         if pty == TY_VOID {
             continue
@@ -4956,7 +4960,7 @@ fn lower_null_propagation(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env,
         return unlowerable_why(ctx, "`?.` member unresolved")
     }
     let off = st.layout.offsets[di as usize]
-    let fty = field_ty(tyit(ctx), &st.def, di as usize, &st.args)
+    let fty = field_ty(tyit(ctx), &st.def, di as usize, &st.args, &ctx.result.nominals)
 
     let res_ty = node_ty(ctx, np.span)
     let rt = resolve_enum(ctx, &res_ty, reg)
@@ -5362,7 +5366,7 @@ fn member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
         return null
     }
     let off = st.layout.offsets[di as usize]
-    let fty = field_ty(tyit(ctx), &st.def, di as usize, &st.args)
+    let fty = field_ty(tyit(ctx), &st.def, di as usize, &st.args, &ctx.result.nominals)
 
     let base = lower_base_address(ctx, bb, env, ma.receiver)
     for _k in 1..depth {
@@ -5455,7 +5459,7 @@ fn deref_member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberA
     let off = st.layout.offsets[di as usize]
     return Some(MemberField {
         addr = bb.gep(cur, Operand.IntConst(off as i64)),
-        fty = field_ty(tyit(ctx), &st.def, di as usize, &st.args),
+        fty = field_ty(tyit(ctx), &st.def, di as usize, &st.args, &ctx.result.nominals),
     })
 }
 

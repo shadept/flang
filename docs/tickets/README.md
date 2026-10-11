@@ -45,4 +45,5 @@ Type: language, compiler, stdlib, tooling.
 | [033](033-parameter-declared-ownership.md) | Parameter-declared ownership | language | implemented | 2026-09-14 | 2026-10-10 |
 | [034](034-typed-slice-intrinsics.md) | Typed slice intrinsics | language | implemented | 2026-10-10 | 2026-10-10 |
 | [035](035-contracts.md) | Contracts | language | provisional | 2026-10-11 | 2026-10-11 |
+| [036](036-associated-types-and-type-parameter-bounds.md) | Associated types, projection, and bounds on type parameters | language | provisional | 2026-10-11 | 2026-10-11 |
 | [099](099-stack-only-types-and-bindings.md) | `#stack` types and stack-only bindings | language | deferred | 2026-08-27 |  |

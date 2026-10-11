@@ -164,10 +164,14 @@ pub type FunctionDecl = struct {
 }
 
 // One `param: bound` entry of a `where` clause (RFC-035). `bound` is a contract: `copyable`, a
-// named or anonymous contract, a function type, or a `+` combination of them.
+// named or anonymous contract, a function type, or a `+` combination of them. `path` holds the
+// associated-type names after `param` in `I.Item: Hash` (RFC-036), empty for a plain parameter.
+// `subject_spans[k]` covers the subject up to its k-th name: `I`, then `I.Item`.
 pub type TypeBound = struct {
     span: SourceSpan
     param: String
+    path: String[]
+    subject_spans: SourceSpan[]
     bound: &TypeExpr
 }
 
@@ -776,6 +780,7 @@ pub fn type_expr_span(t: &TypeExpr) SourceSpan {
         AnonEnum(en) => en.span
         Contract(c) => c.span
         Combined(c) => c.span
+        Projection(p) => p.span
         Error(er) => er.span
     }
 }
@@ -921,6 +926,7 @@ pub type TypeExpr = enum {
     AnonEnum(AnonEnumType)
     Contract(ContractType)
     Combined(CombinedType)
+    Projection(ProjectionType)
     Error(ErrorType)
 }
 
@@ -929,6 +935,25 @@ pub type NamedType = struct {
     span: SourceSpan
     name: String
     generic_args: TypeExpr[]
+    // `Item = T` and `Item: Bound` arguments of a contract application (RFC-036), after the
+    // positional ones.
+    assoc_args: AssocArg[]
+}
+
+// `Item = T` (pinned) or `Item: Bound` - a constraint on a contract's associated type.
+pub type AssocArg = struct {
+    span: SourceSpan
+    name: String
+    pinned: bool
+    ty: &TypeExpr
+}
+
+// `X.Item` - the associated type `Item` of the contract bounding `X` (RFC-036). `base` is a named
+// type parameter, `Self`, or another projection.
+pub type ProjectionType = struct {
+    span: SourceSpan
+    base: &TypeExpr
+    name: String
 }
 
 // `$T` - introduces a generic parameter at first appearance in a function parameter type.
@@ -1021,19 +1046,18 @@ pub type EnumVariant = struct {
     explicit_tag: &Expr?
 }
 
-// One generic parameter binding inside a struct or enum type expression. FLang has no bounds /
-// constraints on generic parameters yet.
+// One type parameter of a struct, enum or contract: `T` or `T: Bound` (RFC-036).
 pub type GenericParam = struct {
     span: SourceSpan
     name: String
+    bound: &TypeExpr?
 }
 
-// `contract(T) where T: B { fn next(self: &Self) T?  type S: Iterator(T) }` (RFC-035). Same node
-// whether named (RHS of a `TypeDecl`) or anonymous in bound position.
+// `contract(T: B) { fn next(self: &Self) T?  type S: Iterator }` (RFC-035). Same node whether named
+// (RHS of a `TypeDecl`) or anonymous in bound position.
 pub type ContractType = struct {
     span: SourceSpan
     generics: GenericParam[]
-    bounds: TypeBound[]
     requirements: ContractRequirement[]
     assoc_types: AssocType[]
 }
@@ -1045,11 +1069,13 @@ pub type ContractRequirement = struct {
     signature: FunctionType
 }
 
-// `type S` / `type S: Bound` - a type the contract solves rather than takes.
+// `type S` / `type S: Bound` - a type the contract solves rather than takes. `type S = T` is
+// derived instead: `value` is set and `bound` is not.
 pub type AssocType = struct {
     span: SourceSpan
     name: String
     bound: &TypeExpr?
+    value: &TypeExpr?
 }
 
 // `A + B + ...` - satisfied when every part is. Parts are contracts.
@@ -1117,7 +1143,12 @@ fn collect_generic_names(te: &TypeExpr, out: &List(String)) {
                 out.push(g.name)
             }
         }
-        Named(n) => collect_generic_list(n.generic_args, out)
+        Named(n) => {
+            collect_generic_list(n.generic_args, out)
+            for &a in n.assoc_args {
+                collect_generic_names(a.ty, out)
+            }
+        }
         Reference(r) => collect_generic_names(r.inner, out)
         Optional(o) => collect_generic_names(o.inner, out)
         Array(a) => collect_generic_names(a.element, out)
@@ -1153,7 +1184,7 @@ fn collect_generic_list(tes: TypeExpr[], out: &List(String)) {
 pub fn mentions_generic(te: &TypeExpr) bool {
     return te.* match {
         GenericBind(_) => true
-        Named(n) => any_generic(n.generic_args)
+        Named(n) => any_generic(n.generic_args) or assoc_generic(n.assoc_args)
         Reference(r) => mentions_generic(r.inner)
         Optional(o) => mentions_generic(o.inner)
         Array(a) => mentions_generic(a.element)
@@ -1164,8 +1195,73 @@ pub fn mentions_generic(te: &TypeExpr) bool {
         AnonEnum(_) => false
         Contract(c) => contract_mentions_generic(&c)
         Combined(c) => any_generic(c.parts)
+        Projection(_) => false
         Error(_) => false
     }
+}
+
+// Whether `te` names `name` as a type: `name` itself, `name.Item`, or anywhere inside.
+pub fn mentions_name(te: &TypeExpr, name: String) bool {
+    return te.* match {
+        Named(n) => n.name == name or any_names(n.generic_args, name) or assoc_names(n.assoc_args,
+            name)
+        Projection(p) => mentions_name(p.base, name)
+        Reference(r) => mentions_name(r.inner, name)
+        Optional(o) => mentions_name(o.inner, name)
+        Array(a) => mentions_name(a.element, name)
+        Slice(sl) => mentions_name(sl.element, name)
+        Tuple(t) => any_names(t.elements, name)
+        Function(f) => function_names(&f, name)
+        Combined(c) => any_names(c.parts, name)
+        Contract(c) => contract_names(&c, name)
+        _ => false
+    }
+}
+
+fn any_names(tes: TypeExpr[], name: String) bool {
+    for &te in tes {
+        if mentions_name(te, name) {
+            return true
+        }
+    }
+    return false
+}
+
+fn assoc_names(args: AssocArg[], name: String) bool {
+    for &a in args {
+        if mentions_name(a.ty, name) {
+            return true
+        }
+    }
+    return false
+}
+
+fn function_names(f: &FunctionType, name: String) bool {
+    if any_names(f.params, name) {
+        return true
+    }
+    return f.return_type match {
+        Some(rt) => mentions_name(rt, name)
+        None => false
+    }
+}
+
+fn contract_names(c: &ContractType, name: String) bool {
+    for &r in c.requirements {
+        if function_names(&r.signature, name) {
+            return true
+        }
+    }
+    return false
+}
+
+fn assoc_generic(args: AssocArg[]) bool {
+    for &a in args {
+        if mentions_generic(a.ty) {
+            return true
+        }
+    }
+    return false
 }
 
 fn contract_mentions_generic(c: &ContractType) bool {

@@ -1271,6 +1271,16 @@ fn decl_label(self: &LspServer, pi: ProjectId, span: SourceSpan) String? {
     return Some(text[span.start..end])
 }
 
+// Whether a type reference names a type parameter, which hovers as `typevar T`: neither `Self`,
+// whose declaration is the type it names, nor an associated type, declared `type Item`.
+fn is_type_param_ref(target: &ResolvedTarget, word: String, decl_text: String) bool {
+    const is_type_ref = target.* match {
+        RtType(_) => true
+        _ => false
+    }
+    return is_type_ref and word != "Self" and !decl_text.starts_with("type ")
+}
+
 // The docstring of the declaration at `span` - the comment run glued above its first token.
 fn doc_for(self: &LspServer, pi: ProjectId, span: SourceSpan) OwnedString? {
     if !self.location_span_ok(pi, span) {
@@ -1357,7 +1367,8 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     // A resolved target answers when its node is anchored to the word: starting at it (reads,
     // callees), ending at it (enum variant refs `Color.Red`), or - for function targets only -
     // containing it with a matching name (a UFCS call node spans the receiver too). Locals fall
-    // through to the typed branch, whose `name: T` form beats a declaration slice.
+    // through to the typed branch, whose `name: T` form beats a declaration slice; a local target
+    // with no type at the word is a type reference (`I.Item`, RFC-036) and shows its declaration.
     if tg.is_some() {
         const target = tg.unwrap().target
         const tspan = tg.unwrap().span
@@ -1380,11 +1391,14 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
             RtLocal(_) => true
             _ => false
         }
-        if accept and !is_local {
+        const typed_here = th.is_some() and th.unwrap().span.start == wstart
+        if accept and (!is_local or !typed_here) {
             const dspan = cursor_decl_span(result, &tg.unwrap(), text, wstart, wend)
             if dspan.is_some() and self.location_span_ok(pi, dspan.unwrap()) {
                 const l = self.decl_label(pi, dspan.unwrap())
-                if l.is_some() {
+                if l.is_some() and is_type_param_ref(&target, wname, l.unwrap()) {
+                    set_hover_label(&label, $"typevar {wname}")
+                } else if l.is_some() {
                     set_hover_label(&label, from_view(l.unwrap()))
                     doc_span = dspan
                 }
@@ -2411,7 +2425,7 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
 
 // A small analyzed project for the cursor-request tests, fabricated in memory: one file at
 // /t/m.f, no disk, no stdlib.
-const DEMO_SRC: String = "pub fn point(q: i32) i32 { return q }\npub type P = struct { x: i32 }\npub fn go(n: i32) i32 {\n    let a = point(3)\n    let s = P { x = 1 }\n    for v in 0..n {\n        let b = v\n    }\n    return a\n}\n// see Wide\npub fn pick(x: $T) $T { return x }\npub fn wait(k: i32) {\n    while k > 0 {\n        k = k - 1\n    }\n}\npub fn use_pick() i32 { return pick(7) }\npub fn wrap(y: $T) i32 { return point(8) }\npub fn use_wrap() i32 { return wrap(true) }\npub fn lone(z: $T) i32 { return point(4) }\npub fn read_x(pp: P) i32 { return pp.x }\npub fn solo(w: $T, point: i32) i32 { return point }\npub type E = enum { A B }\npub fn pick_e() E { return E.A }\npub type Q = struct {\n    // The y.\n    y: i32\n}\npub fn read_y(qq: Q) i32 { return qq.y }\n"
+const DEMO_SRC: String = "pub fn point(q: i32) i32 { return q }\npub type P = struct { x: i32 }\npub fn go(n: i32) i32 {\n    let a = point(3)\n    let s = P { x = 1 }\n    for v in 0..n {\n        let b = v\n    }\n    return a\n}\n// see Wide\npub fn pick(x: $T) $T { return x }\npub fn wait(k: i32) {\n    while k > 0 {\n        k = k - 1\n    }\n}\npub fn use_pick() i32 { return pick(7) }\npub fn wrap(y: $T) i32 { return point(8) }\npub fn use_wrap() i32 { return wrap(true) }\npub fn lone(z: $T) i32 { return point(4) }\npub fn read_x(pp: P) i32 { return pp.x }\npub fn solo(w: $T, point: i32) i32 { return point }\npub type E = enum { A B }\npub fn pick_e() E { return E.A }\npub type Q = struct {\n    // The y.\n    y: i32\n}\npub fn read_y(qq: Q) i32 { return qq.y }\npub type It = contract {\n    type Item\n    fn next(self: &Self) Item\n}\npub fn first(it: &$I) I.Item where I: It { return it.next() }\npub fn keep(it: &$I, b: I) I where I: It, I.Item: It { return b }\npub type Node = struct(T) { next: &Self }\n"
 
 fn demo_project_into(srv: &LspServer) {
     let srcs: List(OwnedString) = list(2)
@@ -2682,6 +2696,78 @@ test "the qualifier of Enum.Variant resolves to the enum, the member to the vari
     demo_run("{\"jsonrpc\":\"2.0\",\"id\":35,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":24,\"character\":27}}}",
         &out3)
     assert_true(contains(out3.as_view(), "pub type E = enum"), "qualifier hovers as the enum")
+}
+
+test "definition on a projection lands on the associated type, its root on the type parameter" {
+    let out = string_builder(4096)
+    defer out.deinit()
+    // definition on `Item` in `I.Item`
+    demo_run("{\"jsonrpc\":\"2.0\",\"id\":36,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":34,\"character\":25}}}",
+        &out)
+    assert_true(contains(out.as_view(), "\"start\":{\"line\":31,\"character\":4}"),
+        "`Item` lands on the contract's `type Item`")
+
+    let out2 = string_builder(4096)
+    defer out2.deinit()
+    // definition on `I` in `I.Item`
+    demo_run("{\"jsonrpc\":\"2.0\",\"id\":37,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":34,\"character\":22}}}",
+        &out2)
+    assert_true(contains(out2.as_view(), "\"start\":{\"line\":34,\"character\":18}"),
+        "`I` lands on the `$I` that introduces it")
+
+    let out3 = string_builder(4096)
+    defer out3.deinit()
+    // hover on `Item` in `I.Item`
+    demo_run("{\"jsonrpc\":\"2.0\",\"id\":38,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":34,\"character\":25}}}",
+        &out3)
+    assert_true(contains(out3.as_view(), "type Item"), "hovers as the associated type")
+
+    let out4 = string_builder(4096)
+    defer out4.deinit()
+    // references on `Item` in `I.Item`: the declaration and the use
+    demo_run("{\"jsonrpc\":\"2.0\",\"id\":39,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":34,\"character\":25},\"context\":{\"includeDeclaration\":true}}}",
+        &out4)
+    assert_true(contains(out4.as_view(), "\"start\":{\"line\":31,\"character\":4}"),
+        "the declaration")
+    assert_true(contains(out4.as_view(), "\"start\":{\"line\":34,\"character\":22}"), "the use")
+}
+
+// Hits `pos` (line, character) with a definition request and checks the answer starts at `want`.
+fn definition_lands(id: i32, line: i32, ch: i32, want: String) bool {
+    let out = string_builder(4096)
+    defer out.deinit()
+    const req = $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/definition\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\"}},\"position\":{{\"line\":{line},\"character\":{ch}}}}}}}"
+    demo_run(req.view, &out)
+    req.deinit()
+    return contains(out.as_view(), want)
+}
+
+test "definition on a type parameter, a where subject and a bare associated type" {
+    assert_true(definition_lands(50, 35, 24, "\"start\":{\"line\":35,\"character\":17}"),
+        "a bare `I` lands on its `$I`")
+    assert_true(definition_lands(51, 35, 44, "\"start\":{\"line\":31,\"character\":4}"),
+        "`Item` in the `where I.Item:` subject lands on the contract's `type Item`")
+    assert_true(definition_lands(52, 35, 42, "\"start\":{\"line\":35,\"character\":17}"),
+        "the subject's root lands on its `$I`")
+    assert_true(definition_lands(53, 32, 25, "\"start\":{\"line\":31,\"character\":4}"),
+        "a bare `Item` inside its contract lands on its declaration")
+}
+
+// Hits `pos` (line, character) with a hover request and checks the answer holds `want`.
+fn hover_shows(id: i32, line: i32, ch: i32, want: String) bool {
+    let out = string_builder(4096)
+    defer out.deinit()
+    const req = $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/hover\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\"}},\"position\":{{\"line\":{line},\"character\":{ch}}}}}}}"
+    demo_run(req.view, &out)
+    req.deinit()
+    return contains(out.as_view(), want)
+}
+
+test "hover on a type parameter reads typevar, on Self the type it names" {
+    assert_true(hover_shows(60, 35, 24, "typevar I"), "a bare `I`")
+    assert_true(hover_shows(61, 32, 19, "pub type It = contract"), "`Self` in a contract")
+    assert_true(hover_shows(62, 32, 25, "type Item"), "a bare associated type")
+    assert_true(hover_shows(63, 36, 35, "pub type Node = struct(T)"), "`Self` in a struct")
 }
 
 test "hover on a callee shows the function's docstring" {

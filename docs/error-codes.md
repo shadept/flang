@@ -3032,6 +3032,10 @@ Report the issue with sample code that reproduces the error.
 | **E2139** | Type Checking     | `Self` outside a struct, enum or contract    |
 | **E2140** | Type Checking     | A declaration named `Self`                   |
 | **E2141** | Type Checking     | A contract requirement that omits `Self`     |
+| **E2142** | Type Checking     | A projection no bound declares               |
+| **E2143** | Type Checking     | A malformed associated-type argument         |
+| **E2144** | Type Checking     | A bound naming a later type parameter        |
+| **E2145** | Parsing           | `where` on a type declaration                |
 
 ### E2115: Unsupported Pattern Form
 
@@ -3466,6 +3470,11 @@ type under `copyable`, named with its derivation chain. The error sits on the ca
 type: the outermost instantiation's call when the call is inside another generic body. The
 function's body is not instantiated for that call.
 
+A struct's or enum's parameter bounds (RFC-036) widen it: a bounded type written in a body with
+arguments its bounds reject is reported at the type expression, or, when its arguments were type
+parameters, at the call whose instantiation settled them; a bound a signature implies by naming the
+type is checked at the call like a `where` entry, and named as a bound of that type.
+
 #### Example
 
 ```flang
@@ -3476,6 +3485,9 @@ fn apply(x: &$T, f: $F) i32 where F: fn(T) i32
 twice(handle)       // error[E2134]: `twice` requires `T: copyable`; `FileHandle` is not copyable: field `fd` is `owned`
 drain_all(3i32)     // error[E2134]: `drain_all` requires `I: Iterator`: `i32` has no `next` of type `fn(&i32) Option(T)`
 apply(&h, take)     // error[E2134]: `apply` requires `F: fn`: `fn(move Handle) i32` is not callable as `fn(T) i32`
+
+type Table = struct(K: Keyed) { first: K }
+let t: Table(Point) = ...   // error[E2134]: `Table` requires `K: Keyed`: `Point` has no `key` of type `fn(Point) i32`
 ```
 
 #### Solution
@@ -3603,6 +3615,101 @@ type Bad = contract {
 #### Solution
 
 Take `Self` (or `&Self`) as a parameter.
+
+---
+
+### E2142: A Projection No Bound Declares
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+`X.Item` names the associated type `Item` of the contract bounding `X` (RFC-036). It is an error
+when no contract in `X`'s bounds - its function's `where`, a type parameter list, or the bounds a
+signature's types imply - declares `Item`, when `X` is not a type parameter, `Self` or another
+projection (a projection on a concrete type is not a form: write the type).
+
+#### Example
+
+```flang
+fn first(it: move $I) I.Elem? where I: Iterator     // error[E2142]: no `Elem`
+fn f(p: Point.Item)                                 // error[E2142]: `Point` is not a type parameter
+```
+
+#### Solution
+
+Bound the parameter by a contract that declares the associated type, or name the concrete type.
+
+---
+
+### E2143: A Malformed Associated-Type Argument
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+`Name(Item = T)` pins and `Name(Item: B)` bounds one of a contract's associated types. It is an
+error when the contract declares no such associated type, when one application constrains the same
+one twice, when the name is not a single contract, or when the form is written outside a bound.
+
+#### Example
+
+```flang
+where I: Iterator(Elem = i32)              // error[E2143]: `Iterator` declares no `Elem`
+where I: Iterator(Item = i32, Item = u8)   // error[E2143]: `Item` twice
+fn f(xs: List(Item = i32))                 // error[E2143]: not in a bound
+```
+
+#### Solution
+
+Name an associated type the contract declares, once, in a bound.
+
+---
+
+### E2144: A Bound Naming a Later Type Parameter
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A struct's, enum's or contract's parameter bounds read in order: a bound may name an earlier
+parameter and its associated types, never a later one.
+
+#### Example
+
+```flang
+type Bad = struct(F: fn(I.Item) bool, I: Iterator) { f: F, it: I }   // error[E2144]
+```
+
+#### Solution
+
+Declare the parameter the bound reads first: `struct(I: Iterator, F: fn(I.Item) bool)`.
+
+---
+
+### E2145: `where` on a Type Declaration
+
+**Category**: Parsing
+**Severity**: Error
+
+#### Description
+
+A struct, enum or contract declares its parameters in a list, and each parameter's bound sits on
+it there. `where` after the list, RFC-035's `contract(T) where T: B` included, is refused: each
+position has one spelling.
+
+#### Example
+
+```flang
+type Wrap = struct(T) where T: copyable { x: T }   // error[E2145]
+```
+
+#### Solution
+
+Move the bound onto the parameter: `struct(T: copyable)`.
 
 ---
 

@@ -36,6 +36,9 @@ import flang_typer.type
 pub type ResolvedTarget = enum {
     RtFunction(u32) // FunctionRegistry id
     RtLocal(NodeId) // declaration node
+    // A type binding's declaration node, on a type-position use: a type parameter (`$T`, a list
+    // entry), `Self`, an associated type (RFC-036).
+    RtType(NodeId)
     RtStructField(NominalId, u32) // nominal + field index
     RtEnumVariant(NominalId, u32) // nominal + variant index
     RtSpecialized(SpecId) // SpecializationRegistry id

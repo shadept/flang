@@ -22,6 +22,7 @@ listed here, it does not exist in FLang.
 | No traits | `#interface` / `#implement` source generators | `trait Foo { }` |
 | Closures capture by reference | Every captured name is a reference to the enclosing binding (RFC-033); no capture-list syntax | `move` closures, capture lists |
 | No `elif`/`else if` | Chain `else if` (two keywords) | `elif` |
+| Associated types | `I.Item`, `Iterator(Item = i32)` | `I::Item`, `<I as Iterator>::Item`, `Iterator<Item = i32>` |
 
 ## Types
 
@@ -99,7 +100,7 @@ fn close(h: move File) {}                   // takes ownership: `h.close()` move
 
 **Generic:** `$T` introduces, `T` refers. Example: `fn identity(x: $T) T { return x }`
 
-**Bounds:** `fn max(s: $T[]) T? where T: copyable`, `where I: Iterator($T), F: fn(T) bool`, `where T: Eq + Hash` - a bound is a contract (see Contracts); `where` is contextual.
+**Bounds:** `fn max(s: $T[]) T? where T: copyable`, `where I: Iterator, F: fn(I.Item) bool`, `where T: Eq + Hash`, `where I: Iterator, I.Item: Hash` - a bound is a contract (see Contracts); `where` is contextual. A struct's, enum's or contract's bounds sit on its parameter list instead (see Structs).
 
 **Foreign:** `#foreign fn malloc(size: usize) &u8?` — no body, C calling convention, not mangled.
 
@@ -118,26 +119,37 @@ pub type Pair = (i32, i32)       // pub follows module visibility rules
 ## Contracts
 
 ```
-pub type Iterator = contract(T) {
-    fn next(self: &Self) T?               // requirement: callable on `Self`
+pub type Iterator = contract {
+    type Item                             // associated type, solved from the requirements
+    fn next(self: &Self) Item?            // requirement: callable on `Self`
 }
-pub type Iterable = contract(T) {
-    type S: Iterator(T)                   // associated type, solved from the requirements
-    fn iter(self: &Self) S
+pub type Iterable = contract {
+    type Iter: Iterator                   // solved, then held to its bound
+    type Item = Iter.Item                 // derived
+    fn iter(self: &Self) Iter
+}
+pub type Into = contract(T: copyable) {   // a parameter, bounded in place
+    fn into(self: Self) T
 }
 pub type Key = copyable + Hash + Eq       // `+` combines contracts
 
-fn sum(it: move $I) T where I: Iterator($T), T: copyable { ... }
+fn first(it: move $I) I.Item? where I: Iterator                    // projection
+fn total(it: move $I) i32 where I: Iterator(Item = i32)            // pinned
+fn to_set(it: move $I) Set(I.Item) where I: Iterator(Item: Hash + Eq)   // bounded
 fn read(b: &$B) T where B: contract { fn get(self: &Self) $T } { ... }   // anonymous
 ```
 
-`contract` is a keyword. A requirement is a function declaration without a body; one per line (commas optional), its return type on the `)`'s line. `Self` is the constrained type inside a contract, and the declared type applied to its own parameters inside a named struct or enum (`next: &Self?`). A contract has no values: bound a type parameter with it.
+`contract` is a keyword. `X.Item` in type position is a projection: the associated type `Item` of `X`'s contract, for a type parameter `X`, `Self`, or another projection (`C.Iter.Item`). In a contract application `Item = T` pins an associated type and `Item: B` bounds it; both follow the positional arguments. A requirement is a function declaration without a body; one per line (commas optional), its return type on the `)`'s line. `Self` is the constrained type inside a contract, and the declared type applied to its own parameters inside a named struct or enum (`next: &Self?`). A contract has no values: bound a type parameter with it.
 
 ## Structs
 
 ```
 type Point = struct { x: i32, y: i32 }
 type Pair = struct(T) { first: T, second: T }                // generic
+type Filtered = struct(I: Iterator, F: fn(I.Item) bool) {    // bounded parameters
+    it: I
+    f: F
+}
 type Color = #foreign struct { r: u8, g: u8, b: u8, a: u8 }  // C FFI struct
 type Vec128 = #simd struct { _data: [u8; 16] }               // SIMD-aligned
 
@@ -146,7 +158,7 @@ let a = .{ x = 10, y = 20 }                     // anonymous (type from context)
 let p2 = Point { x, y = 20 }                    // shorthand: x = x
 ```
 
-Commas between fields optional. Field assignment uses `=`. The legacy `struct Name { ... }` declaration form has been removed (E1050) — see RFC-008.
+Commas between fields optional. Field assignment uses `=`. A parameter's bound sits on it (`T: Bound`); `where` after a type's parameter list is E2145. The legacy `struct Name { ... }` declaration form has been removed (E1050) — see RFC-008.
 
 ## Enums
 

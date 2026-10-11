@@ -349,9 +349,39 @@ fn project_where_bound(self: &Projector, cst: CstNode) TypeBound {
             } }
         None => {}
     }
+    let path: List(String) = list(0, Some(self.alloc))
+    let spans: List(SourceSpan) = list(1, Some(self.alloc))
+    let param: String = ""
+    let start = 0usize
+    for i in 0..cst.child_count() {
+        cst.child(i) match {
+            TokenChild(tok) => {
+                if tok.kind == TokenKind.Colon {
+                    break
+                }
+                if tok.kind != TokenKind.Identifier {
+                    continue
+                }
+                if param.len == 0 {
+                    param = tok.text
+                    start = tok.offset
+                } else {
+                    path.push(tok.text)
+                }
+                spans.push(SourceSpan {
+                    file_id = self.file_id,
+                    start = start,
+                    length = tok.offset + tok.text.len - start,
+                })
+            }
+            NodeChild(_) => {}
+        }
+    }
     return TypeBound {
         span = self.span_from(cst),
-        param = first_ident_text(cst),
+        param = param,
+        path = frozen(path),
+        subject_spans = frozen(spans),
         bound = self.boxed(bound),
     }
 }
@@ -429,7 +459,7 @@ fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
 
 fn project_struct_decl(self: &Projector, cst: CstNode) TypeDecl {
     let generics: List(GenericParam) = list(0, Some(self.alloc))
-    self.collect_generic_params_from_balanced(cst, &generics)
+    self.collect_type_params(cst, &generics)
     let fields: List(StructField) = list(cst.node_child_count(), Some(self.alloc))
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -457,7 +487,7 @@ fn project_struct_decl(self: &Projector, cst: CstNode) TypeDecl {
 
 fn project_enum_decl(self: &Projector, cst: CstNode) TypeDecl {
     let generics: List(GenericParam) = list(0, Some(self.alloc))
-    self.collect_generic_params_from_balanced(cst, &generics)
+    self.collect_type_params(cst, &generics)
     let variants: List(EnumVariant) = list(cst.node_child_count(), Some(self.alloc))
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -531,38 +561,47 @@ fn type_decl_name(self: &Projector, cst: CstNode) String {
     return ""
 }
 
-// Generic params are surfaced as a flat token run inside the struct/enum body (see parser's
-// `consume_balanced` on `(...)`). We re-scan the run between the first `(` and its matching `)` for
-// identifier tokens.
-fn collect_generic_params_from_balanced(self: &Projector, cst: CstNode, out: &List(GenericParam)) {
-    let inside_parens = false
-    let depth: i32 = 0
+// The `TypeParamList` child of a struct, enum or contract, one `GenericParam` per entry.
+fn collect_type_params(self: &Projector, cst: CstNode, out: &List(GenericParam)) {
     for i in 0..cst.child_count() {
-        cst.child(i) match {
-            TokenChild(tok) => {
-                if tok.kind == TokenKind.OpenParenthesis {
-                    if !inside_parens {
-                        inside_parens = true
-                    }
-                    depth = depth + 1
-                    continue
-                }
-                if tok.kind == TokenKind.CloseParenthesis {
-                    depth = depth - 1
-                    if depth == 0 and inside_parens {
-                        return
-                    }
-                    continue
-                }
-                if inside_parens and tok.kind == TokenKind.Identifier {
-                    out.push(GenericParam {
-                        span = self.span_from_token(tok),
-                        name = tok.text,
-                    })
-                }
-            }
-            NodeChild(_) => {}
+        const pl = cst.child(i) match {
+            NodeChild(c) => c
+            TokenChild(_) => continue
         }
+        if pl.kind != NodeKind.TypeParamList {
+            continue
+        }
+        for j in 0..pl.child_count() {
+            pl.child(j) match {
+                NodeChild(tp) => {
+                    if tp.kind == NodeKind.TypeParam {
+                        out.push(self.project_type_param(tp))
+                    }
+                }
+                TokenChild(_) => {}
+            }
+        }
+        return
+    }
+}
+
+fn project_type_param(self: &Projector, cst: CstNode) GenericParam {
+    let bound: TypeExpr? = null
+    nth_node(cst, 0) match {
+        Some(b) => { if is_type_kind(b.kind) {
+                install(&bound, Some(self.project_type_expr(b)))
+            } }
+        None => {}
+    }
+    let span = self.span_from(cst)
+    find_token(cst, TokenKind.Identifier) match {
+        Some(tok) => span = self.span_from_token(&tok)
+        None => {}
+    }
+    return GenericParam {
+        span = span,
+        name = first_ident_text(cst),
+        bound = self.boxed_opt(bound),
     }
 }
 
@@ -2171,6 +2210,7 @@ fn struct_construction_type(self: &Projector, cst: CstNode) TypeExpr? {
         span = name_span,
         name = name,
         generic_args = frozen(generic_args),
+        assoc_args = frozen(list(0, Some(self.alloc))),
     }))
 }
 
@@ -2198,7 +2238,7 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
         }
         let no_args: List(TypeExpr) = list(0, Some(self.alloc))
         return Some(TypeExpr.Named(NamedType { span = span, name = name,
-            generic_args = frozen(no_args) }))
+            generic_args = frozen(no_args), assoc_args = frozen(list(0, Some(self.alloc))) }))
     }
     if cst.kind == NodeKind.CallExpr {
         let name: String = ""
@@ -2225,7 +2265,7 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
             return null
         }
         return Some(TypeExpr.Named(NamedType { span = span, name = name,
-            generic_args = frozen(args) }))
+            generic_args = frozen(args), assoc_args = frozen(list(0, Some(self.alloc))) }))
     }
     return null
 }
@@ -2702,6 +2742,7 @@ fn is_type_kind(kind: NodeKind) bool {
         or kind == NodeKind.TupleType or kind == NodeKind.FunctionType
         or kind == NodeKind.AnonymousStructType or kind == NodeKind.AnonymousEnumType
         or kind == NodeKind.ContractType or kind == NodeKind.CombinedType
+        or kind == NodeKind.ProjectionType
 }
 
 fn project_type_expr(self: &Projector, cst: CstNode) TypeExpr {
@@ -2717,6 +2758,7 @@ fn project_type_expr(self: &Projector, cst: CstNode) TypeExpr {
         AnonymousEnumType => self.project_anon_enum_type(cst)
         ContractType => self.project_contract_type(cst)
         CombinedType => self.project_combined_type(cst)
+        ProjectionType => self.project_projection_type(cst)
         else => TypeExpr.Error(ErrorType { span = self.span_from(cst) })
     }
 }
@@ -2726,6 +2768,7 @@ fn project_named_type(self: &Projector, cst: CstNode) TypeExpr {
     let saw_dollar = false
     let name: String = ""
     let generic_args: List(TypeExpr) = list(cst.node_child_count(), Some(self.alloc))
+    let assoc_args: List(AssocArg) = list(0, Some(self.alloc))
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -2738,7 +2781,9 @@ fn project_named_type(self: &Projector, cst: CstNode) TypeExpr {
                 }
             }
             NodeChild(child) => {
-                if is_type_kind(child.kind) {
+                if child.kind == NodeKind.NamedTypeArg {
+                    assoc_args.push(self.project_assoc_arg(child))
+                } else if is_type_kind(child.kind) {
                     generic_args.push(self.project_type_expr(child))
                 }
             }
@@ -2754,6 +2799,39 @@ fn project_named_type(self: &Projector, cst: CstNode) TypeExpr {
         span = self.span_from(cst),
         name = name,
         generic_args = frozen(generic_args),
+        assoc_args = frozen(assoc_args),
+    })
+}
+
+fn project_assoc_arg(self: &Projector, cst: CstNode) AssocArg {
+    let ty: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
+    nth_node(cst, 0) match {
+        Some(child) => { if is_type_kind(child.kind) {
+                install(&ty, self.project_type_expr(child))
+            } }
+        None => {}
+    }
+    return AssocArg {
+        span = self.span_from(cst),
+        name = first_ident_text(cst),
+        pinned = has_token(cst, TokenKind.Equals),
+        ty = self.boxed(ty),
+    }
+}
+
+// `X.Item`: the base node, then `.` and the member's identifier.
+fn project_projection_type(self: &Projector, cst: CstNode) TypeExpr {
+    let base: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
+    nth_node(cst, 0) match {
+        Some(child) => { if is_type_kind(child.kind) {
+                install(&base, self.project_type_expr(child))
+            } }
+        None => {}
+    }
+    return TypeExpr.Projection(ProjectionType {
+        span = self.span_from(cst),
+        base = self.boxed(base),
+        name = first_ident_text(cst),
     })
 }
 
@@ -2847,7 +2925,7 @@ fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
 
 fn project_contract_type(self: &Projector, cst: CstNode) TypeExpr {
     let generics: List(GenericParam) = list(0, Some(self.alloc))
-    self.collect_generic_params_from_balanced(cst, &generics)
+    self.collect_type_params(cst, &generics)
     let requirements: List(ContractRequirement) = list(cst.node_child_count(), Some(self.alloc))
     let assoc_types: List(AssocType) = list(0, Some(self.alloc))
     for i in 0..cst.child_count() {
@@ -2862,24 +2940,25 @@ fn project_contract_type(self: &Projector, cst: CstNode) TypeExpr {
                 signature = self.project_function_signature(child),
             })
         } else if child.kind == NodeKind.ContractAssocType {
-            let bound: TypeExpr? = null
+            let ty: TypeExpr? = null
             nth_node(child, 0) match {
                 Some(b) => { if is_type_kind(b.kind) {
-                        install(&bound, Some(self.project_type_expr(b)))
+                        install(&ty, Some(self.project_type_expr(b)))
                     } }
                 None => {}
             }
+            const derived = has_token(child, TokenKind.Equals)
             assoc_types.push(AssocType {
                 span = self.span_from(child),
                 name = first_ident_text(child),
-                bound = self.boxed_opt(bound),
+                bound = if derived { null } else { self.boxed_opt(ty) },
+                value = if derived { self.boxed_opt(ty) } else { null },
             })
         }
     }
     return TypeExpr.Contract(ContractType {
         span = self.span_from(cst),
         generics = frozen(generics),
-        bounds = frozen(self.project_bounds(cst)),
         requirements = frozen(requirements),
         assoc_types = frozen(assoc_types),
     })
@@ -2977,7 +3056,7 @@ fn project_function_signature(self: &Projector, cst: CstNode) FunctionType {
 // cannot be recovered faithfully without re-parsing.
 fn project_anon_struct_type(self: &Projector, cst: CstNode) TypeExpr {
     let generics: List(GenericParam) = list(0, Some(self.alloc))
-    self.collect_generic_params_from_balanced(cst, &generics)
+    self.collect_type_params(cst, &generics)
     let fields: List(StructField) = list(cst.node_child_count(), Some(self.alloc))
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -2998,7 +3077,7 @@ fn project_anon_struct_type(self: &Projector, cst: CstNode) TypeExpr {
 
 fn project_anon_enum_type(self: &Projector, cst: CstNode) TypeExpr {
     let generics: List(GenericParam) = list(0, Some(self.alloc))
-    self.collect_generic_params_from_balanced(cst, &generics)
+    self.collect_type_params(cst, &generics)
     let variants: List(EnumVariant) = list(cst.node_child_count(), Some(self.alloc))
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -3216,6 +3295,7 @@ fn struct_pattern_from_tokens(self: &Projector, tokens: &List(Token), span: Sour
             span = self.span_from_token(&tokens[0]),
             name = name,
             generic_args = frozen(list(0, Some(a))),
+            assoc_args = frozen(list(0, Some(a))),
         })),
         fields = frozen(fields),
         has_rest = has_rest,

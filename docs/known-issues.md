@@ -67,10 +67,29 @@ failing requirement (E2134). Not yet:
 - **`op_eq(a, b)` as a call does not resolve on a payload-less enum** or on a type whose `==` is
   derived from `op_cmp`: the operator works and the contract is satisfied, but the call form finds
   no function. Primitives have theirs (`core.ops`).
-- **Struct and enum type parameters take no bounds.** `UnmanagedSet(T)` documents that `T` is
-  `Hash + Eq`, but only its functions say so: `Set(Point)` names a valid type until an `add`. A
-  bound on the declaration (`struct(T) where T: Hash + Eq`, as `contract(T) where ...` is written)
-  would refuse the type where it is written. Next work after RFC-035 lands.
+- **Struct and enum type parameters take no bounds** - resolved by RFC-036 (`struct(T: Hash + Eq)`);
+  the stdlib containers move their bounds onto the types once the seed carries it.
+
+---
+
+### RFC-036 Associated Types and Type-Parameter Bounds: What the First Cut Leaves Out
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (Contracts section)
+
+Associated types, projection, pinned and bounded associated types, bounds on struct, enum and
+contract parameters, projections in fields and payloads, implied bounds (through nesting) and the
+application check are in. Not yet:
+
+- **A bounded type in a signature or a field is checked through its uses, not where it is
+  written.** In a body, `Set(Point)` is checked at the type expression; in a signature its bounds
+  are implied and checked at each call; a field's `Set(Point)` is checked nowhere until a function
+  using it is called. Checking at the declaration needs every function registered first, and the
+  signature and resolve tiers' cached diagnostics (RFC-022) to carry the deferred result.
+- **A literal is checked only through the type it lands in.** `.{ it = x, f = g }` against no
+  written type (a `let` without annotation of a `FilterIter` literal) checks nothing.
+- **A generic body does not check its own uses of bounded types against its bounds**: inside
+  `fn f(x: $T)`, `Set(T)` waits for the instantiation (RFC-035's "bound does not restrict the body").
 
 ---
 
