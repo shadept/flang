@@ -44,9 +44,9 @@ yet:
 Contracts declare, bound, filter overloads, rank, pin `$T` and lambda parameters, and report the
 failing requirement (E2134). Not yet:
 
-- **A contract in a type position is not sugar for a bounded type parameter.** `fn f(src: Reader)`
-  is E2138; write `fn f(src: $R) where R: Reader`. The sugar needs the AST-level generic predicates
-  (`declares_generic`, `generic_names`) to know which names are contracts.
+- **A contract stands for a type parameter in a parameter's type only.** `fn f(src: Reader)` works;
+  a return type (`fn make() Reader`) and a local annotation (`let r: Reader = make()`) are still
+  E2138. The return form needs the body to bind a type parameter the call leaves open (below).
 - **A generic body does not use an open type parameter through its bounds.** Inside
   `fn f(it: move $I) where I: Iterator($T)`, `it.next()` is dispatched at each instantiation, not
   typed `T?` from the bound; the rigid check still drops calls on `I`. Checking a body against its

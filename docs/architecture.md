@@ -172,7 +172,12 @@ touching a disk. The two functions that did read the world, `cwd` and
 
 **Contracts (RFC-035).** A contract declaration is a `type` whose body is `contract { ... }` or a
 `+` combination; it lives in the alias table, so lookup, visibility and re-demand change detection
-are an alias's, and naming one where a type is resolved is E2138. `validate_contract_decl` checks
+are an alias's, and naming one where a type is resolved is E2138 - except while a parameter's own
+type resolves (`sugar_ok`, kept through `&` and `[]`): there `contract_param` mints a type
+parameter named by the occurrence's span, lowers the contract onto it (`sig_sugar`, appended to the
+signature's atoms) and pushes it to `sig_tps`, so the rigid check and instantiations bind it like a
+`$T`. Such a function has no `$` in its AST, so the body pass (`template_id_of`) and lowering (a
+scheme that quantifies) ask the registry rather than `declares_generic`. `validate_contract_decl` checks
 the declaration against a placeholder `Self` in the body pass. A signature's `where` clause is
 lowered once, in `register_function_sig`, to `fn_bounds[id]`: a flat list of `BoundAtom`s
 (`Copyable`, `Callable` with a function type, `Require` with a name and a function type), all over

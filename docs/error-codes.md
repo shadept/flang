@@ -3529,10 +3529,10 @@ Bind the parameter with `$U` in the signature, and bound it by a contract applie
 
 #### Description
 
-A contract is a type with no values (RFC-035): nothing has it as its run-time type. Naming one where
-a value's type is needed - a struct field, an enum payload, a type argument, a parameter, a local
-annotation - is refused. A contract in a parameter's type as sugar for a bounded type parameter is
-not implemented yet.
+A contract is a type with no values (RFC-035): nothing has it as its run-time type. In a function
+parameter's type, directly or behind `&` or `[]`, it stands for a fresh bounded type parameter.
+Anywhere else a value's type is needed - a struct field, an enum payload, a type argument, `C?`, a
+tuple or array element, a return type, a local annotation - it is refused.
 
 #### Example
 

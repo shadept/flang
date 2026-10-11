@@ -275,6 +275,12 @@ pub type Checker = struct {
     sig_open: bool
     // Set while the signature's parameter types resolve: what they imply is not reported at a call.
     sig_params_open: bool
+    // Set while a parameter's own type resolves, where a contract stands for a fresh bounded type
+    // parameter (RFC-035); `sig_sugar` collects those parameters' bounds.
+    sugar_ok: bool
+    sig_sugar: List(BoundAtom)
+    // The parameter whose type is resolving, for those bounds' diagnostics.
+    sugar_param: String
     sig_implied: List(BoundAtom)
     sig_declared: List(String)
     proj_pending: List(PendingProj)
@@ -711,6 +717,9 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         path_bufs = list(0, allocator),
         sig_open = false,
         sig_params_open = false,
+        sugar_ok = false,
+        sig_sugar = list(0, allocator),
+        sugar_param = "",
         sig_implied = list(0, allocator),
         sig_declared = list(0, allocator),
         proj_pending = list(0, allocator),
@@ -947,6 +956,7 @@ pub fn deinit(self: move Checker) {
     self.self_decls.deinit()
     self.sig_refs.deinit()
     self.sig_implied.deinit()
+    self.sig_sugar.deinit()
     self.sig_declared.deinit()
     self.proj_pending.deinit()
     self.fn_decl_params.deinit()
@@ -994,8 +1004,26 @@ pub fn deinit(self: move Checker) {
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn resolve_type_expr(self: &Checker, te: &TypeExpr) Ty {
+    // A contract stands for a type parameter at a parameter's type, behind `&` and `[]` (RFC-035);
+    // inside any other type it would need a value of the contract.
+    const sugar = self.sugar_ok
+    const passes = te.* match {
+        Named(_) => true
+        Reference(_) => true
+        Slice(_) => true
+        Contract(_) => true
+        Combined(_) => true
+        _ => false
+    }
+    self.sugar_ok = sugar and passes
+    const out = resolve_type_node(self, te)
+    self.sugar_ok = sugar
+    return out
+}
+
+fn resolve_type_node(self: &Checker, te: &TypeExpr) Ty {
     return te.* match {
-        Named(n) => resolve_named(self, &n)
+        Named(n) => resolve_named(self, &n, te)
         Reference(r) => resolve_reference(self, &r)
         Optional(o) => resolve_optional(self, &o)
         Array(a) => resolve_array(self, &a)
@@ -1004,18 +1032,64 @@ pub fn resolve_type_expr(self: &Checker, te: &TypeExpr) Ty {
         Function(f) => resolve_function(self, &f)
         GenericBind(g) => resolve_generic_bind(self, &g)
         AnonStruct(a) => resolve_anon_struct_type(self, &a)
-        Contract(c) => contract_value(self, c.span)
-        Combined(c) => contract_value(self, c.span)
+        Contract(c) => contract_param(self, te, "contract", c.span)
+        Combined(c) => contract_param(self, te, "contract", c.span)
         Projection(p) => resolve_projection(self, &p)
         _ => TY_ERROR
     }
 }
 
-// E2138: a contract where a value of it is needed.
-fn contract_value(self: &Checker, span: SourceSpan) Ty {
-    push_diag_e(self, span, E_CONTRACT_VALUE,
-        from_view("a contract has no values - bound a type parameter instead: `$T where T: ...`"))
-    return TY_ERROR
+// A contract where a parameter's type is written (RFC-035): a fresh type parameter bounded by it,
+// one per occurrence, so `src: Reader` is `src: $R where R: Reader`. The occurrence's span names
+// the parameter, and a body check or an instantiation binds that name as it binds a `$T`. Anywhere
+// else a value of the contract would be needed: E2138.
+fn contract_param(self: &Checker, te: &TypeExpr, label: String, span: SourceSpan) Ty {
+    if !self.sugar_ok {
+        const hint = if label == "contract" { "..." } else { label }
+        push_diag_e(self, span, E_CONTRACT_VALUE,
+            $"a contract has no values - in a parameter's type it stands for a bounded type parameter; elsewhere bound one: `$T where T: {hint}`")
+        return TY_ERROR
+    }
+    const at = $"@{span.start}"
+    const name = intern_path(self, label, at.view)
+    at.deinit()
+    const b = self.env.lookup(name)
+    if b.is_some() and b.unwrap().is_type_param {
+        return self.engine.specialize(&b.unwrap().scheme)
+    }
+    if !self.sig_open {
+        push_diag_e(self, span, E_CONTRACT_VALUE,
+            from_view("a contract stands for a type parameter only in a function's own parameter types"))
+        return TY_ERROR
+    }
+    const v = self.engine.fresh_var()
+    bind_type_name(self, name, v, span)
+    ty_node(self, v) match {
+        NVar(tv) => self.tp_names.set(tv.id, label)
+        _ => {}
+    }
+    self.sig_tps.push(SigTypeParam { name = name, ty = v, decl = self.node_of(span) })
+    // Diagnostics name the parameter (`it: Iter`) and its associated types by the contract
+    // (`Iter.Item`); the bindings keep the occurrence's own name.
+    self.sugar_ok = false
+    let members: List(Member) = list(0, self.allocator)
+    lower_bound(self, v, te, self.sugar_param, "", span, &self.sig_sugar, &members, 0usize)
+    for &m in members {
+        bind_member(self, intern_path(self, name, m.name), m.ty, span, true, m.decl)
+        ty_node(self, self.engine.resolve(m.ty)) match {
+            NVar(mv) => self.tp_names.set(mv.id, intern_path(self, label, m.name))
+            _ => {}
+        }
+    }
+    members.deinit()
+    self.sugar_ok = true
+    return v
+}
+
+// Whether `name` is a declared contract or combination of contracts.
+fn names_contract(self: &Checker, name: String) bool {
+    const body = contract_body(self, name)
+    return body.is_some() and is_contract_body(body.unwrap())
 }
 
 // `struct { x: i32, y: i32 }` in type position - a structural record. Generic anonymous structs are
@@ -1073,8 +1147,9 @@ fn anon_struct_ty(self: &Checker, fields: move List(Field), span: SourceSpan) Ty
     return mk_nominal(self, nid, no_args)
 }
 
-fn resolve_named(self: &Checker, n: &NamedType) Ty {
-    if n.assoc_args.len > 0 {
+// `te` is the `Named` node `n` came from.
+fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
+    if n.assoc_args.len > 0 and !names_contract(self, n.name) {
         push_diag_e(self, n.assoc_args[0].span, E_BAD_ASSOC_ARG,
             from_view("`Name = T` and `Name: Bound` constrain a contract's associated type, and belong in a bound"))
         return TY_ERROR
@@ -1137,9 +1212,7 @@ fn resolve_named(self: &Checker, n: &NamedType) Ty {
         }
         let body = alias_body.unwrap()
         if is_contract_body(body) {
-            push_diag_e(self, n.span, E_CONTRACT_VALUE,
-                $"`{n.name}` is a contract and has no values - bound a type parameter instead: `$T where T: {n.name}`")
-            return TY_ERROR
+            return contract_param(self, te, n.name, n.span)
         }
         self.alias_stack.push(n.name)
         const out = resolve_type_expr(self, body)
@@ -1189,10 +1262,13 @@ fn warn_deprecated_type(self: &Checker, id: NominalId, name: String, span: Sourc
 }
 
 fn resolve_generic_args(self: &Checker, n: &NamedType) List(Ty) {
+    const sugar = self.sugar_ok
+    self.sugar_ok = false
     let out: List(Ty) = list(n.generic_args.len, self.allocator)
     for &arg in n.generic_args {
         out.push(resolve_type_expr(self, arg))
     }
+    self.sugar_ok = sugar
     return out
 }
 
@@ -2305,6 +2381,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     self.sig_declared.clear()
     self.proj_pending.clear()
     self.sig_refs.clear()
+    self.sig_sugar.clear()
     self.sig_open = true
     self.sig_params_open = true
     self.env.push_scope()
@@ -2313,7 +2390,10 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     let params: List(Ty) = list(fd.params.len, self.allocator)
     let moves = 0usize
     for &p in fd.params {
+        self.sugar_ok = true
+        self.sugar_param = p.name
         const pt = param_ty(self, p)
+        self.sugar_ok = false
         check_slot_param(self, p)
         moves = moves | move_bit_of(self, params.len, p.is_move, pt, p.span)
         // A default value is checked against its parameter HERE, at the declaration, so the
@@ -2338,6 +2418,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     // a `where` entry may read (`F: fn(I.Item) bool` beside `self: &FilterIter($I, $F)`).
     let atoms: List(BoundAtom) = list(fd.bounds.len + self.sig_implied.len, self.allocator)
     lower_bounds(self, fd.bounds, &atoms)
+    atoms.push_all(self.sig_sugar.as_slice())
     self.sig_open = false
     report_undeclared_projections(self)
     rerecord_sig_refs(self)
@@ -2484,7 +2565,7 @@ fn check_one_decl(self: &Checker, decl: &Decl, tests: bool) {
         Function(fd) => {
             // A generic template's body is validated per instantiation (M10), and once against
             // rigid type parameters for what cannot depend on them.
-            if declares_generic(&fd) {
+            if declares_generic(&fd) or template_id_of(self, &fd).is_some() {
                 check_template_rigid(self, &fd)
             } else {
                 check_function_body(self, &fd)
@@ -2546,7 +2627,9 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
     }
     let params: List(Ty) = list(fd.params.len, self.allocator)
     for &p in fd.params {
+        self.sugar_ok = true
         let ty = param_ty(self, p)
+        self.sugar_ok = false
         // The parameter's type on its own node: a cursor on the signature resolves (hover).
         const p_node = self.node_of(p.span)
         self.results.record_type(p_node, ty)

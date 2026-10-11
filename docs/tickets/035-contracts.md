@@ -414,7 +414,8 @@ function on `i32` as `==` is an operator; `Dict`, `Set`, `MultiMap` keys bounded
 by-value searches `Eq`, what orders values `Ordered`.
 
 Not yet, tracked in docs/known-issues.md ("RFC-035 Contracts: What the First Cut Leaves Out"): the
-type-position sugar, a body using an open parameter through its bounds, mode pinning and the release
+type-position sugar in a return type or local annotation (the parameter form landed with RFC-036's
+follow-up), a body using an open parameter through its bounds, mode pinning and the release
 after a read-only callable handed ownership, the two-way-satisfaction error, superset ranking,
 TypeInfo and identity.
 

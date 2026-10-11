@@ -1562,6 +1562,12 @@ fn lower_function(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) {
     if fid.is_none() {
         return
     }
+    // A contract in a parameter's type makes the function generic with no `$` written (RFC-035):
+    // its scheme quantifies what the AST test cannot see.
+    const scheme = ctx.result.functions.find_by_id(fid.unwrap())
+    if scheme.is_some() and scheme.unwrap().signature.quantified.len() > 0 {
+        return
+    }
     let sym_opt = ctx.syms.lookup_symbol(fid.unwrap())
     if sym_opt.is_none() {
         return
