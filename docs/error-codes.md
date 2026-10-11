@@ -3036,6 +3036,7 @@ Report the issue with sample code that reproduces the error.
 | **E2143** | Type Checking     | A malformed associated-type argument         |
 | **E2144** | Type Checking     | A bound naming a later type parameter        |
 | **E2145** | Parsing           | `where` on a type declaration                |
+| **E2146** | Type Checking     | A call through an unbounded type parameter   |
 
 ### E2115: Unsupported Pattern Form
 
@@ -3710,6 +3711,32 @@ type Wrap = struct(T) where T: copyable { x: T }   // error[E2145]
 #### Solution
 
 Move the bound onto the parameter: `struct(T: copyable)`.
+
+---
+
+### E2146: A Call Through an Unbounded Type Parameter
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A generic body calls a value whose type is one of its type parameters, and no bound says that
+type is callable. Without a bound, nothing states what the call takes or returns, and inference
+would settle it from whichever instantiation comes first. A function-type bound (`F: fn(T) bool`)
+or a contract with an `op_call` requirement makes the call well-typed in the body.
+
+#### Example
+
+```flang
+fn apply(x: i32, f: $F) i32 {
+    return f(x)                         // error[E2146]
+}
+```
+
+#### Solution
+
+Bound the parameter by its shape: `fn apply(x: i32, f: $F) i32 where F: fn(i32) i32`.
 
 ---
 

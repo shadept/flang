@@ -46,4 +46,5 @@ Type: language, compiler, stdlib, tooling.
 | [034](034-typed-slice-intrinsics.md) | Typed slice intrinsics | language | implemented | 2026-10-10 | 2026-10-10 |
 | [035](035-contracts.md) | Contracts | language | provisional | 2026-10-11 | 2026-10-11 |
 | [036](036-associated-types-and-type-parameter-bounds.md) | Associated types, projection, and bounds on type parameters | language | provisional | 2026-10-11 | 2026-10-11 |
+| [037](037-callable-values.md) | Function types as callable values | language | draft | 2026-10-11 |  |
 | [099](099-stack-only-types-and-bindings.md) | `#stack` types and stack-only bindings | language | deferred | 2026-08-27 |  |

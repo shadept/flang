@@ -15,7 +15,7 @@ type Undo = struct {
     prev: u32?
 }
 
-fn apply(f: $F, entry: Undo) u32 {
+fn apply(f: $F, entry: Undo) u32 where F: fn(Undo) u32 {
     return f(entry)
 }
 

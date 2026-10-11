@@ -6,7 +6,7 @@
 // Also covers the callee-only capture: `g` appears ONLY in call position,
 // which bypasses InferIdentifier's capture recording.
 
-fn apply(f: $F, x: i32) i32 { return f(x) }
+fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 { return f(x) }
 
 pub fn main() i32 {
     let g = fn(x: i32) i32 { x * 2 }

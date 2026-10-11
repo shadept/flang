@@ -6,9 +6,9 @@
 // (fn-pointer field call) and once with a capturing closure (op_call field
 // dispatch).
 
-fn apply(f: $F, x: i32) i32 { return f(x) }
+fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 { return f(x) }
 
-fn with_key(key: $F, x: i32) i32 {
+fn with_key(key: $F, x: i32) i32 where F: fn(i32) i32 {
     let inner = fn(v: i32) i32 { key(v) + 100 }
     return apply(inner, x)
 }

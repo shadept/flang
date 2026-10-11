@@ -318,8 +318,11 @@ pub type Checker = struct {
     rigid_flagged: Set(NodeId)
     // Set while an instantiation of a flagged template is checked.
     skip_ownership: bool
-    // Set while `check_template_rigid` runs.
+    // Set while `check_template_rigid` runs, with the template it checks and each rigid variable's
+    // template variable.
     rigid_mode: bool
+    rigid_fid: u32
+    rigid_tvars: Dict(VarId, VarId)
     // `$T` bindings of the signature currently being registered, in declaration order.
     sig_tps: List(SigTypeParam)
     // Generic picks recorded while checking the current body scope; drained after phase 3 (and,
@@ -413,6 +416,11 @@ pub type Checker = struct {
     // set when a re-run signature pass's default-value texts differ from the previous demand's.
     body_caches: Dict(String, ModuleBodyCache)
     body_cache_keys: List(OwnedString)
+    // Module path -> what its generic bodies look like to their rigid check, for hover: a body's
+    // nodes typed by its own type parameters (`cmp: F`) rather than by one instantiation's
+    // arguments. Rebuilt when the module's bodies run, carried when they replay.
+    template_types: Dict(String, TemplateTypes)
+    template_type_keys: List(OwnedString)
     slot_log_on: bool
     slot_picks: List(CapturedPick)
     slot_uninferable: usize
@@ -738,6 +746,8 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         rigid_flagged = set(allocator),
         skip_ownership = false,
         rigid_mode = false,
+        rigid_fid = 0u32,
+        rigid_tvars = dict(allocator),
         sig_tps = list(0, allocator),
         pending_specs = list(0, allocator),
         spec_callers = list(0, allocator),
@@ -765,6 +775,8 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         sig_nodes = list(0, allocator),
         body_caches = dict(allocator),
         body_cache_keys = list(0, allocator),
+        template_types = dict(allocator),
+        template_type_keys = list(0, allocator),
         slot_log_on = false,
         slot_picks = list(0, allocator),
         slot_uninferable = 0usize,
@@ -816,6 +828,8 @@ pub fn begin_demand(self: &Checker) {
     let sig_cache_keys = replace(&self.sig_cache_keys, list(0, self.allocator))
     let body_caches = replace(&self.body_caches, dict(self.allocator))
     let body_cache_keys = replace(&self.body_cache_keys, list(0, self.allocator))
+    let ttypes = replace(&self.template_types, dict(self.allocator))
+    let ttype_keys = replace(&self.template_type_keys, list(0, self.allocator))
     const ct = self.comptime
 
     let next = checker(self.allocator)
@@ -841,6 +855,8 @@ pub fn begin_demand(self: &Checker) {
     install(&next.sig_cache_keys, sig_cache_keys)
     install(&next.body_caches, body_caches)
     install(&next.body_cache_keys, body_cache_keys)
+    install(&next.template_types, ttypes)
+    install(&next.template_type_keys, ttype_keys)
     next.comptime = ct
     // Replaces the checker and releases what it still owns: the tables carried above already left,
     // so what goes is this demand's own.
@@ -953,6 +969,7 @@ pub fn deinit(self: move Checker) {
     self.path_bufs.deinit()
     self.bound_texts.deinit()
     self.ref_log.deinit()
+    self.rigid_tvars.deinit()
     self.self_decls.deinit()
     self.sig_refs.deinit()
     self.sig_implied.deinit()
@@ -984,6 +1001,8 @@ pub fn deinit(self: move Checker) {
     self.sig_nodes.deinit()
     self.body_caches.deinit()
     self.body_cache_keys.deinit()
+    self.template_types.deinit()
+    self.template_type_keys.deinit()
     self.slot_picks.deinit()
     self.spec_frames.deinit()
     self.slot_hints.deinit()
@@ -4829,6 +4848,8 @@ fn check_template_rigid(self: &Checker, fd: &FunctionDecl) {
     let saved_fn_names = replace(&self.pending_fn_names, list(0, self.allocator))
 
     self.env.push_scope()
+    self.rigid_fid = fid.unwrap()
+    self.rigid_tvars.clear()
     bind_rigid_params(self, fid.unwrap())
     self.rigid_mode = true
     check_function_body(self, fd)
@@ -4836,6 +4857,7 @@ fn check_template_rigid(self: &Checker, fd: &FunctionDecl) {
     for &ps in self.pending_specs {
         const _ok = check_call_bounds(self, ps)
     }
+    keep_template_types(self, fd, fid.unwrap())
     self.env.pop_scope()
 
     keep_ownership_diags(self, diags0)
@@ -4857,6 +4879,183 @@ fn check_template_rigid(self: &Checker, fd: &FunctionDecl) {
     self.engine.clear_rigid()
 }
 
+// What hover shows inside a module's generic bodies: each node the rigid check typed, and the names
+// and `where` bounds of the type parameters those types mention.
+pub type TemplateTypes = struct {
+    facts: List(TemplateTyFact)
+    names: Dict(VarId, String)
+    bounds: Dict(VarId, OwnedString)
+}
+
+pub fn deinit(self: move TemplateTypes) {
+    self.facts.deinit()
+    self.names.deinit()
+    self.bounds.deinit()
+}
+
+pub type TemplateTyFact = struct {
+    node: NodeId
+    span: SourceSpan
+    ty: Ty
+}
+
+// The innermost node of a generic body at `offset` in file `fid`, typed by its type parameters.
+pub type TemplateHit = struct {
+    span: SourceSpan
+    ty: Ty
+    names: &Dict(VarId, String)
+    bounds: &Dict(VarId, OwnedString)
+}
+
+/// The innermost generic-body node at `offset` in file `fid`, as the rigid check typed it, or null
+/// when no generic body covers the offset.
+pub fn template_type_at(self: &Checker, fid: i32, offset: usize) TemplateHit? {
+    let best: TemplateHit? = null
+    let best_len = 0usize
+    for e in self.template_types {
+        const tt = self.template_types.get_ref(e.key).unwrap()
+        for &f in tt.facts {
+            const inside = f.span.file_id == fid and f.span.start <= offset
+                and offset < f.span.start + f.span.length
+            if !inside {
+                continue
+            }
+            if best.is_none() or f.span.length < best_len {
+                best = Some(TemplateHit { span = f.span, ty = f.ty, names = &tt.names,
+                    bounds = &tt.bounds })
+                best_len = f.span.length
+            }
+        }
+    }
+    return best
+}
+
+fn reset_template_types(self: &Checker, path: String) {
+    const found = self.template_types.get_ref(path)
+    if found.is_some() {
+        let tt = found.unwrap()
+        tt.facts.clear()
+        tt.names.clear()
+        tt.bounds.clear()
+        return
+    }
+    const idx = self.template_type_keys.len
+    self.template_type_keys.push(from_view(path, self.allocator))
+    self.template_types.set(self.template_type_keys[idx].view, TemplateTypes {
+        facts = list(0, self.allocator),
+        names = dict(self.allocator),
+        bounds = dict(self.allocator),
+    })
+}
+
+// Records what the rigid check of `fd` typed, while its scratch tables and its type parameters'
+// bindings are still in place.
+fn keep_template_types(self: &Checker, fd: &FunctionDecl, fid: u32) {
+    if self.current_module.is_none() {
+        return
+    }
+    const found = self.template_types.get_ref(self.current_module.unwrap())
+    if found.is_none() {
+        return
+    }
+    let tt = found.unwrap()
+    for e in self.results.node_types {
+        const span = self.results.get_span(e.key)
+        if span.is_some() {
+            tt.facts.push(TemplateTyFact {
+                node = e.key,
+                span = span.unwrap(),
+                ty = self.engine.zonk(e.value),
+            })
+        }
+    }
+    for &tp in &self.templates.get_ref(fid).unwrap().tps {
+        const v = rigid_of(self, tp.name)
+        if v.is_some() {
+            tt.names.set(v.unwrap(), display_tp_name(self, tp.name))
+        }
+    }
+    for &b in fd.bounds {
+        const v = rigid_of(self, bound_path(self, b.param, b.path))
+        if v.is_none() {
+            continue
+        }
+        let sb = string_builder(32, self.allocator)
+        if !render_alias_body(b.bound, &sb) {
+            sb.deinit()
+            continue
+        }
+        const prior = tt.bounds.remove(v.unwrap())
+        prior match {
+            Some(text) => {
+                let joined = $"{text.view} + {sb.as_view()}"
+                text.deinit()
+                sb.deinit()
+                tt.bounds.set(v.unwrap(), joined)
+            }
+            None => tt.bounds.set(v.unwrap(), sb.to_string())
+        }
+    }
+}
+
+// The rigid variable a type-parameter name is bound to in the current scope.
+fn rigid_of(self: &Checker, name: String) VarId? {
+    const b = self.env.lookup(name)
+    if b.is_none() or !b.unwrap().is_type_param {
+        return null
+    }
+    return ty_node(self, self.engine.resolve(self.engine.specialize(&b.unwrap().scheme))) match {
+        NVar(v) => Some(v.id)
+        _ => null
+    }
+}
+
+// A type parameter's name as written: a contract in a parameter's type (`it: Iter`) is bound under
+// its occurrence (`Iter.@40`, `Iter.@40.Item`) and shows as the contract (`Iter`, `Iter.Item`).
+fn display_tp_name(self: &Checker, name: String) String {
+    for i in 1..name.len {
+        if name[i] != '@' {
+            continue
+        }
+        let j = i + 1
+        while j < name.len and name[j] != '.' {
+            j = j + 1
+        }
+        const base = name[0..(i - 1)]
+        return if j < name.len { intern_path(self, base, name[(j + 1)..name.len]) } else { base }
+    }
+    return name
+}
+
+// Whether the rigid type parameter `t` is callable by its template's bounds: a function-type bound,
+// or a requirement named `op_call`.
+fn rigid_callable(self: &Checker, t: Ty) bool {
+    const rid = ty_node(self, self.engine.resolve(t)) match {
+        NVar(v) => v.id
+        _ => return true
+    }
+    const tv = self.rigid_tvars.get(rid)
+    const atoms = self.fn_bounds.get_ref(self.rigid_fid)
+    if tv.is_none() or atoms.is_none() {
+        return false
+    }
+    for &a in atoms.unwrap() {
+        const on_it = ty_node(self, self.engine.resolve(a.subject)) match {
+            NVar(v) => v.id == tv.unwrap()
+            _ => false
+        }
+        const calls = a.kind match {
+            Callable => true
+            Require => a.name == "op_call"
+            Copyable => false
+        }
+        if on_it and calls {
+            return true
+        }
+    }
+    return false
+}
+
 // The template's type parameters bound to rigid variables, each copyable when its bounds say so; a
 // path its bounds pinned (`Item = List(T)`) binds to the pinned type over those variables.
 fn bind_rigid_params(self: &Checker, fid: u32) {
@@ -4872,8 +5071,12 @@ fn bind_rigid_params(self: &Checker, fid: u32) {
             continue
         }
         const r = self.engine.fresh_rigid(copyable_in_bounds(self, fid, vid))
-        rigid_var_name(self, r, tp.name)
+        rigid_var_name(self, r, display_tp_name(self, tp.name))
         rigid.set(vid, r)
+        ty_node(self, r) match {
+            NVar(rv) => self.rigid_tvars.set(rv.id, vid)
+            _ => {}
+        }
     }
     for &tp in tps {
         self.env.bind(tp.name, Binding {
@@ -4947,7 +5150,7 @@ fn is_ownership_code(code: String) bool {
     return code == E_USE_AFTER_MOVE or code == E_COPY_NEEDS_MOVE or code == E_MOVE_NOT_LVALUE
         or code == E_ASSIGN_OVER_LIVE or code == E_PARTIAL_MOVE or code == E_CONSUMING_RECEIVER
         or code == E_NOT_OWNED or code == E_RVALUE_NO_OWNER or code == E_MOVE_AND_LEND
-        or code == E_BOUND_UNSATISFIED or code == E_SLOT_NOT_REFILLED
+        or code == E_BOUND_UNSATISFIED or code == E_SLOT_NOT_REFILLED or code == E_UNBOUNDED_CALL
 }
 
 fn instantiate(self: &Checker, p: &PendingSpec, key: move OwnedString, params: move List(Ty),
@@ -8989,6 +9192,11 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
     }
 
     if z.is_error() {
+        return TY_ERROR
+    }
+    if self.engine.is_rigid(z) and !rigid_callable(self, z) {
+        push_diag_e(self, span, E_UNBOUNDED_CALL,
+            from_view("this value's type is a type parameter with no callable bound - bound it by its shape: `where F: fn(...) R`"))
         return TY_ERROR
     }
     if self.engine.is_var(z) {
@@ -13714,6 +13922,7 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
     const diags_from = self.diagnostics.len
 
     const bodies_start = monotonic_ns()
+    reset_template_types(self, path)
     self.results.begin_capture()
     check_module_bodies(self, module, path)
     const bodies_ns = elapsed_ns(bodies_start)
@@ -15669,7 +15878,7 @@ test "a non-capturing lambda records a bare-fn lambda info" {
 }
 
 test "a capturing lambda synthesizes a closure and dispatches through $F" {
-    let src = "fn apply(f: $F, x: i32) i32 { return f(x) }\nfn main() i32 { let k = 40 return apply(fn(v: i32) i32 { v + k }, 2) }\n"
+    let src = "fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 { return f(x) }\nfn main() i32 { let k = 40 return apply(fn(v: i32) i32 { v + k }, 2) }\n"
     let errs = count_check_errors([src], ["m"])
     assert_eq(errs, 0 as usize, "capturing closure through $F checks clean")
     let res = check_result_of([src], ["m"])
@@ -15684,7 +15893,7 @@ test "a capturing lambda synthesizes a closure and dispatches through $F" {
 }
 
 test "unannotated lambda params pin through a generic callable slot" {
-    let src = "fn apply(f: $F, x: i32) i32 { return f(x) }\nfn main() i32 { return apply(fn(v) { v + 1 }, 4) }\n"
+    let src = "fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 { return f(x) }\nfn main() i32 { return apply(fn(v) { v + 1 }, 4) }\n"
     let errs = count_check_errors([src], ["m"])
     assert_eq(errs, 0 as usize, "no-annotation lambda through $F checks clean")
     let res = check_result_of([src], ["m"])
@@ -15698,7 +15907,7 @@ test "unannotated lambda params pin through a generic callable slot" {
 }
 
 test "a closure may assign a captured name (RFC-033)" {
-    let errs = count_check_errors(["fn take(f: $F) i32 { return f(1) }\nfn main() i32 { let k: i32 = 1\n return take(fn(v: i32) i32 { k = 2\n return v }) + k }\n"],
+    let errs = count_check_errors(["fn take(f: $F) i32 where F: fn(i32) i32 { return f(1) }\nfn main() i32 { let k: i32 = 1\n return take(fn(v: i32) i32 { k = 2\n return v }) + k }\n"],
         ["m"])
     assert_eq(errs, 0 as usize, "captures are by reference")
 }
@@ -15735,7 +15944,7 @@ pub fn maybe(a: &move H, b: move H, c: bool) H { let tmp = move a.*
 }
 
 test "a nested closure captures through the enclosing one (RFC-033)" {
-    let errs = count_check_errors(["fn take(f: $F) i32 { return f(1) }\nfn main() i32 { let a: i32 = 1\n return take(fn(x: i32) i32 { let g = fn(y: i32) i32 { return y + a }\n return g(x) + a }) }\n"],
+    let errs = count_check_errors(["fn take(f: $F) i32 where F: fn(i32) i32 { return f(1) }\nfn main() i32 { let a: i32 = 1\n return take(fn(x: i32) i32 { let g = fn(y: i32) i32 { return y + a }\n return g(x) + a }) }\n"],
         ["m"])
     assert_eq(errs, 0 as usize, "transitive captures check")
 }

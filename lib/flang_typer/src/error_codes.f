@@ -165,6 +165,8 @@ pub const E_BAD_ASSOC_ARG: String = "E2143"
 pub const E_LATER_PARAM: String = "E2144"
 // `where` on a type declaration: a type's bounds sit on its parameters. Raised by the parser.
 pub const E_WHERE_ON_TYPE: String = "E2145"
+// A generic body calls a value whose type is a type parameter with no callable bound.
+pub const E_UNBOUNDED_CALL: String = "E2146"
 
 // A `&move T` parameter outside `core`: the one mode that takes a value out of storage its caller
 // keeps is the core library's alone (RFC-033).

@@ -1,7 +1,7 @@
 //! TEST: callback_move_copyable
 //! EXIT: 12
 
-fn each(s: $T[], f: $F) {
+fn each(s: $T[], f: $F) where F: fn(move T) {
     for i in 0..s.len {
         f(s[i])
     }

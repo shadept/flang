@@ -41,9 +41,12 @@ import flang_parser.trivia
 import flang_typer.checker
 import flang_typer.function_registry
 import flang_typer.inference_results
+import flang_typer.interner
+import flang_typer.node_id
 import flang_typer.nominal_registry
 import flang_typer.reporter
 import flang_typer.result
+import flang_typer.type
 
 import flang_lsp.documents
 import flang_lsp.handlers.document_symbol
@@ -1271,6 +1274,21 @@ fn decl_label(self: &LspServer, pi: ProjectId, span: SourceSpan) String? {
     return Some(text[span.start..end])
 }
 
+// `F` hovers with what constrains it: `F where F: fn(T, T) Ord`.
+fn append_bound(result: &TypeCheckResult, ty: Ty, hit: &TemplateHit, rendered: &OwnedString) {
+    const v = result.interner.node(ty) match {
+        NVar(tv) => tv.id
+        _ => return
+    }
+    const bound = hit.bounds.get_ref(v)
+    const name = hit.names.get(v)
+    if bound.is_none() or name.is_none() {
+        return
+    }
+    const joined = $"{rendered.view} where {name.unwrap()}: {bound.unwrap().view}"
+    replace(rendered, joined).deinit()
+}
+
 // Whether a type reference names a type parameter, which hovers as `typevar T`: neither `Self`,
 // whose declaration is the type it names, nor an associated type, declared `type Item`.
 fn is_type_param_ref(target: &ResolvedTarget, word: String, decl_text: String) bool {
@@ -1358,7 +1376,17 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     const wname = word.unwrap().name
 
     const tg = target_at(result, fid, offset)
-    const th = typed_at(result, fid, offset)
+    // Inside a generic body, the types its rigid check gave (`cmp: F`) answer before one
+    // instantiation's (`cmp: fn(i32, i32) Ord`), for a node that is the word itself: a callee's
+    // call node answers with its declaration below.
+    const tmpl = template_type_at(&unit.checker, fid, offset)
+    const from_tmpl = tmpl.is_some() and tmpl.unwrap().span.start == wstart
+        and tmpl.unwrap().span.length == wname.len
+    const th = if from_tmpl {
+        Some(TypedHit { node = 0 as NodeId, span = tmpl.unwrap().span, ty = tmpl.unwrap().ty })
+    } else {
+        typed_at(result, fid, offset)
+    }
 
     let label: OwnedString? = null
     // The declaration whose docstring joins the label, when the label came from one.
@@ -1408,9 +1436,12 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
 
     if label.is_none() and th.is_some() and th.unwrap().span.start == wstart {
         const ty = th.unwrap().ty
-        const vars = type_param_names(&unit.checker)
+        const vars = if from_tmpl { tmpl.unwrap().names } else { type_param_names(&unit.checker) }
         if renderable_ty(result, ty, vars) and !is_void_ty(result, ty) {
-            const rendered = render_ty(result, ty, Some(vars))
+            let rendered = render_ty(result, ty, Some(vars))
+            if from_tmpl {
+                append_bound(result, ty, &tmpl.unwrap(), &rendered)
+            }
             // What brings the binding into scope prefixes the hover (`param q: i32`): the hovered
             // node is the binder itself, or the read's RtLocal target points at it.
             let intro = self.binder_intro(pi, th.unwrap().span)
@@ -2425,7 +2456,7 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
 
 // A small analyzed project for the cursor-request tests, fabricated in memory: one file at
 // /t/m.f, no disk, no stdlib.
-const DEMO_SRC: String = "pub fn point(q: i32) i32 { return q }\npub type P = struct { x: i32 }\npub fn go(n: i32) i32 {\n    let a = point(3)\n    let s = P { x = 1 }\n    for v in 0..n {\n        let b = v\n    }\n    return a\n}\n// see Wide\npub fn pick(x: $T) $T { return x }\npub fn wait(k: i32) {\n    while k > 0 {\n        k = k - 1\n    }\n}\npub fn use_pick() i32 { return pick(7) }\npub fn wrap(y: $T) i32 { return point(8) }\npub fn use_wrap() i32 { return wrap(true) }\npub fn lone(z: $T) i32 { return point(4) }\npub fn read_x(pp: P) i32 { return pp.x }\npub fn solo(w: $T, point: i32) i32 { return point }\npub type E = enum { A B }\npub fn pick_e() E { return E.A }\npub type Q = struct {\n    // The y.\n    y: i32\n}\npub fn read_y(qq: Q) i32 { return qq.y }\npub type It = contract {\n    type Item\n    fn next(self: &Self) Item\n}\npub fn first(it: &$I) I.Item where I: It { return it.next() }\npub fn keep(it: &$I, b: I) I where I: It, I.Item: It { return b }\npub type Node = struct(T) { next: &Self }\n"
+const DEMO_SRC: String = "pub fn point(q: i32) i32 { return q }\npub type P = struct { x: i32 }\npub fn go(n: i32) i32 {\n    let a = point(3)\n    let s = P { x = 1 }\n    for v in 0..n {\n        let b = v\n    }\n    return a\n}\n// see Wide\npub fn pick(x: $T) $T { return x }\npub fn wait(k: i32) {\n    while k > 0 {\n        k = k - 1\n    }\n}\npub fn use_pick() i32 { return pick(7) }\npub fn wrap(y: $T) i32 { return point(8) }\npub fn use_wrap() i32 { return wrap(true) }\npub fn lone(z: $T) i32 { return point(4) }\npub fn read_x(pp: P) i32 { return pp.x }\npub fn solo(w: $T, point: i32) i32 { return point }\npub type E = enum { A B }\npub fn pick_e() E { return E.A }\npub type Q = struct {\n    // The y.\n    y: i32\n}\npub fn read_y(qq: Q) i32 { return qq.y }\npub type It = contract {\n    type Item\n    fn next(self: &Self) Item\n}\npub fn first(it: &$I) I.Item where I: It { return it.next() }\npub fn keep(it: &$I, b: I) I where I: It, I.Item: It { return b }\npub type Node = struct(T) { next: &Self }\npub fn apply(x: $T, f: $F) T where F: fn(T) T { return f(x) }\npub fn use_apply() i32 { return apply(3i32, fn(v) { v }) }\n"
 
 fn demo_project_into(srv: &LspServer) {
     let srcs: List(OwnedString) = list(2)
@@ -2608,13 +2639,13 @@ test "hover on a function parameter renders its type" {
         "parameter with its intro, name and type")
 }
 
-test "hover inside a generic body answers from the instantiation overlay" {
+test "hover inside a generic body answers with its type parameter" {
     let out = string_builder(4096)
     defer out.deinit()
     demo_run("{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":11,\"character\":31}}}",
         &out)
-    assert_true(contains(out.as_view(), "param x: i32"),
-        "the concrete instantiation's type answers, with the binder intro")
+    assert_true(contains(out.as_view(), "param x: T"),
+        "the body's own type parameter answers, not an instantiation's type")
 }
 
 test "hover on a callee inside a generic body shows the declaration" {
@@ -2768,6 +2799,8 @@ test "hover on a type parameter reads typevar, on Self the type it names" {
     assert_true(hover_shows(61, 32, 19, "pub type It = contract"), "`Self` in a contract")
     assert_true(hover_shows(62, 32, 25, "type Item"), "a bare associated type")
     assert_true(hover_shows(63, 36, 35, "pub type Node = struct(T)"), "`Self` in a struct")
+    assert_true(hover_shows(64, 37, 55, "param f: F where F: fn(T) T"),
+        "a generic body's parameter shows its type parameter and its bound, not an instantiation's")
 }
 
 test "hover on a callee shows the function's docstring" {

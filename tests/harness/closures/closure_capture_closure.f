@@ -4,7 +4,7 @@
 // A closure capturing another (capturing) closure: the captured field is a
 // __Closure_N struct, so the inner call dispatches through its op_call.
 
-fn apply(f: $F, x: i32) i32 { return f(x) }
+fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 { return f(x) }
 
 pub fn main() i32 {
     let base = 10

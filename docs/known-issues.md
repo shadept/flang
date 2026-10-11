@@ -568,6 +568,24 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### LSP: Hover and Inlay Hints Inside Generic Bodies Show One Instantiation's Types
+
+**Status:** Open (deferred)
+**Affected:** `lib/flang_lsp/src/handlers/inlay_hint.f`, `lib/flang_lsp/src/query.f` (`typed_at`),
+`lib/flang_lsp/src/server.f` (`on_hover`)
+
+A generic body is type-checked per instantiation, and the only node types kept are each
+instantiation's overlay. Inlay hints, and hover on any node the rigid check did not type, read the
+first overlay that covers the cursor: in `core.slice.swap`, `let tmp = move a.*` shows
+`tmp: UnmanagedDict(OwnedString, JsonValue)`, whichever instantiation came first, instead of `T`.
+
+Hover already prefers what the rigid check typed (`checker.template_type_at`: `cmp: F where F:
+fn(T, T) Ord`). The fix is the same for the rest: inside a template's span, answer from the
+rigid-check table and never from an overlay; a node the rigid check did not type answers nothing.
+
+---
+
+
 ### Member Access Through `op_deref` on a Reference Receiver Read the Parameter's Slot — RESOLVED
 
 **Status:** Resolved 2026-09-06

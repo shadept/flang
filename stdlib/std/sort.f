@@ -146,7 +146,7 @@ fn _partition(s: $T[], lo: usize, hi: usize, cmp: $F) usize where F: fn(T, T) Or
 
 // Sorts s[a], s[b], s[c] in ascending order under cmp. Three comparisons, up to three swaps -
 // classical 3-element insertion sort.
-fn _sort3(s: $T[], a: usize, b: usize, c: usize, cmp: $F) where F: fn(T, T) Ord {
+fn _sort3(s: $T[], a: usize, b: usize, c: usize, cmp: fn(T, T) Ord) {
     if cmp(s[b], s[a]) == Ord.Less {
         swap(&s[a], &s[b])
     }
@@ -427,6 +427,21 @@ pub fn sort(s: $T[], cmp: $F) where F: fn(T, T) Ord {
     powersort(s, cmp)
 }
 
+// Sorts `s` in place by `key(x)` ascending, keeping the order of equal keys.
+pub fn sort_by(s: $T[], key: $F) where F: fn(T) $K, K: Ordered {
+    sort(s, fn(a, b) {
+        let ka = key(a)
+        let kb = key(b)
+        if ka < kb {
+            Ord.Less
+        } else if kb < ka {
+            Ord.Greater
+        } else {
+            Ord.Equal
+        }
+    })
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -636,19 +651,4 @@ fn sort_test_owned(key: i32, tag: i32) SortTestOwned {
 
 fn op_cmp(a: SortTestOwned, b: SortTestOwned) Ord {
     return op_cmp(a.key, b.key)
-}
-
-// Sorts `s` in place by `key(x)` ascending, keeping the order of equal keys.
-pub fn sort_by(s: $T[], key: $F) where F: fn(T) $K, K: Ordered {
-    sort(s, fn(a, b) {
-        let ka = key(a)
-        let kb = key(b)
-        if ka < kb {
-            Ord.Less
-        } else if kb < ka {
-            Ord.Greater
-        } else {
-            Ord.Equal
-        }
-    })
 }

@@ -2,10 +2,10 @@
 //! EXIT: 50
 
 // Capturing closure passed to a generic higher-order function. The HOF's
-// callable parameter is generic ($F), so the closure travels by value with
-// its anonymous type. apply dispatches via op_call on F.
+// callable parameter is generic ($F, bounded by its shape), so the closure
+// travels by value with its anonymous type. apply dispatches via op_call on F.
 
-fn apply(f: $F, x: i32) i32 {
+fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 {
     return f(x)
 }
 
