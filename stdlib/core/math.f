@@ -57,7 +57,7 @@ pub const I64_MAX: i64 = 9223372036854775807
 
 // Returns the absolute value of x.
 // For signed types, returns -x when x is negative.
-pub fn abs(x: $T) T {
+pub fn abs(x: $T) T where T: copyable {
     return if x < 0 { -x } else { x }
 }
 
@@ -67,18 +67,18 @@ pub fn sign(x: $T) i8 {
 }
 
 // Returns the smaller of a and b.
-pub fn min(a: $T, b: T) T {
+pub fn min(a: $T, b: T) T where T: copyable {
     return if a < b { a } else { b }
 }
 
 // Returns the larger of a and b.
-pub fn max(a: $T, b: T) T {
+pub fn max(a: $T, b: T) T where T: copyable {
     return if a < b { b } else { a }
 }
 
 // Clamps x to the inclusive range [lower, upper].
 // Returns lower if x < lower, upper if x > upper, otherwise x.
-pub fn clamp(x: $T, lower: T, upper: T) T {
+pub fn clamp(x: $T, lower: T, upper: T) T where T: copyable {
     return max(lower, min(x, upper))
 }
 
@@ -88,7 +88,7 @@ pub fn clamp(x: $T, lower: T, upper: T) T {
 
 // Returns base raised to the power of exp.
 // Uses exponentiation by squaring for O(log n) multiplications.
-pub fn pow(base: $T, exp: u32) T {
+pub fn pow(base: $T, exp: u32) T where T: copyable {
     let result: T = 1
     let b = base
     let e = exp
@@ -110,7 +110,7 @@ pub fn is_power_of_two(x: $T) bool {
 
 // Returns the floor of log base 2 of x.
 // x must be positive; returns 0 for x <= 1.
-pub fn log2(x: $T) u32 {
+pub fn log2(x: $T) u32 where T: copyable {
     let result: u32 = 0
     let v = x
     while v > 1 {
@@ -126,7 +126,7 @@ pub fn log2(x: $T) u32 {
 
 // Returns the greatest common divisor of a and b using the Euclidean algorithm. Works with signed
 // types by taking absolute values first.
-pub fn gcd(a: $T, b: T) T {
+pub fn gcd(a: $T, b: T) T where T: copyable {
     let x = abs(a)
     let y = abs(b)
     while y != 0 {
@@ -139,7 +139,7 @@ pub fn gcd(a: $T, b: T) T {
 
 // Returns the least common multiple of a and b.
 // Returns 0 if either a or b is 0.
-pub fn lcm(a: $T, b: T) T {
+pub fn lcm(a: $T, b: T) T where T: copyable {
     if a == 0 or b == 0 {
         return 0
     }

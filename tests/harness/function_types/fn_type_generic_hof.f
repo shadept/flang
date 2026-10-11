@@ -8,7 +8,7 @@ fn double(x: i32) i32 {
 }
 
 // Generic HOF: works with any type T where f: T -> T
-fn apply_twice(f: fn($T) T, x: T) T {
+fn apply_twice(f: fn($T) T, x: T) T where T: copyable {
     return f(f(x))
 }
 

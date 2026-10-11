@@ -389,7 +389,7 @@ ownership, and every call site of them is shorter.
 - **Leaks.** Readers now take `T`, so rule 8 fires on chains RFC-028 leaked silently
   (`make().len()`).
 
-Unchanged in both until the generic-bodies rule lands: a generic body can be valid for one `T` and
+Before the generic-bodies rule landed (see plan step 6b): a generic body could be valid for one `T` and
 not another (`push(v)` then reading `v`: fine for `i32`, E2123 for `Route`), reported at
 instantiation. The rule makes it invalid for every `T` unless a `where T: copyable` bound says
 otherwise. Element accessors that return by value keep `_ref` twins.
@@ -493,6 +493,14 @@ promote, then use.
      parameters is E2135. The body rule needs to know which types came from a type parameter, and
      an instantiation binds `T` straight to its concrete type, so it lands with RFC-029's rigid
      check of generic bodies, after 6c. The stdlib takes the bound after the next promote.
+
+     The body rule landed 2026-10-10 as the first slice of RFC-029: each generic body is checked
+     once against rigid type parameters, non-copyable unless bounded, and only the ownership pass
+     reports. The stdlib, the compiler libraries and the harness took the bound where a body copies
+     `T` (`get`, `first`, `min`, the iterators' `next`, the numeric helpers, `UnionFind`), `move`
+     where a body keeps what it was handed (`identity`, builders that store a callback), and two
+     fixes the rule found: `pop_front` moved out of the deque's storage with a copy, and a drain's
+     `next` built its tuple from owned bindings without `move`.
    - **6c, with step 7.** Owned buffers, `deinit(self: move T)`, `clone`, drains, one type at a
      time and green at each. `OwnedString` follows RFC-031 (an `owned view: String` read through
      `op_deref`). This branch has no callback gates to drop.

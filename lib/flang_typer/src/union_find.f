@@ -65,7 +65,7 @@ pub fn deinit(self: move UnionFind($K)) {
 // Find the representative of `k`'s partition, auto-inserting `k` as a singleton on first sight.
 // Walks parent pointers to the root and applies path halving (`node.parent = parent.parent` at each
 // hop).
-pub fn find(self: &UnionFind($K), k: K) K {
+pub fn find(self: &UnionFind($K), k: K) K where K: copyable {
     let existing = self.nodes.get(k)
     if existing.is_none() {
         record_undo(self, k, k, 1, true)
@@ -91,7 +91,7 @@ pub fn find(self: &UnionFind($K), k: K) K {
 
 // Merge the partitions of `a` and `b`. `a`'s representative becomes the root of the merged
 // partition (first-argument-wins). Idempotent when `a` and `b` are already in the same partition.
-pub fn merge(self: &UnionFind($K), a: K, b: K) {
+pub fn merge(self: &UnionFind($K), a: K, b: K) where K: copyable {
     let root_a = self.find(a)
     let root_b = self.find(b)
     if root_a == root_b {
@@ -122,7 +122,7 @@ pub fn commit(self: &UnionFind($K)) {
 
 // Closes the innermost region and undoes its mutations, newest first, restoring the node table to
 // exactly what it was when the region opened. Panics when no region is open.
-pub fn rollback(self: &UnionFind($K)) {
+pub fn rollback(self: &UnionFind($K)) where K: copyable {
     self.undo.rollback(fn(entry: UnionFindUndo(K)) {
         if entry.was_new {
             let _removed = self.nodes.remove(entry.key)
@@ -137,7 +137,8 @@ pub fn rollback(self: &UnionFind($K)) {
 
 // Record one mutation in the innermost open region. No-op outside a checkpoint, so non-speculative
 // callers pay nothing - not even building the entry.
-fn record_undo(self: &UnionFind($K), key: K, old_parent: K, old_size: usize, was_new: bool) {
+fn record_undo(self: &UnionFind($K), key: K, old_parent: K, old_size: usize,
+    was_new: bool) where K: copyable {
     if !self.undo.is_open() {
         return
     }

@@ -1,7 +1,7 @@
 //! TEST: generics_two_params_pick_first
 //! EXIT: 7
 
-pub fn pick_first(a: $T, b: $U) T {
+pub fn pick_first(a: move $T, b: $U) T {
     return a
 }
 

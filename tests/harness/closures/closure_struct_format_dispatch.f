@@ -16,8 +16,8 @@ type Deferred = struct(F) {
     emit: F
 }
 
-fn deferred(f: $F) Deferred(F) {
-    return .{ emit = f }
+fn deferred(f: move $F) Deferred(F) {
+    return .{ emit = move f }
 }
 
 pub fn format(self: &Deferred($F), w: Writer, spec: String) {

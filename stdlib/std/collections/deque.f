@@ -143,15 +143,14 @@ pub fn pop_front(self: &UnmanagedDeque($T)) T? {
     if self.len == 0 {
         return null
     }
-    const slot: &T = self.ptr + self.head
-    const v = slot.*
+    const v = move (self.ptr + self.head).*
     self.head = (self.head + 1) % self.cap
     self.len = self.len - 1
-    return Some(v)
+    return Some(move v)
 }
 
 // Removes and returns the back element, or null when empty. The element is the caller's to deinit.
-pub fn pop_back(self: &UnmanagedDeque($T)) T? {
+pub fn pop_back(self: &UnmanagedDeque($T)) T? where T: copyable {
     if self.len == 0 {
         return null
     }
@@ -162,7 +161,7 @@ pub fn pop_back(self: &UnmanagedDeque($T)) T? {
 }
 
 // Returns the front element without removing it, or null when empty.
-pub fn peek_front(self: &UnmanagedDeque($T)) T? {
+pub fn peek_front(self: &UnmanagedDeque($T)) T? where T: copyable {
     if self.len == 0 {
         return null
     }
@@ -171,7 +170,7 @@ pub fn peek_front(self: &UnmanagedDeque($T)) T? {
 }
 
 // Returns the back element without removing it, or null when empty.
-pub fn peek_back(self: &UnmanagedDeque($T)) T? {
+pub fn peek_back(self: &UnmanagedDeque($T)) T? where T: copyable {
     if self.len == 0 {
         return null
     }
@@ -210,7 +209,7 @@ pub fn iter(it: &DequeIterator($T)) DequeIterator(T) {
 }
 
 // Advances and returns the next element, or null after the back.
-pub fn next(it: &DequeIterator($T)) T? {
+pub fn next(it: &DequeIterator($T)) T? where T: copyable {
     if it.current >= it.deque.len {
         return null
     }

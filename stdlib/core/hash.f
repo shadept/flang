@@ -38,11 +38,11 @@ pub fn hash(val: i64) usize {
     return mix64(val as u64) as usize
 }
 
-pub fn hash(val: &$T) usize {
+pub fn hash(val: &$T) usize where T: copyable {
     return hash(val.*)
 }
 
-pub fn hash(val: $T) usize {
+pub fn hash(val: $T) usize where T: copyable {
     const bytes: &u8 = &val as &u8
     const size: usize = size_of(T)
     let h: usize = 14695981039346656037

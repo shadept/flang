@@ -127,14 +127,14 @@ pub fn unwrap_err(self: move Result($T, $E)) E {
 // =============================================================================
 
 // Assert that a Result is Ok, panic with message if Err
-pub fn assert_ok(r: Result($T, $E), msg: String) {
+pub fn assert_ok(r: &Result($T, $E), msg: String) {
     if (r.is_err()) {
         panic(msg)
     }
 }
 
 // Assert that a Result is Err, panic with message if Ok
-pub fn assert_err(r: Result($T, $E), msg: String) {
+pub fn assert_err(r: &Result($T, $E), msg: String) {
     if (r.is_ok()) {
         panic(msg)
     }

@@ -6,9 +6,9 @@ type Maybe = enum(T) {
     Nothing
 }
 
-fn unwrap_or(opt: Maybe($T), default_val: T) T {
+fn unwrap_or(opt: Maybe($T), default_val: T) T where T: copyable {
     return opt match {
-        Just(v) => v,
+        Just(v) => v
         Nothing => default_val
     }
 }

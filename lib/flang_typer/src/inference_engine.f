@@ -153,6 +153,10 @@ pub type Engine = struct {
     // The checker calls `set_nominal_registry` after `collect_nominals` finishes; until then
     // nominal-aware rules silently no-op.
     nominals: &NominalRegistry?
+    // Rigid variables: a generic body's own type parameters while the body is checked without an
+    // instantiation (RFC-029). One unifies with itself and with an unbound variable, nothing else;
+    // the value is whether a `where T: copyable` bound lets it copy.
+    rigid: Dict(VarId, bool)
     allocator: &Allocator?
 }
 
@@ -176,6 +180,7 @@ pub fn engine(allocator: &Allocator? = null) Engine {
         var_counter = 0u32,
         level = 0u32,
         nominals = null,
+        rigid = dict(allocator),
         allocator = allocator,
     }
 }
@@ -196,6 +201,7 @@ pub fn deinit(self: move Engine) {
     self.binding_undo.deinit()
     self.prim_undo.deinit()
     self.level_undo.deinit()
+    self.rigid.deinit()
 }
 
 // Hand the filled type table to the caller and leave a stand-in. The bindings still name handles of
@@ -246,6 +252,31 @@ pub fn fresh_var(self: &Engine) Ty {
     self.var_counter = id + 1u32
     set_level(self, id, self.level)
     return self.interner.var_of(TyVar { id = id, level = self.level })
+}
+
+// A rigid variable, at the outermost level so no generalisation quantifies it.
+pub fn fresh_rigid(self: &Engine, copyable: bool) Ty {
+    let id = self.var_counter
+    self.var_counter = id + 1u32
+    set_level(self, id, 0u32)
+    self.rigid.set(id, copyable)
+    return self.interner.var_of(TyVar { id = id, level = 0u32 })
+}
+
+// Forget every rigid variable: the body that held them is checked.
+pub fn clear_rigid(self: &Engine) {
+    self.rigid.clear()
+}
+
+fn rigid_rep(self: &Engine, t: Ty) VarId? {
+    return self.ty_node(t) match {
+        NVar(v) => if self.rigid.contains(v.id) { Some(v.id) } else { null }
+        _ => null
+    }
+}
+
+pub fn is_rigid(self: &Engine, t: Ty) bool {
+    return rigid_rep(self, self.resolve(t)).is_some()
 }
 
 // Advance the variable counter without interning a node. Replaying a skipped pass burns the
@@ -407,7 +438,7 @@ pub fn is_copyable(self: &Engine, ty: Ty) bool {
         Some(r) => r
         None => return true
     }
-    return is_copyable_ty(&self.interner, reg, self.zonk(ty), self.allocator)
+    return is_copyable_ty(&self.interner, reg, self.zonk(ty), self.allocator, Some(&self.rigid))
 }
 
 // One hop of the derivation that cleared a type's copyable bit: the aggregate, the field that
@@ -572,6 +603,12 @@ fn unify_resolved(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
         return UnifyOutcome.Unified(.{ ty = a, cost = 0 })
     }
 
+    const ra = rigid_rep(self, a)
+    const rb = rigid_rep(self, b)
+    if ra.is_some() or rb.is_some() {
+        return unify_rigid(self, a, b, ra, rb)
+    }
+
     // Both vars - merge their partitions. The first arg's rep wins (matches the union-find
     // contract) so concrete types accumulated by earlier unifications stay reachable.
     return self.ty_node(a) match {
@@ -584,6 +621,26 @@ fn unify_resolved(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
             _ => unify_concrete(self, a, b)
         }
     }
+}
+
+// A rigid variable is a type of its own: an unbound variable takes it, anything else mismatches.
+fn unify_rigid(self: &Engine, a: Ty, b: Ty, ra: VarId?, rb: VarId?) UnifyOutcome {
+    if ra.is_some() and rb.is_some() and ra.unwrap() == rb.unwrap() {
+        return make_ok(a)
+    }
+    if ra.is_some() and rb.is_none() {
+        return self.ty_node(b) match {
+            NVar(vb) => bind_var(self, vb, a)
+            _ => UnifyOutcome.UniMismatch(.{ actual = a, expected = b })
+        }
+    }
+    if rb.is_some() and ra.is_none() {
+        return self.ty_node(a) match {
+            NVar(va) => bind_var(self, va, b)
+            _ => UnifyOutcome.UniMismatch(.{ actual = a, expected = b })
+        }
+    }
+    return UnifyOutcome.UniMismatch(.{ actual = a, expected = b })
 }
 
 // Both sides concrete (no Var, no Never, no Error). Try structural unification first; on mismatch,

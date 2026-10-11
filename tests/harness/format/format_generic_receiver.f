@@ -14,8 +14,8 @@ type Box = struct(T) {
     v: T
 }
 
-fn box_of(v: $T) Box(T) {
-    return .{ v = v }
+fn box_of(v: move $T) Box(T) {
+    return .{ v = move v }
 }
 
 pub fn format(self: &Box($T), w: Writer, spec: String) {

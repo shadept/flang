@@ -188,7 +188,12 @@ bodies are held per open scope and walked where
 they fire, on every path that exits: falling off the block, `return`,
 `break` and `continue`. Nothing in it unifies, and it reports at the
 outermost open instantiation, so a copy rejected inside a generic body
-names the caller's line.
+names the caller's line. A generic body is also checked once against rigid
+type parameters (`check_template_rigid`, RFC-029): an engine variable that
+unifies only with itself or an unbound variable, non-copyable unless the
+signature bounds it `copyable`. It runs in scratch tables (results, parked
+work, pending specializations, none of which instantiate) and keeps only the
+ownership pass's diagnostics, so a copy of `T` is reported at the declaration.
 
 Each expression is walked with the slot it flows into (`OwnSlot`, RFC-033):
 a read, a by-value destination, a `move` parameter, the function's result,

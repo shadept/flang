@@ -9,8 +9,8 @@ type Holder = struct(F) {
     f: F
 }
 
-fn make_holder(f: $F) Holder(F) {
-    return .{ f = f }
+fn make_holder(f: move $F) Holder(F) {
+    return .{ f = move f }
 }
 
 // Generic fn body: the field's type is a TypeVar at template time and only becomes the concrete

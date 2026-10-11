@@ -10,8 +10,8 @@ type Thunk = struct(F) {
     f: F
 }
 
-fn thunk(f: $F) Thunk(F) {
-    return .{ f = f }
+fn thunk(f: move $F) Thunk(F) {
+    return .{ f = move f }
 }
 
 pub fn main() i32 {

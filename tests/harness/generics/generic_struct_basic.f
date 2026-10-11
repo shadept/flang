@@ -6,8 +6,8 @@ type Pair = struct(T) {
     second: T
 }
 
-fn make_pair(a: $T, b: T) Pair(T) {
-    return .{ first = a, second = b }
+fn make_pair(a: move $T, b: move T) Pair(T) {
+    return .{ first = move a, second = move b }
 }
 
 fn sum_pair(values: Pair(i32)) i32 {

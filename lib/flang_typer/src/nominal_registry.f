@@ -228,7 +228,7 @@ fn clone_def(def: &NominalDef, allocator: &Allocator?) NominalDef {
     }
 }
 
-fn clone_list(xs: &List($T), allocator: &Allocator?) List(T) {
+fn clone_list(xs: &List($T), allocator: &Allocator?) List(T) where T: copyable {
     let out: List(T) = list(xs.len, allocator)
     out.push_all(xs.as_slice())
     return out

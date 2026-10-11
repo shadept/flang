@@ -81,6 +81,8 @@ A type parameter in scope **shadows** any nominal of the same name: inside `fn w
 
 **Bounds.** A `where` clause after the parameters (and return type) constrains a function's type parameters: `fn max(s: $T[]) T? where T: copyable`. `copyable` is the only bound (RFC-019 §2.6): the argument's type must be copyable (RFC-028's derived bit). It is checked at each call that binds `T`, reported there with the derivation chain (E2134), and the body is not instantiated for a call that fails it. A bound that names something other than one of the function's own type parameters, or a bound other than `copyable`, is E2135. `where` is contextual: it opens a clause only as `where Name :`.
 
+**A generic body copies a type parameter only under the bound.** Each generic function is checked once against its own type parameters, each a rigid type that unifies with nothing else and is non-copyable unless `where T: copyable` says otherwise (RFC-029, RFC-033 6b): `T`, `Box(T)`, `(T, T)` copy only when `T` does. A copy, a move out of storage the body does not own, or a call to a function that requires `T: copyable`, is refused at the declaration, with no instantiation anywhere (E2124, E2131, E2134). Only the ownership findings come from this check: whatever is dispatched on `T` - a member call, an operator, an overload pick - waits for an instantiation, as does the liveness of a value handed to a call the check could not resolve. `#if type_info(T).copyable` reads the rigid `T` as not copyable, so the copyable branch is checked at the instantiations that take it. A template the check refused skips the ownership pass at its instantiations, so each error is reported once.
+
 #### 2.3.0 Monomorphization
 
 Generic functions are **monomorphized at their call sites**:

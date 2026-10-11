@@ -1,5 +1,5 @@
 //! TEST: copy_via_by_value_loop
-//! COMPILE-ERROR: E2124 copy_via_by_value_loop.f
+//! COMPILE-ERROR: E2134 copy_via_by_value_loop.f
 //! EXIT: 1
 
 import std.collections.list
@@ -16,8 +16,8 @@ fn close(h: move FileHandle) i32 {
     return h.fd
 }
 
-// The copy happens inside a `std.list` body. The error must name a line in this file, not the
-// container's source.
+// A by-value loop copies each element, so the iterator's `next` requires `T: copyable`: the error
+// names a line in this file, not the container's source.
 pub fn main() i32 {
     let xs: List(FileHandle) = list(2)
     xs.push(open(3))

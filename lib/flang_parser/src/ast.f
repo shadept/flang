@@ -1048,6 +1048,47 @@ pub fn declares_generic(decl: &FunctionDecl) bool {
     }
 }
 
+// The `$T` names a function's parameters and return type introduce, each once, in order.
+pub fn generic_names(decl: &FunctionDecl, out: &List(String)) {
+    for &p in decl.params {
+        collect_generic_names(p.type_expr, out)
+    }
+    decl.return_type match {
+        Some(rt) => collect_generic_names(rt, out)
+        None => {}
+    }
+}
+
+fn collect_generic_names(te: &TypeExpr, out: &List(String)) {
+    te.* match {
+        GenericBind(g) => {
+            if !out.contains(g.name) {
+                out.push(g.name)
+            }
+        }
+        Named(n) => collect_generic_list(n.generic_args, out)
+        Reference(r) => collect_generic_names(r.inner, out)
+        Optional(o) => collect_generic_names(o.inner, out)
+        Array(a) => collect_generic_names(a.element, out)
+        Slice(sl) => collect_generic_names(sl.element, out)
+        Tuple(t) => collect_generic_list(t.elements, out)
+        Function(f) => {
+            collect_generic_list(f.params, out)
+            f.return_type match {
+                Some(rt) => collect_generic_names(rt, out)
+                None => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_generic_list(tes: TypeExpr[], out: &List(String)) {
+    for &te in tes {
+        collect_generic_names(te, out)
+    }
+}
+
 pub fn mentions_generic(te: &TypeExpr) bool {
     return te.* match {
         GenericBind(_) => true

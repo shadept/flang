@@ -105,21 +105,14 @@ pub fn total(self: &MultiMap($K, $V)) usize {
     return self.pool.len - self.dead
 }
 
-// Removes `key` and every value under it, deiniting each value.
+// Removes `key` and every value under it.
 //
 // The values' slots stay in the pool, unreachable, until `compact` reclaims them; `total` no longer
 // counts them. Returns how many values were removed, zero for an absent key.
-pub fn remove_key(self: &MultiMap($K, $V), key: K) usize {
+pub fn remove_key(self: &MultiMap($K, $V), key: K) usize where V: copyable {
     const gone = self.chains.remove(key)
     if gone.is_none() {
         return 0
-    }
-    let cur = gone.unwrap().first
-    while cur != NONE {
-        const slot = &self.pool[cur as usize]
-        let v = move slot.value
-        release(v)
-        cur = slot.next
     }
     self.dead = self.dead + gone.unwrap().count as usize
     return gone.unwrap().count as usize
@@ -128,7 +121,7 @@ pub fn remove_key(self: &MultiMap($K, $V), key: K) usize {
 // Rebuilds the pool without the slots `remove_key` left behind, each key's values laid out
 // contiguously. A no-op when nothing was removed. References from `values_ref` are invalid
 // afterwards. Panics when the new pool cannot be allocated.
-pub fn compact(self: &MultiMap($K, $V)) {
+pub fn compact(self: &MultiMap($K, $V)) where V: copyable {
     if self.dead == 0 {
         return
     }
@@ -152,16 +145,7 @@ pub fn compact(self: &MultiMap($K, $V)) {
 
 // Deinits every value and key, then frees the pool and the key table. Idempotent: a second call is
 // a no-op.
-pub fn deinit(self: move MultiMap($K, $V)) {
-    for e in self.chains {
-        let cur = e.value.first
-        while cur != NONE {
-            const slot = &self.pool[cur as usize]
-            let v = move slot.value
-            release(v)
-            cur = slot.next
-        }
-    }
+pub fn deinit(self: move MultiMap($K, $V)) where V: copyable {
     self.pool.deinit(self.allocator)
     self.chains.deinit(self.allocator)
     self.dead = 0
@@ -199,7 +183,7 @@ pub fn iter(it: &ValuesIter($V)) ValuesIter(V) {
 }
 
 // Advances and returns the next value, or null at the end of the chain.
-pub fn next(it: &ValuesIter($V)) V? {
+pub fn next(it: &ValuesIter($V)) V? where V: copyable {
     if it.cur == NONE {
         return null
     }
@@ -217,7 +201,7 @@ pub type ValuesRefIter = struct(V) {
 }
 
 // Iterates the values under `key` by reference, in insertion order; nothing for an absent key.
-pub fn values_ref(self: &MultiMap($K, $V), key: K) ValuesRefIter(V) {
+pub fn values_ref(self: &MultiMap($K, $V), key: K) ValuesRefIter(V) where V: copyable {
     const first = self.chains.get(key) match {
         Some(c) => c.first
         None => NONE

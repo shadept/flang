@@ -75,6 +75,26 @@ every body, checked or not, in the compiler as well as the editor.
 `project_module` takes an optional diagnostic sink for it. A consumer that wants
 only the shape passes null.
 
+## Landed: the ownership slice (2026-10-10)
+
+Step 2 for the ownership pass alone, which is what RFC-033's generic-bodies rule needed.
+`check_template_rigid` runs where `check_one_decl` used to skip a template, with each `$T` bound to
+a rigid engine variable: it unifies with itself and with an unbound variable, nothing else, and
+is copyable only under `where T: copyable`. The body is checked in scratch tables - result tables,
+parked work and pending specializations are swapped out and dropped, so nothing instantiates with
+a rigid type - and every diagnostic but the ownership pass's is discarded. The `copyable` bounds of
+the generics the body calls are checked against the rigid types too.
+
+Answers to the open questions, for this slice:
+
+- The boundary is the ownership pass. Its one dependence on dispatch is liveness through a call
+  the check could not resolve (`acc = f(acc, x)` with `f: $F`): such a binding is treated as
+  released, so neither E2126 nor E2123 fires on it.
+- The pass shares `check_function_body`.
+- A template the check refused skips the ownership pass at its instantiations. A template
+  instantiated before its own module's bodies are checked can still report both ways.
+- It runs with the module's bodies, so it is carried and replayed with them (RFC-022).
+
 ## Sequencing
 
 1. **E2115 at projection.** Done.

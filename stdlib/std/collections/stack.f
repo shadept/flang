@@ -85,7 +85,7 @@ pub fn pop(self: &UnmanagedStack($T)) T? {
 }
 
 // Returns the top element without removing it, or null when empty.
-pub fn peek(self: &UnmanagedStack($T)) T? {
+pub fn peek(self: &UnmanagedStack($T)) T? where T: copyable {
     return self.__inner.last()
 }
 

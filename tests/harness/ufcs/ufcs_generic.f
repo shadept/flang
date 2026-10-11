@@ -2,7 +2,7 @@
 //! EXIT: 42
 
 // Generic function with reference parameter for UFCS
-fn identity(x: &$T) T {
+fn identity(x: &$T) T where T: copyable {
     return x.*
 }
 

@@ -332,7 +332,8 @@ pub fn deinit(self: move UnmanagedDict($K, $V), allocator: &Allocator) {
 // Copies every entry of `other` into this dict, overwriting the value under a key both have.
 // Entries are copied bitwise: an owned key or value is then owned by both dicts, and only one may
 // deinit it. Panics when the table cannot grow.
-pub fn merge(self: &UnmanagedDict($K, $V), other: &UnmanagedDict(K, V), allocator: &Allocator) {
+pub fn merge(self: &UnmanagedDict($K, $V), other: &UnmanagedDict(K, V),
+    allocator: &Allocator) where K: copyable, V: copyable {
     for e in other.iter() {
         self.set(e.key, e.value, allocator)
     }
@@ -458,12 +459,12 @@ pub fn is_empty(self: &UnmanagedDict($K, $V)) bool {
 }
 
 // `d[key]`: the value for `key`, or null when absent.
-pub fn op_index(self: &UnmanagedDict($K, $V), key: K) V? {
+pub fn op_index(self: &UnmanagedDict($K, $V), key: K) V? where V: copyable {
     return self.get(key)
 }
 
 // Returns the value for `key`, or null when absent.
-pub fn get(self: &UnmanagedDict($K, $V), key: K) V? {
+pub fn get(self: &UnmanagedDict($K, $V), key: K) V? where V: copyable {
     return Some((self.get_ref(key)?).*)
 }
 
@@ -480,7 +481,7 @@ pub fn get_ref(self: &UnmanagedDict($K, $V), key: K) &V? {
 
 // `get` by a probe of another type (a `String` against `OwnedString` keys). `key.hash()` and `==`
 // must agree with the key type's.
-pub fn get(self: &UnmanagedDict($K, $V), key: $Q) V? {
+pub fn get(self: &UnmanagedDict($K, $V), key: $Q) V? where V: copyable {
     return Some((self.get_ref(key)?).*)
 }
 
@@ -507,7 +508,7 @@ pub fn contains(self: &UnmanagedDict($K, $V), key: $Q) bool {
 }
 
 // The value for `key`, or `fallback` when absent.
-pub fn get_or(self: &UnmanagedDict($K, $V), key: K, fallback: move V) V {
+pub fn get_or(self: &UnmanagedDict($K, $V), key: K, fallback: move V) V where V: copyable {
     let v = self.get(key)
     if v.is_some() {
         return v.unwrap()
@@ -517,7 +518,7 @@ pub fn get_or(self: &UnmanagedDict($K, $V), key: K, fallback: move V) V {
 
 // The value for `key`, or `make()` when absent - the lazy counterpart of `get_or`, for fallbacks
 // that are expensive (or effectful) to build.
-pub fn get_or_else(self: &UnmanagedDict($K, $V), key: K, make: $F) V {
+pub fn get_or_else(self: &UnmanagedDict($K, $V), key: K, make: $F) V where V: copyable {
     let v = self.get(key)
     if v.is_some() {
         return v.unwrap()
@@ -636,7 +637,7 @@ pub fn next(self: &DictDrain($K, $V)) (K, V)? {
             entry.hash = HASH_DEAD
             const k = move (self.__dict.entries + idx).key
             const v = move (self.__dict.entries + idx).value
-            return Some((k, v))
+            return Some((move k, move v))
         }
     }
     self.current = self.__dict.cap
@@ -660,7 +661,7 @@ pub fn iter(self: &KeysIter($K, $V)) KeysIter(K, V) {
 }
 
 // Advances and returns the next key, or null after the last.
-pub fn next(self: &KeysIter($K, $V)) K? {
+pub fn next(self: &KeysIter($K, $V)) K? where K: copyable {
     let e = self.it.next()
     if e.is_none() {
         return null
@@ -684,7 +685,7 @@ pub fn iter(self: &ValuesIter($K, $V)) ValuesIter(K, V) {
 }
 
 // Advances and returns the next value, or null after the last.
-pub fn next(self: &ValuesIter($K, $V)) V? {
+pub fn next(self: &ValuesIter($K, $V)) V? where V: copyable {
     let e = self.it.next()
     if e.is_none() {
         return null
@@ -706,7 +707,8 @@ pub fn values(self: &UnmanagedDict($K, $V)) ValuesIter(K, V) {
 
 // Returns a new dict with the same keys and `f(key, value)` as each value. Keys are copied bitwise;
 // an owned key is then owned by both dicts, and only one may deinit it.
-pub fn map_values(self: &UnmanagedDict($K, $V), f: $F, allocator: &Allocator) UnmanagedDict(K, $U) {
+pub fn map_values(self: &UnmanagedDict($K, $V), f: $F, allocator: &Allocator) UnmanagedDict(K,
+    $U) where K: copyable {
     let out: UnmanagedDict(K, U)
     for e in self.iter() {
         out.set(e.key, f(e.key, e.value), allocator)
@@ -716,7 +718,8 @@ pub fn map_values(self: &UnmanagedDict($K, $V), f: $F, allocator: &Allocator) Un
 
 // Returns a new dict of the entries `pred(key, value)` accepts. Keys and values are copied bitwise;
 // an owned key or value is then owned by both dicts, and only one may deinit it.
-pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) UnmanagedDict(K, V) {
+pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) UnmanagedDict(K,
+    V) where K: copyable, V: copyable {
     let out: UnmanagedDict(K, V)
     for e in self.iter() {
         if pred(e.key, e.value) {
@@ -774,20 +777,20 @@ pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) Unm
     // Copies every entry of `other` into this dict, overwriting the value under a key both have.
     // Entries are copied bitwise: an owned key or value is then owned by both dicts, and only one
     // may deinit it.
-    pub fn merge(self: &#(Self)($K, $V), other: &#(Self)(K, V)) {
+    pub fn merge(self: &#(Self)($K, $V), other: &#(Self)(K, V)) where K: copyable, V: copyable {
         self.__storage.merge(other.op_deref(), self.allocator)
     }
 
     // Returns a new dict with the same keys and `f(key, value)` as each value; keys are copied
     // bitwise. The result is on `allocator`, or on the receiver's when null.
-    pub fn map_values(self: &#(Self)($K, $V), f: $F, allocator: &Allocator? = null) Dict(K, $U) {
+    pub fn map_values(self: &#(Self)($K, $V), f: $F, allocator: &Allocator? = null) Dict(K, $U) where K: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.map_values(f, alloc), allocator = alloc }
     }
 
     // Returns a new dict of the entries `pred(key, value)` accepts, copied bitwise. The result is
     // on `allocator`, or on the receiver's when null.
-    pub fn filter(self: &#(Self)($K, $V), pred: $F, allocator: &Allocator? = null) Dict(K, V) {
+    pub fn filter(self: &#(Self)($K, $V), pred: $F, allocator: &Allocator? = null) Dict(K, V) where K: copyable, V: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.filter(pred, alloc), allocator = alloc }
     }

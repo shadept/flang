@@ -39,7 +39,7 @@ pub fn slice_from_raw_parts(ptr: &$T, len: usize) T[] {
 // =============================================================================
 
 // Returns the element at `idx`, or null if `idx` is out of bounds.
-pub fn get(s: $T[], idx: usize) T? {
+pub fn get(s: $T[], idx: usize) T? where T: copyable {
     if idx >= s.len {
         return null
     }
@@ -56,7 +56,7 @@ pub fn get_ref(s: $T[], idx: usize) &T? {
 }
 
 // Returns the element at `idx`. Panics if `idx >= s.len`.
-pub fn op_index(s: $T[], idx: usize) T {
+pub fn op_index(s: $T[], idx: usize) T where T: copyable {
     if idx >= s.len {
         panic("index out of bounds")
     }
@@ -95,7 +95,7 @@ pub fn op_set_index(s: &Slice($T), index: usize, value: move T) {
 }
 
 // Returns the first element, or null when empty.
-pub fn first(s: $T[]) T? {
+pub fn first(s: $T[]) T? where T: copyable {
     if s.len == 0 {
         return null
     }
@@ -103,7 +103,7 @@ pub fn first(s: $T[]) T? {
 }
 
 // Returns the last element, or null when empty.
-pub fn last(s: $T[]) T? {
+pub fn last(s: $T[]) T? where T: copyable {
     if s.len == 0 {
         return null
     }
@@ -171,7 +171,7 @@ pub fn count_if(s: $T[], pred: $F) usize {
 }
 
 // Returns the first element satisfying `pred`, or null.
-pub fn find(s: $T[], pred: $F) T? {
+pub fn find(s: $T[], pred: $F) T? where T: copyable {
     for i in 0..s.len {
         if pred(s[i]) {
             return Some(s[i])
@@ -281,7 +281,7 @@ pub fn ends_with(s: $T[], suffix: T[]) bool {
 }
 
 // Returns the smallest element by `<`, or null when empty.
-pub fn min(s: $T[]) T? {
+pub fn min(s: $T[]) T? where T: copyable {
     if s.len == 0 {
         return null
     }
@@ -295,7 +295,7 @@ pub fn min(s: $T[]) T? {
 }
 
 // Returns the largest element by `<`, or null when empty.
-pub fn max(s: $T[]) T? {
+pub fn max(s: $T[]) T? where T: copyable {
     if s.len == 0 {
         return null
     }
@@ -309,7 +309,7 @@ pub fn max(s: $T[]) T? {
 }
 
 // Returns the element with the smallest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn min_by(s: $T[], key: $F) T? {
+pub fn min_by(s: $T[], key: $F) T? where T: copyable {
     if s.len == 0 {
         return null
     }
@@ -326,7 +326,7 @@ pub fn min_by(s: $T[], key: $F) T? {
 }
 
 // Returns the element with the largest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn max_by(s: $T[], key: $F) T? {
+pub fn max_by(s: $T[], key: $F) T? where T: copyable {
     if s.len == 0 {
         return null
     }
@@ -355,7 +355,7 @@ pub fn each(s: $T[], f: $F) {
 
 // Combines left to right: `f(f(f(init, x0), x1), x2)`.
 pub fn fold(s: $T[], init: move $A, f: $F) A {
-    let acc = init
+    let acc = move init
     for i in 0..s.len {
         acc = f(acc, s[i])
     }
@@ -364,7 +364,7 @@ pub fn fold(s: $T[], init: move $A, f: $F) A {
 
 // Combines right to left: `f(x0, f(x1, f(x2, init)))`. The accumulator is `f`'s second argument.
 pub fn fold_right(s: $T[], init: move $A, f: $F) A {
-    let acc = init
+    let acc = move init
     let i = s.len
     while i > 0 {
         i = i - 1
@@ -410,7 +410,7 @@ pub fn fill(s: $T[], value: T) where T: copyable {
 }
 
 // Replaces all occurrences of `old` with `new` in-place. Returns the number of replacements made.
-pub fn replace(s: $T[], old: T, new: T) usize {
+pub fn replace(s: $T[], old: T, new: T) usize where T: copyable {
     let n: usize = 0
     for i in 0..s.len {
         if s[i] == old {
@@ -522,7 +522,7 @@ pub fn iter(it: &SliceIterator($T)) SliceIterator(T) {
 }
 
 // Advances the iterator and returns the next element, or null if exhausted.
-pub fn next(iter: &SliceIterator($T)) T? {
+pub fn next(iter: &SliceIterator($T)) T? where T: copyable {
     if iter.index >= iter.slice.len {
         return null
     }
@@ -576,7 +576,7 @@ pub fn iter(it: &SliceRevIterator($T)) SliceRevIterator(T) {
 }
 
 // Advances toward the front and returns the next element, or null after the first.
-pub fn next(iter: &SliceRevIterator($T)) T? {
+pub fn next(iter: &SliceRevIterator($T)) T? where T: copyable {
     if iter.remaining == 0 {
         return null
     }

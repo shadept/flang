@@ -73,7 +73,8 @@ pub fn deinit(self: move UnmanagedSet($T), allocator: &Allocator) {
 
 // Returns a new set of the elements `pred` accepts, copied bitwise: an owned element is then owned
 // by both sets, and only one may deinit it.
-pub fn filter(self: &UnmanagedSet($T), pred: $F, allocator: &Allocator) UnmanagedSet(T) {
+pub fn filter(self: &UnmanagedSet($T), pred: $F,
+    allocator: &Allocator) UnmanagedSet(T) where T: copyable {
     let out: UnmanagedSet(T)
     for x in self.iter() {
         if pred(x) {
@@ -84,7 +85,7 @@ pub fn filter(self: &UnmanagedSet($T), pred: $F, allocator: &Allocator) Unmanage
 }
 
 // Returns the elements as a new list, in unspecified order, copied bitwise.
-pub fn to_list(self: &UnmanagedSet($T), allocator: &Allocator) UnmanagedList(T) {
+pub fn to_list(self: &UnmanagedSet($T), allocator: &Allocator) UnmanagedList(T) where T: copyable {
     let out: UnmanagedList(T) = unmanaged_list(self.len(), allocator)
     for x in self.iter() {
         out.push(x, allocator)
@@ -134,14 +135,14 @@ pub fn clear(self: &UnmanagedSet($T)) {
 }
 
 // Calls `f` on every element, in unspecified order.
-pub fn each(self: &UnmanagedSet($T), f: $F) {
+pub fn each(self: &UnmanagedSet($T), f: $F) where T: copyable {
     for x in self.iter() {
         f(x)
     }
 }
 
 // Returns whether any element satisfies `pred`. False when empty.
-pub fn any(self: &UnmanagedSet($T), pred: $F) bool {
+pub fn any(self: &UnmanagedSet($T), pred: $F) bool where T: copyable {
     for x in self.iter() {
         if pred(x) {
             return true
@@ -151,7 +152,7 @@ pub fn any(self: &UnmanagedSet($T), pred: $F) bool {
 }
 
 // Returns whether every element satisfies `pred`. True when empty.
-pub fn all(self: &UnmanagedSet($T), pred: $F) bool {
+pub fn all(self: &UnmanagedSet($T), pred: $F) bool where T: copyable {
     for x in self.iter() {
         let ok: bool = pred(x)
         if !ok {
@@ -184,7 +185,7 @@ pub fn iter(it: &SetIterator($T)) SetIterator(T) {
 
 // Advances and returns the next element, or null after the last. By value, so an owning element
 // type iterates through `iter_ref` instead - a copy of one would own it twice.
-pub fn next(it: &SetIterator($T)) T? {
+pub fn next(it: &SetIterator($T)) T? where T: copyable {
     return it.__inner.next() match {
         Some(entry) => Some(entry.key)
         None => None
@@ -240,14 +241,14 @@ pub fn deinit(self: move Set($T)) {
 
 // Returns a new set of the elements `pred` accepts, copied bitwise. The result is on `allocator`,
 // or on the receiver's when null.
-pub fn filter(self: &Set($T), pred: $F, allocator: &Allocator? = null) Set(T) {
+pub fn filter(self: &Set($T), pred: $F, allocator: &Allocator? = null) Set(T) where T: copyable {
     const alloc = allocator ?? self.allocator
     return .{ __storage = self.__storage.filter(pred, alloc), allocator = alloc }
 }
 
 // Returns the elements as a new list, in unspecified order, copied bitwise. The result is on
 // `allocator`, or on the receiver's when null.
-pub fn to_list(self: &Set($T), allocator: &Allocator? = null) List(T) {
+pub fn to_list(self: &Set($T), allocator: &Allocator? = null) List(T) where T: copyable {
     const alloc = allocator ?? self.allocator
     return .{ __storage = self.__storage.to_list(alloc), allocator = alloc }
 }

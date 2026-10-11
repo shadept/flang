@@ -14,9 +14,9 @@ pub fn main() i32 {
 }
 
 // Generic function with match expression returning literals
-fn unwrap_or(opt: Option($T), default: T) T {
+fn unwrap_or(opt: Option($T), default: T) T where T: copyable {
     return opt match {
-        Some(value) => value,
+        Some(value) => value
         None => default
     }
 }

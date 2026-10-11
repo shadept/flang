@@ -260,6 +260,13 @@ pub type Checker = struct {
     // Every type-parameter var ever minted, by id, with its declared `$T` name - see
     // `type_param_names`. Grows monotonically; ids from retired demands linger harmlessly.
     tp_names: Dict(VarId, String)
+    // Templates whose rigid check (RFC-029) found an ownership error, by declaration node: their
+    // instantiations skip the ownership pass, so each error is reported once, at the declaration.
+    rigid_flagged: Set(NodeId)
+    // Set while an instantiation of a flagged template is checked.
+    skip_ownership: bool
+    // Set while `check_template_rigid` runs.
+    rigid_mode: bool
     // `$T` bindings of the signature currently being registered, in declaration order.
     sig_tps: List(SigTypeParam)
     // Generic picks recorded while checking the current body scope; drained after phase 3 (and,
@@ -643,6 +650,9 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         fn_deprecations = dict(allocator),
         templates = dict(allocator),
         tp_names = dict(allocator),
+        rigid_flagged = set(allocator),
+        skip_ownership = false,
+        rigid_mode = false,
         sig_tps = list(0, allocator),
         pending_specs = list(0, allocator),
         spec_callers = list(0, allocator),
@@ -843,6 +853,7 @@ pub fn deinit(self: move Checker) {
     self.anon_structs.deinit()
     self.sig_tps.deinit()
     self.tp_names.deinit()
+    self.rigid_flagged.deinit()
     self.pending_specs.deinit()
     self.spec_callers.deinit()
     self.spec_call_spans.deinit()
@@ -2232,10 +2243,11 @@ fn wants_test_bodies(self: &Checker, module: &Module) bool {
 fn check_one_decl(self: &Checker, decl: &Decl, tests: bool) {
     decl.* match {
         Function(fd) => {
-            // A generic template's body is only validated per instantiation (M10) - with unbound
-            // type params, overload resolution is unreliable and node types are meaningless. An
-            // uninstantiated template is never checked at all.
-            if !declares_generic(&fd) {
+            // A generic template's body is validated per instantiation (M10), and once against
+            // rigid type parameters for what cannot depend on them.
+            if declares_generic(&fd) {
+                check_template_rigid(self, &fd)
+            } else {
                 check_function_body(self, &fd)
             }
         }
@@ -2327,7 +2339,9 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
         push_diag_e(self, fd.span, E_MISSING_RETURN, $"function `{fd.name}` must return a value")
     }
 
-    own_check_body(self, body, Some(fd.params), !ret_is_void and !ret_is_never)
+    if !self.skip_ownership {
+        own_check_body(self, body, Some(fd.params), !ret_is_void and !ret_is_never)
+    }
 
     let _r = self.fn_stack.pop()
     self.engine.exit_level()
@@ -2420,7 +2434,7 @@ fn checker_name(raw: &u8, name: String, span: SourceSpan) CtValue? {
     chk.env.lookup(name) match {
         Some(b) => {
             const ty = chk.engine.zonk(chk.engine.specialize(&b.scheme))
-            if chk.engine.is_var(ty) {
+            if chk.engine.is_var(ty) and !chk.engine.is_rigid(ty) {
                 return null
             }
             if b.is_type_param {
@@ -2443,7 +2457,8 @@ fn directive_type(self: &Checker, ty: Ty, span: SourceSpan) CtValue {
 }
 
 fn directive_info(self: &Checker, ty: Ty) CtTypeInfo {
-    return ct_type_info_of_ty(&self.engine.interner, &self.nominals, ty, self.allocator)
+    return ct_type_info_of_ty(&self.engine.interner, &self.nominals, ty, self.allocator,
+        Some(&self.engine.rigid))
 }
 
 // A generic nominal has no type to offer without its arguments, and a bare name carries none.
@@ -3080,6 +3095,112 @@ fn sig_concrete(self: &Checker, params: &List(Ty), ret: Ty) bool {
 // diagnostic) when the instantiation chain is implausibly deep. `at` re-registers a carried entry
 // in place - same id, fresh overlay - handing its previous dep list to the frame as nested reuse
 // hints.
+// A generic body checked once against rigid type parameters (RFC-029): each `$T` is a type of its
+// own, copyable only under `where T: copyable`, so copying a value of a type parameter is refused
+// where the body writes it. What is dispatched on `T` fails against a rigid one and waits for an
+// instantiation, so the check runs in scratch tables and keeps the ownership findings alone,
+// including the `copyable` bounds of the generics it calls.
+fn check_template_rigid(self: &Checker, fd: &FunctionDecl) {
+    let names: List(String) = list(4, self.allocator)
+    defer names.deinit()
+    generic_names(fd, &names)
+
+    const diags0 = self.diagnostics.len
+    const calls0 = self.pending_calls.len
+    let saved_results = replace(&self.results, inference_results(self.allocator))
+    let saved_pending = replace(&self.pending_specs, list(0, self.allocator))
+    let saved_literals = replace(&self.pending_literals, list(0, self.allocator))
+    let saved_anons = replace(&self.pending_anons, list(0, self.allocator))
+    let saved_members = replace(&self.pending_members, list(0, self.allocator))
+    let saved_fn_names = replace(&self.pending_fn_names, list(0, self.allocator))
+
+    self.env.push_scope()
+    for name in names {
+        const rigid = self.engine.fresh_rigid(has_copyable_bound(fd, name))
+        rigid_var_name(self, rigid, name)
+        self.env.bind(name, Binding {
+            scheme = mono(rigid, self.allocator),
+            decl = self.node_of(fd.span),
+            is_const = true,
+            is_type_param = true,
+        })
+    }
+    self.rigid_mode = true
+    check_function_body(self, fd)
+    self.rigid_mode = false
+    for &ps in self.pending_specs {
+        const _ok = check_call_bounds(self, ps)
+    }
+    self.env.pop_scope()
+
+    keep_ownership_diags(self, diags0)
+    if self.diagnostics.len > diags0 {
+        self.rigid_flagged.add(self.node_of(fd.span))
+    }
+
+    drop_pending_specs(replace(&self.pending_specs, saved_pending))
+    replace(&self.results, saved_results).deinit()
+    replace(&self.pending_literals, saved_literals).deinit()
+    replace(&self.pending_anons, saved_anons).deinit()
+    replace(&self.pending_members, saved_members).deinit()
+    replace(&self.pending_fn_names, saved_fn_names).deinit()
+    while self.pending_calls.len > calls0 {
+        const pc = self.pending_calls.pop().unwrap()
+        pc.arg_tys.deinit()
+        pc.pos_exprs.deinit()
+    }
+    self.engine.clear_rigid()
+}
+
+fn has_copyable_bound(fd: &FunctionDecl, name: String) bool {
+    for &b in fd.bounds {
+        if b.param == name and b.bound == BOUND_COPYABLE {
+            return true
+        }
+    }
+    return false
+}
+
+fn rigid_var_name(self: &Checker, rigid: Ty, name: String) {
+    ty_node(self, rigid) match {
+        NVar(v) => self.tp_names.set(v.id, name)
+        _ => {}
+    }
+}
+
+// Picks a rigid check made and will never instantiate: their tables die with them.
+fn drop_pending_specs(specs: move List(PendingSpec)) {
+    for ps in specs.drain() {
+        ps.tp_binds.deinit()
+        ps.inst_params.deinit()
+    }
+    specs.deinit()
+}
+
+// Drops the diagnostics past `from` that an instantiation could contradict, keeping the ownership
+// pass's: those hold whatever `T` turns out to be.
+fn keep_ownership_diags(self: &Checker, from: usize) {
+    let tail: List(Diagnostic) = list(self.diagnostics.len - from, self.allocator)
+    while self.diagnostics.len > from {
+        tail.push(self.diagnostics.pop().unwrap())
+    }
+    for d in tail.drain_rev() {
+        if is_ownership_code(d.code) {
+            self.diagnostics.push(d)
+        } else {
+            d.deinit()
+        }
+    }
+    tail.deinit()
+}
+
+fn is_ownership_code(code: String) bool {
+    return code == E_USE_AFTER_MOVE or code == E_COPY_NEEDS_MOVE or code == E_MOVE_NOT_LVALUE
+        or code == E_ASSIGN_OVER_LIVE or code == E_PARTIAL_MOVE or code == E_CONSUMING_RECEIVER
+        or code == E_NOT_OWNED or code == E_RVALUE_NO_OWNER or code == E_MOVE_AND_LEND
+        or code == E_BOUND_UNSATISFIED or code == E_SLOT_NOT_REFILLED
+}
+
 fn instantiate(self: &Checker, p: &PendingSpec, key: move OwnedString, params: move List(Ty),
     ret: Ty, at: SpecId? = null) SpecId? {
     if self.spec_depth >= MAX_SPEC_DEPTH {
@@ -3153,7 +3274,10 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: move OwnedString, params: m
         })
     }
 
+    const saved_skip = self.skip_ownership
+    self.skip_ownership = self.rigid_flagged.contains(self.node_of(template.decl.span))
     check_function_body(self, template.decl)
+    self.skip_ownership = saved_skip
     resolve_anon_literals(self)
     resolve_pending_members(self)
     resolve_fn_name_values(self)
@@ -4254,19 +4378,28 @@ fn append_copy_blame(self: &Checker, ty: Ty, sb: &StringBuilder) {
     for i in 0..hops.len {
         sb.append("; `")
         format_with_names(&self.engine.interner, self.engine.zonk(hops[i].owner), sb,
-            Some(&self.nominals))
+            Some(&self.nominals), Some(&self.tp_names))
         const what = if hops[i].variant { "variant" } else { "field" }
         sb.append($"` is not copyable: {what} `{hops[i].field}` is ")
         hops[i].field_ty match {
             Some(ft) => {
                 sb.append("`")
                 format_with_names(&self.engine.interner, self.engine.zonk(ft), sb,
-                    Some(&self.nominals))
+                    Some(&self.nominals), Some(&self.tp_names))
                 sb.append("`")
             }
             None => sb.append("`owned`")
         }
     }
+    const leaf = if hops.len == 0 { Some(ty) } else { hops[hops.len - 1].field_ty }
+    if leaf.is_none() or !self.engine.is_rigid(leaf.unwrap()) {
+        return
+    }
+    const name = ty_node(self, self.engine.resolve(leaf.unwrap())) match {
+        NVar(v) => self.tp_names.get(v.id) ?? "T"
+        _ => "T"
+    }
+    sb.append($"; `{name}` is a type parameter: copying it needs `where {name}: copyable`")
 }
 
 // The expression forms `move` accepts: the grammar of an assignment target (spec 3.4.1). A call is
@@ -8916,6 +9049,9 @@ type OwnPass = struct {
     // `&move T` parameters, by declaration node: the body may take the value out of each, and must
     // leave one behind before it returns (RFC-033).
     slots: List(NodeId)
+    // Under a rigid check: bindings handed to a call that did not resolve, which may have consumed
+    // them. Whether they are still live depends on what `T` turns out to be.
+    uncertain: List(NodeId)
     // Names a pattern bound into storage the function does not own (spec 7.5: an aggregate binding
     // names the scrutinee's storage). None may be moved out; under a lent parameter they also only
     // read, like `lent`.
@@ -9004,6 +9140,7 @@ fn own_run(self: &Checker, body: &BlockExpr, lent: move List(NodeId), captured: 
         captured = move captured,
         slots = move slots,
         borrowed = list(0, self.allocator),
+        uncertain = list(0, self.allocator),
         taker = "",
     }
     own_block(self, &p, body, if returns { own_returning() } else { own_read() })
@@ -9065,6 +9202,7 @@ fn own_deinit(p: move OwnPass) {
     p.captured.deinit()
     p.slots.deinit()
     p.borrowed.deinit()
+    p.uncertain.deinit()
 }
 
 fn own_is_lent(p: &OwnPass, decl: NodeId) bool {
@@ -9432,7 +9570,7 @@ fn own_lent_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr, what: String
     sb.append($"`{id.name}` is not owned here: {what}; declare `{id.name}: move ")
     own_type(self, id.span) match {
         Some(ty) => format_with_names(&self.engine.interner, self.engine.zonk(ty), &sb,
-            Some(&self.nominals))
+            Some(&self.nominals), Some(&self.tp_names))
         None => {}
     }
     sb.append("` to own it")
@@ -10066,6 +10204,33 @@ fn own_call(self: &Checker, p: &OwnPass, c: &CallExpr) {
     if !callee.relocates {
         own_overlaps(self, p, &uses)
     }
+    const unresolved = callee.decl.is_none() and callee.fn_ty.is_none() and !callee.payload
+    if self.rigid_mode and unresolved {
+        own_mark_uncertain(self, p, c)
+    }
+}
+
+fn own_mark_uncertain(self: &Checker, p: &OwnPass, c: &CallExpr) {
+    c.callee.* match {
+        MemberAccess(ma) => own_uncertain_root(self, p, ma.receiver)
+        _ => {}
+    }
+    for &arg in c.args {
+        arg.* match {
+            Positional(e) => own_uncertain_root(self, p, e)
+            Named(n) => own_uncertain_root(self, p, n.value)
+        }
+    }
+}
+
+fn own_uncertain_root(self: &Checker, p: &OwnPass, e: &Expr) {
+    own_chain_root(self, e) match {
+        Some(id) => own_local_decl(self, self.node_of(id.span)) match {
+            Some(d) => p.uncertain.push(d)
+            None => {}
+        }
+        None => {}
+    }
 }
 
 fn own_callee(self: &Checker, c: &CallExpr) OwnCallee {
@@ -10513,8 +10678,11 @@ fn own_assign_field(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr, span: So
 }
 
 // Whether nothing the place `path` holds is still owned there: the place was moved, or every
-// non-copyable field below it was.
+// non-copyable field below it was. A binding of uncertain liveness counts as released.
 fn own_released(self: &Checker, p: &OwnPass, decl: NodeId, path: String, ty: Ty?) bool {
+    if own_list_has(&p.uncertain, decl) {
+        return true
+    }
     if own_moved_above(p, decl, path).is_some() {
         return true
     }
@@ -12637,7 +12805,7 @@ test "a carried slot restores its closures and specializations" {
     // spurious error.
     let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
-        "fn id(x: $T) $T { return x }\nfn main() i32 {\n    const k = 2\n    let f = fn(x: i32) i32 { x + k }\n    return id(5)\n}\n")
+        "fn id(x: move $T) $T { return x }\nfn main() i32 {\n    const k = 2\n    let f = fn(x: i32) i32 { x + k }\n    return id(5)\n}\n")
     assert_eq(r.first, 0 as usize, "the program type-checks cold")
     assert_eq(r.second, 0 as usize, "and identically when the slot replays")
 }
@@ -12668,7 +12836,7 @@ test "an upstream body edit re-anchors the carried slots" {
     // name someone else's variables.
     let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { let z = 2\nreturn z }\n",
-        "fn id(x: $T) $T { return x }\nfn main() i32 { return id(5) }\n")
+        "fn id(x: move $T) $T { return x }\nfn main() i32 { return id(5) }\n")
     assert_eq(r.first, 0 as usize, "the program type-checks cold")
     assert_eq(r.second, 0 as usize, "and identically once the stream shifts")
 }
@@ -12731,8 +12899,8 @@ test "an edited template body re-instantiates carried specializations" {
     // Module b's generic body changes without its scheme changing, so no global invalidation fires;
     // the stale marking on the carried specialization is what forces the re-check that reports the
     // f64-vs-i32 mismatch.
-    let r = redemand_errors("pub fn pick(x: $T) $T { return x }\n",
-        "pub fn pick(x: $T) $T { const bad: i32 = 1.5\nreturn x }\n",
+    let r = redemand_errors("pub fn pick(x: move $T) $T { return x }\n",
+        "pub fn pick(x: move $T) $T { const bad: i32 = 1.5\nreturn x }\n",
         "import b\nfn main() i32 { return pick(5) }\n")
     assert_eq(r.first, 0 as usize, "the original template type-checks")
     assert_true(r.second > 0, "the edited body re-instantiates and reports")
@@ -12773,7 +12941,7 @@ test "a reused specialization replays its closure environment" {
 
 test "a carried specialization keeps its id across a clean re-demand" {
     const b_src = "pub fn helper() i32 { return 1 }\n"
-    const a_src = "import b\nfn id(x: $T) $T { return x }\nfn main() i32 { return id(5) }\n"
+    const a_src = "import b\nfn id(x: move $T) $T { return x }\nfn main() i32 { return id(5) }\n"
     let mods = list(2)
     mods.push(parse_src(b_src, 0i32))
     mods.push(parse_src(a_src, 1i32))
@@ -12813,7 +12981,7 @@ test "a carried specialization keeps its id across a clean re-demand" {
 }
 
 test "a removed call site sweeps its specialization" {
-    const b_src = "pub fn pick(x: $T) $T { return x }\n"
+    const b_src = "pub fn pick(x: move $T) $T { return x }\n"
     const a1 = "import b\nfn main() i32 { return pick(5) }\n"
     const a2 = "import b\nfn main() i32 { return 5 }\n"
     let mods = list(2)
@@ -13084,7 +13252,7 @@ test "coalesce rejects a mismatched fallback and a non-Option left side" {
 // The `?` fixtures register the real well-known modules: `core.try` for `TryResult` and
 // `core.option` for `Option` plus its `op_try`, copied from the stdlib.
 const TRY_SRC: String = "pub type TryResult = enum(T, R) {\n    Continue(T),\n    Return(R),\n}\n"
-const OPTION_TRY_SRC: String = "import core.try\npub type Option = enum(T) {\n    None,\n    Some(T),\n}\npub fn op_try(self: Option($T)) TryResult(T, Option($U)) {\n    return self match {\n        Some(v) => TryResult.Continue(v),\n        None => TryResult.Return(None),\n    }\n}\n"
+const OPTION_TRY_SRC: String = "import core.try\npub type Option = enum(T) {\n    None,\n    Some(T),\n}\npub fn op_try(self: move Option($T)) TryResult(T, Option($U)) {\n    return self match {\n        Some(v) => TryResult.Continue(move v),\n        None => TryResult.Return(None),\n    }\n}\n"
 
 test "postfix ? types as the Continue payload and constrains the return" {
     let errors = count_check_errors([TRY_SRC, OPTION_TRY_SRC,
@@ -13550,7 +13718,7 @@ test "a capturing closure cannot fill a bare fn slot (E2111 hint)" {
 }
 
 test "a lambda inside a generic template records per instantiation" {
-    let src = "fn scale(x: $T) T { let f = fn(v: T) T { v }\n return f(x) }\nfn main() i32 { let a = scale(1i32)\n let b = scale(2i64)\n if b == 2 { return a } return 0 }\n"
+    let src = "fn scale(x: $T) T where T: copyable { let f = fn(v: T) T { v }\n return f(x) }\nfn main() i32 { let a = scale(1i32)\n let b = scale(2i64)\n if b == 2 { return a } return 0 }\n"
     let errs = count_check_errors([src], ["m"])
     assert_eq(errs, 0 as usize, "template lambda checks per instantiation")
     let res = check_result_of([src], ["m"])

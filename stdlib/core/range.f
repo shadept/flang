@@ -32,12 +32,12 @@ pub type RangeIterator = struct(T) {
 }
 
 // Create iterator from range
-pub fn iter(r: &Range($T)) RangeIterator(T) {
+pub fn iter(r: &Range($T)) RangeIterator(T) where T: copyable {
     return .{ current = r.start, end = r.end }
 }
 
 // Advance iterator and return next value
-pub fn next(it: &RangeIterator($T)) T? {
+pub fn next(it: &RangeIterator($T)) T? where T: copyable {
     if it.current >= it.end {
         return null
     }

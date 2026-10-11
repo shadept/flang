@@ -6,8 +6,8 @@ type Pair = struct(T) {
     b: T
 }
 
-fn make_pair(x: $T, y: T) Pair(T) {
-    return .{ a = x, b = y }
+fn make_pair(x: move $T, y: move T) Pair(T) {
+    return .{ a = move x, b = move y }
 }
 
 pub fn main() i32 {

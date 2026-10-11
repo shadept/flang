@@ -9,6 +9,6 @@ pub fn main() i32 {
 }
 
 // Generic function that returns the second argument (the literal)
-fn pick_second(a: $T, b: T) T {
+fn pick_second(a: $T, b: T) T where T: copyable {
     return b
 }

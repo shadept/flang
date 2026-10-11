@@ -1,7 +1,7 @@
 //! TEST: generics_identity_basic
 //! EXIT: 42
 
-pub fn identity(x: $T) T {
+pub fn identity(x: move $T) T {
     return x
 }
 
