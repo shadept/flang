@@ -99,7 +99,7 @@ fn close(h: move File) {}                   // takes ownership: `h.close()` move
 
 **Generic:** `$T` introduces, `T` refers. Example: `fn identity(x: $T) T { return x }`
 
-**Bounds:** `fn max(s: $T[]) T? where T: copyable` - the only bound is `copyable`; `where` is contextual.
+**Bounds:** `fn max(s: $T[]) T? where T: copyable`, `where I: Iterator($T), F: fn(T) bool`, `where T: Eq + Hash` - a bound is a contract (see Contracts); `where` is contextual.
 
 **Foreign:** `#foreign fn malloc(size: usize) &u8?` — no body, C calling convention, not mangled.
 
@@ -114,6 +114,24 @@ pub type Pair = (i32, i32)       // pub follows module visibility rules
 ```
 
 `type Name = <type-expr>` introduces a transparent alias when the RHS is not a `struct(...) { ... }` / `enum(...) { ... }` builder. No nominal identity, no conversion at use sites. Cyclic aliases (`type A = B; type B = A`) error with E2036.
+
+## Contracts
+
+```
+pub type Iterator = contract(T) {
+    fn next(self: &Self) T?               // requirement: callable on `Self`
+}
+pub type Iterable = contract(T) {
+    type S: Iterator(T)                   // associated type, solved from the requirements
+    fn iter(self: &Self) S
+}
+pub type Key = copyable + Hash + Eq       // `+` combines contracts
+
+fn sum(it: move $I) T where I: Iterator($T), T: copyable { ... }
+fn read(b: &$B) T where B: contract { fn get(self: &Self) $T } { ... }   // anonymous
+```
+
+`contract` is a keyword. A requirement is a function declaration without a body; one per line (commas optional), its return type on the `)`'s line. `Self` is the constrained type inside a contract, and the declared type applied to its own parameters inside a named struct or enum (`next: &Self?`). A contract has no values: bound a type parameter with it.
 
 ## Structs
 

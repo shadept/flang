@@ -3028,6 +3028,10 @@ Report the issue with sample code that reproduces the error.
 | **E2135** | Type Checking     | Malformed `where` bound                      |
 | **E2136** | Semantic Analysis | `&move` parameter outside `core`             |
 | **E2137** | Semantic Analysis | A `&move` slot is left empty                 |
+| **E2138** | Type Checking     | A contract where a value is needed           |
+| **E2139** | Type Checking     | `Self` outside a struct, enum or contract    |
+| **E2140** | Type Checking     | A declaration named `Self`                   |
+| **E2141** | Type Checking     | A contract requirement that omits `Self`     |
 
 ### E2115: Unsupported Pattern Form
 
@@ -3455,22 +3459,29 @@ fn apply(f: $F, x: i32) i32 { return f(x) }   // generic over the closure type
 
 #### Description
 
-A call binds a type parameter to a type its `where` bound rejects. `where T: copyable` requires the
-argument's type to be copyable. The error names the derivation chain and sits on the call that
-chose the type: the outermost instantiation's call when the call is inside another generic body.
-The function's body is not instantiated for that call.
+A call binds a type parameter to a type its `where` bound rejects (RFC-035): a contract
+requirement the type does not satisfy (no call of that name and shape resolves on it), a callable
+of the wrong shape or one that asks more of its argument than the bound allows, or a non-copyable
+type under `copyable`, named with its derivation chain. The error sits on the call that chose the
+type: the outermost instantiation's call when the call is inside another generic body. The
+function's body is not instantiated for that call.
 
 #### Example
 
 ```flang
 fn twice(x: $T) T where T: copyable
+fn drain_all(it: move $I) where I: Iterator($T)
+fn apply(x: &$T, f: $F) i32 where F: fn(T) i32
 
 twice(handle)       // error[E2134]: `twice` requires `T: copyable`; `FileHandle` is not copyable: field `fd` is `owned`
+drain_all(3i32)     // error[E2134]: `drain_all` requires `I: Iterator`: `i32` has no `next` of type `fn(&i32) Option(T)`
+apply(&h, take)     // error[E2134]: `apply` requires `F: fn`: `fn(move Handle) i32` is not callable as `fn(T) i32`
 ```
 
 #### Solution
 
-Pass a copyable value, or use a function that takes the value by reference or by `move`.
+Pass a type that has the required functions, declare them for it, or pass a callable that only
+reads its argument.
 
 ---
 
@@ -3481,19 +3492,117 @@ Pass a copyable value, or use a function that takes the value by reference or by
 
 #### Description
 
-A `where` entry names a bound other than `copyable`, or constrains a name that is not one of the
-function's own type parameters.
+A `where` entry names something that is not a contract (a struct, an enum, a primitive), applies a
+contract to the wrong number of arguments, combines a non-contract with `+`, or constrains a name
+that is not one of the function's own type parameters.
 
 #### Example
 
 ```flang
-fn pick(x: $T) T where T: sortable      // error[E2135]: unknown bound
+fn pick(x: $T) T where T: Point         // error[E2135]: `Point` is not a contract
+fn pick(x: $T) T where T: Iterator      // error[E2135]: `Iterator` takes 1 type argument(s)
 fn pick(x: $T) T where U: copyable      // error[E2135]: `U` is not a type parameter
 ```
 
 #### Solution
 
-Bind the parameter with `$U` in the signature, and use `copyable`.
+Bind the parameter with `$U` in the signature, and bound it by a contract applied to its arguments.
+
+---
+
+### E2138: A Contract Where a Value Is Needed
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A contract is a type with no values (RFC-035): nothing has it as its run-time type. Naming one where
+a value's type is needed - a struct field, an enum payload, a type argument, a parameter, a local
+annotation - is refused. A contract in a parameter's type as sugar for a bounded type parameter is
+not implemented yet.
+
+#### Example
+
+```flang
+type Reader = contract { fn read(self: &Self) i32 }
+
+type Holder = struct { r: Reader }      // error[E2138]
+```
+
+#### Solution
+
+Bound a type parameter: `type Holder = struct(R) { r: R }` and `where R: Reader` on the functions
+that need it.
+
+---
+
+### E2139: `Self` Outside a Struct, Enum or Contract Body
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+`Self` names the type being declared: the constrained type in a contract, the type applied to its
+own parameters in a named struct or enum. Anywhere else there is nothing for it to name.
+
+#### Example
+
+```flang
+fn f(x: Self) {}        // error[E2139]
+```
+
+#### Solution
+
+Name the type.
+
+---
+
+### E2140: A Declaration Named `Self`
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+`Self` is a predeclared type name and cannot be shadowed: no type, `$Self` or generic parameter may
+take it, so it means the same thing wherever it is valid.
+
+#### Example
+
+```flang
+type Self = struct { x: i32 }           // error[E2140]
+fn f(x: $Self) {}                       // error[E2140]
+```
+
+#### Solution
+
+Pick another name.
+
+---
+
+### E2141: A Contract Requirement That Omits `Self`
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A requirement says that a function of its name and shape is callable on `Self`. One that mentions
+`Self` in neither its parameters nor its return type says nothing about the type being constrained.
+
+#### Example
+
+```flang
+type Bad = contract {
+    fn make(x: i32) i32                 // error[E2141]
+}
+```
+
+#### Solution
+
+Take `Self` (or `&Self`) as a parameter.
 
 ---
 

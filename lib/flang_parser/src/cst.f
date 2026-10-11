@@ -191,6 +191,16 @@ pub type NodeKind = enum {
     // Inline `struct { ... }` and `enum { ... }` in type position.
     AnonymousStructType
     AnonymousEnumType
+    // `contract(T) where T: B { fn name(params) ret, type S: Bound }`.
+    ContractType
+    // `fn name(params) ret` inside a contract body.
+    ContractRequirement
+    // `type S` / `type S: Bound` inside a contract body.
+    ContractAssocType
+    // `A + B` in bound position.
+    CombinedType
+    // `Name: Bound` - one entry of a `where` clause.
+    WhereBound
 
     // ─────────────────────────────────────────────────────────────────────
     // Error recovery

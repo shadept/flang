@@ -331,6 +331,12 @@ type Renderer = struct {
     // dropped while false.
     started: bool
     prev_kind: TokenKind
+    // Inside a `where` clause, opened at brace depth `where_depth`: a line breaking there continues
+    // the signature and indents one step, until the body's `{`.
+    in_where: bool
+    where_depth: usize
+    // A function's clause ends at its block, a contract's at its own body.
+    where_in_fn: bool
     // The last token was a prefix `-` / `!` / `~`: nothing may separate it from its operand (`Less
     // = -1`).
     prev_prefix: bool
@@ -368,6 +374,9 @@ fn render_module(cst: &CstNode, cfg: &FmtConfig, eol: String) OwnedString {
         started = false,
         prev_kind = TokenKind.Eof,
         prev_prefix = false,
+        in_where = false,
+        where_depth = 0usize,
+        where_in_fn = false,
         prev_parent = NodeKind.Module,
         source = cst.cst.source,
         tokens = &cst.cst.tokens,
@@ -822,6 +831,7 @@ fn render_token(r: &Renderer, tok: &Token, parent: NodeKind) {
     r.gap_had_space = false
 
     r.line.append(tok.text)
+    track_where(r, tok, parent)
     update_depths(r, tok.kind)
     if tok.kind == TokenKind.Comma and r.interp_depth == 0 and is_comma_list(parent) {
         record_wrap_point(r, 0)
@@ -938,6 +948,9 @@ fn record_wrap_point(r: &Renderer, min_extra: usize) {
     if eff < min_extra {
         eff = min_extra
     }
+    if eff == 0 and in_where_clause(r) {
+        eff = 1
+    }
     r.wrap_points.push(WrapPoint {
         offset = r.line.len,
         indent = (r.brace_depth + eff) * r.cfg.indent,
@@ -1011,13 +1024,37 @@ fn emit_line_break(r: &Renderer, next: TokenKind) {
         groups = groups - 1
     }
     let extra = groups
-    if extra == 0 and is_continuation_start(next, r.prev_kind) {
+    if extra == 0 and (is_continuation_start(next, r.prev_kind) or in_where_clause(r)) {
         extra = 1
     }
     const spaces = (depth + extra) * r.cfg.indent
     for n in 0..spaces {
         r.line.append_byte(' ' as u8)
     }
+}
+
+// A `where` opens on the declaration's own token (a function's or a contract's) and closes at that
+// declaration's body: a function's block, or the contract's own brace. An anonymous contract inside
+// a function's clause opens a brace of its own without closing it.
+fn track_where(r: &Renderer, tok: &Token, parent: NodeKind) {
+    const owns_clause = parent == NodeKind.FunctionDecl or parent == NodeKind.ContractType
+    if tok.kind == TokenKind.Identifier and tok.text == "where" and owns_clause {
+        r.in_where = true
+        r.where_depth = r.brace_depth
+        r.where_in_fn = parent == NodeKind.FunctionDecl
+        return
+    }
+    if !r.in_where or tok.kind != TokenKind.OpenBrace or r.brace_depth != r.where_depth {
+        return
+    }
+    const body = if r.where_in_fn { NodeKind.BlockExpr } else { NodeKind.ContractType }
+    if parent == body {
+        r.in_where = false
+    }
+}
+
+fn in_where_clause(r: &Renderer) bool {
+    return r.in_where and r.brace_depth == r.where_depth
 }
 
 fn open_groups_at_brace(r: &Renderer) usize {
@@ -1143,7 +1180,7 @@ fn needs_space(r: &Renderer, cur: TokenKind, parent: NodeKind) bool {
             return parent != NodeKind.CallExpr
         }
         return !(ends_expression(prev) or prev == TokenKind.Struct or prev == TokenKind.Enum
-            or prev == TokenKind.Fn)
+            or prev == TokenKind.Contract or prev == TokenKind.Fn)
     }
     if glue_before(cur, parent) {
         return false
@@ -1682,6 +1719,15 @@ test "a paren opening a statement is left alone" {
     let out = r.unwrap()
     defer out.deinit()
     assert_true(out.view == src, "nothing precedes it that could end an expression")
+}
+
+test "a wrapped where clause indents as a continuation until the body" {
+    let cfg = default_config()
+    const src = "fn f(x: $T) T where T: copyable,\n    U: Eq + Hash {\n    return x\n}\n"
+    const r = format_source(src, &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(out.view == src, "the bound list keeps its step; the body is back at depth 1")
 }
 
 test "join-lines false indents the continuation instead" {

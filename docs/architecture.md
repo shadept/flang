@@ -170,6 +170,26 @@ touching a disk. The two functions that did read the world, `cwd` and
 - **`TypeLayoutService`** computes memory layouts (alignment, offsets) for struct types, used by lowering for implicit reference passing of large values.
 - **`op_deref` peel:** For field access, when `member_deref_retry` can't find a field on a nominal type it resolves `op_deref(&Type)` and retries on the target, hop by hop. For UFCS calls `resolve_overload` probes the receiver's shapes in tiers across all candidates - as written, then adapted value<->`&T`, then each `op_deref` hop by reference and by value (`RecvAlt`, built by `deref_alternatives`) - and moves to the next tier only when nothing matched (`peel_needed`). Arguments peel in `probe_candidate`: a failed unify retries through `peel_arg` (by reference, then by value when the peeled type is copyable, fewest hops first, `2 * hops` of penalty), and the winner's chain is recorded per argument node by `commit_arg_peel`, which `lower_arg` replays. Binary operators peel through `binary_dispatch`: operand chains from `operand_chain`, fewest hops first, hops recorded on the operator node and replayed by `lower_operand`. The winner's `hops` selects the chain prefix `commit_deref_chain` records on the call node (`receiver_derefs`); lowering replays it as function calls before the field GEP or function call. The protocol operators go through the same path via `receiver_pick`: `check_index` (`op_index_ref`/`op_index`, chain on the index node), `try_set_index_assignment` (`op_set_index`, chain on the assignment node) and `resolve_for_protocol` (`iter`/`iter_ref`, chain on the body node beside the `iter` pick), and `index_operator_call`, `set_index_operator_call` and `lower_for_iter` replay them through `lower_deref_receiver`. So `xs[i]` and `for x in xs` on a wrapper compile exactly as `xs.op_index_ref(i)` and `xs.iter()` would.
 
+**Contracts (RFC-035).** A contract declaration is a `type` whose body is `contract { ... }` or a
+`+` combination; it lives in the alias table, so lookup, visibility and re-demand change detection
+are an alias's, and naming one where a type is resolved is E2138. `validate_contract_decl` checks
+the declaration against a placeholder `Self` in the body pass. A signature's `where` clause is
+lowered once, in `register_function_sig`, to `fn_bounds[id]`: a flat list of `BoundAtom`s
+(`Copyable`, `Callable` with a function type, `Require` with a name and a function type), all over
+the signature's own variables, with `Self` bound to the constrained parameter and each associated
+type a fresh variable; the variables only atoms mention are added to the scheme's quantified set.
+`check_bounds` instantiates the atoms with a call's bindings and asks each for a `Verdict`: a
+`Require` resolves its call through `satisfy_pick` (the method-call path of `receiver_pick`,
+without recording, and never taking a by-value receiver's address) and unifies the declared return
+exactly, or, for an operator name, holds where the operator applies (`operator_verdict`: a
+payload-less enum's tag compare, `operator_match`'s derivations); a `Callable` matches a function type,
+a closure's signature or an `op_call`. It runs speculatively in three places: `probe_candidate`
+(a failing bound drops the candidate; the atoms that held become `ProbeCost.held`, a ranking key
+after specificity), the commit in `resolve_overload` (what the atoms solved is kept, which is how
+`$T` and a lambda's parameters get pinned), and `check_call_bounds` in the drain (E2134). Nested
+bound checks are depth-limited (`MAX_BOUND_DEPTH`) and decide `copyable` too, and a candidate whose
+bound fails stays refused there; diagnostics raised while probing are dropped.
+
 **Ownership pass.** After a body is checked, `own_check_body` walks it a
 second time to decide liveness for non-copyable values (RFC-028). It is a
 separate walk because it needs facts inference produces - every node's

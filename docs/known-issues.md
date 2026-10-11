@@ -36,18 +36,110 @@ yet:
 
 ---
 
-### `std.collections.iter` Is Disabled
+### RFC-035 Contracts: What the First Cut Leaves Out
 
 **Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (Contracts section)
+
+Contracts declare, bound, filter overloads, rank, pin `$T` and lambda parameters, and report the
+failing requirement (E2134). Not yet:
+
+- **A contract in a type position is not sugar for a bounded type parameter.** `fn f(src: Reader)`
+  is E2138; write `fn f(src: $R) where R: Reader`. The sugar needs the AST-level generic predicates
+  (`declares_generic`, `generic_names`) to know which names are contracts.
+- **A generic body does not use an open type parameter through its bounds.** Inside
+  `fn f(it: move $I) where I: Iterator($T)`, `it.next()` is dispatched at each instantiation, not
+  typed `T?` from the bound; the rigid check still drops calls on `I`. Checking a body against its
+  bounds alone (RFC-029's follow-up) builds on this.
+- **The body never binds a type parameter the call site leaves open.** A bound-only `$T` is solved
+  by the bound at the call, or the call is E2001 as before.
+- **Mode pinning.** An unannotated lambda in a `fn(move A, T) A` slot still takes `A` read-only;
+  the bound accepts it (a reader fits a `move` slot), but nothing releases the argument the
+  combinator handed over. `fold`'s bound is `fn(A, T) A` until this lands. The "unannotated
+  callbacks never take ownership" gap above is unchanged.
+- **A satisfaction that resolves two ways is not an error**: the overload ranking picks.
+- **Ranking compares bounds by how many atoms held**, not by requirement-set inclusion: two
+  partially overlapping bounds rank by size.
+- **`type_info` of a contract**, `TypeKind.Contract`, and contract identity as requirement-set
+  equality are not implemented; a contract is looked up by name through the alias table.
+- **`Self` in an anonymous struct nested in a named one** names the enclosing type instead of being
+  refused.
+- **`op_eq(a, b)` as a call does not resolve on a payload-less enum** or on a type whose `==` is
+  derived from `op_cmp`: the operator works and the contract is satisfied, but the call form finds
+  no function. Primitives have theirs (`core.ops`).
+- **Struct and enum type parameters take no bounds.** `UnmanagedSet(T)` documents that `T` is
+  `Hash + Eq`, but only its functions say so: `Set(Point)` names a valid type until an `add`. A
+  bound on the declaration (`struct(T) where T: Hash + Eq`, as `contract(T) where ...` is written)
+  would refuse the type where it is written. Next work after RFC-035 lands.
+
+---
+
+### FNV-1a Hashes Leave Small Tables Using Only the Low Bits of Each Byte
+
+**Status:** Open - needs investigation
+**Affected:** `stdlib/core/hash.f` (generic `hash`), `stdlib/core/string.f` (`hash(String)`),
+`stdlib/std/string.f` (`hash(OwnedString)`), `stdlib/std/collections/dict.f` (`hash_key`,
+`probe_slot`)
+
+The FNV-1a implementation is correct: it matches the published 64-bit vectors (`""`, `"a"`,
+`"foobar"`). But multiplication modulo 2^64 only carries upward, so the low k bits of the result
+depend only on the low k bits of each byte, and `Dict` takes its slot from the low bits
+(`h & (cap - 1)`). Below 256 slots a byte's high bits never reach the slot: `"a"` and `"q"` (0x61,
+0x71) land in the same slot of a 16-slot table, as do `"ab"` and `"qr"`. ASCII keys in small dicts
+bunch into few slots, and linear probing clusters them. The integer overloads finalize with `mix64`
+and do not have this.
+
+To investigate: measure the clustering on real key sets (the compiler's own string-keyed tables),
+then decide where a finalizer belongs - `mix64` at the end of the three byte hashes, so every
+`hash()` consumer gets spread bits, or once in `hash_key`. Word-at-a-time hashing is a separate
+question: only with a per-word mixer, never FNV over words (whose high bits would never reach the
+slot at all), and only if profiling shows the byte loop costs something.
+
+---
+
+### Float `%` Truncates
+
+**Status:** Open
+**Affected:** `lib/flang_driver/src/lower.f` (or the C backend's float remainder)
+
+`7.5f64 % 2.0f64` evaluates to `1`, not `1.5`: the float remainder takes an integer path somewhere
+between lowering and C. `op_mod` on floats (core.ops) inherits it, since its body is the operator.
+
+---
+
+### The Checker Accepts Every Operator on Every Primitive
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (`arithmetic`, `comparison`, `check_unary`)
+
+`f64 << f64`, `bool + bool` and `-u32` type-check; the built-in path unifies the operands and
+checks nothing about the operator. `core.ops` declares only the meaningful set (spec 5.2), so the
+function form refuses what the operator form lets through.
+
+---
+
+### Tuple `==` Type-Checks but Lowering Refuses It
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (`comparison`), `lib/flang_driver/src/lower.f`
+
+`comparison` sends any non-nominal operand pair down the built-in path, so `(1, 2) == (1, 2)`
+checks; lowering then refuses the function ("operator over aggregates without dispatch"). Tuples
+have `op_cmp` overloads in `core.cmp` the ladder never consults for them.
+
+---
+
+### `std.collections.iter` Is Disabled - RESOLVED
+
+**Status:** Resolved 2026-10-11 (RFC-035)
 **Affected:** `stdlib/std/collections/iter.f`, `stdlib/std/prelude.f`, `stdlib/std/collections.f`
 
-Every function in `std.iter` takes an unconstrained `it: $I`. Under receiver tiers (spec.md §7.1)
-such a catch-all takes any receiver as written: `xs.last()` on a `List` resolved to
-`last(it: move $I)` and failed inside it, and `d.any(f)` on a `Dict` handed `f` one entry instead
-of `(key, value)`. The module is commented out and no longer re-exported by the prelude.
-`stdlib/dict_iter_chain.f` and `ownership/stdlib_iter_adapters_own.f` are skipped.
-
-**Solution:** RFC-019 contracts, restoring the module with `where I: Iterator` signatures.
+Every function in `std.iter` took an unconstrained `it: $I`, which under receiver tiers captured any
+receiver as written. Each now carries `where I: Iterator($T)` and its callables `F: fn(...)`, so a
+`List` or `Dict` receiver fails the bound and the catch-all drops out of the overload set. The
+module is re-exported by the prelude and `std.collections` again; `stdlib/dict_iter_chain.f` and
+`ownership/stdlib_iter_adapters_own.f` run. Adapters that copy their elements are bounded
+`T: copyable` (the iterator protocol is defined for copyable elements, spec 2.6).
 
 ---
 

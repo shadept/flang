@@ -44,5 +44,5 @@ Type: language, compiler, stdlib, tooling.
 | [031](031-owned-generic-consolidation.md) | `OwnedString`, a `String` that owns its buffer | stdlib | implemented | 2026-09-01 | 2026-09-16 |
 | [033](033-parameter-declared-ownership.md) | Parameter-declared ownership | language | implemented | 2026-09-14 | 2026-10-10 |
 | [034](034-typed-slice-intrinsics.md) | Typed slice intrinsics | language | implemented | 2026-10-10 | 2026-10-10 |
-| [035](035-contracts.md) | Contracts | language | draft | 2026-10-11 |  |
+| [035](035-contracts.md) | Contracts | language | provisional | 2026-10-11 | 2026-10-11 |
 | [099](099-stack-only-types-and-bindings.md) | `#stack` types and stack-only bindings | language | deferred | 2026-08-27 |  |

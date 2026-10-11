@@ -79,9 +79,40 @@ Inference is multi-phase: constraints flow bidirectionally from return positions
 
 A type parameter in scope **shadows** any nominal of the same name: inside `fn wrap(e: $E) Result(T, E)`, `E` is the parameter even if a type named `E` is visible.
 
-**Bounds.** A `where` clause after the parameters (and return type) constrains a function's type parameters: `fn max(s: $T[]) T? where T: copyable`. `copyable` is the only bound (RFC-019 §2.6): the argument's type must be copyable (RFC-028's derived bit). It is checked at each call that binds `T`, reported there with the derivation chain (E2134), and the body is not instantiated for a call that fails it. A bound that names something other than one of the function's own type parameters, or a bound other than `copyable`, is E2135. `where` is contextual: it opens a clause only as `where Name :`.
+**Bounds.** A `where` clause after the parameters (and return type) bounds a function's type parameters by contracts (§2.3.2): `fn max(s: $T[]) T? where T: copyable`, `fn filter(it: move $I, f: move $F) FilterIter(I, F) where I: Iterator($T), F: fn(T) bool`. A bound is checked at each call that binds its parameter, reported there with the requirement that failed (E2134; for `copyable`, with the derivation chain), and the body is not instantiated for a call that fails it. A bound on something other than one of the function's own type parameters, or one that is not a contract, is E2135. `where` is contextual: it opens a clause only as `where Name :`.
 
 **A generic body copies a type parameter only under the bound.** Each generic function is checked once against its own type parameters, each a rigid type that unifies with nothing else and is non-copyable unless `where T: copyable` says otherwise (RFC-029, RFC-033 6b): `T`, `Box(T)`, `(T, T)` copy only when `T` does. A copy, a move out of storage the body does not own, or a call to a function that requires `T: copyable`, is refused at the declaration, with no instantiation anywhere (E2124, E2131, E2134). Only the ownership findings come from this check: whatever is dispatched on `T` - a member call, an operator, an overload pick - waits for an instantiation, as does the liveness of a value handed to a call the check could not resolve. `#if type_info(T).copyable` reads the rigid `T` as not copyable, so the copyable branch is checked at the instantiations that take it. A template the check refused skips the ownership pass at its instantiations, so each error is reported once.
+
+#### 2.3.2 Contracts
+
+A contract (RFC-035) names a set of functions a type must have. It is declared as a type, takes parameters on its keyword as `struct` does, and holds requirements (function declarations without a body) and associated types:
+
+```
+pub type Iterator = contract(T) {
+    fn next(self: &Self) T?
+}
+
+pub type Iterable = contract(T) {
+    type S: Iterator(T)
+    fn iter(self: &Self) S
+}
+
+pub type Key = copyable + Hash + Eq
+```
+
+- **`Self`** is the type being constrained, the `I` in `where I: Iterator(T)`. Every requirement mentions it (E2141).
+- **A requirement is satisfied when the call it describes resolves**, as a method call on its first parameter - overload ranking, `op_deref` peeling and a reference receiver read as its value included - and returns exactly the declared type. A by-value receiver is never adapted to a reference: `hash(self: Self)` is not met by a `hash(&T)`. The call resolves as the instantiated body would (§2.3.0): in the generic's defining module, with what the calling module makes visible unioned in - so a private `op_cmp` in the caller does not satisfy `Ordered` on `core`'s `max`, whose body could not call it. `OwnedString` is `Eq` through `String`'s `op_eq`; a payload-less enum is `Eq` through its built-in `==`, and a type with only `op_cmp` through the derived one (§5.2).
+- **An associated type** (`type S: Bound`) is solved from the requirements, then held to its own bound.
+- **`+`** combines contracts; a type satisfies the combination when it satisfies every part. `copyable` is the built-in contract RFC-028's derived bit satisfies.
+- **A function type in bound position is a contract**: `F: fn(T, U) R` holds for a function value, a closure, or a type with a matching `op_call`. A callable fits a bound that asks no more of it than its own signature does: a reading parameter fits a `&T` or a `move T` slot; a `move` parameter fits only a `move` slot, and a `&T` parameter only a `&T` slot (E2134).
+- **At the use site the sigil does what it does in a signature**: `Iterator($T)` introduces `T` and the contract solves it (a name only a bound introduces may name the return type); `Iterator(String)` requires it. An anonymous contract is written in place: `where B: contract { fn get(self: &Self) $T }`.
+- **A bound pins, not only checks.** Once a call picks a bounded overload, what its bounds solve is kept: `$T` from `next`'s return, a lambda argument's parameter types from `F: fn(T) bool`.
+- **Overloads.** A candidate whose bound fails is dropped from the call's overload set; when no other candidate fits, the bounded one is reported with its failing requirement. Between candidates of the same shape, the one with more requirements seen to hold wins: a bound adds specificity against an unbounded type parameter, never against a concrete type.
+- **A contract has no values.** Where a type is needed - a parameter, a field, a payload, a type argument, a local - it is E2138; bound a type parameter instead.
+
+`core` declares `Eq` (`fn op_eq(a: Self, b: Self) bool`), `Hash` (`fn hash(self: Self) usize`) and `Ordered` (`Eq` plus `fn op_cmp(a: Self, b: Self) Ord`), which `core`'s own slice, hash and math functions use; `std.collections.iter` declares `Iterator(T)` and `Iterable(T)`. The hashed containers bound their keys `K: Hash + Eq` (`Dict`, `Set`, `MultiMap`), the searches by value (`contains`, `index_of`, `last_index_of` on slices and lists, slice `==`) bound their element `Eq`, and what orders values (`min`, `max`, `clamp`, the binary searches, `std.iter`'s `min`/`max`/`min_by`/`max_by`) bounds it `Ordered`, so a key without `==` or `hash` is refused at the call, naming the contract (E2134).
+
+Not yet: a contract in a parameter's type as sugar for a bounded type parameter (`src: Reader`), a call on a value of an open type parameter typed through its bounds inside the generic body, the ambiguity check for a requirement that resolves two ways, mode pinning (a lambda taking `move` from a `fn(move T)` bound), `type_info` of a contract, and `dyn` (docs/known-issues.md).
 
 #### 2.3.0 Monomorphization
 
@@ -121,6 +152,7 @@ Structs are always declared as a `type` alias whose RHS is a `struct(...) { ... 
 - Anonymous construction: `.{ x = 10, y = 20 }` (type from context).
 - Field shorthand: `.{ x, y = 20 }` equivalent to `.{ x = x, y = 20 }`.
 - **Strict construction**: every field must be assigned. `Point { x = 10 }` errors with E2050 ("struct literal missing field `<name>`") if `Point` has more fields. `Marker { }` is valid only when `Marker` has zero fields. Context-less `.{}` is invalid.
+- **`Self`** inside a named struct or enum body is the type applied to its own parameters: in `type Node = struct(T) { value: T, next: &Self? }`, `Self` is `Node(T)`. By value it is the infinite-size error a by-value self-reference is (E2035). `Self` is a predeclared type name, not a keyword: valid only inside a named struct, enum or contract body (E2139), and nothing may be declared with it - a type, a `$Self`, a generic parameter (E2140).
 
 #### Memory layout
 
@@ -173,7 +205,7 @@ Three types with explicit ownership. All share layout `{ ptr: &u8, len: usize }`
 
 **Containers own their buffers.** `UnmanagedList.ptr` and `UnmanagedDict.entries` are `owned`, so every container - `List`, `Dict`, `Set`, `Deque`, `Stack` and anything holding one by value - is non-copyable (RFC-028's derived bit). A container reaches a second place through `move`, a `&T` parameter, or `clone`; reading one out of a table is `get_ref` / `lookup_ref`, and a loop over a non-copyable element is `for &x in xs`.
 
-**Container iteration and ownership.** The iterator protocol is defined for copyable elements; an owning element type moves through a container's `drain` (`for x in xs.drain()` hands each element over; a drain is not copyable, and the loop releases it on exit, which puts the untaken tail back, §7.4). A dict lends each entry (`for e in d` binds `&Entry`), since an entry may hold owning keys or values; a set iterates by value and adds `iter_ref`, the split `List` already has. `swap` exchanges two values in place through `&move` slots (§3.2), so an owning `T` moves between two places with no copy, and the sorts compare an owning element by reference (`fn(&T, &T) Ord`). What is deliberately not settled yet: relocating owning elements through an adapter chain (docs/known-issues.md).
+**Container iteration and ownership.** The iterator protocol is defined for copyable elements; an owning element type moves through a container's `drain` (`for x in xs.drain()` hands each element over; a drain is not copyable, and the loop releases it on exit, which puts the untaken tail back, §7.4). A dict lends each entry (`for e in d` binds `&Entry`), since an entry may hold owning keys or values; a set iterates by value and adds `iter_ref`, the split `List` already has. `swap` exchanges two values in place through `&move` slots (§3.2), so an owning `T` moves between two places with no copy, and the sorts compare an owning element in read mode where it lies (`fn(T, T) Ord`, §3.2). What is deliberately not settled yet: relocating owning elements through an adapter chain (docs/known-issues.md).
 
 **OwnedString** — owns its buffer: `struct { view: String, allocator: &Allocator? }`. Must be freed via `deinit()`. Follows allocator pattern. Produced by `StringBuilder.to_string()`, `from_view()`. Every `String` read reaches `view` through `op_deref` (`s.len`, `s.starts_with(p)`, `s == t`); `hash` is declared, since the catch-all `hash($T)` would take it as written. A dict or set keyed by `OwnedString` is looked up by `String` (RFC-031).
 
@@ -563,7 +595,7 @@ Regression tests: `tests/harness/eval_order/`.
 
 ### 5.2 Operator Functions
 
-Operators on primitive types are compiler built-ins, resolved and emitted directly as arithmetic — no function call is involved. For user types, an operator resolves to the corresponding `op_*` function below (recorded on the node by the checker, emitted as an ordinary call by lowering); a user type enables an operator by defining that function.
+An operator and its `op_*` function below are one thing: `a == b` is `op_eq(a, b)`. A user type enables an operator by defining the function; the checker records the pick on the node and lowering emits an ordinary call. The primitive types have theirs too, declared in `core.ops` with the built-in operation as body and `#inline`, so `op_add(a, b)` on `i32` can be called, passed as a function value and bound by a contract like any user type's; the operator expression on primitives emits the built-in directly, so no user `op_add(i32, i32)` captures integer addition. The set follows the type: every primitive has the six comparisons; every number `+ - * / %`; signed numbers unary `-`; integers `& | ^ << >> >>>` and `~`; `bool` `& | ^` and `!`. A payload-less enum's `==` is the built-in tag compare, and `!=`, `<`, `>`, `<=`, `>=`, `==` derive from `op_ne` or `op_cmp` when a type defines those instead (§5.2 ladder); a contract requirement named after an operator function holds wherever the operator applies, derivations included (§2.3.2).
 
 | Operator                                          | Function                                        |
 | ------------------------------------------------- | ----------------------------------------------- |
@@ -732,7 +764,7 @@ Any function with first parameter `T`, `move T` or `&T` can be called as `value.
 
 A no-context lambda is an error — diagnostic recommends adding annotations to the parameters or the binding site. One inference-order consequence of the `$F` path: a value whose type is pinned *only* through the instantiation (e.g. `fold`'s seed when `f` is duck-typed) cannot resolve a bare numeric literal — write `xs.fold(0i32, fn(a, x) { a + x })`, not `fold(0, …)`.
 
-**Stdlib callback convention.** Standard-library combinators (`List`/`Dict`/`Set` utilities, the `std.iter` adapters and consumers, `sort`'s comparator) type their callbacks as duck-typed generic parameters (`f: $F`), never as concrete `fn(...)` types: any callable fits — bare functions, non-capturing lambdas, and capturing closures — and monomorphization makes the dispatch direct. Callbacks **read** the element: combinators invoke `f(s[i])`, and a callback parameter `x: T` takes it in read mode (§3.2) for every element type, copyable or not, with no copy. A callback that takes ownership (`fn(v: move T)`) fits only where elements are handed over, as from a drain; passed where the element is lent, it is E2125. `sort`'s comparator and `sort_by`'s key are the reference-mode callbacks: over a non-copyable element they take `&T`.
+**Stdlib callback convention.** Standard-library combinators (`List`/`Dict`/`Set` utilities, the `std.iter` adapters and consumers, `sort`'s comparator) type their callbacks as generic parameters (`f: $F`), never as concrete `fn(...)` types: any callable fits — bare functions, non-capturing lambdas, and capturing closures — and monomorphization makes the dispatch direct. Where a combinator states the callback's shape it does so as a bound (§2.3.2), `where F: fn(T) bool`, which also types an unannotated lambda's parameters from the element type; `std.iter` and the sorts do (`sort(s) where T: Ordered`, `sort(s, cmp) where F: fn(T, T) Ord`, `sort_by(s, key) where F: fn(T) $K, K: Ordered`), the other container utilities do not yet. Callbacks **read** the element: combinators invoke `f(s[i])`, and a callback parameter `x: T` takes it in read mode (§3.2) for every element type, copyable or not, with no copy. A callback that takes ownership (`fn(v: move T)`) fits only where elements are handed over, as from a drain; passed where the element is lent, it is E2125. `sort`'s comparator reads too, for every element type: a `fn(&T, &T) Ord` comparator is refused, since a `&T` parameter may write (E2134).
 
 **Lazy-fallback convention.** A function whose parameter is a fallback - a value used only when the primary one is absent - comes in two forms under two names: the plain name takes the value, an `_else` suffix takes something that produces it.
 
@@ -748,6 +780,8 @@ Arguments are evaluated before the call, so the plain form computes its fallback
 Two names rather than two overloads, because a single argument can satisfy both shapes at once. When `T` is itself callable - a type with an `op_call` returning its own type, say - one value is both a valid fallback and a valid fallback-producer, and no rule in the type system says which the caller meant. Overload ranking would still pick one, silently. The name is what carries the intent.
 
 ### 7.4 Iterator Protocol
+
+`std.collections.iter` states the protocol as contracts (§2.3.2), so a generic function can require it: `Iterator(T)` is a type with `fn next(self: &Self) T?`, and `Iterable(T)` one whose `fn iter(self: &Self) S` lends an `Iterator(T)`. `for` itself keeps resolving `iter` and `next` as calls. The `std.iter` adapters and consumers take `it: move $I where I: Iterator($T)`.
 
 `for x in collection` desugars to (conceptually — the compiler emits IR directly):
 

@@ -2,6 +2,7 @@
 status: draft
 type: language
 created: 2026-08-20
+relates: [RFC-035]
 ---
 
 # 019 — Deferred designs from the lambda/stdlib-combinator milestone
@@ -55,6 +56,8 @@ before promising `&String → &str`-style view ergonomics. Estimated
 ~1.5–2 days per compiler by extending the receiver machinery.
 
 ## 2. Generic constraints (callable-shape bounds)
+
+Superseded by RFC-035 (contracts), which replaces these design notes.
 
 `filter(it: $I, f: $F)` accepts ANY `f`; a wrong-shaped callable only
 errors deep inside `next` at instantiation. A constraint syntax

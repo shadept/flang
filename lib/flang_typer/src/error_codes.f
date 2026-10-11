@@ -139,11 +139,21 @@ pub const E_NOT_OWNED: String = "E2131"
 pub const E_RVALUE_NO_OWNER: String = "E2132"
 // One call both moves a place and lends or shares a place overlapping it with owned state.
 pub const E_MOVE_AND_LEND: String = "E2133"
-// A call binds a type parameter to a type its `where` bound rejects: `where T: copyable` with a
-// non-copyable argument (RFC-019 §2.6).
+// A call binds a type parameter to a type its `where` bound rejects: a contract requirement that
+// does not resolve, a callable of the wrong shape, a non-copyable type under `copyable` (RFC-035).
 pub const E_BOUND_UNSATISFIED: String = "E2134"
-// A `where` entry that is not a known bound on one of the function's own type parameters.
+// A `where` entry that is not a contract on one of the function's own type parameters, or a
+// contract applied to the wrong number of arguments, or a `+` operand that is not a contract.
 pub const E_BAD_BOUND: String = "E2135"
+// A contract where a value of it is needed: a parameter, field, payload, type argument or local
+// (RFC-035; the type-position sugar is not implemented).
+pub const E_CONTRACT_VALUE: String = "E2138"
+// `Self` outside a named struct, enum or contract body.
+pub const E_SELF_OUTSIDE: String = "E2139"
+// A type, type parameter or generic parameter declared with the reserved name `Self`.
+pub const E_SELF_DECLARED: String = "E2140"
+// A contract requirement whose parameters and return type never mention `Self`.
+pub const E_REQUIREMENT_NO_SELF: String = "E2141"
 
 // A `&move T` parameter outside `core`: the one mode that takes a value out of storage its caller
 // keeps is the core library's alone (RFC-033).

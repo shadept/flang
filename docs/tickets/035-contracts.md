@@ -1,7 +1,8 @@
 ---
-status: draft
+status: provisional
 type: language
 created: 2026-10-11
+implemented: 2026-10-11
 relates: [RFC-019, RFC-029, RFC-033, RFC-014]
 ---
 
@@ -391,6 +392,31 @@ New syntax, so the seed rule applies: implement, harness-test, promote, then use
 9. **Docs.** Spec 2.3 (bounds), 2.4 and 2.5 (`Self` in structs and enums), 7.3 (callback
    convention), 7.4 (`for` and the contracts); RFC-019
    §2 marked superseded by this RFC.
+
+## Implementation status (2026-10-11)
+
+Landed: the syntax (`contract`, requirements, associated types, `+`, function types and anonymous
+contracts in bound position), `Self` in contracts and named structs and enums with its refusals,
+contract declarations checked on their own (E2141), bounds lowered once per signature to
+requirement atoms, satisfaction by resolving each requirement as a method call, overload probing
+that drops a candidate whose bound fails (and reports it, E2134, when nothing else fits), commit-time
+pinning of `$T` and of lambda parameter types, the callable-mode subsumption, ranking by the
+number of atoms that held, E2138-E2141, `Iterator` and `Iterable` in `std.collections.iter` (not
+`core`: nothing in `core` uses them, and `for` resolves its calls without them), and
+`std.collections.iter` restored with every `$I` bounded. `Eq` and `Ordered` (core.cmp) and `Hash`
+(core.hash), with every primitive's operator functions declared in `core.ops` so `op_eq` is a
+function on `i32` as `==` is an operator; `Dict`, `Set`, `MultiMap` keys bounded `Hash + Eq`, the
+by-value searches `Eq`, what orders values `Ordered`.
+
+Not yet, tracked in docs/known-issues.md ("RFC-035 Contracts: What the First Cut Leaves Out"): the
+type-position sugar, a body using an open parameter through its bounds, mode pinning and the release
+after a read-only callable handed ownership, the two-way-satisfaction error, superset ranking,
+TypeInfo and identity.
+
+Answers taken on the open questions below: parameter names in requirements are optional, as in
+function types; satisfaction resolves as the instantiated body will - the defining module, with the
+call site's visible set unioned in (the loaded-context rule), so the caller's private functions do
+not count; partially overlapping bounds rank by how many requirements held.
 
 ## Open questions
 

@@ -768,6 +768,7 @@ fn keyword_or_identifier(word: String) TokenKind {
         "import" => TokenKind.Import
         "struct" => TokenKind.Struct
         "enum" => TokenKind.Enum
+        "contract" => TokenKind.Contract
         "match" => TokenKind.Match
         "as" => TokenKind.As
         "test" => TokenKind.Test

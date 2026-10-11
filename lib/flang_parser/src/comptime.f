@@ -1008,6 +1008,29 @@ pub fn spell_type_into(sb: &StringBuilder, te: &TypeExpr) {
             }
             sb.append(" }")
         }
+        Contract(c) => {
+            sb.append("contract { ")
+            let first = true
+            for &r in c.requirements {
+                if !first {
+                    sb.append(", ")
+                }
+                first = false
+                sb.append("fn ")
+                sb.append(r.name)
+            }
+            sb.append(" }")
+        }
+        Combined(c) => {
+            let first = true
+            for &part in c.parts {
+                if !first {
+                    sb.append(" + ")
+                }
+                first = false
+                spell_type_into(sb, part)
+            }
+        }
         Error(_) => sb.append("<error>")
     }
 }

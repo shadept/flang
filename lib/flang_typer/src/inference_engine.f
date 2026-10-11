@@ -960,7 +960,7 @@ fn unify_func(self: &Engine, fa: &NFuncNode, fb: &NFuncNode, a: Ty, b: Ty) Unify
 
 // Unify without the coercion ladder: vars bind as usual, two concrete types must be structurally
 // identical.
-fn unify_exact(self: &Engine, actual: Ty, expected: Ty) UnifyOutcome {
+pub fn unify_exact(self: &Engine, actual: Ty, expected: Ty) UnifyOutcome {
     let a = self.resolve(actual)
     let b = self.resolve(expected)
     if a.is_error() or b.is_error() {

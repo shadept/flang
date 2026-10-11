@@ -615,18 +615,39 @@ fn at_where_clause(self: &Parser) bool {
         and self.peek_kind(1) == TokenKind.Identifier and self.peek_kind(2) == TokenKind.Colon
 }
 
-// `where T: copyable, U: copyable` - tokens only, read back by the projector.
+// `where T: copyable, I: Iterator($T)` - one `WhereBound` node per entry.
 fn parse_where_into(self: &Parser, b: &NodeBuilder) {
     self.eat_into(b)
     loop {
-        self.expect_into(b, TokenKind.Identifier, "E1002")
-        self.expect_into(b, TokenKind.Colon, "E1002")
-        self.expect_into(b, TokenKind.Identifier, "E1002")
+        let wb = self.open(NodeKind.WhereBound)
+        self.expect_into(&wb, TokenKind.Identifier, "E1002")
+        self.expect_into(&wb, TokenKind.Colon, "E1002")
+        const t = self.parse_bound_type()
+        self.push_node_into(&wb, t)
+        const node = self.finish(wb)
+        self.push_node_into(b, node)
         if self.current_kind() != TokenKind.Comma {
             break
         }
         self.eat_into(b)
     }
+}
+
+// A type in bound position: `A + B + ...`, one `CombinedType` node when `+` joins two or more.
+fn parse_bound_type(self: &Parser) CstNodeId {
+    const first = self.parse_type()
+    if self.current_kind() != TokenKind.Plus {
+        return first
+    }
+    let b = self.open(NodeKind.CombinedType)
+    b.start = self.tree.nodes[first].start as usize
+    self.push_node_into(&b, first)
+    while self.current_kind() == TokenKind.Plus {
+        self.eat_into(&b)
+        const t = self.parse_type()
+        self.push_node_into(&b, t)
+    }
+    return self.finish(b)
 }
 
 fn parse_function_params(self: &Parser, b: &NodeBuilder) {
@@ -679,7 +700,7 @@ fn parse_function_param(self: &Parser) CstNodeId {
 fn can_start_type(self: &Parser, k: TokenKind) bool {
     return k == TokenKind.Identifier or k == TokenKind.Ampersand or k == TokenKind.Dollar
         or k == TokenKind.OpenBracket or k == TokenKind.OpenParenthesis or k == TokenKind.Fn
-        or k == TokenKind.Struct or k == TokenKind.Enum
+        or k == TokenKind.Struct or k == TokenKind.Enum or k == TokenKind.Contract
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -759,8 +780,9 @@ fn parse_type_decl_with_directives(self: &Parser, leading: move List(CstNodeId))
         self.eat_into(&b)
         self.parse_enum_body_into(&b)
     } else {
-        // Plain alias `type T = OtherType` - parse a type expression.
-        const t = self.parse_type()
+        // Plain alias `type T = OtherType` - parse a type expression. `type K = A + B` names a
+        // combined contract.
+        const t = self.parse_bound_type()
         self.push_node_into(&b, t)
     }
     return self.finish(b)
@@ -2029,35 +2051,11 @@ fn parse_primary_type(self: &Parser) CstNodeId {
     if k == TokenKind.Fn {
         let b = self.open(NodeKind.FunctionType)
         self.eat_into(&b)
-        if self.current_kind() == TokenKind.OpenParenthesis {
-            self.eat_into(&b)
-            while !self.at_eof() and self.current_kind() != TokenKind.CloseParenthesis {
-                // Optional parameter name: `fn(x: T)` - peek `ident :` then eat both before falling
-                // through to the type expr.
-                if self.current_kind() == TokenKind.Identifier
-                    and self.peek_kind(1) == TokenKind.Colon {
-                    self.eat_into(&b)
-                    self.eat_into(&b)
-                }
-                if self.current_kind() == TokenKind.Move {
-                    self.eat_into(&b)
-                }
-                const t = self.parse_type()
-                self.push_node_into(&b, t)
-                if self.current_kind() == TokenKind.Comma {
-                    self.eat_into(&b)
-                }
-                else if self.current_kind() != TokenKind.CloseParenthesis {
-                    break
-                }
-            }
-            self.expect_into(&b, TokenKind.CloseParenthesis, "E1002")
-        }
-        if self.can_start_type(self.current_kind()) {
-            const ret = self.parse_type()
-            self.push_node_into(&b, ret)
-        }
+        self.parse_fn_type_tail_into(&b)
         return self.finish(b)
+    }
+    if k == TokenKind.Contract {
+        return self.parse_contract_type()
     }
     if k == TokenKind.Struct {
         let b = self.open(NodeKind.AnonymousStructType)
@@ -2077,6 +2075,86 @@ fn parse_primary_type(self: &Parser) CstNodeId {
     if !self.at_eof() {
         self.eat_into(&b)
     }
+    return self.finish(b)
+}
+
+// `(params) ret?` of a function type or a contract requirement.
+fn parse_fn_type_tail_into(self: &Parser, b: &NodeBuilder) {
+    if self.current_kind() == TokenKind.OpenParenthesis {
+        self.eat_into(b)
+        while !self.at_eof() and self.current_kind() != TokenKind.CloseParenthesis {
+            // Optional parameter name: `fn(x: T)` - peek `ident :` then eat both before falling
+            // through to the type expr.
+            if self.current_kind() == TokenKind.Identifier
+                and self.peek_kind(1) == TokenKind.Colon {
+                self.eat_into(b)
+                self.eat_into(b)
+            }
+            if self.current_kind() == TokenKind.Move {
+                self.eat_into(b)
+            }
+            const t = self.parse_type()
+            self.push_node_into(b, t)
+            if self.current_kind() == TokenKind.Comma {
+                self.eat_into(b)
+            }
+            else if self.current_kind() != TokenKind.CloseParenthesis {
+                break
+            }
+        }
+        self.expect_into(b, TokenKind.CloseParenthesis, "E1002")
+    }
+    // The return type shares the `)`'s line: a type opening the next line starts the next member.
+    if self.can_start_type(self.current_kind()) and !self.at_line_start() {
+        const ret = self.parse_type()
+        self.push_node_into(b, ret)
+    }
+}
+
+// `contract(T) where T: B { members }` - members are requirements (`fn name(params) ret`) and
+// associated types (`type S: Bound`), separated by newlines or commas.
+fn parse_contract_type(self: &Parser) CstNodeId {
+    let b = self.open(NodeKind.ContractType)
+    self.eat_into(&b)
+    if self.current_kind() == TokenKind.OpenParenthesis {
+        self.consume_balanced(&b, TokenKind.OpenParenthesis, TokenKind.CloseParenthesis)
+    }
+    if self.at_where_clause() {
+        self.parse_where_into(&b)
+    }
+    if !self.expect_into(&b, TokenKind.OpenBrace, "E1002") {
+        return self.finish(b)
+    }
+    while !self.at_eof() and self.current_kind() != TokenKind.CloseBrace {
+        const k = self.current_kind()
+        if k == TokenKind.Fn {
+            let m = self.open(NodeKind.ContractRequirement)
+            self.eat_into(&m)
+            self.expect_into(&m, TokenKind.Identifier, "E1002")
+            self.parse_fn_type_tail_into(&m)
+            const node = self.finish(m)
+            self.push_node_into(&b, node)
+        } else if k == TokenKind.Type {
+            let m = self.open(NodeKind.ContractAssocType)
+            self.eat_into(&m)
+            self.expect_into(&m, TokenKind.Identifier, "E1002")
+            if self.current_kind() == TokenKind.Colon {
+                self.eat_into(&m)
+                const t = self.parse_bound_type()
+                self.push_node_into(&m, t)
+            }
+            const node = self.finish(m)
+            self.push_node_into(&b, node)
+        } else {
+            self.record_error_here("E1002",
+                $"expected `fn` or `type` in a contract body, found `{self.current().text}`")
+            self.eat_into(&b)
+        }
+        if self.current_kind() == TokenKind.Comma {
+            self.eat_into(&b)
+        }
+    }
+    self.expect_into(&b, TokenKind.CloseBrace, "E1002")
     return self.finish(b)
 }
 

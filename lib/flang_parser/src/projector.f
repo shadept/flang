@@ -325,47 +325,35 @@ fn project_function(self: &Projector, cst: CstNode) FunctionDecl {
     }
 }
 
-// The `where` clause's `param : bound` token triples, in order. The declaration's own tokens are
-// `fn`, the name, the parentheses and the clause, so the first `where` identifier after `)` opens
-// it.
+// The `where` clause's entries, in order: one `WhereBound` child node each.
 fn project_bounds(self: &Projector, cst: CstNode) List(TypeBound) {
     let out: List(TypeBound) = list(0, Some(self.alloc))
-    let saw_close = false
-    let in_where = false
-    let param: Token? = null
     for i in 0..cst.child_count() {
-        const tok = cst.child(i) match {
-            TokenChild(t) => t
-            NodeChild(_) => continue
-        }
-        if tok.kind == TokenKind.CloseParenthesis {
-            saw_close = true
-            continue
-        }
-        if !in_where {
-            in_where = saw_close and tok.kind == TokenKind.Identifier and tok.text == "where"
-            continue
-        }
-        if tok.kind != TokenKind.Identifier {
-            continue
-        }
-        param match {
-            Some(p) => {
-                out.push(TypeBound {
-                    span = .{
-                        file_id = self.file_id,
-                        start = p.offset,
-                        length = tok.offset + tok.text.len - p.offset,
-                    },
-                    param = p.text,
-                    bound = tok.text,
-                })
-                param = null
+        cst.child(i) match {
+            NodeChild(child) => {
+                if child.kind == NodeKind.WhereBound {
+                    out.push(self.project_where_bound(child))
+                }
             }
-            None => param = Some(tok.*)
+            TokenChild(_) => {}
         }
     }
     return out
+}
+
+fn project_where_bound(self: &Projector, cst: CstNode) TypeBound {
+    let bound: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
+    nth_node(cst, 0) match {
+        Some(child) => { if is_type_kind(child.kind) {
+                install(&bound, self.project_type_expr(child))
+            } }
+        None => {}
+    }
+    return TypeBound {
+        span = self.span_from(cst),
+        param = first_ident_text(cst),
+        bound = self.boxed(bound),
+    }
 }
 
 // Identifier between `fn` and `(`. We pick the first identifier token after `fn`; before `fn`, the
@@ -2713,6 +2701,7 @@ fn is_type_kind(kind: NodeKind) bool {
         or kind == NodeKind.OptionalType or kind == NodeKind.ArrayType or kind == NodeKind.SliceType
         or kind == NodeKind.TupleType or kind == NodeKind.FunctionType
         or kind == NodeKind.AnonymousStructType or kind == NodeKind.AnonymousEnumType
+        or kind == NodeKind.ContractType or kind == NodeKind.CombinedType
 }
 
 fn project_type_expr(self: &Projector, cst: CstNode) TypeExpr {
@@ -2726,6 +2715,8 @@ fn project_type_expr(self: &Projector, cst: CstNode) TypeExpr {
         FunctionType => self.project_function_type(cst)
         AnonymousStructType => self.project_anon_struct_type(cst)
         AnonymousEnumType => self.project_anon_enum_type(cst)
+        ContractType => self.project_contract_type(cst)
+        CombinedType => self.project_combined_type(cst)
         else => TypeExpr.Error(ErrorType { span = self.span_from(cst) })
     }
 }
@@ -2851,6 +2842,69 @@ fn project_tuple_type(self: &Projector, cst: CstNode) TypeExpr {
 }
 
 fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
+    return TypeExpr.Function(self.project_function_signature(cst))
+}
+
+fn project_contract_type(self: &Projector, cst: CstNode) TypeExpr {
+    let generics: List(GenericParam) = list(0, Some(self.alloc))
+    self.collect_generic_params_from_balanced(cst, &generics)
+    let requirements: List(ContractRequirement) = list(cst.node_child_count(), Some(self.alloc))
+    let assoc_types: List(AssocType) = list(0, Some(self.alloc))
+    for i in 0..cst.child_count() {
+        const child = cst.child(i) match {
+            NodeChild(c) => c
+            TokenChild(_) => continue
+        }
+        if child.kind == NodeKind.ContractRequirement {
+            requirements.push(ContractRequirement {
+                span = self.span_from(child),
+                name = first_ident_text(child),
+                signature = self.project_function_signature(child),
+            })
+        } else if child.kind == NodeKind.ContractAssocType {
+            let bound: TypeExpr? = null
+            nth_node(child, 0) match {
+                Some(b) => { if is_type_kind(b.kind) {
+                        install(&bound, Some(self.project_type_expr(b)))
+                    } }
+                None => {}
+            }
+            assoc_types.push(AssocType {
+                span = self.span_from(child),
+                name = first_ident_text(child),
+                bound = self.boxed_opt(bound),
+            })
+        }
+    }
+    return TypeExpr.Contract(ContractType {
+        span = self.span_from(cst),
+        generics = frozen(generics),
+        bounds = frozen(self.project_bounds(cst)),
+        requirements = frozen(requirements),
+        assoc_types = frozen(assoc_types),
+    })
+}
+
+fn project_combined_type(self: &Projector, cst: CstNode) TypeExpr {
+    let parts: List(TypeExpr) = list(cst.node_child_count(), Some(self.alloc))
+    for i in 0..cst.child_count() {
+        cst.child(i) match {
+            NodeChild(child) => {
+                if is_type_kind(child.kind) {
+                    parts.push(self.project_type_expr(child))
+                }
+            }
+            TokenChild(_) => {}
+        }
+    }
+    return TypeExpr.Combined(CombinedType {
+        span = self.span_from(cst),
+        parts = frozen(parts),
+    })
+}
+
+// The `(params) ret?` of a function type or a contract requirement.
+fn project_function_signature(self: &Projector, cst: CstNode) FunctionType {
     let params: List(TypeExpr) = list(cst.node_child_count(), Some(self.alloc))
     let param_names: List(String) = list(0, Some(self.alloc))
     let param_moves: List(bool) = list(0, Some(self.alloc))
@@ -2909,13 +2963,13 @@ fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
         Some(t) => { ret_ref = Some(self.boxed(t)) }
         None => {}
     }
-    return TypeExpr.Function(FunctionType {
+    return FunctionType {
         span = self.span_from(cst),
         params = frozen(params),
         param_names = frozen(param_names),
         param_moves = frozen(param_moves),
         return_type = ret_ref,
-    })
+    }
 }
 
 // Inline `struct { ... }` in type position - parser consumes the body as loose tokens. We surface

@@ -163,11 +163,12 @@ pub type FunctionDecl = struct {
     body: &BlockExpr?
 }
 
-// One `param: bound` entry of a `where` clause (RFC-019 §2.6). `copyable` is the only bound so far.
+// One `param: bound` entry of a `where` clause (RFC-035). `bound` is a contract: `copyable`, a
+// named or anonymous contract, a function type, or a `+` combination of them.
 pub type TypeBound = struct {
     span: SourceSpan
     param: String
-    bound: String
+    bound: &TypeExpr
 }
 
 // One parameter slot. `is_variadic` is true for the trailing `..xs: T` form. `default_value`
@@ -773,6 +774,8 @@ pub fn type_expr_span(t: &TypeExpr) SourceSpan {
         Function(f) => f.span
         AnonStruct(st) => st.span
         AnonEnum(en) => en.span
+        Contract(c) => c.span
+        Combined(c) => c.span
         Error(er) => er.span
     }
 }
@@ -916,6 +919,8 @@ pub type TypeExpr = enum {
     Function(FunctionType)
     AnonStruct(AnonStructType)
     AnonEnum(AnonEnumType)
+    Contract(ContractType)
+    Combined(CombinedType)
     Error(ErrorType)
 }
 
@@ -1023,6 +1028,36 @@ pub type GenericParam = struct {
     name: String
 }
 
+// `contract(T) where T: B { fn next(self: &Self) T?  type S: Iterator(T) }` (RFC-035). Same node
+// whether named (RHS of a `TypeDecl`) or anonymous in bound position.
+pub type ContractType = struct {
+    span: SourceSpan
+    generics: GenericParam[]
+    bounds: TypeBound[]
+    requirements: ContractRequirement[]
+    assoc_types: AssocType[]
+}
+
+// `fn name(params) ret` - a function of this name and shape must be callable on `Self`.
+pub type ContractRequirement = struct {
+    span: SourceSpan
+    name: String
+    signature: FunctionType
+}
+
+// `type S` / `type S: Bound` - a type the contract solves rather than takes.
+pub type AssocType = struct {
+    span: SourceSpan
+    name: String
+    bound: &TypeExpr?
+}
+
+// `A + B + ...` - satisfied when every part is. Parts are contracts.
+pub type CombinedType = struct {
+    span: SourceSpan
+    parts: TypeExpr[]
+}
+
 // Recovery placeholder for unrecognised type-expression tokens.
 pub type ErrorType = struct {
     span: SourceSpan
@@ -1042,13 +1077,19 @@ pub fn declares_generic(decl: &FunctionDecl) bool {
             return true
         }
     }
+    for &b in decl.bounds {
+        if mentions_generic(b.bound) {
+            return true
+        }
+    }
     return decl.return_type match {
         Some(rt) => mentions_generic(rt)
         None => false
     }
 }
 
-// The `$T` names a function's parameters and return type introduce, each once, in order.
+// The `$T` names a function's parameters, return type and `where` bounds introduce, each once, in
+// order.
 pub fn generic_names(decl: &FunctionDecl, out: &List(String)) {
     for &p in decl.params {
         collect_generic_names(p.type_expr, out)
@@ -1056,6 +1097,16 @@ pub fn generic_names(decl: &FunctionDecl, out: &List(String)) {
     decl.return_type match {
         Some(rt) => collect_generic_names(rt, out)
         None => {}
+    }
+    for &b in decl.bounds {
+        collect_generic_names(b.bound, out)
+    }
+}
+
+// The `$T` names a function's `where` bounds introduce, each once, in order.
+pub fn bound_generic_names(decl: &FunctionDecl, out: &List(String)) {
+    for &b in decl.bounds {
+        collect_generic_names(b.bound, out)
     }
 }
 
@@ -1077,6 +1128,16 @@ fn collect_generic_names(te: &TypeExpr, out: &List(String)) {
             f.return_type match {
                 Some(rt) => collect_generic_names(rt, out)
                 None => {}
+            }
+        }
+        Combined(c) => collect_generic_list(c.parts, out)
+        Contract(c) => {
+            for &r in c.requirements {
+                collect_generic_list(r.signature.params, out)
+                r.signature.return_type match {
+                    Some(rt) => collect_generic_names(rt, out)
+                    None => {}
+                }
             }
         }
         _ => {}
@@ -1101,8 +1162,19 @@ pub fn mentions_generic(te: &TypeExpr) bool {
         Function(f) => function_mentions_generic(&f)
         AnonStruct(_) => false
         AnonEnum(_) => false
+        Contract(c) => contract_mentions_generic(&c)
+        Combined(c) => any_generic(c.parts)
         Error(_) => false
     }
+}
+
+fn contract_mentions_generic(c: &ContractType) bool {
+    for &r in c.requirements {
+        if function_mentions_generic(&r.signature) {
+            return true
+        }
+    }
+    return false
 }
 
 fn function_mentions_generic(f: &FunctionType) bool {
