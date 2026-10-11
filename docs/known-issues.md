@@ -67,8 +67,8 @@ failing requirement (E2134). Not yet:
 - **`op_eq(a, b)` as a call does not resolve on a payload-less enum** or on a type whose `==` is
   derived from `op_cmp`: the operator works and the contract is satisfied, but the call form finds
   no function. Primitives have theirs (`core.ops`).
-- **Struct and enum type parameters take no bounds** - resolved by RFC-036 (`struct(T: Hash + Eq)`);
-  the stdlib containers move their bounds onto the types once the seed carries it.
+- **Struct and enum type parameters take no bounds** - resolved by RFC-036; the stdlib containers
+  carry `struct(K: Hash + Eq, V)`.
 
 ---
 

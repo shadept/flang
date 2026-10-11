@@ -256,8 +256,10 @@ and `contract`, `X.Item` projections, `Name = T` / `Name: B` contract arguments,
 parse, E2145), associated types solved at the call, projection, pinning and bounding, two contracts
 on one parameter sharing a member, struct, enum and contract parameter bounds, implied bounds on
 functions through every type their signature names (nesting included), the application check in
-bodies and at instantiation, projections in struct fields and enum payloads, and E2142-E2145. Not
-yet: promote and the stdlib migration (steps 4-5), which wait on approval of the promote commit.
+bodies and at instantiation, projections in struct fields and enum payloads, and E2142-E2145. The
+seed was promoted (`seed/20261011`), and the stdlib migrated: `Iterator` and `Iterable` in the
+associated-type form, every `std.collections.iter` adapter bounded on its struct, and the hashed
+containers' `Hash + Eq` on their types.
 
 How it differs from the Design text:
 
@@ -271,8 +273,10 @@ How it differs from the Design text:
   result in the nominal registry, which every field substitution (checker, copyability, layout,
   lowering) reads.
 - **Where written bounds are checked.** In a body a bounded type is checked at the type
-  expression; in a signature its bounds are implied and checked at each call; a field's type, and a
-  literal against no written type, are checked only through their uses (docs/known-issues.md).
+  expression; in a signature its bounds are implied: a call reports what the return type implies,
+  while what a parameter's type implies blocks the instantiation and is reported only when no
+  error is on record (the type's formation was). A field's type, and a literal against no written
+  type, are checked only through their uses (docs/known-issues.md).
 
 Answers taken on the open questions: implied bounds hold transitively, through every bounded type a
 signature names at any depth; a projection on a concrete type stays not a form (E2142).

@@ -273,6 +273,8 @@ pub type Checker = struct {
     // (`sig_implied`), and a projection its bounds have not declared yet gets a placeholder they
     // must declare by the signature's end (`proj_pending`, checked against `sig_declared`).
     sig_open: bool
+    // Set while the signature's parameter types resolve: what they imply is not reported at a call.
+    sig_params_open: bool
     sig_implied: List(BoundAtom)
     sig_declared: List(String)
     proj_pending: List(PendingProj)
@@ -708,6 +710,7 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         paths = dict(allocator),
         path_bufs = list(0, allocator),
         sig_open = false,
+        sig_params_open = false,
         sig_implied = list(0, allocator),
         sig_declared = list(0, allocator),
         proj_pending = list(0, allocator),
@@ -2303,6 +2306,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     self.proj_pending.clear()
     self.sig_refs.clear()
     self.sig_open = true
+    self.sig_params_open = true
     self.env.push_scope()
     self.engine.enter_level()
 
@@ -2324,6 +2328,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
         }
         params.push(pt)
     }
+    self.sig_params_open = false
     prebind_bound_names(self, fd)
     let ret = fd.return_type match {
         Some(rt) => resolve_type_expr(self, rt)
@@ -2534,6 +2539,11 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
     self.env.push_scope()
     self.engine.enter_level()
 
+    // An instantiation's signature types were the call's to check: what they imply held there.
+    const saved_apps = self.check_apps
+    if self.spec_depth > 0 {
+        self.check_apps = false
+    }
     let params: List(Ty) = list(fd.params.len, self.allocator)
     for &p in fd.params {
         let ty = param_ty(self, p)
@@ -2552,6 +2562,7 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
         Some(rt) => resolve_type_expr(self, rt)
         None => TY_VOID
     }
+    self.check_apps = saved_apps
 
     let frame = FnFrame { name = fd.name, return_ty = ret, decl_span = fd.span }
     self.fn_stack.push(frame)
@@ -2854,6 +2865,9 @@ type BoundAtom = struct {
     // The bounded type whose parameter bound this atom is, implied by a signature naming it
     // (RFC-036); empty for a `where` entry.
     owner: String
+    // Implied by a parameter's type: the argument's type was checked where it was formed, so a call
+    // uses the atom to solve and to filter overloads, and does not report it.
+    from_param: bool
 }
 
 type Verdict = enum {
@@ -3194,6 +3208,7 @@ fn lower_bound(self: &Checker, subject: Ty, te: &TypeExpr, param: String, label:
             param = param,
             bound_name = if label.len > 0 { label } else { "fn" },
             owner = "",
+            from_param = false,
         })
         Combined(c) => {
             for &part in c.parts {
@@ -3219,6 +3234,7 @@ fn lower_named_bound(self: &Checker, subject: Ty, n: &NamedType, param: String, 
             param = param,
             bound_name = if label.len > 0 { label } else { BOUND_COPYABLE },
             owner = "",
+            from_param = false,
         })
         return
     }
@@ -3379,6 +3395,7 @@ fn lower_contract(self: &Checker, subject: Ty, c: &ContractType, args: &List(Ty)
             param = param,
             bound_name = name,
             owner = "",
+            from_param = false,
         })
     }
     out.push_all(pre.as_slice())
@@ -3725,6 +3742,7 @@ fn imply_bounds(self: &Checker, nb: &NomBounds, binds: &Dict(VarId, Ty), args: &
             param = a.param,
             bound_name = a.bound_name,
             owner = owner,
+            from_param = self.sig_params_open,
         })
     }
     for &m in nb.members {
@@ -4138,13 +4156,16 @@ fn drop_diags_from(self: &Checker, from: usize) {
 
 // A call's bounds against the types it bound, reported at the call that chose them - the outermost
 // open instantiation when the call sits in a generic body. False when one fails: the body is not
-// instantiated for a call the signature rejects.
+// instantiated for a call the signature rejects. A bound a parameter's type implies was the
+// argument type's to meet where it was formed (RFC-036), so its failure is reported here only when
+// nothing has been: a type formed unchecked still gets a diagnostic.
 fn check_call_bounds(self: &Checker, p: &PendingSpec) bool {
     const atoms = self.fn_bounds.get_ref(p.function_id)
     if atoms.is_none() {
         return true
     }
     let ok = true
+    const formed_reported = has_errors(self)
     // One report per `where` entry: its first failing requirement.
     let reported: List(SourceSpan) = list(0, self.allocator)
     defer reported.deinit()
@@ -4167,13 +4188,27 @@ fn check_call_bounds(self: &Checker, p: &PendingSpec) bool {
         drop_diags_from(self, diags0)
         if fails {
             ok = false
-            if !span_listed(&reported, a.span) {
+            const silent = a.from_param and formed_reported
+            if !silent and !span_listed(&reported, a.span) {
                 reported.push(a.span)
                 report_bound(self, p, a)
             }
         }
     }
     return ok
+}
+
+fn has_errors(self: &Checker) bool {
+    for &d in self.diagnostics {
+        const is_error = d.severity match {
+            Error => true
+            _ => false
+        }
+        if is_error {
+            return true
+        }
+    }
+    return false
 }
 
 fn span_listed(spans: &List(SourceSpan), span: SourceSpan) bool {

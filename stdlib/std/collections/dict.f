@@ -37,11 +37,17 @@ pub type Entry = struct(K, V) {
     value: V
 }
 
+// Deinits the key and the value. Call it only on a live entry, one whose `hash` is at least 2.
+pub fn deinit(self: move Entry($K, $V)) {
+    release(self.key)
+    release(self.value)
+}
+
 // A hash map from `K` to `V` that carries no allocator: every operation that grows or frees the
 // table takes one as its last argument, and the same allocator must be passed every time. A
 // zero-initialised value is a valid empty dict. Keys and values are owned: `deinit` deinits each
-// before freeing the table. `K` is `Hash + Eq`.
-pub type UnmanagedDict = struct(K, V) {
+// before freeing the table.
+pub type UnmanagedDict = struct(K: Hash + Eq, V) {
     owned entries: &Entry(K, V)
     length: usize
     // Tombstones left by removals. They occupy probe slots until the next rehash, so the load
@@ -54,7 +60,7 @@ pub type UnmanagedDict = struct(K, V) {
 // through. Every `UnmanagedDict` operation applies to it as well, reached through `op_deref`, and
 // the allocating ones come without the allocator argument. A zero-initialised value is a valid
 // empty dict on the global allocator.
-pub type Dict = struct(K, V) {
+pub type Dict = struct(K: Hash + Eq, V) {
     __storage: UnmanagedDict(K, V)
     allocator: &Allocator
 }
@@ -68,7 +74,7 @@ pub fn op_deref(self: &Dict($K, $V)) &UnmanagedDict(K, V) {
 // is known: `s.index.managed(s.allocator).set(k, v)` inserts into `s.index` in place. It holds the
 // table by reference, so nothing is copied and there is nothing to deinit; the owner of the table
 // frees it, through the same allocator.
-pub type DictRef = struct(K, V) {
+pub type DictRef = struct(K: Hash + Eq, V) {
     __storage: &UnmanagedDict(K, V)
     allocator: &Allocator
 }
@@ -239,8 +245,7 @@ fn claim_slot(self: &UnmanagedDict($K, $V), h: usize) &Entry(K, V) {
 // A present key keeps its entry untouched, and `key` and `value` stay the caller's to deinit; an
 // inserted pair is owned by the dict from here. One probe either way, so a membership-then-insert
 // check is `if d.add(k, v, alloc) { ... }`. Panics when the table cannot grow.
-pub fn add(self: &UnmanagedDict($K, $V), key: move K, value: move V,
-    allocator: &Allocator) bool where K: Hash + Eq {
+pub fn add(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: &Allocator) bool {
     if self.find_entry(key).is_some() {
         return false
     }
@@ -270,7 +275,7 @@ pub fn add(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V,
 // The reference is valid until the next insert, which may move the table. Panics when the table
 // cannot grow.
 pub fn get_or_insert_with(self: &UnmanagedDict($K, $V), key: move K, make: $F,
-    allocator: &Allocator) &V where K: Hash + Eq {
+    allocator: &Allocator) &V {
     const found = self.find_entry(key)
     if found.is_some() {
         const entry = found.unwrap()
@@ -283,8 +288,7 @@ pub fn get_or_insert_with(self: &UnmanagedDict($K, $V), key: move K, make: $F,
 
 // Insert or update a key-value pair. On an update the old value is deinited, and so is `key`, since
 // the entry keeps the one it already has. Panics when the allocation fails.
-pub fn set(self: &UnmanagedDict($K, $V), key: move K, value: move V,
-    allocator: &Allocator) where K: Hash + Eq {
+pub fn set(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: &Allocator) {
     const existing = self.find_index(key)
     if existing.is_some() {
         // Written from `self.entries`, not through a lent `&Entry`: taking out of storage this
@@ -322,7 +326,7 @@ pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V,
 // no-op.
 pub fn deinit(self: move UnmanagedDict($K, $V), allocator: &Allocator) {
     if self.cap > 0 {
-        self.deinit_entries()
+        self.clear()
         allocator.free(slice_from_raw_parts(self.entries, self.cap))
     }
     self.entries = 0usize as &Entry(K, V)
@@ -335,7 +339,7 @@ pub fn deinit(self: move UnmanagedDict($K, $V), allocator: &Allocator) {
 // Entries are copied bitwise: an owned key or value is then owned by both dicts, and only one may
 // deinit it. Panics when the table cannot grow.
 pub fn merge(self: &UnmanagedDict($K, $V), other: &UnmanagedDict(K, V),
-    allocator: &Allocator) where K: copyable + Hash + Eq, V: copyable {
+    allocator: &Allocator) where K: copyable, V: copyable {
     for e in other.iter() {
         self.set(e.key, e.value, allocator)
     }
@@ -347,7 +351,7 @@ pub fn merge(self: &UnmanagedDict($K, $V), other: &UnmanagedDict(K, V),
 
 // Removes `key` and returns its value, or null when absent. The stored key is deinited; the value
 // is the caller's to deinit.
-pub fn remove(self: &UnmanagedDict($K, $V), key: K) V? where K: Hash + Eq {
+pub fn remove(self: &UnmanagedDict($K, $V), key: K) V? {
     return self.take_entry(self.find_index(key))
 }
 
@@ -375,30 +379,21 @@ fn take_entry(self: &UnmanagedDict($K, $V), found: usize?) V? {
 
 // Removes every entry, deiniting each key and value. The table is kept for reuse.
 pub fn clear(self: &UnmanagedDict($K, $V)) {
-    if self.cap > 0 {
-        self.deinit_entries()
-        mark_empty(self)
-    }
-    self.length = 0
-    self.dead = 0
-}
-
-// Deinit every live key and value, leaving the slots as they are.
-fn deinit_entries(self: &UnmanagedDict($K, $V)) {
     for i in 0..self.cap {
         if (self.entries + i).hash >= 2 {
-            let k = move (self.entries + i).key
-            release(k)
-            let v = move (self.entries + i).value
-            release(v)
+            let entry = move (self.entries + i).*
+            entry.deinit()
         }
     }
+    mark_empty(self)
+    self.length = 0
+    self.dead = 0
 }
 
 // Mutate the value for `key` in place via `f(&value)`. Returns whether the key was present.
 // In-place mutation (not get-modify-set) is the only sound shape for owned values: `set` deinits
 // the value it overwrites.
-pub fn update(self: &UnmanagedDict($K, $V), key: K, f: $F) bool where K: Hash + Eq {
+pub fn update(self: &UnmanagedDict($K, $V), key: K, f: $F) bool {
     let r = self.get_ref(key)
     if r.is_none() {
         return false
@@ -461,18 +456,18 @@ pub fn is_empty(self: &UnmanagedDict($K, $V)) bool {
 }
 
 // `d[key]`: the value for `key`, or null when absent.
-pub fn op_index(self: &UnmanagedDict($K, $V), key: K) V? where V: copyable, K: Hash + Eq {
+pub fn op_index(self: &UnmanagedDict($K, $V), key: K) V? where V: copyable {
     return self.get(key)
 }
 
 // Returns the value for `key`, or null when absent.
-pub fn get(self: &UnmanagedDict($K, $V), key: K) V? where V: copyable, K: Hash + Eq {
+pub fn get(self: &UnmanagedDict($K, $V), key: K) V? where V: copyable {
     return Some((self.get_ref(key)?).*)
 }
 
 // Returns a reference to the value for `key`, or null when absent. Valid until the next insert,
 // which may move the table.
-pub fn get_ref(self: &UnmanagedDict($K, $V), key: K) &V? where K: Hash + Eq {
+pub fn get_ref(self: &UnmanagedDict($K, $V), key: K) &V? {
     const found = self.find_entry(key)
     if found.is_none() {
         return null
@@ -499,7 +494,7 @@ pub fn get_ref(self: &UnmanagedDict($K, $V), key: $Q) &V? where Q: Hash {
 }
 
 // Returns whether `key` is present.
-pub fn contains(self: &UnmanagedDict($K, $V), key: K) bool where K: Hash + Eq {
+pub fn contains(self: &UnmanagedDict($K, $V), key: K) bool {
     return self.find_entry(key).is_some()
 }
 
@@ -510,8 +505,7 @@ pub fn contains(self: &UnmanagedDict($K, $V), key: $Q) bool where Q: Hash {
 }
 
 // The value for `key`, or `fallback` when absent.
-pub fn get_or(self: &UnmanagedDict($K, $V), key: K, fallback: move V) V where V: copyable,
-K: Hash + Eq {
+pub fn get_or(self: &UnmanagedDict($K, $V), key: K, fallback: move V) V where V: copyable {
     let v = self.get(key)
     if v.is_some() {
         return v.unwrap()
@@ -521,8 +515,7 @@ K: Hash + Eq {
 
 // The value for `key`, or `make()` when absent - the lazy counterpart of `get_or`, for fallbacks
 // that are expensive (or effectful) to build.
-pub fn get_or_else(self: &UnmanagedDict($K, $V), key: K, make: $F) V where V: copyable,
-K: Hash + Eq {
+pub fn get_or_else(self: &UnmanagedDict($K, $V), key: K, make: $F) V where V: copyable {
     let v = self.get(key)
     if v.is_some() {
         return v.unwrap()
@@ -712,7 +705,7 @@ pub fn values(self: &UnmanagedDict($K, $V)) ValuesIter(K, V) {
 // Returns a new dict with the same keys and `f(key, value)` as each value. Keys are copied bitwise;
 // an owned key is then owned by both dicts, and only one may deinit it.
 pub fn map_values(self: &UnmanagedDict($K, $V), f: $F, allocator: &Allocator) UnmanagedDict(K,
-    $U) where K: copyable + Hash + Eq {
+    $U) where K: copyable {
     let out: UnmanagedDict(K, U)
     for e in self.iter() {
         out.set(e.key, f(e.key, e.value), allocator)
@@ -723,7 +716,7 @@ pub fn map_values(self: &UnmanagedDict($K, $V), f: $F, allocator: &Allocator) Un
 // Returns a new dict of the entries `pred(key, value)` accepts. Keys and values are copied bitwise;
 // an owned key or value is then owned by both dicts, and only one may deinit it.
 pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) UnmanagedDict(K,
-    V) where K: copyable + Hash + Eq, V: copyable {
+    V) where K: copyable, V: copyable {
     let out: UnmanagedDict(K, V)
     for e in self.iter() {
         if pred(e.key, e.value) {
@@ -745,7 +738,7 @@ pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) Unm
 
 #define(managed_dict, Name: Ident) {
     // Insert or update a key-value pair. Panics when the allocation fails.
-    pub fn set(self: &#(Name)($K, $V), key: move K, value: move V) where K: Hash + Eq {
+    pub fn set(self: &#(Name)($K, $V), key: move K, value: move V) {
         self.__storage.set(key, value, self.allocator)
     }
 
@@ -756,13 +749,13 @@ pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) Unm
     }
 
     // `d[key] = value`: insert or update. Panics when the allocation fails.
-    pub fn op_set_index(self: &#(Name)($K, $V), key: move K, value: move V) where K: Hash + Eq {
+    pub fn op_set_index(self: &#(Name)($K, $V), key: move K, value: move V) {
         self.__storage.set(key, value, self.allocator)
     }
 
     // Inserts `key` with `value` unless the key is present, and returns whether it was inserted. A
     // present key keeps its entry, and `key` and `value` stay the caller's.
-    pub fn add(self: &#(Name)($K, $V), key: move K, value: move V) bool where K: Hash + Eq {
+    pub fn add(self: &#(Name)($K, $V), key: move K, value: move V) bool {
         return self.__storage.add(key, value, self.allocator)
     }
 
@@ -774,27 +767,27 @@ pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) Unm
 
     // Returns a reference to the value for `key`, inserting `make()` under it first when the key is
     // absent. `make` runs only on a miss. The reference is valid until the next insert.
-    pub fn get_or_insert_with(self: &#(Name)($K, $V), key: move K, make: $F) &V where K: Hash + Eq {
+    pub fn get_or_insert_with(self: &#(Name)($K, $V), key: move K, make: $F) &V {
         return self.__storage.get_or_insert_with(key, make, self.allocator)
     }
 
     // Copies every entry of `other` into this dict, overwriting the value under a key both have.
     // Entries are copied bitwise: an owned key or value is then owned by both dicts, and only one
     // may deinit it.
-    pub fn merge(self: &#(Name)($K, $V), other: &#(Name)(K, V)) where K: copyable + Hash + Eq, V: copyable {
+    pub fn merge(self: &#(Name)($K, $V), other: &#(Name)(K, V)) where K: copyable, V: copyable {
         self.__storage.merge(other.op_deref(), self.allocator)
     }
 
     // Returns a new dict with the same keys and `f(key, value)` as each value; keys are copied
     // bitwise. The result is on `allocator`, or on the receiver's when null.
-    pub fn map_values(self: &#(Name)($K, $V), f: $F, allocator: &Allocator? = null) Dict(K, $U) where K: copyable + Hash + Eq {
+    pub fn map_values(self: &#(Name)($K, $V), f: $F, allocator: &Allocator? = null) Dict(K, $U) where K: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.map_values(f, alloc), allocator = alloc }
     }
 
     // Returns a new dict of the entries `pred(key, value)` accepts, copied bitwise. The result is
     // on `allocator`, or on the receiver's when null.
-    pub fn filter(self: &#(Name)($K, $V), pred: $F, allocator: &Allocator? = null) Dict(K, V) where K: copyable + Hash + Eq, V: copyable {
+    pub fn filter(self: &#(Name)($K, $V), pred: $F, allocator: &Allocator? = null) Dict(K, V) where K: copyable, V: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.filter(pred, alloc), allocator = alloc }
     }

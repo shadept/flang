@@ -199,7 +199,9 @@ of that path (`resolve_projection`). While a signature resolves (`sig_open`), a 
 declared yet gets a placeholder its later declaration unifies with (`bind_member`), and one never
 declared is E2142. A struct's or enum's parameter bounds are lowered in `lower_type_params` to
 `nom_bounds[id]`. `apply_nominal_bounds` runs at every application `resolve_named` builds: in a
-signature it appends the instantiated atoms to the function's (`sig_implied`) and binds the
+signature it appends the instantiated atoms to the function's (`sig_implied`; those a parameter's
+type implies are marked `from_param`, and `check_call_bounds` reports them only when no error is on
+record) and binds the
 members under the argument's parameter name. In a body (`check_apps`) it checks them
 (`check_app_bounds`). A field typed by a projection keeps the associated variable, which the
 definition lists in `assoc_params`. `solve_instance` runs the definition's atoms for a ground

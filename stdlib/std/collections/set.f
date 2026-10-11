@@ -18,8 +18,8 @@ import std.test
 
 // A hash set of `T` that carries no allocator: `add` and `deinit` take one as their last argument,
 // and the same allocator must be passed every time. A zero-initialised value is a valid empty set.
-// Elements are owned: `deinit` deinits each. `T` is `Hash + Eq`.
-pub type UnmanagedSet = struct(T) {
+// Elements are owned: `deinit` deinits each.
+pub type UnmanagedSet = struct(T: Hash + Eq) {
     __inner: UnmanagedDict(T, u8)
 }
 
@@ -27,7 +27,7 @@ pub type UnmanagedSet = struct(T) {
 // Every `UnmanagedSet` operation applies to it as well, reached through `op_deref`, and the
 // allocating ones come without the allocator argument. A zero-initialised value is a valid empty
 // set on the global allocator.
-pub type Set = struct(T) {
+pub type Set = struct(T: Hash + Eq) {
     __storage: UnmanagedSet(T)
     allocator: &Allocator
 }
@@ -56,7 +56,7 @@ pub fn set(allocator: &Allocator? = null) Set($T) {
 // A present value is left as it is, and the `value` passed stays the caller's to deinit; an added
 // one is owned by the set. One probe either way, so a visited check is `if seen.add(x, alloc) { ...
 // }`. Panics when the table cannot grow.
-pub fn add(self: &UnmanagedSet($T), value: move T, allocator: &Allocator) bool where T: Hash + Eq {
+pub fn add(self: &UnmanagedSet($T), value: move T, allocator: &Allocator) bool {
     return self.__inner.add(value, 1u8, allocator)
 }
 
@@ -74,7 +74,7 @@ pub fn deinit(self: move UnmanagedSet($T), allocator: &Allocator) {
 // Returns a new set of the elements `pred` accepts, copied bitwise: an owned element is then owned
 // by both sets, and only one may deinit it.
 pub fn filter(self: &UnmanagedSet($T), pred: $F,
-    allocator: &Allocator) UnmanagedSet(T) where T: copyable + Hash + Eq {
+    allocator: &Allocator) UnmanagedSet(T) where T: copyable {
     let out: UnmanagedSet(T)
     for x in self.iter() {
         if pred(x) {
@@ -108,7 +108,7 @@ pub fn is_empty(self: &UnmanagedSet($T)) bool {
 }
 
 // Returns whether `value` is present.
-pub fn contains(self: &UnmanagedSet($T), value: T) bool where T: Hash + Eq {
+pub fn contains(self: &UnmanagedSet($T), value: T) bool {
     return self.__inner.contains(value)
 }
 
@@ -119,7 +119,7 @@ pub fn contains(self: &UnmanagedSet($T), value: $Q) bool where Q: Hash {
 }
 
 // Removes `value`, deiniting the stored element, and returns whether it was present.
-pub fn remove(self: &UnmanagedSet($T), value: T) bool where T: Hash + Eq {
+pub fn remove(self: &UnmanagedSet($T), value: T) bool {
     return self.__inner.remove(value).is_some()
 }
 
@@ -225,7 +225,7 @@ pub fn next(it: &SetRefIterator($T)) &T? {
 
 // Adds `value` unless it is present, and returns whether it was added. A present value is left as
 // it is, and the `value` passed stays the caller's. Panics when the table cannot grow.
-pub fn add(self: &Set($T), value: move T) bool where T: Hash + Eq {
+pub fn add(self: &Set($T), value: move T) bool {
     return self.__storage.add(value, self.allocator)
 }
 
@@ -241,8 +241,7 @@ pub fn deinit(self: move Set($T)) {
 
 // Returns a new set of the elements `pred` accepts, copied bitwise. The result is on `allocator`,
 // or on the receiver's when null.
-pub fn filter(self: &Set($T), pred: $F,
-    allocator: &Allocator? = null) Set(T) where T: copyable + Hash + Eq {
+pub fn filter(self: &Set($T), pred: $F, allocator: &Allocator? = null) Set(T) where T: copyable {
     const alloc = allocator ?? self.allocator
     return .{ __storage = self.__storage.filter(pred, alloc), allocator = alloc }
 }

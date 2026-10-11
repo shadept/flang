@@ -16,8 +16,8 @@ pub fn op_eq(a: Name, b: Name) bool {
 pub fn deinit(self: move Name) {}
 
 pub fn main() i32 {
-    let s: Set(Name) = set()
+    let s: Set(Name) = set() // error E2134: `Name` has no `hash`
     defer s.deinit()
-    const _added = s.add(Name { id = 1 }) // error E2134: `Name` has no `hash`
+    const _added = s.add(Name { id = 1 })
     return 0
 }
