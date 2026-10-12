@@ -125,7 +125,7 @@ if (seedSources.Length > 0
     && (!File.Exists(seedExe) || seedSources.Max(File.GetLastWriteTimeUtc) > File.GetLastWriteTimeUtc(seedExe)))
 {
     Console.WriteLine($"=== Seed out of date, rebuilding {seedExe} ===");
-    var (tool, toolArgs) = OperatingSystem.IsWindows() ? ("cmd", "/c build.bat") : ("make", "");
+    var (tool, toolArgs) = OperatingSystem.IsWindows() ? ("cmd", "/c .\\build.bat") : ("make", "");
     if (Run(tool, toolArgs, seedDir) != 0)
     {
         Console.Error.WriteLine($"Error: seed build failed in boot/{rid} (needs only a C compiler; see boot/README.md).");

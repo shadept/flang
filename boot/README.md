@@ -10,7 +10,7 @@ whenever the seed C beside it is newer. By hand:
 
     cd boot/<target>
     make                          # linux-x64, darwin-arm64
-    build.bat                     # win-x64, from a VS developer prompt
+    build.bat                     # win-x64, finds MSVC via vswhere
 
 That produces `flang-seed`, a full FLang compiler. It then builds the current
 sources (stage 1), which build themselves again (stage 2):
