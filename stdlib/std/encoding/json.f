@@ -558,9 +558,9 @@ fn skip_whitespace(self: &JsonDecoder) {
     let c = self.peek()
     while c.is_some() and (c.unwrap() == ' ' or c.unwrap() == '\t' or c.unwrap() == '\n'
         or c.unwrap() == '\r') {
-        self.advance()
-        c = self.peek()
-    }
+            self.advance()
+            c = self.peek()
+        }
 }
 
 // ---- DOM parsing ----

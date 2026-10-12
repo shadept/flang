@@ -74,8 +74,13 @@ type TemplateParser = struct {
 // Parse a template body. `body` is the text between the `#define`'s braces, starting at byte `base`
 // of file `file_id`. Everything produced borrows `body` and is allocated from `alloc`, which must
 // outlive the nodes. Parse errors are pushed to `diags` with file-absolute spans.
-pub fn parse_template_body(body: String, base: usize, file_id: i32, alloc: &Allocator,
-    diags: &List(Diagnostic)) List(TemplateNode) {
+pub fn parse_template_body(
+    body: String,
+    base: usize,
+    file_id: i32,
+    alloc: &Allocator,
+    diags: &List(Diagnostic),
+) List(TemplateNode) {
     let lx = lexer(body, Some(alloc))
     const tokens = lx.tokenize()
     // The parser takes the token list; this one keeps a copy of its own for the template scan.
@@ -232,8 +237,11 @@ fn parse_for(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
     const iterable = project_expression(cst, self.file_id, self.alloc)
     let body: List(TemplateNode) = list(0, Some(self.alloc))
     const after = self.parse_braced_body(self.parser.token_index(), &body)
-    out.push(TemplateNode.Loop(TemplateFor { var_name = var_name, iterable = iterable,
-        body = move body }))
+    out.push(
+        TemplateNode.Loop(
+            TemplateFor { var_name = var_name, iterable = iterable, body = move body },
+        ),
+    )
     return after
 }
 
@@ -254,8 +262,9 @@ fn parse_if(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
         self.cursor = self.tokens[after].offset
         after = self.parse_braced_body(after + 2, &else_body)
     }
-    out.push(TemplateNode.Cond(TemplateIf { cond = cond, body = move body,
-        else_body = move else_body }))
+    out.push(
+        TemplateNode.Cond(TemplateIf { cond = cond, body = move body, else_body = move else_body }),
+    )
     return after
 }
 
@@ -326,8 +335,11 @@ fn parse_string_holes(self: &TemplateParser, tok: Token, out: &List(TemplateNode
 
 // Expand `nodes` into `sb`. The first evaluation error stops expansion and is returned (its span is
 // body-relative; the caller adds `base`).
-pub fn expand_template(env: &CtEnv, nodes: &List(TemplateNode), sb: &StringBuilder) Result((),
-    CtError) {
+pub fn expand_template(
+    env: &CtEnv,
+    nodes: &List(TemplateNode),
+    sb: &StringBuilder,
+) Result((), CtError) {
     for &node in nodes {
         expand_node(env, node, sb)?
     }
@@ -403,8 +415,7 @@ fn append_string_escaped(sb: &StringBuilder, text: String) {
 fn test_env(arena: &Allocator) CtEnv {
     const ctx: ComptimeCtx = .{ os = "testos", arch = "testarch", testing = false, release = false }
     const boxed = box(arena, ctx)
-    const lookup: CtLookup = .{ ctx = 0usize as &u8, resolve = test_no_lookup,
-        name = no_name }
+    const lookup: CtLookup = .{ ctx = 0usize as &u8, resolve = test_no_lookup, name = no_name }
     return ct_env(boxed, arena, lookup)
 }
 
@@ -434,11 +445,16 @@ test "template: #for over a bound list with #(x) and \"#(x)\"" {
     names.push(CtValue.S("z"))
     env.bindings["names"] = CtValue.List(move names)
     env.bindings["fType"] = CtValue.Ident("f32")
-    const out = expand_for_test("type P = struct {\n#for f in names {\n  #(f): #(fType), \"#(f)\"\n}\n}",
-        &env, &a)
+    const out = expand_for_test(
+        "type P = struct {\n#for f in names {\n  #(f): #(fType), \"#(f)\"\n}\n}",
+        &env,
+        &a,
+    )
     defer out.deinit()
-    assert_true(out.view == "type P = struct {\n\n  x: f32, \"x\"\n\n  y: f32, \"y\"\n\n  z: f32, \"z\"\n\n}",
-        "expansion text")
+    assert_true(
+        out.view == "type P = struct {\n\n  x: f32, \"x\"\n\n  y: f32, \"y\"\n\n  z: f32, \"z\"\n\n}",
+        "expansion text",
+    )
 }
 
 test "template: #if / #elif / #else on the closed context and bindings" {
@@ -446,8 +462,11 @@ test "template: #if / #elif / #else on the closed context and bindings" {
     let a = backing.allocator()
     let env = test_env(&a)
     env.bindings["n"] = CtValue.I(2)
-    const out = expand_for_test("#if platform.os == \"windows\" {A} #elif n == 2 {B} #else {C}",
-        &env, &a)
+    const out = expand_for_test(
+        "#if platform.os == \"windows\" {A} #elif n == 2 {B} #else {C}",
+        &env,
+        &a,
+    )
     defer out.deinit()
     assert_true(out.view == "B", "expansion text")
 }

@@ -167,15 +167,24 @@ type ParseState = struct {
 // Process a chunk of data, appending field content to field_buf and completed fields to spans.
 // Returns the number of bytes consumed. Sets row_complete to true if a newline was found (end of
 // row).
-fn process_chunk(data: u8[], data_len: usize, options: &CsvOptions, state: &ParseState,
-    field_buf: &StringBuilder, spans: &List(FieldSpan), field_start_offset: usize,
-    row_complete: &bool) usize {
+fn process_chunk(
+    data: u8[],
+    data_len: usize,
+    options: &CsvOptions,
+    state: &ParseState,
+    field_buf: &StringBuilder,
+    spans: &List(FieldSpan),
+    field_start_offset: usize,
+    row_complete: &bool,
+) usize {
     // Pad to 16 bytes for SIMD if needed
     let chunk_buf: [u8; 16] = [0; 16]
     let chunk_ptr = data.ptr
     if data_len < 16 {
-        copy_to(slice_from_raw_parts(data.ptr, data_len), slice_from_raw_parts(&chunk_buf[0],
-                data_len))
+        copy_to(
+            slice_from_raw_parts(data.ptr, data_len),
+            slice_from_raw_parts(&chunk_buf[0], data_len),
+        )
         chunk_ptr = &chunk_buf[0]
     }
 
@@ -286,8 +295,12 @@ pub type CsvDecoder = struct {
     state: ParseState
 }
 
-pub fn csv_decoder_init(self: &CsvDecoder, r: Reader, options: CsvOptions = csv_options(),
-    allocator: &Allocator? = null) {
+pub fn csv_decoder_init(
+    self: &CsvDecoder,
+    r: Reader,
+    options: CsvOptions = csv_options(),
+    allocator: &Allocator? = null,
+) {
     self.reader = r
     self.options = options
     self.headers = list(16, allocator)
@@ -331,8 +344,16 @@ fn parse_decoder_row(self: &CsvDecoder) bool {
         // need a different approach. Instead: accumulate ALL field data into field_buf with a
         // separator, and track spans as absolute offsets into field_buf.
         const chunk_slice = slice_from_raw_parts(&self.chunk[0], self.chunk_len)
-        const consumed = process_chunk(chunk_slice, self.chunk_len, &self.options, &self.state,
-            &self.field_buf, &self.spans, self.field_buf.len, &row_complete)
+        const consumed = process_chunk(
+            chunk_slice,
+            self.chunk_len,
+            &self.options,
+            &self.state,
+            &self.field_buf,
+            &self.spans,
+            self.field_buf.len,
+            &row_complete,
+        )
 
         if row_complete {
             // Shift remaining bytes
@@ -708,8 +729,12 @@ pub type CsvReader = struct {
     parsed: bool
 }
 
-pub fn csv_reader_init(self: &CsvReader, r: Reader, options: CsvOptions = csv_options(),
-    allocator: &Allocator? = null) {
+pub fn csv_reader_init(
+    self: &CsvReader,
+    r: Reader,
+    options: CsvOptions = csv_options(),
+    allocator: &Allocator? = null,
+) {
     self.options = options
     self.buffer = string_builder(4096, allocator)
     self.headers = list(16, allocator)
@@ -753,8 +778,10 @@ fn parse_all(self: &CsvReader) {
             // SIMD classify
             let chunk_buf: [u8; 16] = [0; 16]
             if chunk_size < 16 {
-                copy_to(slice_from_raw_parts(data_ptr + pos, chunk_size),
-                    slice_from_raw_parts(&chunk_buf[0], chunk_size))
+                copy_to(
+                    slice_from_raw_parts(data_ptr + pos, chunk_size),
+                    slice_from_raw_parts(&chunk_buf[0], chunk_size),
+                )
             }
             const cptr = if chunk_size < 16 { &chunk_buf[0] } else { data_ptr + pos }
             const masks = classify_chunk(cptr, self.options.delimiter, self.options.quote)
@@ -817,8 +844,7 @@ fn parse_all(self: &CsvReader) {
             // EOF - flush remaining field
             if field_start < data_len {
                 current_fields.push(self.extract_field(data, field_start, data_len))
-                rows.push(CsvRecord { fields = move current_fields,
-                    headers = Some(&self.headers) })
+                rows.push(CsvRecord { fields = move current_fields, headers = Some(&self.headers) })
             }
             break
         }
@@ -829,8 +855,10 @@ fn parse_all(self: &CsvReader) {
         const chunk_size = if is_partial { remaining } else { 16usize }
         let cptr = data_ptr + pos
         if is_partial {
-            copy_to(slice_from_raw_parts(cptr, chunk_size), slice_from_raw_parts(&pad_buf[0],
-                    chunk_size))
+            copy_to(
+                slice_from_raw_parts(cptr, chunk_size),
+                slice_from_raw_parts(&pad_buf[0], chunk_size),
+            )
             cptr = &pad_buf[0]
         }
 
@@ -866,8 +894,7 @@ fn parse_all(self: &CsvReader) {
 
             if byte == 0x0A or byte == 0x0D {
                 current_fields.push(self.extract_field(data, field_start, abs_pos))
-                rows.push(CsvRecord { fields = move current_fields,
-                    headers = Some(&self.headers) })
+                rows.push(CsvRecord { fields = move current_fields, headers = Some(&self.headers) })
                 current_fields = list(16)
 
                 field_start = abs_pos + 1
@@ -946,8 +973,11 @@ pub type CsvTable = struct {
     buffer: StringBuilder
 }
 
-pub fn csv_table(r: Reader, options: CsvOptions = csv_options(),
-    allocator: &Allocator? = null) Result(CsvTable, CsvError) {
+pub fn csv_table(
+    r: Reader,
+    options: CsvOptions = csv_options(),
+    allocator: &Allocator? = null,
+) Result(CsvTable, CsvError) {
     let reader: CsvReader
     csv_reader_init(&reader, r, options, allocator)
     reader.parse_all()
@@ -991,8 +1021,11 @@ pub fn select_rows(table: &CsvTable, start: usize, end: usize) CsvTable {
         sel_rows.push(CsvRecord { fields = move copied_fields, headers = null })
     }
 
-    let result = CsvTable { buffer = string_builder(0), headers = move sel_headers,
-        rows = move sel_rows }
+    let result = CsvTable {
+        buffer = string_builder(0),
+        headers = move sel_headers,
+        rows = move sel_rows,
+    }
     // The records point at the table's own header list, which only exists once it is built.
     for &rec in result.rows {
         rec.headers = Some(&result.headers)
@@ -1033,8 +1066,11 @@ pub fn select_columns(table: &CsvTable, names: String[]) CsvTable {
     }
     indices.deinit()
 
-    let result = CsvTable { buffer = string_builder(0), headers = move col_headers,
-        rows = move col_rows }
+    let result = CsvTable {
+        buffer = string_builder(0),
+        headers = move col_headers,
+        rows = move col_rows,
+    }
     for &rec in result.rows {
         rec.headers = Some(&result.headers)
     }

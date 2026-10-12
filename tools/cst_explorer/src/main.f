@@ -271,8 +271,13 @@ fn eprintln(line: String) {
     const _r2 = stderr.write("\n")
 }
 
-fn print_timing_banner(path: String, bytes: usize, tokens: usize, diagnostics: usize,
-    iterations: usize) {
+fn print_timing_banner(
+    path: String,
+    bytes: usize,
+    tokens: usize,
+    diagnostics: usize,
+    iterations: usize,
+) {
     const banner = $"{path}: {bytes} bytes, {tokens} tokens, {diagnostics} diagnostics - {iterations} iter"
     defer banner.deinit()
     eprintln(banner.view)
@@ -293,8 +298,14 @@ fn print_timing_row(label: String, min_ns: u64, max_ns: u64, sum_ns: u64, iterat
 // Tokens are an indexed array; the CST `tree` references them by integer.
 // ─────────────────────────────────────────────────────────────────────────
 
-fn print_json(path: String, source: String, tokens: &List(Token), cst: &CstNode, ast: &Module,
-    diagnostics: &List(Diagnostic)) {
+fn print_json(
+    path: String,
+    source: String,
+    tokens: &List(Token),
+    cst: &CstNode,
+    ast: &Module,
+    diagnostics: &List(Diagnostic),
+) {
     let sb = string_builder(source.len * 4 + 4096)
     defer sb.deinit()
 
@@ -377,8 +388,14 @@ fn find_token_index(tokens: &List(Token), tok: &Token) usize {
     return 0usize
 }
 
-fn emit_token_json(sb: &StringBuilder, tok: &Token, source: String, prev_end: usize,
-    next_off: usize, lidx: &LineIndex) {
+fn emit_token_json(
+    sb: &StringBuilder,
+    tok: &Token,
+    source: String,
+    prev_end: usize,
+    next_off: usize,
+    lidx: &LineIndex,
+) {
     sb.append("{\"kind\":\"")
     sb.append(tok.kind.to_string())
     sb.append("\",\"offset\":")
@@ -411,7 +428,9 @@ fn emit_trivia_json(sb: &StringBuilder, it: TriviaIter) {
             sb.append(",")
         }
         sb.append("{\"kind\":\"")
-        sb.append(if pieces[i].kind == TriviaKind.LineComment { "LineComment" } else { "Whitespace" })
+        sb.append(
+            if pieces[i].kind == TriviaKind.LineComment { "LineComment" } else { "Whitespace" },
+        )
         sb.append("\",\"text\":")
         append_json_string(sb, pieces[i].text)
         sb.append("}")

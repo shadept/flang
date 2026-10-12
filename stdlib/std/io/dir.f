@@ -221,7 +221,9 @@ pub fn remove_dir_all(path: String, allocator: &Allocator? = null) Result((), Di
         const view = item.path.view
         // A file that will not unlink is a failure of the directory removal, so it is reported as
         // one.
-        const r = if item.is_dir { remove_dir(view) } else { raw_unlink(view).map_err(to_dir_error) }
+        const r = if item.is_dir { remove_dir(
+            view,
+        ) } else { raw_unlink(view).map_err(to_dir_error) }
         if r.is_err() {
             return r
         }

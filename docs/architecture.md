@@ -637,10 +637,50 @@ Design:
   in `a[i]` and `T[]`; `.`, `&` as a prefix, `#` and `$` glue to what follows.
 - **Structure is authored, layout is width-driven.** A newline can end a
   statement, so breaks between statements and inside brace bodies always
-  stand, as do blank lines and comment placement. Breaks inside `(`/`[`
-  groups and before `and`/`or` are layout: with `join-lines` on they
-  re-flow, and `max-width` decides where lines break (after list commas,
-  before `and`/`or`). A too-long line with no such break point stays long.
+  stand, as do blank lines and comment placement. Breaks inside bracketed
+  lists and before `and`/`or` are layout: with `join-lines` on they re-flow,
+  and `max-width` decides where lines break. A too-long line with nothing
+  left to break stays long.
+- **Groups.** Every bracketed comma list (call arguments, parameters, type
+  arguments, tuples, array and struct literals) is a group, laid out flat or
+  broken. Broken puts each element on a line of its own one indent step
+  deeper than the opener's line, each ending in a comma, and the closer back
+  at the opener's line indent:
+
+      pub fn op_cmp(
+          a: ($T1, $T2, $T3, $T4, $T5, $T6, $T7, $T8),
+          b: (T1, T2, T3, T4, T5, T6, T7, T8),
+      ) Ord {
+
+  A broken array literal whose every element is written on one line in at
+  most 10 columns fills its lines instead, breaking after a comma only when
+  the next element would not fit (rustfmt's short-array rule):
+
+      let arr = [
+          37i32, 12, 88, 4, 21, 77, 56, 9, 63, 42, 11, 84, 29, 55, 18, 73, 66,
+          14, 80, 58, 6, 39,
+      ]
+
+  A group is broken when its author put a line break straight after its
+  opener (so a broken list stays broken), or when a line it sits on is wider
+  than `max-width` and it is the outermost flat group on that line - inner
+  groups are only considered once the outer ones are broken. A trailing
+  comment does not count toward the width. Overflow is found by rendering:
+  a render that breaks a group is rerun under the new set, until one breaks
+  none. A brace body inside a flat group (a lambda argument) keeps the group
+  flat on its opening line: `g(fn() {`.
+- **Signatures.** A `where` clause is a group the body's `{` closes, and a
+  signature holding one is a group around both lists: an overflowing
+  signature first moves `where` to a line of its own at the declaration's
+  indent, then breaks the parameter list if the head still overflows, then
+  breaks the bound list one bound per line, with `{` alone on the line after:
+
+      pub fn merge_by(a: move $I, b: move $J, key: $F) List(I.Item)
+      where
+          I: Iterator(Item: copyable),
+          F: fn(I.Item) $K,
+          K: copyable + Ordered,
+      {
 - **Comment reflow.** Runs of own-line `//` prose re-fill to `max-width`.
   Structure is left alone: lists, rulers, tables, indented example blocks,
   aligned columns, and any line with a non-ASCII byte (box drawing,
@@ -675,7 +715,7 @@ Configuration lives in a `[fmt]` table in `flang.toml`, parsed by
 | `indent` | `4` | spaces per indentation level |
 | `max-width` | `100` | layout width in columns; `0` disables wrapping, joining, and reflow |
 | `max-blank-lines` | `1` | maximum consecutive blank lines |
-| `trailing-comma` | `"multiline"` | `no` / `multiline` / `always` - trailing comma in comma lists (call args, arrays, struct construction) |
+| `trailing-comma` | `"multiline"` | `no` / `multiline` / `always` - trailing comma in comma lists (call args, parameters, `where` bounds, arrays, struct construction); `multiline` means a broken group |
 | `separators` | `"no"` | same values - separators the grammar makes optional (struct fields, enum variants, match arms) |
 | `join-lines` | `true` | re-flow layout breaks (groups, `and`/`or`) to `max-width` |
 | `sort-imports` | `true` | regroup and sort the leading import block |
@@ -688,7 +728,7 @@ Configuration lives in a `[fmt]` table in `flang.toml`, parsed by
 `always` is accepted but its multiline forcing is not implemented yet; it
 currently behaves as `multiline`.
 
-Formatting runs to an internal fixpoint (a wrap inserted by one pass is an
+Formatting runs to an internal fixpoint (a break inserted by one pass is an
 authored break to the next, which can move a separator), capped at four
 passes; an output still changing then is refused as a formatter bug.
 

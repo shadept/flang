@@ -103,8 +103,8 @@ pub type FqnHit = struct(V) {
 // Resolves `name` in `vis`'s scope and returns the winning FQN alongside the value, for a caller
 // that must cite which name won. A dotted or exact name matches itself; a bare name matches the
 // current module's, then the first visible module's, in table order.
-pub fn lookup_entry(self: &FqnMap($V), name: String,
-    vis: &Visibility) FqnHit($V)? where V: copyable {
+pub fn lookup_entry(self: &FqnMap($V), name: String, vis: &Visibility) FqnHit($V)?
+where V: copyable {
     return self.lookup_id(name, vis) match {
         Some(id) => Some(.{ fqn = self.names.get(id), value = self.entries.get(id).unwrap() })
         None => null

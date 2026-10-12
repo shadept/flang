@@ -201,12 +201,27 @@ pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) S
         if !sig_lowerable(&result.interner, &s, false, &result.nominals) {
             continue
         }
-        let sym = mangle_spec_symbol(&result.interner, sp.module, sp.name, &s, &result.nominals,
-            allocator)
+        let sym = mangle_spec_symbol(
+            &result.interner,
+            sp.module,
+            sp.name,
+            &s,
+            &result.nominals,
+            allocator,
+        )
         const sym_view = sym.view
         by_spec_id.set(sp.id, sym)
-        displays.set(sym_view, pretty_symbol(&result.interner, sp.module, sp.name, &s.params,
-                &result.nominals, allocator))
+        displays.set(
+            sym_view,
+            pretty_symbol(
+                &result.interner,
+                sp.module,
+                sp.name,
+                &s.params,
+                &result.nominals,
+                allocator,
+            ),
+        )
         by_spec_sig.set(sp.id, s)
     }
 
@@ -461,14 +476,23 @@ fn add_function_symbol(self: &SymbolBuilder, decl: &FunctionDecl, fqn: String) {
     }
     let s = sig.unwrap()
     const foreign = is_foreign_directive(decl.directives)
-    let sym = mangle_symbol(self.interner, fqn, decl.name, foreign, &s.params, self.nominals,
-        self.allocator)
+    let sym = mangle_symbol(
+        self.interner,
+        fqn,
+        decl.name,
+        foreign,
+        &s.params,
+        self.nominals,
+        self.allocator,
+    )
     const sym_view = sym.view
     self.by_fn_id.set(fid.unwrap(), sym)
     // `main` and foreigns keep their bare, already-readable symbol.
     if !foreign and decl.name != "main" {
-        self.displays.set(sym_view, pretty_symbol(self.interner, fqn, decl.name, &s.params,
-                self.nominals, self.allocator))
+        self.displays.set(
+            sym_view,
+            pretty_symbol(self.interner, fqn, decl.name, &s.params, self.nominals, self.allocator),
+        )
     }
 }
 
@@ -677,8 +701,14 @@ fn short_name(fqn: String) String {
 
 // The display name behind a mangled symbol: `module.path.name(&Type,u32)`. Commas carry no space so
 // folded-stack tooling that splits frames naively stays happy.
-fn pretty_symbol(it: &TypeInterner, fqn: String, name: String, params: &List(Ty),
-    reg: &NominalRegistry, allocator: &Allocator? = null) OwnedString {
+fn pretty_symbol(
+    it: &TypeInterner,
+    fqn: String,
+    name: String,
+    params: &List(Ty),
+    reg: &NominalRegistry,
+    allocator: &Allocator? = null,
+) OwnedString {
     let sb = string_builder(fqn.len + name.len + 16, allocator)
     defer sb.deinit()
     if fqn.len > 0 {
@@ -698,8 +728,14 @@ fn pretty_symbol(it: &TypeInterner, fqn: String, name: String, params: &List(Ty)
 }
 
 // Shared mangling core: `module__name__param__param` into `sb`.
-fn append_mangled(it: &TypeInterner, sb: &StringBuilder, fqn: String, name: String,
-    params: &List(Ty), reg: &NominalRegistry) {
+fn append_mangled(
+    it: &TypeInterner,
+    sb: &StringBuilder,
+    fqn: String,
+    name: String,
+    params: &List(Ty),
+    reg: &NominalRegistry,
+) {
     if fqn.len > 0 {
         append_module_path(sb, fqn)
         sb.append("__")
@@ -714,8 +750,15 @@ fn append_mangled(it: &TypeInterner, sb: &StringBuilder, fqn: String, name: Stri
 // The C symbol a function lowers to. The entry point and foreign functions keep their declared
 // names - both name symbols fixed outside the compiler (the backend's entry wiring, and the C
 // linker). Everything else is qualified by module path and separated by parameter types.
-fn mangle_symbol(it: &TypeInterner, fqn: String, name: String, is_foreign: bool, params: &List(Ty),
-    reg: &NominalRegistry, allocator: &Allocator? = null) OwnedString {
+fn mangle_symbol(
+    it: &TypeInterner,
+    fqn: String,
+    name: String,
+    is_foreign: bool,
+    params: &List(Ty),
+    reg: &NominalRegistry,
+    allocator: &Allocator? = null,
+) OwnedString {
     if is_foreign or name == "main" {
         return from_view(name, allocator)
     }
@@ -730,8 +773,14 @@ fn mangle_symbol(it: &TypeInterner, fqn: String, name: String, is_foreign: bool,
 // in the specialization key, so it has to participate in the symbol too - a return-only-polymorphic
 // template's instantiations differ in nothing else - and the suffix keeps every specialization
 // distinct from same-parameter monomorphic overloads.
-fn mangle_spec_symbol(it: &TypeInterner, fqn: String, name: String, sig: &FnSig,
-    reg: &NominalRegistry, allocator: &Allocator? = null) OwnedString {
+fn mangle_spec_symbol(
+    it: &TypeInterner,
+    fqn: String,
+    name: String,
+    sig: &FnSig,
+    reg: &NominalRegistry,
+    allocator: &Allocator? = null,
+) OwnedString {
     let sb = string_builder(fqn.len + name.len + 24, allocator)
     defer sb.deinit()
     append_mangled(it, &sb, fqn, name, &sig.params, reg)
@@ -768,8 +817,10 @@ test "mangles symbols by module fqn, keeping main and foreigns bare" {
     defer c.deinit()
     let d = mangle_symbol(&it, "", "add", false, &none, &reg)
     defer d.deinit()
-    assert_true(a.view == "flang_0typer__checker__deinit",
-        "dotted fqn separates, underscores escape")
+    assert_true(
+        a.view == "flang_0typer__checker__deinit",
+        "dotted fqn separates, underscores escape",
+    )
     assert_true(b.view == "printf", "foreign names pass through")
     assert_true(c.view == "main", "main stays bare")
     assert_true(d.view == "add", "no fqn, bare name")

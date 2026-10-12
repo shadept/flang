@@ -122,44 +122,93 @@ fn cache_put(cache: &LayoutCache?, ty: Ty, l: Layout) {
 
 // Size and alignment of any resolved `Ty`. The type must be zonked and concrete: a `Var` reaching
 // layout is a compiler bug (lowering's contract - docs/self-host.md).
-pub fn layout_of(it: &TypeInterner, ty: Ty, reg: &NominalRegistry, cache: &LayoutCache? = null,
-    allocator: &Allocator? = null) Layout {
+pub fn layout_of(
+    it: &TypeInterner,
+    ty: Ty,
+    reg: &NominalRegistry,
+    cache: &LayoutCache? = null,
+    allocator: &Allocator? = null,
+) Layout {
     return layout_rec(it, ty, reg, cache, allocator)
 }
 
 // Layout of a struct instantiation: `args` substitutes the struct's type parameters (empty for
 // non-generic structs).
-pub fn struct_layout(it: &TypeInterner, def: &StructDef, args: &List(Ty), reg: &NominalRegistry,
-    cache: &LayoutCache? = null, allocator: &Allocator? = null) StructLayout {
+pub fn struct_layout(
+    it: &TypeInterner,
+    def: &StructDef,
+    args: &List(Ty),
+    reg: &NominalRegistry,
+    cache: &LayoutCache? = null,
+    allocator: &Allocator? = null,
+) StructLayout {
     return struct_layout_impl(it, def, args, reg, cache, allocator)
 }
 
 // Layout of an enum instantiation. Recognises the `Option(&T)` niche.
-pub fn enum_layout(it: &TypeInterner, def: &EnumDef, args: &List(Ty), reg: &NominalRegistry,
-    cache: &LayoutCache? = null, allocator: &Allocator? = null) EnumLayout {
+pub fn enum_layout(
+    it: &TypeInterner,
+    def: &EnumDef,
+    args: &List(Ty),
+    reg: &NominalRegistry,
+    cache: &LayoutCache? = null,
+    allocator: &Allocator? = null,
+) EnumLayout {
     return enum_layout_impl(it, def, args, reg, cache, allocator)
 }
 
 // The declared type of field `index` with the instantiation's type arguments substituted in (the
 // raw definition stores generic fields against the declaration's type parameters).
-pub fn field_ty(it: &TypeInterner, def: &StructDef, index: usize, args: &List(Ty),
-    reg: &NominalRegistry) Ty {
-    return member_ty(it, reg, def.fqn, &def.type_params, &def.assoc_params, args,
-        def.fields[index].ty)
+pub fn field_ty(
+    it: &TypeInterner,
+    def: &StructDef,
+    index: usize,
+    args: &List(Ty),
+    reg: &NominalRegistry,
+) Ty {
+    return member_ty(
+        it,
+        reg,
+        def.fqn,
+        &def.type_params,
+        &def.assoc_params,
+        args,
+        def.fields[index].ty,
+    )
 }
 
 // The declared type of variant `vnum`'s payload `index` with the instantiation's type arguments
 // substituted in - the enum-side mirror of `field_ty`.
-pub fn variant_payload_ty(it: &TypeInterner, def: &EnumDef, vnum: usize, index: usize,
-    args: &List(Ty), reg: &NominalRegistry) Ty {
-    return member_ty(it, reg, def.fqn, &def.type_params, &def.assoc_params, args,
-        def.variants[vnum].payloads[index])
+pub fn variant_payload_ty(
+    it: &TypeInterner,
+    def: &EnumDef,
+    vnum: usize,
+    index: usize,
+    args: &List(Ty),
+    reg: &NominalRegistry,
+) Ty {
+    return member_ty(
+        it,
+        reg,
+        def.fqn,
+        &def.type_params,
+        &def.assoc_params,
+        args,
+        def.variants[vnum].payloads[index],
+    )
 }
 
 // A field or payload type of the definition `fqn` instantiated at `args`. The associated types its
 // fields name (`I.Item`, RFC-036) take what the checker solved them to for that instance.
-fn member_ty(it: &TypeInterner, reg: &NominalRegistry, fqn: String, params: &List(VarId),
-    assoc: &List(VarId), args: &List(Ty), ty: Ty) Ty {
+fn member_ty(
+    it: &TypeInterner,
+    reg: &NominalRegistry,
+    fqn: String,
+    params: &List(VarId),
+    assoc: &List(VarId),
+    args: &List(Ty),
+    ty: Ty,
+) Ty {
     if assoc.len == 0 {
         return subst(it, ty, params, args)
     }
@@ -184,8 +233,13 @@ fn member_ty(it: &TypeInterner, reg: &NominalRegistry, fqn: String, params: &Lis
 
 // Core walk
 
-fn layout_rec(it: &TypeInterner, ty: Ty, reg: &NominalRegistry, cache: &LayoutCache?,
-    alloc: &Allocator?) Layout {
+fn layout_rec(
+    it: &TypeInterner,
+    ty: Ty,
+    reg: &NominalRegistry,
+    cache: &LayoutCache?,
+    alloc: &Allocator?,
+) Layout {
     let hit = cache_get(cache, ty)
     if hit.is_some() {
         return hit.unwrap()
@@ -229,8 +283,13 @@ fn prim_layout(p: PrimitiveKind) Layout {
     }
 }
 
-fn array_layout(it: &TypeInterner, a: &NArrayNode, reg: &NominalRegistry, cache: &LayoutCache?,
-    alloc: &Allocator?) Layout {
+fn array_layout(
+    it: &TypeInterner,
+    a: &NArrayNode,
+    reg: &NominalRegistry,
+    cache: &LayoutCache?,
+    alloc: &Allocator?,
+) Layout {
     let el = layout_rec(it, a.elem, reg, cache, alloc)
     return lay(el.size * a.length, el.align)
 }
@@ -238,8 +297,14 @@ fn array_layout(it: &TypeInterner, a: &NArrayNode, reg: &NominalRegistry, cache:
 // Fold a sequence of field types into offsets, total size and alignment. Fields are placed in
 // `field_order` (declaration order for `C`, descending alignment for `Auto`), but `offsets` is
 // written back indexed by declaration order so callers address it with a field's declared index.
-fn fields_layout(it: &TypeInterner, tys: &List(Ty), repr: Repr, reg: &NominalRegistry,
-    cache: &LayoutCache?, alloc: &Allocator?) StructLayout {
+fn fields_layout(
+    it: &TypeInterner,
+    tys: &List(Ty),
+    repr: Repr,
+    reg: &NominalRegistry,
+    cache: &LayoutCache?,
+    alloc: &Allocator?,
+) StructLayout {
     let n = tys.len
     let fls: List(Layout) = list(n, alloc)
     let max_align: usize = 1
@@ -299,15 +364,25 @@ fn field_order(fls: &List(Layout), repr: Repr, max_align: usize, alloc: &Allocat
 
 // A tuple's full layout - size, align, and per-element offsets (M11 tuple literals and `t.N`
 // projection read them).
-pub fn tuple_layout(it: &TypeInterner, elems: &List(Ty), reg: &NominalRegistry,
-    cache: &LayoutCache? = null, allocator: &Allocator? = null) StructLayout {
+pub fn tuple_layout(
+    it: &TypeInterner,
+    elems: &List(Ty),
+    reg: &NominalRegistry,
+    cache: &LayoutCache? = null,
+    allocator: &Allocator? = null,
+) StructLayout {
     return fields_layout(it, elems, Repr.Auto, reg, cache, allocator)
 }
 
 // Size/align of a positional tuple or anonymous record's child window (offsets discarded). These
 // have no declaration to lock them, so they take the default auto layout.
-fn span_size(it: &TypeInterner, span: ChildSpan, reg: &NominalRegistry, cache: &LayoutCache?,
-    alloc: &Allocator?) Layout {
+fn span_size(
+    it: &TypeInterner,
+    span: ChildSpan,
+    reg: &NominalRegistry,
+    cache: &LayoutCache?,
+    alloc: &Allocator?,
+) Layout {
     let tys: List(Ty) = list(span.len, alloc)
     for i in 0..span.len { tys.push(it.child_at(span, i)) }
     let r = aggregate_size(it, &tys, reg, cache, alloc)
@@ -315,16 +390,26 @@ fn span_size(it: &TypeInterner, span: ChildSpan, reg: &NominalRegistry, cache: &
     return r
 }
 
-fn aggregate_size(it: &TypeInterner, elems: &List(Ty), reg: &NominalRegistry, cache: &LayoutCache?,
-    alloc: &Allocator?) Layout {
+fn aggregate_size(
+    it: &TypeInterner,
+    elems: &List(Ty),
+    reg: &NominalRegistry,
+    cache: &LayoutCache?,
+    alloc: &Allocator?,
+) Layout {
     let sl = fields_layout(it, elems, Repr.Auto, reg, cache, alloc)
     let r = lay(sl.size, sl.align)
     sl.offsets.deinit()
     return r
 }
 
-fn nominal_layout(it: &TypeInterner, nn: &NNominalNode, reg: &NominalRegistry, cache: &LayoutCache?,
-    alloc: &Allocator?) Layout {
+fn nominal_layout(
+    it: &TypeInterner,
+    nn: &NNominalNode,
+    reg: &NominalRegistry,
+    cache: &LayoutCache?,
+    alloc: &Allocator?,
+) Layout {
     let args: List(Ty) = list(nn.args.len, alloc)
     defer args.deinit()
     for i in 0..nn.args.len { args.push(it.child_at(nn.args, i)) }
@@ -354,28 +439,55 @@ fn nominal_layout(it: &TypeInterner, nn: &NNominalNode, reg: &NominalRegistry, c
     }
 }
 
-fn struct_size(it: &TypeInterner, def: &StructDef, args: &List(Ty), reg: &NominalRegistry,
-    cache: &LayoutCache?, alloc: &Allocator?) Layout {
+fn struct_size(
+    it: &TypeInterner,
+    def: &StructDef,
+    args: &List(Ty),
+    reg: &NominalRegistry,
+    cache: &LayoutCache?,
+    alloc: &Allocator?,
+) Layout {
     let sl = struct_layout_impl(it, def, args, reg, cache, alloc)
     let r = lay(sl.size, sl.align)
     sl.offsets.deinit()
     return r
 }
 
-fn enum_size(it: &TypeInterner, def: &EnumDef, args: &List(Ty), reg: &NominalRegistry,
-    cache: &LayoutCache?, alloc: &Allocator?) Layout {
+fn enum_size(
+    it: &TypeInterner,
+    def: &EnumDef,
+    args: &List(Ty),
+    reg: &NominalRegistry,
+    cache: &LayoutCache?,
+    alloc: &Allocator?,
+) Layout {
     let el = enum_layout_impl(it, def, args, reg, cache, alloc)
     return lay(el.size, el.align)
 }
 
 // Aggregates
 
-fn struct_layout_impl(it: &TypeInterner, def: &StructDef, args: &List(Ty), reg: &NominalRegistry,
-    cache: &LayoutCache?, alloc: &Allocator?) StructLayout {
+fn struct_layout_impl(
+    it: &TypeInterner,
+    def: &StructDef,
+    args: &List(Ty),
+    reg: &NominalRegistry,
+    cache: &LayoutCache?,
+    alloc: &Allocator?,
+) StructLayout {
     let tys: List(Ty) = list(def.fields.len, alloc)
     for i in 0..def.fields.len {
-        tys.push(member_ty(it, reg, def.fqn, &def.type_params, &def.assoc_params, args,
-                def.fields[i].ty))
+        tys.push(
+            member_ty(
+                it,
+                reg,
+                def.fqn,
+                &def.type_params,
+                &def.assoc_params,
+                args,
+                def.fields[i].ty,
+            ),
+        )
     }
     let sl = fields_layout(it, &tys, repr_of(def), reg, cache, alloc)
     tys.deinit()
@@ -389,14 +501,22 @@ fn struct_layout_impl(it: &TypeInterner, def: &StructDef, args: &List(Ty), reg: 
 // can request vector alignment. Per-payload byte offsets of one variant, relative to the ENUM's
 // base: the shared payload offset plus the variant's own struct-like internal layout (M11
 // multi-payload variants). Never call for the niche form.
-pub fn variant_payload_offsets(it: &TypeInterner, def: &EnumDef, vnum: usize, args: &List(Ty),
-    reg: &NominalRegistry, cache: &LayoutCache? = null, allocator: &Allocator? = null) List(usize) {
+pub fn variant_payload_offsets(
+    it: &TypeInterner,
+    def: &EnumDef,
+    vnum: usize,
+    args: &List(Ty),
+    reg: &NominalRegistry,
+    cache: &LayoutCache? = null,
+    allocator: &Allocator? = null,
+) List(usize) {
     let el = enum_layout(it, def, args, reg, cache, allocator)
     let v = &def.variants[vnum]
     let ptys: List(Ty) = list(v.payloads.len, allocator)
     for j in 0..v.payloads.len {
-        ptys.push(member_ty(it, reg, def.fqn, &def.type_params, &def.assoc_params, args,
-                v.payloads[j]))
+        ptys.push(
+            member_ty(it, reg, def.fqn, &def.type_params, &def.assoc_params, args, v.payloads[j]),
+        )
     }
     let pl = fields_layout(it, &ptys, Repr.Auto, reg, cache, allocator)
     ptys.deinit()
@@ -414,8 +534,14 @@ fn simd_layout(sl: move StructLayout) StructLayout {
     return .{ size = align_up(sl.size, align), align = align, offsets = move sl.offsets }
 }
 
-fn enum_layout_impl(it: &TypeInterner, def: &EnumDef, args: &List(Ty), reg: &NominalRegistry,
-    cache: &LayoutCache?, alloc: &Allocator?) EnumLayout {
+fn enum_layout_impl(
+    it: &TypeInterner,
+    def: &EnumDef,
+    args: &List(Ty),
+    reg: &NominalRegistry,
+    cache: &LayoutCache?,
+    alloc: &Allocator?,
+) EnumLayout {
     if is_option_niche(it, def, args) {
         return .{ size = 8, align = 8, tag_size = 0, payload_offset = 0, is_niche = true }
     }
@@ -432,8 +558,17 @@ fn enum_layout_impl(it: &TypeInterner, def: &EnumDef, args: &List(Ty), reg: &Nom
         any_payload = true
         let ptys: List(Ty) = list(v.payloads.len, alloc)
         for j in 0..v.payloads.len {
-            ptys.push(member_ty(it, reg, def.fqn, &def.type_params, &def.assoc_params, args,
-                    v.payloads[j]))
+            ptys.push(
+                member_ty(
+                    it,
+                    reg,
+                    def.fqn,
+                    &def.type_params,
+                    &def.assoc_params,
+                    args,
+                    v.payloads[j],
+                ),
+            )
         }
         let pl = fields_layout(it, &ptys, Repr.Auto, reg, cache, alloc)
         ptys.deinit()
@@ -600,10 +735,16 @@ test "primitives have natural size and alignment" {
     assert_eq(layout_of(&it, prim_of(PrimitiveKind.I32), &reg).size, 4 as usize, "i32 is 4 bytes")
     assert_eq(layout_of(&it, prim_of(PrimitiveKind.I32), &reg).align, 4 as usize, "i32 aligns to 4")
     assert_eq(layout_of(&it, prim_of(PrimitiveKind.F64), &reg).size, 8 as usize, "f64 is 8 bytes")
-    assert_eq(layout_of(&it, prim_of(PrimitiveKind.Char), &reg).size, 4 as usize,
-        "char is a 4-byte codepoint")
-    assert_eq(layout_of(&it, prim_of(PrimitiveKind.USize), &reg).size, 8 as usize,
-        "usize is 8 bytes on a 64-bit target")
+    assert_eq(
+        layout_of(&it, prim_of(PrimitiveKind.Char), &reg).size,
+        4 as usize,
+        "char is a 4-byte codepoint",
+    )
+    assert_eq(
+        layout_of(&it, prim_of(PrimitiveKind.USize), &reg).size,
+        8 as usize,
+        "usize is 8 bytes on a 64-bit target",
+    )
 }
 
 test "references and arrays" {
@@ -629,12 +770,30 @@ test "auto layout reorders fields by alignment to minimise padding" {
     let reg = nominal_registry()
     defer reg.deinit()
     let fields: List(Field) = list(3)
-    fields.push(Field { name = "a", ty = prim_of(PrimitiveKind.I8), decl_span = none_span(),
-        owned = false }) // decl 0, align 1
-    fields.push(Field { name = "b", ty = prim_of(PrimitiveKind.I64), decl_span = none_span(),
-        owned = false }) // decl 1, align 8
-    fields.push(Field { name = "c", ty = prim_of(PrimitiveKind.I16), decl_span = none_span(),
-        owned = false }) // decl 2, align 2
+    fields.push(
+        Field {
+            name = "a",
+            ty = prim_of(PrimitiveKind.I8),
+            decl_span = none_span(),
+            owned = false,
+        },
+    ) // decl 0, align 1
+    fields.push(
+        Field {
+            name = "b",
+            ty = prim_of(PrimitiveKind.I64),
+            decl_span = none_span(),
+            owned = false,
+        },
+    ) // decl 1, align 8
+    fields.push(
+        Field {
+            name = "c",
+            ty = prim_of(PrimitiveKind.I16),
+            decl_span = none_span(),
+            owned = false,
+        },
+    ) // decl 2, align 2
     let def = StructDef {
         fqn = "T",
         module = "",
@@ -663,12 +822,30 @@ test "C repr keeps declaration order and C padding" {
     let reg = nominal_registry()
     defer reg.deinit()
     let fields: List(Field) = list(3)
-    fields.push(Field { name = "a", ty = prim_of(PrimitiveKind.I8), decl_span = none_span(),
-        owned = false })
-    fields.push(Field { name = "b", ty = prim_of(PrimitiveKind.I64), decl_span = none_span(),
-        owned = false })
-    fields.push(Field { name = "c", ty = prim_of(PrimitiveKind.I16), decl_span = none_span(),
-        owned = false })
+    fields.push(
+        Field {
+            name = "a",
+            ty = prim_of(PrimitiveKind.I8),
+            decl_span = none_span(),
+            owned = false,
+        },
+    )
+    fields.push(
+        Field {
+            name = "b",
+            ty = prim_of(PrimitiveKind.I64),
+            decl_span = none_span(),
+            owned = false,
+        },
+    )
+    fields.push(
+        Field {
+            name = "c",
+            ty = prim_of(PrimitiveKind.I16),
+            decl_span = none_span(),
+            owned = false,
+        },
+    )
     let def = StructDef {
         fqn = "T",
         module = "",

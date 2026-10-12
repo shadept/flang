@@ -491,8 +491,14 @@ fn blame_nominal(self: &Engine, ty: Ty, nn: &NNominalNode, out: &List(CopyBlame)
 }
 
 fn blame_struct(self: &Engine, ty: Ty, sd: &StructDef, nn: &NNominalNode, out: &List(CopyBlame)) {
-    let subst = self.nominals.unwrap().instance_subst(ty, &sd.type_params, &sd.assoc_params,
-        nn.args, &self.interner, self.allocator)
+    let subst = self.nominals.unwrap().instance_subst(
+        ty,
+        &sd.type_params,
+        &sd.assoc_params,
+        nn.args,
+        &self.interner,
+        self.allocator,
+    )
     defer subst.deinit()
     for i in 0..sd.fields.len {
         if sd.fields[i].owned {
@@ -521,8 +527,14 @@ fn blame_struct(self: &Engine, ty: Ty, sd: &StructDef, nn: &NNominalNode, out: &
 }
 
 fn blame_enum(self: &Engine, ty: Ty, ed: &EnumDef, nn: &NNominalNode, out: &List(CopyBlame)) {
-    let subst = self.nominals.unwrap().instance_subst(ty, &ed.type_params, &ed.assoc_params,
-        nn.args, &self.interner, self.allocator)
+    let subst = self.nominals.unwrap().instance_subst(
+        ty,
+        &ed.type_params,
+        &ed.assoc_params,
+        nn.args,
+        &self.interner,
+        self.allocator,
+    )
     defer subst.deinit()
     for vi in 0..ed.variants.len {
         for pi in 0..ed.variants[vi].payloads.len {
@@ -1362,10 +1374,14 @@ test "an owned field clears the bit, and nothing else does" {
     const p = reg.register(NominalDef.NomStruct(cp_struct(list(0), plain)), $"m.Plain")
     const h = cp_handle(&reg)
 
-    assert_true(eng.is_copyable(cp_nominal(&eng, p, list(0))),
-        "the same shape without `owned` stays copyable")
-    assert_true(!eng.is_copyable(cp_nominal(&eng, h, list(0))),
-        "a field declared `owned` makes the type non-copyable")
+    assert_true(
+        eng.is_copyable(cp_nominal(&eng, p, list(0))),
+        "the same shape without `owned` stays copyable",
+    )
+    assert_true(
+        !eng.is_copyable(cp_nominal(&eng, h, list(0))),
+        "a field declared `owned` makes the type non-copyable",
+    )
 }
 
 test "the bit is transitive through by-value fields, and stops at a reference" {
@@ -1387,10 +1403,14 @@ test "the bit is transitive through by-value fields, and stops at a reference" {
     by_ref.push(cp_field("h", eng.mk_ref(handle), false))
     const viewer = reg.register(NominalDef.NomStruct(cp_struct(list(0), by_ref)), $"m.Viewer")
 
-    assert_true(!eng.is_copyable(cp_nominal(&eng, owner, list(0))),
-        "a non-copyable field type is inherited")
-    assert_true(eng.is_copyable(cp_nominal(&eng, viewer, list(0))),
-        "a reference is a leaf: it shares the value rather than holding it")
+    assert_true(
+        !eng.is_copyable(cp_nominal(&eng, owner, list(0))),
+        "a non-copyable field type is inherited",
+    )
+    assert_true(
+        eng.is_copyable(cp_nominal(&eng, viewer, list(0))),
+        "a reference is a leaf: it shares the value rather than holding it",
+    )
     assert_true(eng.is_copyable(eng.mk_ref(handle)), "`&Handle` is itself copyable")
     assert_true(!eng.is_copyable(eng.mk_array(handle, 2)), "an array of them is not")
 }
@@ -1439,8 +1459,9 @@ test "a view over a non-copyable element stays copyable" {
     let params: List(VarId) = list(1)
     params.push(tv)
     let fs: List(Field) = list(2)
-    fs.push(cp_field("ptr", eng.mk_ref(eng.interner.var_of(TyVar { id = tv, level = 0u32 })),
-            false))
+    fs.push(
+        cp_field("ptr", eng.mk_ref(eng.interner.var_of(TyVar { id = tv, level = 0u32 })), false),
+    )
     fs.push(cp_field("len", prim_of(PrimitiveKind.USize), false))
     const view = reg.register(NominalDef.NomStruct(cp_struct(params, fs)), $"m.View")
 
@@ -1476,6 +1497,8 @@ test "an enum variant payload propagates the bit" {
         deprecation = null,
     }), $"m.Maybe")
 
-    assert_true(!eng.is_copyable(cp_nominal(&eng, maybe, list(0))),
-        "a payload carries the bit even though it cannot declare `owned`")
+    assert_true(
+        !eng.is_copyable(cp_nominal(&eng, maybe, list(0))),
+        "a payload carries the bit even though it cannot declare `owned`",
+    )
 }

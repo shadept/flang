@@ -181,8 +181,14 @@ fn resolve_type_decl(raw: &u8, name: String) &TypeDecl? {
 // `sources[i]` / `file_paths[i]` back `modules[i]` (the driver's file table); generated chunks are
 // appended to both so their file ids resolve. Runs after every module's nominal names are
 // collected.
-pub fn expand_templates(chk: &Checker, state: &TemplateState, modules: &List(Module),
-    paths: &List(String), sources: &List(OwnedString), file_paths: &List(OwnedString)) {
+pub fn expand_templates(
+    chk: &Checker,
+    state: &TemplateState,
+    modules: &List(Module),
+    paths: &List(String),
+    sources: &List(OwnedString),
+    file_paths: &List(OwnedString),
+) {
     // Callers without a file table (typer unit tests) can't host template bodies; nothing to
     // expand.
     if sources.len < modules.len {
@@ -201,12 +207,24 @@ pub fn expand_templates(chk: &Checker, state: &TemplateState, modules: &List(Mod
         let progress = false
         for item in work.drain() {
             if item.generation >= MAX_GENERATIONS {
-                push_diag_e(chk, item.inv.span, E_TEMPLATE_DEPTH,
-                    $"Template expansion depth exceeded ({MAX_GENERATIONS}) at `#{item.inv.name}`")
+                push_diag_e(
+                    chk,
+                    item.inv.span,
+                    E_TEMPLATE_DEPTH,
+                    $"Template expansion depth exceeded ({MAX_GENERATIONS}) at `#{item.inv.name}`",
+                )
                 continue
             }
-            const outcome = expand_one(chk, state, modules, paths, sources, file_paths, &item,
-                &parked)
+            const outcome = expand_one(
+                chk,
+                state,
+                modules,
+                paths,
+                sources,
+                file_paths,
+                &item,
+                &parked,
+            )
             outcome match {
                 Outcome.Expanded => { progress = true }
                 Outcome.UnknownType => { parked.push(item) }
@@ -227,8 +245,16 @@ pub fn expand_templates(chk: &Checker, state: &TemplateState, modules: &List(Mod
 // Register a module's (or chunk's) generator definitions, type syntax and invocations. `first_decl`
 // is where this module's new decls start in `modules[m].decls` (0 for an original module, the
 // pre-append length for a chunk); `decl_base` offsets the DeclRef indices the same way.
-fn index_module(state: &TemplateState, module: &Module, m: usize, decl_base: usize, path: String,
-    source: String, work: &List(WorkItem), generation: u32) {
+fn index_module(
+    state: &TemplateState,
+    module: &Module,
+    m: usize,
+    decl_base: usize,
+    path: String,
+    source: String,
+    work: &List(WorkItem),
+    generation: u32,
+) {
     let j: usize = 0
     for &d in module.decls {
         d.* match {
@@ -244,10 +270,10 @@ fn index_module(state: &TemplateState, module: &Module, m: usize, decl_base: usi
                 }
             }
             GenInvoke(inv) => { work.push(WorkItem {
-                    module = m,
-                    inv = inv,
-                    generation = generation,
-                }) }
+                module = m,
+                inv = inv,
+                generation = generation,
+            }) }
             Type(td) => {
                 state.syntax[$"{path}.{td.name}"] = DeclRef { module = m, decl = decl_base + j }
             }
@@ -257,9 +283,16 @@ fn index_module(state: &TemplateState, module: &Module, m: usize, decl_base: usi
     }
 }
 
-fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), paths: &List(String),
-    sources: &List(OwnedString), file_paths: &List(OwnedString), item: &WorkItem,
-    parked: &List(WorkItem)) Outcome {
+fn expand_one(
+    chk: &Checker,
+    state: &TemplateState,
+    modules: &List(Module),
+    paths: &List(String),
+    sources: &List(OwnedString),
+    file_paths: &List(OwnedString),
+    item: &WorkItem,
+    parked: &List(WorkItem),
+) Outcome {
     const inv = &item.inv
     const found_def = state.defs.get_ref(inv.name)
     if found_def.is_none() {
@@ -273,8 +306,12 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
     const arity_ok = if has_variadic { inv.args.len >= required } else { inv.args.len == def.params.len }
     if !arity_ok {
         const expect: OwnedString = if has_variadic { $"at least {required}" } else { $"{def.params.len}" }
-        push_diag_e(chk, inv.span, E_GENERATOR_ARITY,
-            $"Source generator `{inv.name}` expects {expect} arguments, got {inv.args.len}")
+        push_diag_e(
+            chk,
+            inv.span,
+            E_GENERATOR_ARITY,
+            $"Source generator `{inv.name}` expects {expect} arguments, got {inv.args.len}",
+        )
         return Outcome.Failed
     }
 
@@ -292,8 +329,7 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
         alloc = &a,
     }
     defer ectx.vis.deinit()
-    const lookup: CtLookup = .{ ctx = &ectx as &u8, resolve = resolve_type_decl,
-        name = no_name }
+    const lookup: CtLookup = .{ ctx = &ectx as &u8, resolve = resolve_type_decl, name = no_name }
     let env = ct_env(&chk.comptime, &a, lookup)
 
     // Bind parameters. A `Type` argument whose nominal is not collected yet parks the invocation
@@ -381,20 +417,38 @@ fn expand_one(chk: &Checker, state: &TemplateState, modules: &List(Module), path
     let origin = &modules[item.module]
     const decl_base = origin.decls.len
     origin.append_decls(&chunk_module.decls)
-    index_module(state, &chunk_module, item.module, decl_base, paths[item.module],
-        sources[sources.len - 1].view, parked, item.generation + 1)
+    index_module(
+        state,
+        &chunk_module,
+        item.module,
+        decl_base,
+        paths[item.module],
+        sources[sources.len - 1].view,
+        parked,
+        item.generation + 1,
+    )
     state.chunk_modules.push(chunk_module)
     return Outcome.Expanded
 }
 
-fn bind_arg(chk: &Checker, env: &CtEnv, param: &GenParam, arg: &GenArg, gen_name: String,
-    a: &Allocator) Result(CtValue, Outcome) {
+fn bind_arg(
+    chk: &Checker,
+    env: &CtEnv,
+    param: &GenParam,
+    arg: &GenArg,
+    gen_name: String,
+    a: &Allocator,
+) Result(CtValue, Outcome) {
     if param.kind == "Ident" {
         return arg.* match {
             IdentArg(id) => Ok(CtValue.Ident(id.name))
             _ => {
-                push_diag_e(chk, gen_arg_span(arg), E_GENERATOR_ARG_KIND,
-                    $"Source generator `{gen_name}` parameter `{param.name}` expects an identifier")
+                push_diag_e(
+                    chk,
+                    gen_arg_span(arg),
+                    E_GENERATOR_ARG_KIND,
+                    $"Source generator `{gen_name}` parameter `{param.name}` expects an identifier",
+                )
                 Err(Outcome.Failed)
             }
         }
@@ -418,8 +472,12 @@ fn bind_arg(chk: &Checker, env: &CtEnv, param: &GenParam, arg: &GenArg, gen_name
             }
         }
     }
-    push_diag_e(chk, param.span, E_GENERATOR_ARG_KIND,
-        $"Unknown generator parameter kind `{param.kind}` (expected `Ident` or `Type`)")
+    push_diag_e(
+        chk,
+        param.span,
+        E_GENERATOR_ARG_KIND,
+        $"Unknown generator parameter kind `{param.kind}` (expected `Ident` or `Type`)",
+    )
     return Err(Outcome.Failed)
 }
 
@@ -442,8 +500,12 @@ fn type_is_collected(chk: &Checker, name: String) bool {
     }
 }
 
-fn report_unknown_types(chk: &Checker, state: &TemplateState, paths: &List(String),
-    item: &WorkItem) {
+fn report_unknown_types(
+    chk: &Checker,
+    state: &TemplateState,
+    paths: &List(String),
+    item: &WorkItem,
+) {
     const found = state.defs.get_ref(item.inv.name)
     if found.is_none() {
         return
@@ -517,8 +579,8 @@ pub fn generated_path(origin: String) OwnedString {
 fn count_lines(text: String) usize {
     let n: usize = 0
     for c in text.as_raw_bytes() { if c == '\n' as u8 {
-            n = n + 1
-        } }
+        n = n + 1
+    } }
     return n
 }
 

@@ -135,12 +135,19 @@ test "flat_map chains a fallible step without nesting" {
     let some: Option(i32) = Some(4)
     let none: Option(i32) = null
     // `f` itself returns an Option; the result stays one level deep.
-    assert_eq(some.flat_map(fn(v: i32) Option(i32) { halve(v) }).unwrap_or(0), 2,
-        "Some chains through f")
-    assert_true(some.flat_map(fn(v: i32) Option(i32) { halve(v + 1) }).is_none(),
-        "an f returning None collapses")
-    assert_true(none.flat_map(fn(v: i32) Option(i32) { halve(v) }).is_none(),
-        "None short-circuits, f never runs")
+    assert_eq(
+        some.flat_map(fn(v: i32) Option(i32) { halve(v) }).unwrap_or(0),
+        2,
+        "Some chains through f",
+    )
+    assert_true(
+        some.flat_map(fn(v: i32) Option(i32) { halve(v + 1) }).is_none(),
+        "an f returning None collapses",
+    )
+    assert_true(
+        none.flat_map(fn(v: i32) Option(i32) { halve(v) }).is_none(),
+        "None short-circuits, f never runs",
+    )
 }
 
 fn halve(v: i32) Option(i32) {
@@ -153,14 +160,22 @@ fn halve(v: i32) Option(i32) {
 test "filter keeps a value that passes and drops one that fails" {
     let kept: Option(i32) = Some(4)
     let dropped: Option(i32) = Some(3)
-    assert_eq(kept.filter(fn(v: i32) bool { v % 2 == 0 }).unwrap_or(-1), 4,
-        "an even value survives")
-    assert_eq(dropped.filter(fn(v: i32) bool { v % 2 == 0 }).unwrap_or(-1), -1,
-        "an odd value is filtered out")
+    assert_eq(
+        kept.filter(fn(v: i32) bool { v % 2 == 0 }).unwrap_or(-1),
+        4,
+        "an even value survives",
+    )
+    assert_eq(
+        dropped.filter(fn(v: i32) bool { v % 2 == 0 }).unwrap_or(-1),
+            -1,
+        "an odd value is filtered out",
+    )
 }
 
 test "filter never runs its predicate on None" {
     let none: Option(i32) = null
-    assert_true(none.filter(fn(v: i32) bool { true }).is_none(),
-        "None stays None, predicate untouched")
+    assert_true(
+        none.filter(fn(v: i32) bool { true }).is_none(),
+        "None stays None, predicate untouched",
+    )
 }

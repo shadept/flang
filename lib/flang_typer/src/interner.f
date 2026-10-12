@@ -202,10 +202,22 @@ pub fn type_interner(allocator: &Allocator?, capacity: usize) TypeInterner {
     seed_leaf(&self, TyNode.NNever)
     seed_leaf(&self, TyNode.NError)
     // `prim_of` (type.f) fixes the id order; this is that order.
-    const prims: [PrimitiveKind; 14] = [PrimitiveKind.Bool, PrimitiveKind.I8, PrimitiveKind.I16,
-        PrimitiveKind.I32, PrimitiveKind.I64, PrimitiveKind.ISize, PrimitiveKind.U8,
-        PrimitiveKind.U16, PrimitiveKind.U32, PrimitiveKind.U64, PrimitiveKind.USize,
-        PrimitiveKind.F32, PrimitiveKind.F64, PrimitiveKind.Char]
+    const prims: [PrimitiveKind; 14] = [
+        PrimitiveKind.Bool,
+        PrimitiveKind.I8,
+        PrimitiveKind.I16,
+        PrimitiveKind.I32,
+        PrimitiveKind.I64,
+        PrimitiveKind.ISize,
+        PrimitiveKind.U8,
+        PrimitiveKind.U16,
+        PrimitiveKind.U32,
+        PrimitiveKind.U64,
+        PrimitiveKind.USize,
+        PrimitiveKind.F32,
+        PrimitiveKind.F64,
+        PrimitiveKind.Char,
+    ]
     for p in prims {
         seed_leaf(&self, TyNode.NPrim(p))
     }
@@ -456,8 +468,12 @@ pub fn substitute(self: &TypeInterner, ty: Ty, subst: &Dict(VarId, Ty), alloc: &
     }
 }
 
-fn substitute_span(self: &TypeInterner, span: ChildSpan, subst: &Dict(VarId, Ty),
-    alloc: &Allocator?) List(Ty) {
+fn substitute_span(
+    self: &TypeInterner,
+    span: ChildSpan,
+    subst: &Dict(VarId, Ty),
+    alloc: &Allocator?,
+) List(Ty) {
     let out: List(Ty) = list(span.len, alloc)
     for i in 0..span.len {
         out.push(self.substitute(self.child_at(span, i), subst, alloc))
@@ -465,22 +481,34 @@ fn substitute_span(self: &TypeInterner, span: ChildSpan, subst: &Dict(VarId, Ty)
     return out
 }
 
-fn substitute_func(self: &TypeInterner, f: &NFuncNode, subst: &Dict(VarId, Ty),
-    alloc: &Allocator?) Ty {
+fn substitute_func(
+    self: &TypeInterner,
+    f: &NFuncNode,
+    subst: &Dict(VarId, Ty),
+    alloc: &Allocator?,
+) Ty {
     let ps = substitute_span(self, f.params, subst, alloc)
     defer ps.deinit()
     return self.func_of(&ps, f.moves, self.substitute(f.ret, subst, alloc))
 }
 
-fn substitute_tuple(self: &TypeInterner, span: ChildSpan, subst: &Dict(VarId, Ty),
-    alloc: &Allocator?) Ty {
+fn substitute_tuple(
+    self: &TypeInterner,
+    span: ChildSpan,
+    subst: &Dict(VarId, Ty),
+    alloc: &Allocator?,
+) Ty {
     let es = substitute_span(self, span, subst, alloc)
     defer es.deinit()
     return self.tuple_of(&es)
 }
 
-fn substitute_record(self: &TypeInterner, rec: &NRecordNode, subst: &Dict(VarId, Ty),
-    alloc: &Allocator?) Ty {
+fn substitute_record(
+    self: &TypeInterner,
+    rec: &NRecordNode,
+    subst: &Dict(VarId, Ty),
+    alloc: &Allocator?,
+) Ty {
     let fs: List(Field) = list(rec.tys.len, alloc)
     defer fs.deinit()
     for i in 0..rec.tys.len {
@@ -494,8 +522,12 @@ fn substitute_record(self: &TypeInterner, rec: &NRecordNode, subst: &Dict(VarId,
     return self.record_of(&fs)
 }
 
-fn substitute_nominal(self: &TypeInterner, nn: &NNominalNode, subst: &Dict(VarId, Ty),
-    alloc: &Allocator?) Ty {
+fn substitute_nominal(
+    self: &TypeInterner,
+    nn: &NNominalNode,
+    subst: &Dict(VarId, Ty),
+    alloc: &Allocator?,
+) Ty {
     let as_ = substitute_span(self, nn.args, subst, alloc)
     defer as_.deinit()
     return self.nominal_of(nn.id, &as_)
@@ -667,8 +699,10 @@ test "a var keys on id and level together" {
     // `free_vars` reads the level off the node, so a moved level must surface as a fresh node
     // rather than a stale cached one.
     assert_true(it.var_of(TyVar { id = 4u32, level = 9u32 }) != a, "a moved level is a fresh node")
-    assert_true(it.var_of(TyVar { id = 5u32, level = 1u32 }) != a,
-        "a different var is a different node")
+    assert_true(
+        it.var_of(TyVar { id = 5u32, level = 1u32 }) != a,
+        "a different var is a different node",
+    )
 }
 
 test "empty tuple and void stay distinct shapes" {

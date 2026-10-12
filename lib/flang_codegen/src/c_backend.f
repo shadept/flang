@@ -1184,8 +1184,14 @@ fn emit_uns_binop(a: &Operand, b: &Operand, ty: IrType, op: String, sb: &StringB
     sb.append(")")
 }
 
-fn emit_shift(a: &Operand, b: &Operand, ty: IrType, op: String, unsigned_lhs: bool,
-    sb: &StringBuilder) {
+fn emit_shift(
+    a: &Operand,
+    b: &Operand,
+    ty: IrType,
+    op: String,
+    unsigned_lhs: bool,
+    sb: &StringBuilder,
+) {
     sb.append("(")
     emit_c_type(ty, sb)
     sb.append(")(")
@@ -1671,8 +1677,10 @@ fn c_hex_nibble(n: u8) u8 {
 
 // Try discovery unless the caller overrode the compiler. Override skips env synthesis (caller is
 // responsible).
-fn discover_or_override(options: &BuildOptions, allocator: &Allocator?) Result(CompilerInfo,
-    BuildError) {
+fn discover_or_override(
+    options: &BuildOptions,
+    allocator: &Allocator?,
+) Result(CompilerInfo, BuildError) {
     options.compiler_override match {
         Some(p) => {
             let env_keys: List(OwnedString) = list(0, allocator)
@@ -2154,8 +2162,11 @@ fn objs_dir_for(output_path: String, allocator: &Allocator?) OwnedString {
 
 // Build the argv passed to the compiler. Layout differs between MSVC and Unix-style; both layouts
 // compile-and-link in one shot.
-fn build_compiler_argv(info: &CompilerInfo, c_path: String,
-    options: &BuildOptions) List(OwnedString) {
+fn build_compiler_argv(
+    info: &CompilerInfo,
+    c_path: String,
+    options: &BuildOptions,
+) List(OwnedString) {
     let alloc = options.allocator
     let argv: List(OwnedString) = list(16, alloc)
 
@@ -2257,13 +2268,13 @@ fn build_compiler_argv(info: &CompilerInfo, c_path: String,
         const lib = options.libs[i]
         if lib.len > 0 and (lib[0] == '/' or lib.starts_with("./") or lib.contains(".a")
             or lib.contains(".so")) {
-            argv.push(from_view(lib, alloc))
-        } else {
-            let sb = string_builder(3 + lib.len, alloc)
-            sb.append("-l")
-            sb.append(lib)
-            argv.push(sb.to_string())
-        }
+                argv.push(from_view(lib, alloc))
+            } else {
+                let sb = string_builder(3 + lib.len, alloc)
+                sb.append("-l")
+                sb.append(lib)
+                argv.push(sb.to_string())
+            }
     }
     for i in 0..options.ldflags.len {
         push_ldflag_words(&argv, options.ldflags[i], alloc)
@@ -2328,8 +2339,10 @@ test "a float constant is emitted as an exact C99 hex-float literal" {
     let sb = string_builder(1024)
     defer sb.deinit()
     translate(&m, &sb)
-    assert_true(contains(sb.as_view(), "0x1.8p+0"),
-        "1.5 travels as its exact bits, not a truncated decimal")
+    assert_true(
+        contains(sb.as_view(), "0x1.8p+0"),
+        "1.5 travels as its exact bits, not a truncated decimal",
+    )
 }
 
 // Spawn the compiler with the prepared argv + env. Returns the exit code. Run the C compiler with
@@ -2337,8 +2350,12 @@ test "a float constant is emitted as an exact C99 hex-float literal" {
 // translation unit and deprecation on a clean build, and the caller only wants the noise when the
 // exit code says something went wrong. Matches the reference compiler (Compiler.cs), which captures
 // both streams and reports them inside the failure diagnostic.
-fn run_compiler(info: &CompilerInfo, argv: &List(OwnedString), out: &StringBuilder,
-    allocator: &Allocator?) Result(i32, BuildError) {
+fn run_compiler(
+    info: &CompilerInfo,
+    argv: &List(OwnedString),
+    out: &StringBuilder,
+    allocator: &Allocator?,
+) Result(i32, BuildError) {
     let cmd = command(info.path.view, allocator)
     defer cmd.deinit()
     for i in 0..argv.len {

@@ -203,13 +203,17 @@ fn finish(self: &Parser, b: NodeBuilder) CstNodeId {
     }
     self.scratch.truncate(b.mark)
     const id = self.tree.nodes.len as CstNodeId
-    self.tree.nodes.push(CstNodeData {
-        kind = b.kind,
-        start = b.start as u32,
-        end = b.end as u32,
-        children = ChildSpan { start = start as u32,
-            len = (self.tree.children.len - start) as u32 },
-    })
+    self.tree.nodes.push(
+        CstNodeData {
+            kind = b.kind,
+            start = b.start as u32,
+            end = b.end as u32,
+            children = ChildSpan {
+                start = start as u32,
+                len = (self.tree.children.len - start) as u32,
+            },
+        },
+    )
     return id
 }
 
@@ -249,8 +253,13 @@ fn record_expected(self: &Parser, kind: TokenKind, code: String) {
     self.record_error_at(code, msg, tok.offset, tok.text.len)
 }
 
-fn record_error_at(self: &Parser, code: String, message: move OwnedString, start: usize,
-    length: usize) {
+fn record_error_at(
+    self: &Parser,
+    code: String,
+    message: move OwnedString,
+    start: usize,
+    length: usize,
+) {
     const sp: SourceSpan = .{ file_id = self.file_id, start = start, length = length }
     self.diagnostics.push(error(code, message, sp))
 }
@@ -614,14 +623,20 @@ fn at_where_clause(self: &Parser) bool {
     if self.current_kind() != TokenKind.Identifier or self.current().text != "where" {
         return false
     }
-    let i = 1usize
+    return self.at_bound_subject(1)
+}
+
+// Whether `Name :` or `Name.Item :` starts `i` tokens ahead.
+fn at_bound_subject(self: &Parser, from: usize) bool {
+    let i = from
     while self.peek_kind(i) == TokenKind.Identifier and self.peek_kind(i + 1) == TokenKind.Dot {
         i = i + 2
     }
     return self.peek_kind(i) == TokenKind.Identifier and self.peek_kind(i + 1) == TokenKind.Colon
 }
 
-// `where T: copyable, I: Iterator, I.Item: Hash` - one `WhereBound` node per entry.
+// `where T: copyable, I: Iterator, I.Item: Hash` - one `WhereBound` node per entry. A trailing
+// comma is allowed.
 fn parse_where_into(self: &Parser, b: &NodeBuilder) {
     self.eat_into(b)
     loop {
@@ -640,6 +655,9 @@ fn parse_where_into(self: &Parser, b: &NodeBuilder) {
             break
         }
         self.eat_into(b)
+        if !self.at_bound_subject(0) {
+            break
+        }
     }
 }
 
@@ -728,11 +746,19 @@ fn parse_legacy_type_decl(self: &Parser, leading: move List(CstNodeId), is_struc
         self.eat_into(&b)
     }
     if is_struct {
-        self.record_error_here("E1050",
-            from_view("`struct Name { ... }` syntax has been removed, use `type Name = struct { ... }` instead"))
+        self.record_error_here(
+            "E1050",
+            from_view(
+                "`struct Name { ... }` syntax has been removed, use `type Name = struct { ... }` instead",
+            ),
+        )
     } else {
-        self.record_error_here("E1051",
-            from_view("`enum Name { ... }` syntax has been removed, use `type Name = enum { ... }` instead"))
+        self.record_error_here(
+            "E1051",
+            from_view(
+                "`enum Name { ... }` syntax has been removed, use `type Name = enum { ... }` instead",
+            ),
+        )
     }
     self.eat_into(&b) // `struct` / `enum`
     if self.current_kind() == TokenKind.Identifier {
@@ -758,9 +784,12 @@ fn parse_type_decl_with_directives(self: &Parser, leading: move List(CstNodeId))
         const dn = self.directive_name_of(leading[i])
         if dn == "simd" or dn == "foreign" {
             const d = self.tree.node_at(leading[i])
-            self.record_error_at("E1001",
+            self.record_error_at(
+                "E1001",
                 $"`#{dn}` must appear after `=` in a type declaration - write `type Name = #{dn} struct {{ ... }}`",
-                d.start as usize, (d.end - d.start) as usize)
+                d.start as usize,
+                (d.end - d.start) as usize,
+            )
         }
     }
     for i in 0..leading.len { self.push_node_into(&b, leading[i]) }
@@ -856,8 +885,12 @@ fn parse_type_params_into(self: &Parser, b: &NodeBuilder) {
         self.push_node_into(b, node)
     }
     if self.at_where_clause() {
-        self.record_error_here("E2145",
-            from_view("a type declares its bounds on its parameters: `struct(T: Bound)`, not `where`"))
+        self.record_error_here(
+            "E2145",
+            from_view(
+                "a type declares its bounds on its parameters: `struct(T: Bound)`, not `where`",
+            ),
+        )
         self.parse_where_into(b)
     }
 }
@@ -1119,8 +1152,11 @@ fn at_line_start(self: &Parser) bool {
         return false
     }
     const prev = self.tree.tokens[self.position - 1]
-    return spans_newline(self.tree.source, prev.offset + prev.text.len,
-        self.tree.tokens[self.position].offset)
+    return spans_newline(
+        self.tree.source,
+        prev.offset + prev.text.len,
+        self.tree.tokens[self.position].offset,
+    )
 }
 
 fn parse_single_keyword_stmt(self: &Parser, kind: NodeKind) CstNodeId {
@@ -1258,8 +1294,12 @@ fn parse_for_loop(self: &Parser) CstNodeId {
     // (RFC-006). Parsed defensively so the body still reads (E1010).
     let parenthesised = self.current_kind() == TokenKind.OpenParenthesis
     if parenthesised {
-        self.record_error_here("E1010",
-            from_view("parentheses around the `for` header are not allowed - write `for x in xs { ... }`"))
+        self.record_error_here(
+            "E1010",
+            from_view(
+                "parentheses around the `for` header are not allowed - write `for x in xs { ... }`",
+            ),
+        )
         self.eat_into(&b)
     }
     if self.current_kind() == TokenKind.Ampersand {
@@ -1694,8 +1734,10 @@ fn parse_primary_expression(self: &Parser) CstNodeId {
     }
     if k == TokenKind.OpenBrace {
         if self.stop_at_brace {
-            return self.error_token_node("E1001",
-                $"unexpected `{{` (block here would shadow control-flow body)")
+            return self.error_token_node(
+                "E1001",
+                $"unexpected `{{` (block here would shadow control-flow body)",
+            )
         }
         return self.parse_block_expr()
     }
@@ -2070,8 +2112,10 @@ fn parse_primary_type(self: &Parser) CstNodeId {
             // expression (E1004). Identifiers are let through: a `const` length resolves later.
             const lk = self.current_kind()
             if lk != TokenKind.Integer and lk != TokenKind.Identifier {
-                self.record_error_here("E1004",
-                    from_view("invalid array length - the length must be an integer literal"))
+                self.record_error_here(
+                    "E1004",
+                    from_view("invalid array length - the length must be an integer literal"),
+                )
             }
             const size = self.parse_expression()
             self.push_node_into(&b, size)
@@ -2193,8 +2237,10 @@ fn parse_contract_type(self: &Parser) CstNodeId {
             const node = self.finish(m)
             self.push_node_into(&b, node)
         } else {
-            self.record_error_here("E1002",
-                $"expected `fn` or `type` in a contract body, found `{self.current().text}`")
+            self.record_error_here(
+                "E1002",
+                $"expected `fn` or `type` in a contract body, found `{self.current().text}`",
+            )
             self.eat_into(&b)
         }
         if self.current_kind() == TokenKind.Comma {

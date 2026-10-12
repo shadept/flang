@@ -109,8 +109,11 @@ pub fn block(self: &FunctionBuilder, label: String, p0: IrType, p1: IrType) Bloc
     return self.block_internal(label, types)
 }
 
-fn block_internal(self: &FunctionBuilder, label: String,
-    param_types: move List(IrType)) BlockBuilder {
+fn block_internal(
+    self: &FunctionBuilder,
+    label: String,
+    param_types: move List(IrType),
+) BlockBuilder {
     let params: List(BlockParam) = list(param_types.len, self.allocator)
     for i in 0..param_types.len {
         const id = self.fresh()
@@ -251,7 +254,10 @@ fn unary(self: &BlockBuilder, op: UnaryOp, ty: IrType, v: Operand) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Unary(UnaryInstr {
-        result = id, op = op, ty = ty, operand = v,
+        result = id,
+        op = op,
+        ty = ty,
+        operand = v,
     }))
     return Operand.Local(id)
 }
@@ -309,8 +315,13 @@ pub fn fcmp_ge(self: &BlockBuilder, ty: IrType, lhs: Operand, rhs: Operand) Oper
     return self.compare(CompareOp.FcmpGe, ty, lhs, rhs)
 }
 
-fn compare(self: &BlockBuilder, op: CompareOp, operand_ty: IrType, lhs: Operand,
-    rhs: Operand) Operand {
+fn compare(
+    self: &BlockBuilder,
+    op: CompareOp,
+    operand_ty: IrType,
+    lhs: Operand,
+    rhs: Operand,
+) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Compare(CompareInstr {
@@ -385,7 +396,9 @@ pub fn stack_slot(self: &BlockBuilder, size: u64, align: u64) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.StackSlot(StackSlotInstr {
-        result = id, size = size, align = align,
+        result = id,
+        size = size,
+        align = align,
     }))
     return Operand.Local(id)
 }
@@ -398,7 +411,10 @@ pub fn load_aligned(self: &BlockBuilder, ty: IrType, ptr: Operand, align: u64) O
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Load(LoadInstr {
-        result = id, ty = ty, ptr = ptr, align = align,
+        result = id,
+        ty = ty,
+        ptr = ptr,
+        align = align,
     }))
     return Operand.Local(id)
 }
@@ -410,7 +426,10 @@ pub fn store(self: &BlockBuilder, ty: IrType, value: Operand, ptr: Operand) {
 pub fn store_aligned(self: &BlockBuilder, ty: IrType, value: Operand, ptr: Operand, align: u64) {
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Store(StoreInstr {
-        ty = ty, value = value, ptr = ptr, align = align,
+        ty = ty,
+        value = value,
+        ptr = ptr,
+        align = align,
     }))
 }
 
@@ -418,7 +437,9 @@ pub fn gep(self: &BlockBuilder, ptr: Operand, offset: Operand) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Gep(GepInstr {
-        result = id, ptr = ptr, offset = offset,
+        result = id,
+        ptr = ptr,
+        offset = offset,
     }))
     return Operand.Local(id)
 }
@@ -426,14 +447,18 @@ pub fn gep(self: &BlockBuilder, ptr: Operand, offset: Operand) Operand {
 pub fn memcpy(self: &BlockBuilder, dst: Operand, src: Operand, size: Operand) {
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Memcpy(MemcpyInstr {
-        dst = dst, src = src, size = size,
+        dst = dst,
+        src = src,
+        size = size,
     }))
 }
 
 pub fn memset(self: &BlockBuilder, dst: Operand, byte: Operand, size: Operand) {
     let block = &self.fb.func.blocks[self.block_idx]
     block.instrs.push(Instr.Memset(MemsetInstr {
-        dst = dst, byte = byte, size = size,
+        dst = dst,
+        byte = byte,
+        size = size,
     }))
 }
 
@@ -442,8 +467,12 @@ pub fn memset(self: &BlockBuilder, dst: Operand, byte: Operand, size: Operand) {
 // ─────────────────────────────────────────────────────────────────────────
 
 // Direct call returning a value. `args` ownership transfers in.
-pub fn call(self: &BlockBuilder, callee: String, return_ty: IrType,
-    args: move List(Operand)) Operand {
+pub fn call(
+    self: &BlockBuilder,
+    callee: String,
+    return_ty: IrType,
+    args: move List(Operand),
+) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(0, self.fb.allocator)
@@ -476,8 +505,13 @@ pub fn call_void(self: &BlockBuilder, callee: String, args: move List(Operand)) 
 
 // Indirect call through a fn-pointer value. The inline signature is the C cast the backend spells;
 // aggregate params/returns already travel as `ptr` operands, mirroring direct calls.
-pub fn call_indirect(self: &BlockBuilder, fn_ptr: Operand, param_types: move List(IrType),
-    return_ty: IrType, args: move List(Operand)) Operand {
+pub fn call_indirect(
+    self: &BlockBuilder,
+    fn_ptr: Operand,
+    param_types: move List(IrType),
+    return_ty: IrType,
+    args: move List(Operand),
+) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(0, self.fb.allocator)
@@ -495,8 +529,12 @@ pub fn call_indirect(self: &BlockBuilder, fn_ptr: Operand, param_types: move Lis
     return Operand.Local(id)
 }
 
-pub fn call_indirect_void(self: &BlockBuilder, fn_ptr: Operand, param_types: move List(IrType),
-    args: move List(Operand)) {
+pub fn call_indirect_void(
+    self: &BlockBuilder,
+    fn_ptr: Operand,
+    param_types: move List(IrType),
+    args: move List(Operand),
+) {
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(0, self.fb.allocator)
     let result: u32? = null
@@ -519,8 +557,13 @@ pub fn call_one(self: &BlockBuilder, callee: String, return_ty: IrType, a0: Oper
     return self.call(callee, return_ty, args)
 }
 
-pub fn call_two(self: &BlockBuilder, callee: String, return_ty: IrType, a0: Operand,
-    a1: Operand) Operand {
+pub fn call_two(
+    self: &BlockBuilder,
+    callee: String,
+    return_ty: IrType,
+    a0: Operand,
+    a1: Operand,
+) Operand {
     let args: List(Operand) = list(2, self.fb.allocator)
     args.push(a0)
     args.push(a1)
@@ -529,8 +572,13 @@ pub fn call_two(self: &BlockBuilder, callee: String, return_ty: IrType, a0: Oper
 
 // Variadic foreign call. `fixed_args` are the named parameters of the foreign decl; `extras` are
 // the variadic portion with explicit types.
-pub fn call_variadic(self: &BlockBuilder, callee: String, return_ty: IrType,
-    fixed_args: move List(Operand), extras: move List((IrType, Operand))) Operand {
+pub fn call_variadic(
+    self: &BlockBuilder,
+    callee: String,
+    return_ty: IrType,
+    fixed_args: move List(Operand),
+    extras: move List((IrType, Operand)),
+) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(extras.len, self.fb.allocator)
@@ -598,8 +646,14 @@ pub fn br_if(self: &BlockBuilder, cond: Operand, then_label: String, else_label:
 }
 
 // Conditional branch with block arguments on each edge.
-pub fn br_if_args(self: &BlockBuilder, cond: Operand, then_label: String,
-    then_args: move List(Operand), else_label: String, else_args: move List(Operand)) {
+pub fn br_if_args(
+    self: &BlockBuilder,
+    cond: Operand,
+    then_label: String,
+    then_args: move List(Operand),
+    else_label: String,
+    else_args: move List(Operand),
+) {
     let block = &self.fb.func.blocks[self.block_idx]
     block.set_terminator(Terminator.BrIf(BrIfTerm {
         cond = cond,

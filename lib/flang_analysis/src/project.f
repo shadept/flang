@@ -421,7 +421,9 @@ test "parses project metadata, deps, build config and imports" {
 }
 
 test "collects [fmt] entries verbatim with values unquoted" {
-    let p = parse_project("[project]\nname = \"x\"\n\n[fmt]\nindent = 2\ntrailing-comma = \"always\"\n")
+    let p = parse_project(
+        "[project]\nname = \"x\"\n\n[fmt]\nindent = 2\ntrailing-comma = \"always\"\n",
+    )
     defer p.deinit()
     assert_eq(p.fmt.len, 2 as usize, "two fmt entries")
     assert_true(p.fmt[0].key.view == "indent", "key 0")
@@ -441,7 +443,9 @@ test "applies defaults for kind, source and output" {
 }
 
 test "ignores comments and blank lines" {
-    let p = parse_project("\n  # a comment\n[project]\nname = \"c\"  # trailing\nversion = \"2\"\n\n")
+    let p = parse_project(
+        "\n  # a comment\n[project]\nname = \"c\"  # trailing\nversion = \"2\"\n\n",
+    )
     defer p.deinit()
     assert_true(p.name.view == "c", "name ignores trailing comment")
     assert_true(p.version.view == "2", "version after blank lines")

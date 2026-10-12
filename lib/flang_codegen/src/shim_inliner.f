@@ -265,8 +265,12 @@ fn reaches_self(adj: &List(List(usize)), start: usize, alloc: &Allocator?) bool 
 //     to the operand to substitute in the cloned instruction.
 // ─────────────────────────────────────────────────────────────────────
 
-fn inline_calls_in(m: &IrModule, caller_idx: usize, inlinable: &Dict(OwnedString, usize),
-    alloc: &Allocator?) usize {
+fn inline_calls_in(
+    m: &IrModule,
+    caller_idx: usize,
+    inlinable: &Dict(OwnedString, usize),
+    alloc: &Allocator?,
+) usize {
     let inlined_count: usize = 0
     let result_subst: Dict(u32, Operand) = dict(alloc)
     defer result_subst.deinit()
@@ -309,8 +313,14 @@ fn inline_calls_in(m: &IrModule, caller_idx: usize, inlinable: &Dict(OwnedString
                             effective_args.push(remap_operand(c.args[ai], &result_subst))
                         }
 
-                        const ret_op = splice_callee(m, callee_idx, caller, &effective_args,
-                            &new_instrs, alloc)
+                        const ret_op = splice_callee(
+                            m,
+                            callee_idx,
+                            caller,
+                            &effective_args,
+                            &new_instrs,
+                            alloc,
+                        )
 
                         c.result match {
                             Some(old_id) => {
@@ -345,8 +355,14 @@ fn inline_calls_in(m: &IrModule, caller_idx: usize, inlinable: &Dict(OwnedString
 // Splice a single inlinable call. Reads from `m.functions[callee_idx]`, allocates fresh SSA ids on
 // `caller`, appends the cloned instructions to `out`, and returns the operand replacing the call's
 // result (or `None` for void).
-fn splice_callee(m: &IrModule, callee_idx: usize, caller: &Function, args: &List(Operand),
-    out: &List(Instr), alloc: &Allocator?) Operand? {
+fn splice_callee(
+    m: &IrModule,
+    callee_idx: usize,
+    caller: &Function,
+    args: &List(Operand),
+    out: &List(Instr),
+    alloc: &Allocator?,
+) Operand? {
     let local_subst: Dict(u32, Operand) = dict(alloc)
     defer local_subst.deinit()
 
@@ -389,8 +405,12 @@ fn splice_callee(m: &IrModule, callee_idx: usize, caller: &Function, args: &List
 // preserves result ids and remaps operands only.
 // ────────────────────────────────────────────────────────────────────
 
-fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Function,
-    alloc: &Allocator?) Instr {
+fn clone_callee_instr(
+    inst: &Instr,
+    subst: &Dict(u32, Operand),
+    caller: &Function,
+    alloc: &Allocator?,
+) Instr {
     return inst.* match {
         Binary(b) => {
             const lhs = remap_operand(b.lhs, subst)
@@ -410,7 +430,10 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
             const new_id = caller.fresh_value_id()
             subst.set(u.result, Operand.Local(new_id))
             Instr.Unary(UnaryInstr {
-                result = new_id, op = u.op, ty = u.ty, operand = operand,
+                result = new_id,
+                op = u.op,
+                ty = u.ty,
+                operand = operand,
             })
         }
         Compare(c) => {
@@ -442,7 +465,9 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
             const new_id = caller.fresh_value_id()
             subst.set(s.result, Operand.Local(new_id))
             Instr.StackSlot(StackSlotInstr {
-                result = new_id, size = s.size, align = s.align,
+                result = new_id,
+                size = s.size,
+                align = s.align,
             })
         }
         Load(l) => {
@@ -450,14 +475,20 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
             const new_id = caller.fresh_value_id()
             subst.set(l.result, Operand.Local(new_id))
             Instr.Load(LoadInstr {
-                result = new_id, ty = l.ty, ptr = ptr, align = l.align,
+                result = new_id,
+                ty = l.ty,
+                ptr = ptr,
+                align = l.align,
             })
         }
         Store(s) => {
             const value = remap_operand(s.value, subst)
             const ptr = remap_operand(s.ptr, subst)
             Instr.Store(StoreInstr {
-                ty = s.ty, value = value, ptr = ptr, align = s.align,
+                ty = s.ty,
+                value = value,
+                ptr = ptr,
+                align = s.align,
             })
         }
         Gep(g) => {
@@ -466,7 +497,9 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
             const new_id = caller.fresh_value_id()
             subst.set(g.result, Operand.Local(new_id))
             Instr.Gep(GepInstr {
-                result = new_id, ptr = ptr, offset = offset,
+                result = new_id,
+                ptr = ptr,
+                offset = offset,
             })
         }
         Memcpy(mc) => {
@@ -474,7 +507,9 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
             const src = remap_operand(mc.src, subst)
             const size = remap_operand(mc.size, subst)
             Instr.Memcpy(MemcpyInstr {
-                dst = dst, src = src, size = size,
+                dst = dst,
+                src = src,
+                size = size,
             })
         }
         Memset(ms) => {
@@ -482,7 +517,9 @@ fn clone_callee_instr(inst: &Instr, subst: &Dict(u32, Operand), caller: &Functio
             const byte = remap_operand(ms.byte, subst)
             const size = remap_operand(ms.size, subst)
             Instr.Memset(MemsetInstr {
-                dst = dst, byte = byte, size = size,
+                dst = dst,
+                byte = byte,
+                size = size,
             })
         }
         Call(c) => {
@@ -646,10 +683,16 @@ test "splicing a body that writes through its spilled parameter keeps value sema
     assert_true(ri < m.functions.len, "run is still in the module")
     const f = &m.functions[ri]
     assert_eq(call_count(f), 0 as usize, "no residual call to bump")
-    assert_eq(slot_count(f), 2 as usize,
-        "the callee's spill slot was cloned alongside the caller's")
+    assert_eq(
+        slot_count(f),
+        2 as usize,
+        "the callee's spill slot was cloned alongside the caller's",
+    )
 
     const xslot_id = xslot match { Local(id) => id, _ => 0u32 }
-    assert_eq(stores_to(f, xslot_id), 1 as usize,
-        "only run's own spill writes x's slot - the spliced body's writes hit the cloned copy")
+    assert_eq(
+        stores_to(f, xslot_id),
+        1 as usize,
+        "only run's own spill writes x's slot - the spliced body's writes hit the cloned copy",
+    )
 }

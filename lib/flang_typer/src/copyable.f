@@ -29,8 +29,13 @@ import flang_typer.interner
 import flang_typer.nominal_registry
 import flang_typer.type
 
-pub fn is_copyable_ty(it: &TypeInterner, reg: &NominalRegistry, ty: Ty, alloc: &Allocator?,
-    rigid: &Dict(VarId, bool)? = null) bool {
+pub fn is_copyable_ty(
+    it: &TypeInterner,
+    reg: &NominalRegistry,
+    ty: Ty,
+    alloc: &Allocator?,
+    rigid: &Dict(VarId, bool)? = null,
+) bool {
     return it.node(ty) match {
         NRef(_) => true
         NFunc(_) => true
@@ -46,8 +51,13 @@ pub fn is_copyable_ty(it: &TypeInterner, reg: &NominalRegistry, ty: Ty, alloc: &
     }
 }
 
-fn copyable_span(it: &TypeInterner, reg: &NominalRegistry, span: ChildSpan, alloc: &Allocator?,
-    rigid: &Dict(VarId, bool)?) bool {
+fn copyable_span(
+    it: &TypeInterner,
+    reg: &NominalRegistry,
+    span: ChildSpan,
+    alloc: &Allocator?,
+    rigid: &Dict(VarId, bool)?,
+) bool {
     for i in 0..span.len {
         if !is_copyable_ty(it, reg, it.child_at(span, i), alloc, rigid) {
             return false
@@ -56,16 +66,29 @@ fn copyable_span(it: &TypeInterner, reg: &NominalRegistry, span: ChildSpan, allo
     return true
 }
 
-fn copyable_nominal(it: &TypeInterner, reg: &NominalRegistry, ty: Ty, nn: &NNominalNode,
-    alloc: &Allocator?, rigid: &Dict(VarId, bool)?) bool {
+fn copyable_nominal(
+    it: &TypeInterner,
+    reg: &NominalRegistry,
+    ty: Ty,
+    nn: &NNominalNode,
+    alloc: &Allocator?,
+    rigid: &Dict(VarId, bool)?,
+) bool {
     return reg.get(nn.id).* match {
         NomStruct(sd) => copyable_struct(it, reg, ty, &sd, nn, alloc, rigid)
         NomEnum(ed) => copyable_enum(it, reg, ty, &ed, nn, alloc, rigid)
     }
 }
 
-fn copyable_struct(it: &TypeInterner, reg: &NominalRegistry, ty: Ty, sd: &StructDef,
-    nn: &NNominalNode, alloc: &Allocator?, rigid: &Dict(VarId, bool)?) bool {
+fn copyable_struct(
+    it: &TypeInterner,
+    reg: &NominalRegistry,
+    ty: Ty,
+    sd: &StructDef,
+    nn: &NNominalNode,
+    alloc: &Allocator?,
+    rigid: &Dict(VarId, bool)?,
+) bool {
     for i in 0..sd.fields.len {
         if sd.fields[i].owned {
             return false
@@ -82,8 +105,15 @@ fn copyable_struct(it: &TypeInterner, reg: &NominalRegistry, ty: Ty, sd: &Struct
     return true
 }
 
-fn copyable_enum(it: &TypeInterner, reg: &NominalRegistry, ty: Ty, ed: &EnumDef, nn: &NNominalNode,
-    alloc: &Allocator?, rigid: &Dict(VarId, bool)?) bool {
+fn copyable_enum(
+    it: &TypeInterner,
+    reg: &NominalRegistry,
+    ty: Ty,
+    ed: &EnumDef,
+    nn: &NNominalNode,
+    alloc: &Allocator?,
+    rigid: &Dict(VarId, bool)?,
+) bool {
     let subst = reg.instance_subst(ty, &ed.type_params, &ed.assoc_params, nn.args, it, alloc)
     defer subst.deinit()
     for vi in 0..ed.variants.len {

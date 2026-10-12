@@ -47,8 +47,13 @@ pub fn report_ctx(code: String, span: SourceSpan, nominals: &NominalRegistry? = 
 // Emit zero or one diagnostic depending on the outcome. `Unified` produces nothing. Every other
 // variant produces exactly one diagnostic on `out`. Caller owns the message strings appended to the
 // diagnostic - they aren't reclaimed by anything in this file.
-pub fn report(outcome: &UnifyOutcome, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic),
-    allocator: &Allocator? = null) {
+pub fn report(
+    outcome: &UnifyOutcome,
+    ctx: &ReportCtx,
+    it: &TypeInterner,
+    out: &List(Diagnostic),
+    allocator: &Allocator? = null,
+) {
     let alloc = allocator.or_global()
     outcome.* match {
         Unified(_) => {}
@@ -59,8 +64,13 @@ pub fn report(outcome: &UnifyOutcome, ctx: &ReportCtx, it: &TypeInterner, out: &
     }
 }
 
-fn report_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic),
-    alloc: &Allocator) {
+fn report_mismatch(
+    m: &Mismatch,
+    ctx: &ReportCtx,
+    it: &TypeInterner,
+    out: &List(Diagnostic),
+    alloc: &Allocator,
+) {
     let message = ctx.message_override match {
         Some(msg) => move msg
         None => format_mismatch(m, ctx, it, alloc)
@@ -76,8 +86,13 @@ fn report_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner, out: &List(
     out.push(diag)
 }
 
-fn report_occurs(o: &OccursDetails, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic),
-    alloc: &Allocator) {
+fn report_occurs(
+    o: &OccursDetails,
+    ctx: &ReportCtx,
+    it: &TypeInterner,
+    out: &List(Diagnostic),
+    alloc: &Allocator,
+) {
     let sb = string_builder(64, Some(alloc))
     sb.append("recursive type: variable ?")
     sb.append(o.var_id)
@@ -115,8 +130,13 @@ fn report_arity(a: &ArityDetails, ctx: &ReportCtx, out: &List(Diagnostic), alloc
     out.push(diag)
 }
 
-fn report_prim_constraint(p: &PrimViolation, ctx: &ReportCtx, it: &TypeInterner,
-    out: &List(Diagnostic), alloc: &Allocator) {
+fn report_prim_constraint(
+    p: &PrimViolation,
+    ctx: &ReportCtx,
+    it: &TypeInterner,
+    out: &List(Diagnostic),
+    alloc: &Allocator,
+) {
     let sb = string_builder(64, Some(alloc))
     sb.append("type mismatch: expected one of ")
     let written = 0usize
@@ -148,8 +168,12 @@ fn report_prim_constraint(p: &PrimViolation, ctx: &ReportCtx, it: &TypeInterner,
     out.push(diag)
 }
 
-fn format_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner,
-    alloc: &Allocator) OwnedString {
+fn format_mismatch(
+    m: &Mismatch,
+    ctx: &ReportCtx,
+    it: &TypeInterner,
+    alloc: &Allocator,
+) OwnedString {
     let sb = string_builder(64, Some(alloc))
     sb.append("type mismatch: expected `")
     format_with_names(it, m.expected, &sb, ctx.nominals)
@@ -164,8 +188,13 @@ fn format_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner,
 // prints - the harness matches on that text. Public: the LSP renders hover and inlay-hint types
 // through the same formatting diagnostics use. `vars` optionally names free variables (a generic
 // signature's `$T` bindings, see `checker.type_param_names`); an unnamed var falls back to `?N`.
-pub fn format_with_names(it: &TypeInterner, t: Ty, sb: &StringBuilder, reg: &NominalRegistry?,
-    vars: &Dict(VarId, String)? = null) {
+pub fn format_with_names(
+    it: &TypeInterner,
+    t: Ty,
+    sb: &StringBuilder,
+    reg: &NominalRegistry?,
+    vars: &Dict(VarId, String)? = null,
+) {
     if reg.is_none() {
         it.format(t, sb)
         return

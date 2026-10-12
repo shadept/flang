@@ -74,8 +74,12 @@ fn deinit(self: move Tarjan) {
 //
 // Every module appears exactly once, so the result is a permutation of `0..count` whatever the
 // edges say.
-pub fn demand_order(count: usize, fqns: &List(String), edges: &List(ImportEdge),
-    allocator: &Allocator? = null) List(usize) {
+pub fn demand_order(
+    count: usize,
+    fqns: &List(String),
+    edges: &List(ImportEdge),
+    allocator: &Allocator? = null,
+) List(usize) {
     const alloc = allocator.or_global()
     let t = Tarjan {
         adj = build_adjacency(count, fqns, edges, alloc),
@@ -106,8 +110,12 @@ pub fn demand_order(count: usize, fqns: &List(String), edges: &List(ImportEdge),
 
 // Returns the successors of each node, one row per node, deduplicated and in FQN order. Edges
 // naming a module outside `0..count` and self-edges are dropped.
-fn build_adjacency(count: usize, fqns: &List(String), edges: &List(ImportEdge),
-    allocator: &Allocator) UnmanagedList(List(usize)) {
+fn build_adjacency(
+    count: usize,
+    fqns: &List(String),
+    edges: &List(ImportEdge),
+    allocator: &Allocator,
+) UnmanagedList(List(usize)) {
     let adj: UnmanagedList(List(usize)) = unmanaged_list(count, allocator)
     for _i in 0..count {
         adj.push(list(0, allocator), allocator)
@@ -241,8 +249,10 @@ test "a cycle is one component, ordered by fqn inside it" {
     assert_eq(order.len, 3 as usize, "a cycle does not lose or repeat a module")
     // Index 2 is "b", index 1 is "c" - the component emits them by name.
     assert_true(position_of(&order, 2) < position_of(&order, 1), "b before c inside the component")
-    assert_true(position_of(&order, 1) < position_of(&order, 0),
-        "the whole cycle before its dependent")
+    assert_true(
+        position_of(&order, 1) < position_of(&order, 0),
+        "the whole cycle before its dependent",
+    )
 }
 
 test "a self-import is not a cycle" {

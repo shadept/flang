@@ -69,9 +69,15 @@ type FnNode = struct {
 // produced `result` checked `test {}` bodies: when it did (the LSP), test use is in the recorded
 // edges and needs no allowance; when it did not (a build), every non-`pub` function of a
 // test-bearing module is rooted conservatively.
-pub fn unused_functions(result: &TypeCheckResult, modules: &List(Module), fqns: &List(String),
-    project_origin: &List(bool), lib_kind: bool, tests_checked: bool,
-    allocator: &Allocator? = null) List(Diagnostic) {
+pub fn unused_functions(
+    result: &TypeCheckResult,
+    modules: &List(Module),
+    fqns: &List(String),
+    project_origin: &List(bool),
+    lib_kind: bool,
+    tests_checked: bool,
+    allocator: &Allocator? = null,
+) List(Diagnostic) {
     // Project module FQN -> its index (= its file id).
     let index_of: Dict(String, usize) = dict(allocator)
     defer index_of.deinit()
@@ -151,8 +157,17 @@ pub fn unused_functions(result: &TypeCheckResult, modules: &List(Module), fqns: 
     // target.
     let adj: MultiMap(u32, u32) = multimap(allocator)
     defer adj.deinit()
-    add_table_edges(result, &result.resolved_targets, &result.resolved_ops, &result.receiver_derefs,
-        &nodes, &per_file, &adj, &reached, &work)
+    add_table_edges(
+        result,
+        &result.resolved_targets,
+        &result.resolved_ops,
+        &result.receiver_derefs,
+        &nodes,
+        &per_file,
+        &adj,
+        &reached,
+        &work,
+    )
     add_overlay_edges(result, &nodes, &adj, &reached, &work)
 
     // Reachability.
@@ -182,14 +197,19 @@ pub fn unused_functions(result: &TypeCheckResult, modules: &List(Module), fqns: 
 
     let out: List(Diagnostic) = list(missed.len, allocator)
     for &n in missed {
-        out.push(Diagnostic {
-            severity = Severity.Warning,
-            code = W_UNUSED_FUNCTION,
-            message = $"unused function `{n.name}`",
-            hint = from_view("prefix with `_` to suppress"),
-            span = SourceSpan { file_id = n.file as i32, start = n.start,
-                length = n.end - n.start },
-        })
+        out.push(
+            Diagnostic {
+                severity = Severity.Warning,
+                code = W_UNUSED_FUNCTION,
+                message = $"unused function `{n.name}`",
+                hint = from_view("prefix with `_` to suppress"),
+                span = SourceSpan {
+                    file_id = n.file as i32,
+                    start = n.start,
+                    length = n.end - n.start,
+                },
+            },
+        )
     }
     return out
 }
@@ -231,9 +251,16 @@ fn target_fn(result: &TypeCheckResult, t: &ResolvedTarget) u32? {
 
 // Record `from-site -> fid`: an edge from the enclosing project function, or a root when the site
 // has no such home.
-fn add_site(key: NodeId, fid: u32, result: &TypeCheckResult, nodes: &Dict(u32, FnNode),
-    per_file: &List(List(FnNode)), adj: &MultiMap(u32, u32), reached: &Dict(u32, bool),
-    work: &List(u32)) {
+fn add_site(
+    key: NodeId,
+    fid: u32,
+    result: &TypeCheckResult,
+    nodes: &Dict(u32, FnNode),
+    per_file: &List(List(FnNode)),
+    adj: &MultiMap(u32, u32),
+    reached: &Dict(u32, bool),
+    work: &List(u32),
+) {
     if nodes.get(fid).is_none() {
         return
     }
@@ -248,10 +275,17 @@ fn add_site(key: NodeId, fid: u32, result: &TypeCheckResult, nodes: &Dict(u32, F
     }
 }
 
-fn add_table_edges(result: &TypeCheckResult, targets: &Dict(NodeId, ResolvedTarget),
-    ops: &Dict(NodeId, ResolvedOperator), derefs: &Dict(NodeId, List(ResolvedTarget)),
-    nodes: &Dict(u32, FnNode), per_file: &List(List(FnNode)), adj: &MultiMap(u32, u32),
-    reached: &Dict(u32, bool), work: &List(u32)) {
+fn add_table_edges(
+    result: &TypeCheckResult,
+    targets: &Dict(NodeId, ResolvedTarget),
+    ops: &Dict(NodeId, ResolvedOperator),
+    derefs: &Dict(NodeId, List(ResolvedTarget)),
+    nodes: &Dict(u32, FnNode),
+    per_file: &List(List(FnNode)),
+    adj: &MultiMap(u32, u32),
+    reached: &Dict(u32, bool),
+    work: &List(u32),
+) {
     for e in targets {
         const t = e.value
         const fid = target_fn(result, &t)
@@ -274,8 +308,13 @@ fn add_table_edges(result: &TypeCheckResult, targets: &Dict(NodeId, ResolvedTarg
 
 // A specialization's body edges live in its private overlay. They all attribute to the template
 // function - which instantiation resolved them does not matter for reachability.
-fn add_overlay_edges(result: &TypeCheckResult, nodes: &Dict(u32, FnNode), adj: &MultiMap(u32, u32),
-    reached: &Dict(u32, bool), work: &List(u32)) {
+fn add_overlay_edges(
+    result: &TypeCheckResult,
+    nodes: &Dict(u32, FnNode),
+    adj: &MultiMap(u32, u32),
+    reached: &Dict(u32, bool),
+    work: &List(u32),
+) {
     for i in 0..(result.specializations.next_id as usize) {
         const found = result.specializations.find(i as SpecId)
         if found.is_none() {
@@ -375,9 +414,14 @@ fn cmp_file_start(a: FnNode, b: FnNode) Ord {
 
 // The W1004 diagnostics for one checked project, sorted by (file, start). Parameters as
 // `unused_functions`.
-pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &List(String),
-    project_origin: &List(bool), tests_checked: bool,
-    allocator: &Allocator? = null) List(Diagnostic) {
+pub fn unused_imports(
+    result: &TypeCheckResult,
+    modules: &List(Module),
+    fqns: &List(String),
+    project_origin: &List(bool),
+    tests_checked: bool,
+    allocator: &Allocator? = null,
+) List(Diagnostic) {
     // Module FQN -> index, all modules - uses land anywhere in the tree.
     let index_of: Dict(String, usize) = dict(allocator)
     defer index_of.deinit()
@@ -471,8 +515,12 @@ pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &L
             }
             const home = index_of.get(f.module.unwrap())
             if home.is_some() and is_project(project_origin, home.unwrap()) {
-                add_ty_modules(result, f.signature.body, &used[home.unwrap()],
-                    &memos[home.unwrap()])
+                add_ty_modules(
+                    result,
+                    f.signature.body,
+                    &used[home.unwrap()],
+                    &memos[home.unwrap()],
+                )
             }
         }
     }
@@ -569,8 +617,17 @@ pub fn unused_imports(result: &TypeCheckResult, modules: &List(Module), fqns: &L
         }
         for &d in modules[i].decls {
             d.* match {
-                Import(id) => check_import(&id, i, fqns, &index_of, modules, &used[i], &reexports,
-                    &missed, allocator)
+                Import(id) => check_import(
+                    &id,
+                    i,
+                    fqns,
+                    &index_of,
+                    modules,
+                    &used[i],
+                    &reexports,
+                    &missed,
+                    allocator,
+                )
                 _ => {}
             }
         }
@@ -624,9 +681,17 @@ fn imports_attributable(m: &Module, i: usize, tests_checked: bool) bool {
 // One import declaration's verdict. Skips - besides a resolved use - are `pub import`, the
 // auto-imported prelude, a self-import, an import that never resolved (the loader reported it), and
 // a target that exports what the edges cannot see (type aliases, generators).
-fn check_import(id: &ImportDecl, from: usize, fqns: &List(String), index_of: &Dict(String, usize),
-    modules: &List(Module), used: &Set(String), reexports: &List(List(usize)),
-    missed: &List(ImportSite), allocator: &Allocator?) {
+fn check_import(
+    id: &ImportDecl,
+    from: usize,
+    fqns: &List(String),
+    index_of: &Dict(String, usize),
+    modules: &List(Module),
+    used: &Set(String),
+    reexports: &List(List(usize)),
+    missed: &List(ImportSite),
+    allocator: &Allocator?,
+) {
     if id.is_pub {
         return
     }
@@ -695,8 +760,13 @@ fn is_alias_body(t: &TypeExpr) bool {
 }
 
 // Note module `m` as used from the project file the site at `key` lies in.
-fn note_use(key: NodeId, m: String?, result: &TypeCheckResult, project_origin: &List(bool),
-    used: &List(Set(String))) {
+fn note_use(
+    key: NodeId,
+    m: String?,
+    result: &TypeCheckResult,
+    project_origin: &List(bool),
+    used: &List(Set(String)),
+) {
     if m.is_none() {
         return
     }
@@ -719,8 +789,11 @@ fn add_opt(u: &Set(String), m: String?) {
 }
 
 // The defining module of whatever a resolved target names, if it has one.
-fn target_module(result: &TypeCheckResult, fn_module: &Dict(u32, String),
-    t: &ResolvedTarget) String? {
+fn target_module(
+    result: &TypeCheckResult,
+    fn_module: &Dict(u32, String),
+    t: &ResolvedTarget,
+) String? {
     return t.* match {
         RtFunction(fid) => fn_module.get(fid)
         RtSpecialized(sid) => result.specializations.find(sid) match {
@@ -876,7 +949,9 @@ fn diag_messages(unit: &AnalyzedProject, code: String) List(String) {
 }
 
 test "an unreachable function warns and a called one does not" {
-    let unit = exe_unit("fn used() i32 { return 1 }\nfn dead() i32 { return 2 }\nfn main() i32 { return used() }\n")
+    let unit = exe_unit(
+        "fn used() i32 { return 1 }\nfn dead() i32 { return 2 }\nfn main() i32 { return used() }\n",
+    )
     defer unit.deinit()
     let w = diag_messages(&unit, "W1003")
     defer w.deinit()
@@ -893,7 +968,9 @@ test "a `_`-prefixed function suppresses the warning" {
 }
 
 test "a library's pub functions are roots, its private dead code still warns" {
-    let unit = lib_unit("pub fn api() i32 { return inner() }\nfn inner() i32 { return 1 }\nfn dead() i32 { return 2 }\n")
+    let unit = lib_unit(
+        "pub fn api() i32 { return inner() }\nfn inner() i32 { return 1 }\nfn dead() i32 { return 2 }\n",
+    )
     defer unit.deinit()
     let w = diag_messages(&unit, "W1003")
     defer w.deinit()
@@ -910,7 +987,9 @@ test "an exe's pub function is not a root" {
 }
 
 test "a module with test blocks roots its non-pub functions" {
-    let unit = exe_unit("fn probe() i32 { return 1 }\ntest \"t\" { let _x = 0 }\nfn main() i32 { return 0 }\n")
+    let unit = exe_unit(
+        "fn probe() i32 { return 1 }\ntest \"t\" { let _x = 0 }\nfn main() i32 { return 0 }\n",
+    )
     defer unit.deinit()
     let w = diag_messages(&unit, "W1003")
     defer w.deinit()
@@ -918,7 +997,9 @@ test "a module with test blocks roots its non-pub functions" {
 }
 
 test "one overload used does not excuse its sibling" {
-    let unit = exe_unit("fn f(x: i32) i32 { return x }\nfn f(x: bool) i32 { return 1 }\nfn main() i32 { return f(3i32) }\n")
+    let unit = exe_unit(
+        "fn f(x: i32) i32 { return x }\nfn f(x: bool) i32 { return 1 }\nfn main() i32 { return f(3i32) }\n",
+    )
     defer unit.deinit()
     let w = diag_messages(&unit, "W1003")
     defer w.deinit()
@@ -926,7 +1007,9 @@ test "one overload used does not excuse its sibling" {
 }
 
 test "a function referenced as a value is used" {
-    let unit = exe_unit("fn add(x: i32) i32 { return x + 1 }\nfn main() i32 {\n    let g: fn(i32) i32 = add\n    return g(1)\n}\n")
+    let unit = exe_unit(
+        "fn add(x: i32) i32 { return x + 1 }\nfn main() i32 {\n    let g: fn(i32) i32 = add\n    return g(1)\n}\n",
+    )
     defer unit.deinit()
     let w = diag_messages(&unit, "W1003")
     defer w.deinit()
@@ -934,7 +1017,9 @@ test "a function referenced as a value is used" {
 }
 
 test "a call inside a generic template body marks its target used" {
-    let unit = exe_unit("fn helper() i32 { return 3 }\nfn pick(x: $T) i32 { return helper() }\nfn main() i32 { return pick(1i32) }\n")
+    let unit = exe_unit(
+        "fn helper() i32 { return 3 }\nfn pick(x: $T) i32 { return helper() }\nfn main() i32 { return pick(1i32) }\n",
+    )
     defer unit.deinit()
     let w = diag_messages(&unit, "W1003")
     defer w.deinit()
@@ -942,7 +1027,9 @@ test "a call inside a generic template body marks its target used" {
 }
 
 test "an operator overload used through its operator is not unused" {
-    let unit = exe_unit("type P = struct { x: i32 }\nfn op_eq(a: &P, b: &P) bool { return a.x == b.x }\nfn main() i32 {\n    let a = P { x = 1 }\n    let b = P { x = 1 }\n    if a == b { return 0 }\n    return 1\n}\n")
+    let unit = exe_unit(
+        "type P = struct { x: i32 }\nfn op_eq(a: &P, b: &P) bool { return a.x == b.x }\nfn main() i32 {\n    let a = P { x = 1 }\n    let b = P { x = 1 }\n    if a == b { return 0 }\n    return 1\n}\n",
+    )
     defer unit.deinit()
     let w = diag_messages(&unit, "W1003")
     defer w.deinit()
@@ -950,7 +1037,9 @@ test "an operator overload used through its operator is not unused" {
 }
 
 test "a use in a constant initializer roots the callee" {
-    let unit = exe_unit("fn seed() i32 { return 7 }\nconst START: i32 = seed()\nfn main() i32 { return START }\n")
+    let unit = exe_unit(
+        "fn seed() i32 { return 7 }\nconst START: i32 = seed()\nfn main() i32 { return START }\n",
+    )
     defer unit.deinit()
     let w = diag_messages(&unit, "W1003")
     defer w.deinit()
@@ -985,7 +1074,8 @@ fn main() i32 {
 }
 
 test "a type-only use counts for W1004" {
-    let unit = analyzed_fixture("import p.leaf
+    let unit = analyzed_fixture(
+        "import p.leaf
 
 fn measure(m: &Marker) i32 {
     return 0
@@ -994,7 +1084,8 @@ fn measure(m: &Marker) i32 {
 fn main() i32 {
     return 0
 }
-")
+",
+    )
     defer unit.deinit()
     let w = diag_messages(&unit, "W1004")
     defer w.deinit()
@@ -1015,7 +1106,8 @@ fn main() i32 {
 }
 
 test "a test-bearing module keeps its imports" {
-    let unit = analyzed_fixture("import p.leaf
+    let unit = analyzed_fixture(
+        "import p.leaf
 
 test \"maybe the test uses it\" {
     let _v = leaf()
@@ -1024,7 +1116,8 @@ test \"maybe the test uses it\" {
 fn main() i32 {
     return 0
 }
-")
+",
+    )
     defer unit.deinit()
     let w = diag_messages(&unit, "W1004")
     defer w.deinit()

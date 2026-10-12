@@ -634,8 +634,11 @@ test "min, max and the folds over a slice" {
     assert_eq(s.max().unwrap(), 9, "max")
     assert_eq(s.min_by(fn(v: i32) i32 { 0 - v }).unwrap(), 9, "min_by negated")
     assert_eq(s.fold(0i32, fn(a: i32, b: i32) i32 { a + b }), 13, "fold")
-    assert_eq(s.fold_right(10i32, fn(x: i32, acc: i32) i32 { acc - x }), 10 - 1 - 9 - 3,
-        "fold_right runs from the end")
+    assert_eq(
+        s.fold_right(10i32, fn(x: i32, acc: i32) i32 { acc - x }),
+        10 - 1 - 9 - 3,
+        "fold_right runs from the end",
+    )
 }
 
 // =============================================================================

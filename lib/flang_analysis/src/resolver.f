@@ -110,8 +110,11 @@ pub fn deinit(self: move ResolveCtx) {
 
 // Resolve a dotted import to an existing file path, or null when no rule matches an existing file.
 // The returned string is owned by the caller.
-pub fn resolve_import(ctx: &ResolveCtx, segs: String[],
-    allocator: &Allocator? = null) OwnedString? {
+pub fn resolve_import(
+    ctx: &ResolveCtx,
+    segs: String[],
+    allocator: &Allocator? = null,
+) OwnedString? {
     // Project rule: first segment is the project name.
     if segs.len > 1 and segs[0] == ctx.project_name.view {
         let p = join_module_path(ctx.project_source_root.view, segs, 1, allocator)
@@ -183,8 +186,12 @@ pub fn module_fqn(ctx: &ResolveCtx, path: String, allocator: &Allocator? = null)
 }
 
 // `base/seg.../tail.f` from import segments, joining with forward slashes.
-pub fn join_module_path(base: String, segs: String[], start: usize,
-    allocator: &Allocator? = null) OwnedString {
+pub fn join_module_path(
+    base: String,
+    segs: String[],
+    start: usize,
+    allocator: &Allocator? = null,
+) OwnedString {
     let sb = string_builder(0, allocator)
     defer sb.deinit()
     sb.append(base)
@@ -207,8 +214,12 @@ pub fn resolve_ctx(proj: &Project, stdlib_root: String, allocator: &Allocator? =
 // Dependency paths in the manifest are relative to the manifest's own directory, so they are joined
 // under `project_dir` before their source roots are derived. The LSP analyzes projects anywhere in
 // the workspace this way; a build passes `"."`.
-pub fn resolve_ctx_at(proj: &Project, project_dir: String, stdlib_root: String,
-    allocator: &Allocator? = null) ResolveCtx {
+pub fn resolve_ctx_at(
+    proj: &Project,
+    project_dir: String,
+    stdlib_root: String,
+    allocator: &Allocator? = null,
+) ResolveCtx {
     let deps = list(0, allocator)
     for &d in proj.deps {
         let dep_dir = join_under(project_dir, d.path.view, allocator)
@@ -222,8 +233,10 @@ pub fn resolve_ctx_at(proj: &Project, project_dir: String, stdlib_root: String,
     }
     return ResolveCtx {
         project_name = from_view(proj.name.view),
-        project_source_root = normalized_owned(source_root(project_dir, proj.source.view,
-                allocator), allocator),
+        project_source_root = normalized_owned(
+            source_root(project_dir, proj.source.view, allocator),
+            allocator,
+        ),
         deps = move deps,
         stdlib_root = normalize_sep(stdlib_root, allocator),
         cwd = normalize_sep(project_dir, allocator),
@@ -603,14 +616,18 @@ test "canon_path folds dots, absolutizes, and lowercases the drive" {
 }
 
 test "resolve_ctx_at roots the project and its deps under the given directory" {
-    let proj = parse_project("[project]\nname = \"p\"\nkind = \"lib\"\nsource = \"src/**/*.f\"\n\n[dependencies]\ncore = { path = \"../core\" }\n")
+    let proj = parse_project(
+        "[project]\nname = \"p\"\nkind = \"lib\"\nsource = \"src/**/*.f\"\n\n[dependencies]\ncore = { path = \"../core\" }\n",
+    )
     defer proj.deinit()
     let ctx = resolve_ctx_at(&proj, "w/proj", "stdlib")
     defer ctx.deinit()
     assert_true(ctx.project_source_root.view == "w/proj/src", "source root under the dir")
     assert_true(ctx.cwd.view == "w/proj", "cwd is the project dir")
-    assert_true(ctx.deps[0].root.view == "w/proj/../core/src",
-        "relative dep path joins under the dir")
+    assert_true(
+        ctx.deps[0].root.view == "w/proj/../core/src",
+        "relative dep path joins under the dir",
+    )
 
     let abs = resolve_ctx_at(&proj, "c:/w", "stdlib")
     defer abs.deinit()

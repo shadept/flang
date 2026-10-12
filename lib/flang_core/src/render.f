@@ -46,8 +46,14 @@ pub fn render_style(color: bool) RenderStyle {
 }
 
 // One diagnostic, ready to write. A spanless diagnostic (`none_span`) renders as the header alone.
-pub fn render_diagnostic(path: String, source: String, idx: &LineIndex, d: &Diagnostic,
-    style: &RenderStyle, allocator: &Allocator? = null) OwnedString {
+pub fn render_diagnostic(
+    path: String,
+    source: String,
+    idx: &LineIndex,
+    d: &Diagnostic,
+    style: &RenderStyle,
+    allocator: &Allocator? = null,
+) OwnedString {
     let sb = string_builder(256, allocator)
     write_header(&sb, d, style)
     if is_none(d.span) {
@@ -160,8 +166,14 @@ fn write_gutter(sb: &StringBuilder, number: String, width: usize, style: &Render
     unpaint(sb, style)
 }
 
-fn write_source_line(sb: &StringBuilder, source: String, idx: &LineIndex, line: usize, width: usize,
-    style: &RenderStyle) {
+fn write_source_line(
+    sb: &StringBuilder,
+    source: String,
+    idx: &LineIndex,
+    line: usize,
+    width: usize,
+    style: &RenderStyle,
+) {
     const n = uint_text(line + 1)
     defer n.deinit()
     write_gutter(sb, n.view, width, style)
@@ -171,8 +183,17 @@ fn write_source_line(sb: &StringBuilder, source: String, idx: &LineIndex, line: 
 }
 
 // The caret run under `line`'s share of the span, with the hint after it on the last line.
-fn write_carets(sb: &StringBuilder, source: String, idx: &LineIndex, d: &Diagnostic, line: usize,
-    start_line: usize, end_line: usize, width: usize, style: &RenderStyle) {
+fn write_carets(
+    sb: &StringBuilder,
+    source: String,
+    idx: &LineIndex,
+    d: &Diagnostic,
+    line: usize,
+    start_line: usize,
+    end_line: usize,
+    width: usize,
+    style: &RenderStyle,
+) {
     const text = line_text(source, idx, line)
     const cols = display_width(text, style.tab_width)
 
@@ -213,8 +234,13 @@ fn line_text(source: String, idx: &LineIndex, line: usize) String {
 }
 
 // Columns `offset` sits at within its line once tabs are expanded, counting a codepoint once.
-fn display_col(source: String, idx: &LineIndex, line: usize, offset: usize,
-    tab_width: usize) usize {
+fn display_col(
+    source: String,
+    idx: &LineIndex,
+    line: usize,
+    offset: usize,
+    tab_width: usize,
+) usize {
     const b = idx.line_bounds(source, line)
     let stop = offset
     if stop < b.0 {
@@ -346,8 +372,10 @@ test "a hint follows the carets" {
     const out = render_of(src, &d)
     defer out.deinit()
 
-    assert_true(contains(out.view, "^^^^^ did you mean `right`?"),
-        "the hint sits on the caret line")
+    assert_true(
+        contains(out.view, "^^^^^ did you mean `right`?"),
+        "the hint sits on the caret line",
+    )
 }
 
 test "a spanless diagnostic is the header alone" {

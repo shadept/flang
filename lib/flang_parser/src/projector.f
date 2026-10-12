@@ -44,8 +44,12 @@ type Projector = struct {
 // Project a parsed CST `Module` node into the typed AST `Module`. `allocator` is the backing
 // allocator for the arena (defaults to the global allocator). `file_id` is forwarded into every
 // produced `SourceSpan` - pass the workspace-stable id, or `-1` for "none".
-pub fn project_module(cst: CstNode, file_id: i32, allocator: &Allocator? = null,
-    diags: &List(Diagnostic)? = null) Module {
+pub fn project_module(
+    cst: CstNode,
+    file_id: i32,
+    allocator: &Allocator? = null,
+    diags: &List(Diagnostic)? = null,
+) Module {
     const backing = allocator.or_global()
     let arena = arena_allocator(backing)
     let arena_a = arena.allocator()
@@ -125,8 +129,8 @@ fn find_token(cst: CstNode, kind: TokenKind) Token? {
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => { if tok.kind == kind {
-                    return Some(tok.*)
-                } }
+                return Some(tok.*)
+            } }
             NodeChild(_) => {}
         }
     }
@@ -162,8 +166,13 @@ fn first_ident_text(cst: CstNode) String {
 // would otherwise carry it silently.
 fn error_pattern(self: &Projector, span: SourceSpan) Pattern {
     self.diags match {
-        Some(d) => d.push(error("E2115",
-                from_view("unsupported pattern form: this shape is not a pattern"), span))
+        Some(d) => d.push(
+            error(
+                "E2115",
+                from_view("unsupported pattern form: this shape is not a pattern"),
+                span,
+            ),
+        )
         None => {}
     }
     return Pattern.Error(ErrorPattern { span = span })
@@ -345,8 +354,8 @@ fn project_where_bound(self: &Projector, cst: CstNode) TypeBound {
     let bound: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
     nth_node(cst, 0) match {
         Some(child) => { if is_type_kind(child.kind) {
-                install(&bound, self.project_type_expr(child))
-            } }
+            install(&bound, self.project_type_expr(child))
+        } }
         None => {}
     }
     let path: List(String) = list(0, Some(self.alloc))
@@ -589,8 +598,8 @@ fn project_type_param(self: &Projector, cst: CstNode) GenericParam {
     let bound: TypeExpr? = null
     nth_node(cst, 0) match {
         Some(b) => { if is_type_kind(b.kind) {
-                install(&bound, Some(self.project_type_expr(b)))
-            } }
+            install(&bound, Some(self.project_type_expr(b)))
+        } }
         None => {}
     }
     let span = self.span_from(cst)
@@ -974,7 +983,9 @@ fn project_if_directive_decl(self: &Projector, cst: CstNode) IfDirectiveDecl {
                 if child.kind == NodeKind.BlockExpr {
                     // Block body holds module-level decls in directive form; re-walk it as if it
                     // were a Module body.
-                    let target: &List(Decl) = if blocks_seen == 0 { &then_decls } else { &else_decls }
+                    let target: &List(
+                        Decl,
+                    ) = if blocks_seen == 0 { &then_decls } else { &else_decls }
                     for j in 0..child.child_count() {
                         child.child(j) match {
                             NodeChild(sub) => {
@@ -1231,7 +1242,9 @@ fn project_if_directive_stmt(self: &Projector, cst: CstNode) IfDirectiveStmt {
         cst.child(i) match {
             NodeChild(child) => {
                 if child.kind == NodeKind.BlockExpr {
-                    let target: &List(Stmt) = if blocks_seen == 0 { &then_stmts } else { &else_stmts }
+                    let target: &List(
+                        Stmt,
+                    ) = if blocks_seen == 0 { &then_stmts } else { &else_stmts }
                     self.collect_block_stmts(child, target)
                     blocks_seen = blocks_seen + 1
                 }
@@ -2078,8 +2091,9 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
                 if tok.kind == TokenKind.Identifier {
                     // Flush previous pending field as shorthand.
                     if pending_active {
-                        fields.push(self.make_struct_field_init(pending_name, pending_span,
-                                pending_value))
+                        fields.push(
+                            self.make_struct_field_init(pending_name, pending_span, pending_value),
+                        )
                     }
                     pending_name = tok.text
                     pending_span = self.span_from_token(tok)
@@ -2094,8 +2108,9 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
                 }
                 if tok.kind == TokenKind.Comma {
                     if pending_active {
-                        fields.push(self.make_struct_field_init(pending_name, pending_span,
-                                pending_value))
+                        fields.push(
+                            self.make_struct_field_init(pending_name, pending_span, pending_value),
+                        )
                         pending_active = false
                         install(&pending_value, null)
                     }
@@ -2103,8 +2118,9 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
                 }
                 if tok.kind == TokenKind.CloseBrace {
                     if pending_active {
-                        fields.push(self.make_struct_field_init(pending_name, pending_span,
-                                pending_value))
+                        fields.push(
+                            self.make_struct_field_init(pending_name, pending_span, pending_value),
+                        )
                         pending_active = false
                         install(&pending_value, null)
                     }
@@ -2141,8 +2157,12 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
     })
 }
 
-fn make_struct_field_init(self: &Projector, name: String, span: SourceSpan,
-    value: Expr?) StructFieldInit {
+fn make_struct_field_init(
+    self: &Projector,
+    name: String,
+    span: SourceSpan,
+    value: Expr?,
+) StructFieldInit {
     let v_ref: &Expr? = null
     value match {
         Some(e) => { v_ref = Some(self.boxed(e)) }
@@ -2237,8 +2257,16 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
             return null
         }
         let no_args: List(TypeExpr) = list(0, Some(self.alloc))
-        return Some(TypeExpr.Named(NamedType { span = span, name = name,
-            generic_args = frozen(no_args), assoc_args = frozen(list(0, Some(self.alloc))) }))
+        return Some(
+            TypeExpr.Named(
+                NamedType {
+                    span = span,
+                    name = name,
+                    generic_args = frozen(no_args),
+                    assoc_args = frozen(list(0, Some(self.alloc))),
+                },
+            ),
+        )
     }
     if cst.kind == NodeKind.CallExpr {
         let name: String = ""
@@ -2264,8 +2292,16 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
         if name.len == 0 {
             return null
         }
-        return Some(TypeExpr.Named(NamedType { span = span, name = name,
-            generic_args = frozen(args), assoc_args = frozen(list(0, Some(self.alloc))) }))
+        return Some(
+            TypeExpr.Named(
+                NamedType {
+                    span = span,
+                    name = name,
+                    generic_args = frozen(args),
+                    assoc_args = frozen(list(0, Some(self.alloc))),
+                },
+            ),
+        )
     }
     return null
 }
@@ -2807,8 +2843,8 @@ fn project_assoc_arg(self: &Projector, cst: CstNode) AssocArg {
     let ty: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
     nth_node(cst, 0) match {
         Some(child) => { if is_type_kind(child.kind) {
-                install(&ty, self.project_type_expr(child))
-            } }
+            install(&ty, self.project_type_expr(child))
+        } }
         None => {}
     }
     return AssocArg {
@@ -2824,8 +2860,8 @@ fn project_projection_type(self: &Projector, cst: CstNode) TypeExpr {
     let base: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
     nth_node(cst, 0) match {
         Some(child) => { if is_type_kind(child.kind) {
-                install(&base, self.project_type_expr(child))
-            } }
+            install(&base, self.project_type_expr(child))
+        } }
         None => {}
     }
     return TypeExpr.Projection(ProjectionType {
@@ -2839,8 +2875,8 @@ fn project_reference_type(self: &Projector, cst: CstNode) TypeExpr {
     let inner: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
     nth_node(cst, 0) match {
         Some(child) => { if is_type_kind(child.kind) {
-                install(&inner, self.project_type_expr(child))
-            } }
+            install(&inner, self.project_type_expr(child))
+        } }
         None => {}
     }
     return TypeExpr.Reference(ReferenceType {
@@ -2853,8 +2889,8 @@ fn project_optional_type(self: &Projector, cst: CstNode) TypeExpr {
     let inner: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
     nth_node(cst, 0) match {
         Some(child) => { if is_type_kind(child.kind) {
-                install(&inner, self.project_type_expr(child))
-            } }
+            install(&inner, self.project_type_expr(child))
+        } }
         None => {}
     }
     return TypeExpr.Optional(OptionalType {
@@ -2891,8 +2927,8 @@ fn project_slice_type(self: &Projector, cst: CstNode) TypeExpr {
     let element: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
     nth_node(cst, 0) match {
         Some(child) => { if is_type_kind(child.kind) {
-                install(&element, self.project_type_expr(child))
-            } }
+            install(&element, self.project_type_expr(child))
+        } }
         None => {}
     }
     return TypeExpr.Slice(SliceType {
@@ -2943,8 +2979,8 @@ fn project_contract_type(self: &Projector, cst: CstNode) TypeExpr {
             let ty: TypeExpr? = null
             nth_node(child, 0) match {
                 Some(b) => { if is_type_kind(b.kind) {
-                        install(&ty, Some(self.project_type_expr(b)))
-                    } }
+                    install(&ty, Some(self.project_type_expr(b)))
+                } }
                 None => {}
             }
             const derived = has_token(child, TokenKind.Equals)
@@ -3112,8 +3148,12 @@ fn project_anon_enum_type(self: &Projector, cst: CstNode) TypeExpr {
 // land there. Projecting them to `Wildcard` would make them match everything, so a match would
 // silently take the wrong arm. `Error` instead makes consumers refuse the match outright.
 
-fn project_pattern_from_tokens(self: &Projector, tokens: &List(Token), start: usize,
-    end: usize) Pattern {
+fn project_pattern_from_tokens(
+    self: &Projector,
+    tokens: &List(Token),
+    start: usize,
+    end: usize,
+) Pattern {
     const span: SourceSpan = .{ file_id = self.file_id, start = start, length = end - start }
     if tokens.len == 0 {
         return Pattern.Wildcard(WildcardPattern { span = span })
@@ -3302,8 +3342,14 @@ fn struct_pattern_from_tokens(self: &Projector, tokens: &List(Token), span: Sour
     })
 }
 
-fn push_struct_pattern_field(self: &Projector, fields: &List(StructPatternField), has_rest: &bool,
-    tokens: &List(Token), lo: usize, hi: usize) {
+fn push_struct_pattern_field(
+    self: &Projector,
+    fields: &List(StructPatternField),
+    has_rest: &bool,
+    tokens: &List(Token),
+    lo: usize,
+    hi: usize,
+) {
     if hi <= lo {
         return
     }
@@ -3331,8 +3377,13 @@ fn push_struct_pattern_field(self: &Projector, fields: &List(StructPatternField)
 
 // `lo..hi` in pattern position: at most one literal token on either side of the range token;
 // anything fancier degrades to Error (E2115) rather than guess.
-fn range_pattern_from(self: &Projector, tokens: &List(Token), dd: usize, inclusive: bool,
-    span: SourceSpan) Pattern {
+fn range_pattern_from(
+    self: &Projector,
+    tokens: &List(Token),
+    dd: usize,
+    inclusive: bool,
+    span: SourceSpan,
+) Pattern {
     let start_ref: &Expr? = null
     let end_ref: &Expr? = null
     if dd > 0 {
@@ -3432,11 +3483,14 @@ fn literal_pattern_for(self: &Projector, tok: Token, span: SourceSpan) Pattern {
         })
     }
     if tok.kind == TokenKind.StringLiteral {
-        return Pattern.Literal(LiteralPattern {
-            span = span,
-            value = LiteralValue.String(StringLiteral { span = span,
-                text = strip_quotes(tok.text) }),
-        })
+        return Pattern.Literal(
+            LiteralPattern {
+                span = span,
+                value = LiteralValue.String(
+                    StringLiteral { span = span, text = strip_quotes(tok.text) },
+                ),
+            },
+        )
     }
     if tok.kind == TokenKind.CharLiteral {
         return Pattern.Literal(LiteralPattern {
@@ -3472,8 +3526,11 @@ fn literal_pattern_for(self: &Projector, tok: Token, span: SourceSpan) Pattern {
     return self.error_pattern(span)
 }
 
-fn enum_variant_pattern_from_tokens(self: &Projector, tokens: &List(Token),
-    span: SourceSpan) Pattern {
+fn enum_variant_pattern_from_tokens(
+    self: &Projector,
+    tokens: &List(Token),
+    span: SourceSpan,
+) Pattern {
     let qualifier: String? = null
     let name: String = ""
     let payloads: List(Pattern) = list(0, Some(self.alloc))

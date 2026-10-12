@@ -77,10 +77,23 @@ pub type ChildStdin = struct { owned __fd: i32 }
 // Foreign ABI
 // =============================================================================
 
-#foreign fn __flang_proc_spawn(prog: &u8, argv: &usize, argc: usize, envp: &usize, envc: usize,
-    cwd: &u8?, has_cwd: i32, stdin_mode: i32, stdout_mode: i32, stderr_mode: i32,
-    out_handle: &usize, out_stdin_fd: &i32, out_stdout_fd: &i32, out_stderr_fd: &i32, out_err: &i32,
-    ) i32
+#foreign fn __flang_proc_spawn(
+    prog: &u8,
+    argv: &usize,
+    argc: usize,
+    envp: &usize,
+    envc: usize,
+    cwd: &u8?,
+    has_cwd: i32,
+    stdin_mode: i32,
+    stdout_mode: i32,
+    stderr_mode: i32,
+    out_handle: &usize,
+    out_stdin_fd: &i32,
+    out_stdout_fd: &i32,
+    out_stderr_fd: &i32,
+    out_err: &i32,
+) i32
 
 #foreign fn __flang_proc_wait(handle: usize, out_exit: &i32, out_err: &i32) i32
 #foreign fn __flang_proc_kill(handle: usize, out_err: &i32) i32
@@ -224,9 +237,23 @@ pub fn spawn(self: &Command) Result(Child, ProcessError) {
     let err_fd: i32 = -1
     let err_code: i32 = 0
 
-    const status = __flang_proc_spawn(prog, argv_ptrs.ptr, argv_ptrs.len, envp_ptrs.ptr,
-        envp_ptrs.len, cwd_ptr, has_cwd, self.__stdin, self.__stdout, self.__stderr, &handle,
-        &in_fd, &out_fd, &err_fd, &err_code)
+    const status = __flang_proc_spawn(
+        prog,
+        argv_ptrs.ptr,
+        argv_ptrs.len,
+        envp_ptrs.ptr,
+        envp_ptrs.len,
+        cwd_ptr,
+        has_cwd,
+        self.__stdin,
+        self.__stdout,
+        self.__stderr,
+        &handle,
+        &in_fd,
+        &out_fd,
+        &err_fd,
+        &err_code,
+    )
     if status != 0 {
         return Err(err_code as ProcessError)
     }

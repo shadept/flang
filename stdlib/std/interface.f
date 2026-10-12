@@ -12,8 +12,8 @@
         #for field in Spec.fields {
             #(field.name): fn(ctx: &u8,
                 #for param in field.type_info.params {
-                #(param.name): #(param.type_info.name),
-            }) #(field.type_info.return_type.name)
+                    #(param.name): #(param.type_info.name),
+                }) #(field.type_info.return_type.name)
         }
     }
 
@@ -25,13 +25,13 @@
     #for field in Spec.fields {
         pub fn #(field.name)(self: &#(Name),
             #for param in field.type_info.params {
-            #(param.name): #(param.type_info.name),
-        }) #(field.type_info.return_type.name) {
-            return self._vtable.#(field.name)(self._ctx,
-                #for param in field.type_info.params {
-                #(param.name),
-            })
-        }
+                #(param.name): #(param.type_info.name),
+            }) #(field.type_info.return_type.name) {
+                return self._vtable.#(field.name)(self._ctx,
+                    #for param in field.type_info.params {
+                        #(param.name),
+                    })
+            }
     }
 }
 
@@ -39,14 +39,14 @@
     #for field in type_named(Iface.name + "Vtable").fields {
         fn __#(Impl.name)_#(Iface.name)_#(field.name)(
             #for param in field.type_info.params {
-            #(param.name): #(param.type_info.name),
-        } ) #(field.type_info.return_type.name) {
-            let self = ctx as &#(Impl.name)
-            return self.#(field.name)(
-                #for param in field.type_info.params[1..] {
-                #(param.name),
-            })
-        }
+                #(param.name): #(param.type_info.name),
+            } ) #(field.type_info.return_type.name) {
+                let self = ctx as &#(Impl.name)
+                return self.#(field.name)(
+                    #for param in field.type_info.params[1..] {
+                        #(param.name),
+                    })
+            }
     }
 
     const __#(Impl.name)_#(Iface.name)_vtable = #(Iface.name)Vtable {

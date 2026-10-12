@@ -53,8 +53,13 @@ pub fn rtti_kind(it: &TypeInterner, reg: &NominalRegistry, t: Ty) i32 {
 
 // The `type_info(T)` value of a type named in a `#if`, or the `type_of(v)` value of a value named
 // there: name, kind and the copyable bit of the concrete `t`, no syntax behind it.
-pub fn ct_type_info_of_ty(it: &TypeInterner, reg: &NominalRegistry, t: Ty, alloc: &Allocator?,
-    rigid: &Dict(VarId, bool)? = null) CtTypeInfo {
+pub fn ct_type_info_of_ty(
+    it: &TypeInterner,
+    reg: &NominalRegistry,
+    t: Ty,
+    alloc: &Allocator?,
+    rigid: &Dict(VarId, bool)? = null,
+) CtTypeInfo {
     return CtTypeInfo {
         name = rtti_name(it, reg, t),
         kind = rtti_kind(it, reg, t),

@@ -1065,8 +1065,12 @@ fn resolve_type_node(self: &Checker, te: &TypeExpr) Ty {
 fn contract_param(self: &Checker, te: &TypeExpr, label: String, span: SourceSpan) Ty {
     if !self.sugar_ok {
         const hint = if label == "contract" { "..." } else { label }
-        push_diag_e(self, span, E_CONTRACT_VALUE,
-            $"a contract has no values - in a parameter's type it stands for a bounded type parameter; elsewhere bound one: `$T where T: {hint}`")
+        push_diag_e(
+            self,
+            span,
+            E_CONTRACT_VALUE,
+            $"a contract has no values - in a parameter's type it stands for a bounded type parameter; elsewhere bound one: `$T where T: {hint}`",
+        )
         return TY_ERROR
     }
     const at = $"@{span.start}"
@@ -1077,8 +1081,14 @@ fn contract_param(self: &Checker, te: &TypeExpr, label: String, span: SourceSpan
         return self.engine.specialize(&b.unwrap().scheme)
     }
     if !self.sig_open {
-        push_diag_e(self, span, E_CONTRACT_VALUE,
-            from_view("a contract stands for a type parameter only in a function's own parameter types"))
+        push_diag_e(
+            self,
+            span,
+            E_CONTRACT_VALUE,
+            from_view(
+                "a contract stands for a type parameter only in a function's own parameter types",
+            ),
+        )
         return TY_ERROR
     }
     const v = self.engine.fresh_var()
@@ -1169,8 +1179,14 @@ fn anon_struct_ty(self: &Checker, fields: move List(Field), span: SourceSpan) Ty
 // `te` is the `Named` node `n` came from.
 fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
     if n.assoc_args.len > 0 and !names_contract(self, n.name) {
-        push_diag_e(self, n.assoc_args[0].span, E_BAD_ASSOC_ARG,
-            from_view("`Name = T` and `Name: Bound` constrain a contract's associated type, and belong in a bound"))
+        push_diag_e(
+            self,
+            n.assoc_args[0].span,
+            E_BAD_ASSOC_ARG,
+            from_view(
+                "`Name = T` and `Name: Bound` constrain a contract's associated type, and belong in a bound",
+            ),
+        )
         return TY_ERROR
     }
     // Primitive?
@@ -1225,8 +1241,12 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
         // `type A = B` / `type B = A`: expanding either one reaches itself, so the expansion never
         // terminates (E2036). The names currently being expanded are the cycle witness.
         if contains_view(&self.alias_stack, n.name) {
-            push_diag_e(self, n.span, E_CYCLIC_ALIAS,
-                $"type alias `{n.name}` is cyclic - it expands to itself")
+            push_diag_e(
+                self,
+                n.span,
+                E_CYCLIC_ALIAS,
+                $"type alias `{n.name}` is cyclic - it expands to itself",
+            )
             return TY_ERROR
         }
         let body = alias_body.unwrap()
@@ -1254,8 +1274,14 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
     }
 
     if n.name == SELF_NAME {
-        push_diag_e(self, n.span, E_SELF_OUTSIDE,
-            from_view("`Self` names the type being declared, and is only valid inside a named struct, enum or contract body"))
+        push_diag_e(
+            self,
+            n.span,
+            E_SELF_OUTSIDE,
+            from_view(
+                "`Self` names the type being declared, and is only valid inside a named struct, enum or contract body",
+            ),
+        )
         return TY_ERROR
     }
     push_diag_e(self, n.span, E_UNKNOWN_TYPE, $"unknown type `{n.name}`")
@@ -1297,8 +1323,14 @@ fn resolve_reference(self: &Checker, r: &ReferenceType) Ty {
     // can produce (E2006).
     let is_fn = ty_node(self, inner) match { NFunc(_) => true, _ => false }
     if is_fn {
-        push_diag_e(self, r.span, E_REF_TO_FN,
-            from_view("cannot take a reference to a function type - function types are already pointer-sized"))
+        push_diag_e(
+            self,
+            r.span,
+            E_REF_TO_FN,
+            from_view(
+                "cannot take a reference to a function type - function types are already pointer-sized",
+            ),
+        )
         return TY_ERROR
     }
     return self.engine.mk_ref(inner)
@@ -1402,8 +1434,14 @@ fn check_slot_param(self: &Checker, p: &FunctionParam) {
     if in_core_module(self) {
         return
     }
-    push_diag_e(self, p.span, E_SLOT_OUTSIDE_CORE,
-        from_view("`&move` parameters are declared in the core library only - `core.slice`'s `swap` and `replace` are how a value leaves a slot its caller keeps"))
+    push_diag_e(
+        self,
+        p.span,
+        E_SLOT_OUTSIDE_CORE,
+        from_view(
+            "`&move` parameters are declared in the core library only - `core.slice`'s `swap` and `replace` are how a value leaves a slot its caller keeps",
+        ),
+    )
 }
 
 // Whether the module being checked is part of the core library.
@@ -1421,13 +1459,23 @@ fn move_bit_of(self: &Checker, i: usize, declared: bool, ty: Ty, span: SourceSpa
     }
     const is_ref = ty_node(self, self.engine.resolve(ty)) match { NRef(_) => true, _ => false }
     if is_ref {
-        push_diag_e(self, span, E_MOVE_REF_PARAM,
-            from_view("`move` on a reference parameter: a reference is copyable, and owning it says nothing about the value it refers to"))
+        push_diag_e(
+            self,
+            span,
+            E_MOVE_REF_PARAM,
+            from_view(
+                "`move` on a reference parameter: a reference is copyable, and owning it says nothing about the value it refers to",
+            ),
+        )
         return 0usize
     }
     if i >= MAX_MOVE_PARAMS {
-        push_diag_e(self, span, E_MOVE_REF_PARAM,
-            $"`move` is supported on the first {MAX_MOVE_PARAMS} parameters only")
+        push_diag_e(
+            self,
+            span,
+            E_MOVE_REF_PARAM,
+            $"`move` is supported on the first {MAX_MOVE_PARAMS} parameters only",
+        )
         return 0usize
     }
     return move_bit(i)
@@ -1645,8 +1693,13 @@ fn build_visibility(self: &Checker, modules: &List(Module), paths: &List(String)
 
 // Record module `m`'s imports as views into `paths`. An import whose dotted path names no loaded
 // module is silently dropped here; the unresolved-import diagnostic is the loader's job.
-fn collect_edges(m: &Module, paths: &List(String), imps: &List(String), reexps: &List(String),
-    alloc: &Allocator?) {
+fn collect_edges(
+    m: &Module,
+    paths: &List(String),
+    imps: &List(String),
+    reexps: &List(String),
+    alloc: &Allocator?,
+) {
     for &d in m.decls {
         d.* match {
             Import(id) => {
@@ -1672,8 +1725,14 @@ fn collect_edges(m: &Module, paths: &List(String), imps: &List(String), reexps: 
 
 // `{idx} ∪ imports(idx)` then a BFS that follows only `pub import` edges,
 // per the spec's non-transitive-import / transitive-re-export rule.
-fn compute_visible(idx: usize, paths: &List(String), imports: &List(List(String)),
-    reexports: &List(List(String)), out: &Set(String), alloc: &Allocator?) {
+fn compute_visible(
+    idx: usize,
+    paths: &List(String),
+    imports: &List(List(String)),
+    reexports: &List(List(String)),
+    out: &Set(String),
+    alloc: &Allocator?,
+) {
     out.add(paths[idx])
     let work: List(String) = list(0, alloc)
     for im in imports[idx] {
@@ -1772,8 +1831,12 @@ fn collect_one_name(self: &Checker, decl: &Decl, module_path: String) {
             refuse_self_name(self, td.name, td.span)
             let fqn_owned = $"{module_path}.{td.name}"
             if self.nominals.contains(fqn_owned.view) or self.aliases.contains(fqn_owned.view) {
-                push_diag_e(self, td.span, E_DUP_TYPE_DECL,
-                    $"duplicate type declaration `{td.name}`")
+                push_diag_e(
+                    self,
+                    td.span,
+                    E_DUP_TYPE_DECL,
+                    $"duplicate type declaration `{td.name}`",
+                )
                 fqn_owned.deinit()
                 return
             }
@@ -1782,10 +1845,16 @@ fn collect_one_name(self: &Checker, decl: &Decl, module_path: String) {
             // for an alias body (stored unresolved for lazy expansion at use).
             let kind = nominal_kind_of(td.body)
             kind match {
-                NkStruct => note_bound_text(self, register_struct_placeholder(self, &td, fqn_owned),
-                    td.body)
-                NkEnum => note_bound_text(self, register_enum_placeholder(self, &td, fqn_owned),
-                    td.body)
+                NkStruct => note_bound_text(
+                    self,
+                    register_struct_placeholder(self, &td, fqn_owned),
+                    td.body,
+                )
+                NkEnum => note_bound_text(
+                    self,
+                    register_enum_placeholder(self, &td, fqn_owned),
+                    td.body,
+                )
                 NkAlias => {
                     td.body match {
                         Contract(c) => self.self_decls.set(node_id_of(c.span), td.span)
@@ -1954,8 +2023,12 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
         // A field name twice would make every later lookup ambiguous and silently pick the first -
         // reject at the declaration.
         if field_named(&fields, f.name) {
-            push_diag_e(self, f.span, E_DUP_FIELD,
-                $"duplicate field `{f.name}` in struct `{td.name}`")
+            push_diag_e(
+                self,
+                f.span,
+                E_DUP_FIELD,
+                $"duplicate field `{f.name}` in struct `{td.name}`",
+            )
             continue
         }
         fields.push(Field {
@@ -2004,8 +2077,12 @@ fn check_recursive_nominal(self: &Checker, id: NominalId, name: String, span: So
         return
     }
     const noun = if cut.unwrap().1 { "variant" } else { "field" }
-    push_diag_e(self, span, E_RECURSIVE_TYPE,
-        $"recursive type `{name}` has infinite size - {noun} `{cut.unwrap().0}` reaches back to it; break the cycle with a reference")
+    push_diag_e(
+        self,
+        span,
+        E_RECURSIVE_TYPE,
+        $"recursive type `{name}` has infinite size - {noun} `{cut.unwrap().0}` reaches back to it; break the cycle with a reference",
+    )
 }
 
 // Poison every by-value member that reaches back to `id`, and report whether any did.
@@ -2059,8 +2136,12 @@ fn cut_back_edges(self: &Checker, id: NominalId) (String, bool)? {
 }
 
 // Whether `target` is reachable from `current`'s by-value members.
-fn nominal_contains(self: &Checker, current: NominalId, target: NominalId,
-    seen: &Set(NominalId)) bool {
+fn nominal_contains(
+    self: &Checker,
+    current: NominalId,
+    target: NominalId,
+    seen: &Set(NominalId),
+) bool {
     if seen.contains(current) {
         return false
     }
@@ -2110,8 +2191,12 @@ fn ty_contains_nominal(self: &Checker, t: Ty, target: NominalId, seen: &Set(Nomi
     }
 }
 
-fn span_contains_nominal(self: &Checker, span: ChildSpan, target: NominalId,
-    seen: &Set(NominalId)) bool {
+fn span_contains_nominal(
+    self: &Checker,
+    span: ChildSpan,
+    target: NominalId,
+    seen: &Set(NominalId),
+) bool {
     for i in 0..span.len {
         if ty_contains_nominal(self, self.engine.interner.child_at(span, i), target, seen) {
             return true
@@ -2268,15 +2353,23 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
             None => {}
         }
         if tags.contains(next_tag) {
-            push_diag_e(self, v.span, E_DUP_TAG,
-                $"duplicate tag value {next_tag} for variant `{v.name}` in enum `{td.name}`")
+            push_diag_e(
+                self,
+                v.span,
+                E_DUP_TAG,
+                $"duplicate tag value {next_tag} for variant `{v.name}` in enum `{td.name}`",
+            )
         }
         tags.push(next_tag)
         tag_by_name.set(v.name, next_tag)
         next_tag = next_tag + 1i64
         if variant_named(&variants, v.name) {
-            push_diag_e(self, v.span, E_DUP_VARIANT,
-                $"duplicate variant `{v.name}` in enum `{td.name}`")
+            push_diag_e(
+                self,
+                v.span,
+                E_DUP_VARIANT,
+                $"duplicate variant `{v.name}` in enum `{td.name}`",
+            )
             payloads.deinit()
             continue
         }
@@ -2318,8 +2411,12 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
     // E2047: a NAKED enum - one that assigns integer tags - is a plain C-style enumeration; a
     // payload would have nowhere to live.
     if has_explicit_tag and has_payload {
-        push_diag_e(self, td.span, E_NAKED_ENUM_PAYLOAD,
-            $"enum `{td.name}` assigns explicit tag values, so no variant may carry a payload")
+        push_diag_e(
+            self,
+            td.span,
+            E_NAKED_ENUM_PAYLOAD,
+            $"enum `{td.name}` assigns explicit tag values, so no variant may carry a payload",
+        )
     }
 }
 
@@ -2484,8 +2581,12 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     // running one of them.
     let dup = duplicate_overload(self, fd.name, &scheme_obj.signature)
     if dup {
-        push_diag_e(self, fd.span, E_DUP_SIGNATURE,
-            $"duplicate definition of `{fd.name}` with the same parameter types")
+        push_diag_e(
+            self,
+            fd.span,
+            E_DUP_SIGNATURE,
+            $"duplicate definition of `{fd.name}` with the same parameter types",
+        )
     }
     const quantified_count = scheme_obj.signature.quantified.len()
     let id = self.functions.register(scheme_obj)
@@ -2804,8 +2905,13 @@ fn directive_type(self: &Checker, ty: Ty, span: SourceSpan) CtValue {
 }
 
 fn directive_info(self: &Checker, ty: Ty) CtTypeInfo {
-    return ct_type_info_of_ty(&self.engine.interner, &self.nominals, ty, self.allocator,
-        Some(&self.engine.rigid))
+    return ct_type_info_of_ty(
+        &self.engine.interner,
+        &self.nominals,
+        ty,
+        self.allocator,
+        Some(&self.engine.rigid),
+    )
 }
 
 // A generic nominal has no type to offer without its arguments, and a bare name carries none.
@@ -3006,8 +3112,12 @@ fn lower_bounds(self: &Checker, bounds: TypeBound[], out: &List(BoundAtom)) {
         const path = bound_path(self, b.param, b.path)
         const subject = path_ty(self, path, b.param, b.span)
         if subject.is_none() {
-            push_diag_e(self, b.span, E_BAD_BOUND,
-                $"`{path}` is not a type parameter of this function")
+            push_diag_e(
+                self,
+                b.span,
+                E_BAD_BOUND,
+                $"`{path}` is not a type parameter of this function",
+            )
             continue
         }
         lower_with_members(self, subject.unwrap(), b.bound, path, b.span, out)
@@ -3101,8 +3211,14 @@ fn path_ty(self: &Checker, path: String, root: String, span: SourceSpan) Ty? {
 // type - so the two unify.
 // `decl` is the declaration the path names, for go-to-definition: the contract's `type Item`, or
 // the projection itself for a placeholder, which a later declaration repoints.
-fn bind_member(self: &Checker, path: String, ty: Ty, span: SourceSpan, declared: bool,
-    decl: SourceSpan) {
+fn bind_member(
+    self: &Checker,
+    path: String,
+    ty: Ty,
+    span: SourceSpan,
+    declared: bool,
+    decl: SourceSpan,
+) {
     if declared and self.sig_open {
         self.sig_declared.push(path)
     }
@@ -3140,8 +3256,12 @@ fn repoint_sig_tp(self: &Checker, name: String, decl: NodeId) {
 fn report_undeclared_projections(self: &Checker) {
     for &p in self.proj_pending {
         if !self.sig_declared.contains(p.path) {
-            push_diag_e(self, p.span, E_UNKNOWN_ASSOC,
-                $"no contract bounding this type parameter declares `{p.path}`")
+            push_diag_e(
+                self,
+                p.span,
+                E_UNKNOWN_ASSOC,
+                $"no contract bounding this type parameter declares `{p.path}`",
+            )
         }
     }
     self.proj_pending.clear()
@@ -3152,8 +3272,12 @@ fn resolve_projection(self: &Checker, p: &ProjectionType) Ty {
     const root = projection_root(p.base)
     const base_path = projection_path(self, p.base)
     if root.is_none() or base_path.is_none() {
-        push_diag_e(self, p.span, E_UNKNOWN_ASSOC,
-            from_view("a projection reads an associated type of a type parameter: `I.Item`"))
+        push_diag_e(
+            self,
+            p.span,
+            E_UNKNOWN_ASSOC,
+            from_view("a projection reads an associated type of a type parameter: `I.Item`"),
+        )
         return TY_ERROR
     }
     const path = intern_path(self, base_path.unwrap(), p.name)
@@ -3164,12 +3288,20 @@ fn resolve_projection(self: &Checker, p: &ProjectionType) Ty {
     }
     const r = self.env.lookup(root.unwrap())
     if r.is_none() or !r.unwrap().is_type_param {
-        push_diag_e(self, p.span, E_UNKNOWN_ASSOC,
-            $"`{root.unwrap()}` is not a type parameter - a projection on a concrete type is not a form; write the type itself")
+        push_diag_e(
+            self,
+            p.span,
+            E_UNKNOWN_ASSOC,
+            $"`{root.unwrap()}` is not a type parameter - a projection on a concrete type is not a form; write the type itself",
+        )
         return TY_ERROR
     }
-    push_diag_e(self, p.span, E_UNKNOWN_ASSOC,
-        $"no contract bounding `{base_path.unwrap()}` declares `{p.name}`")
+    push_diag_e(
+        self,
+        p.span,
+        E_UNKNOWN_ASSOC,
+        $"no contract bounding `{base_path.unwrap()}` declares `{p.name}`",
+    )
     return TY_ERROR
 }
 
@@ -3279,8 +3411,14 @@ fn projection_path(self: &Checker, te: &TypeExpr) String? {
 }
 
 // Lowers `te` on `subject` and binds the associated types it declares under `path`.
-fn lower_with_members(self: &Checker, subject: Ty, te: &TypeExpr, path: String, span: SourceSpan,
-    out: &List(BoundAtom)) {
+fn lower_with_members(
+    self: &Checker,
+    subject: Ty,
+    te: &TypeExpr,
+    path: String,
+    span: SourceSpan,
+    out: &List(BoundAtom),
+) {
     let members: List(Member) = list(0, self.allocator)
     defer members.deinit()
     lower_bound(self, subject, te, path, "", span, out, &members, 0usize)
@@ -3292,11 +3430,24 @@ fn lower_with_members(self: &Checker, subject: Ty, te: &TypeExpr, path: String, 
 // `label` is the outermost named contract the atoms come from, for diagnostics: `T: Ordered` rather
 // than the `Eq` or anonymous part that failed. Empty at the top of a `where` entry. The associated
 // types the bound declares land in `members`.
-fn lower_bound(self: &Checker, subject: Ty, te: &TypeExpr, param: String, label: String,
-    span: SourceSpan, out: &List(BoundAtom), members: &List(Member), depth: usize) {
+fn lower_bound(
+    self: &Checker,
+    subject: Ty,
+    te: &TypeExpr,
+    param: String,
+    label: String,
+    span: SourceSpan,
+    out: &List(BoundAtom),
+    members: &List(Member),
+    depth: usize,
+) {
     if depth > MAX_CONTRACT_DEPTH {
-        push_diag_e(self, span, E_BAD_BOUND,
-            from_view("contract nests too deeply - is it defined through itself?"))
+        push_diag_e(
+            self,
+            span,
+            E_BAD_BOUND,
+            from_view("contract nests too deeply - is it defined through itself?"),
+        )
         return
     }
     te.* match {
@@ -3317,15 +3468,40 @@ fn lower_bound(self: &Checker, subject: Ty, te: &TypeExpr, param: String, label:
                 lower_bound(self, subject, part, param, label, span, out, members, depth + 1)
             }
         }
-        Contract(c) => lower_contract(self, subject, &c, null, param,
-            if label.len > 0 { label } else { "contract" }, span, out, members, depth)
-        _ => push_diag_e(self, type_expr_span(te), E_BAD_BOUND,
-            from_view("a bound is a contract: `copyable`, a contract name, `contract { ... }`, a function type, or a `+` of them"))
+        Contract(c) => lower_contract(
+            self,
+            subject,
+            &c,
+            null,
+            param,
+            if label.len > 0 { label } else { "contract" },
+            span,
+            out,
+            members,
+            depth,
+        )
+        _ => push_diag_e(
+            self,
+            type_expr_span(te),
+            E_BAD_BOUND,
+            from_view(
+                "a bound is a contract: `copyable`, a contract name, `contract { ... }`, a function type, or a `+` of them",
+            ),
+        )
     }
 }
 
-fn lower_named_bound(self: &Checker, subject: Ty, n: &NamedType, param: String, label: String,
-    span: SourceSpan, out: &List(BoundAtom), members: &List(Member), depth: usize) {
+fn lower_named_bound(
+    self: &Checker,
+    subject: Ty,
+    n: &NamedType,
+    param: String,
+    label: String,
+    span: SourceSpan,
+    out: &List(BoundAtom),
+    members: &List(Member),
+    depth: usize,
+) {
     if n.name == BOUND_COPYABLE and n.generic_args.len == 0 and n.assoc_args.len == 0 {
         out.push(BoundAtom {
             span = span,
@@ -3361,8 +3537,12 @@ fn lower_named_bound(self: &Checker, subject: Ty, n: &NamedType, param: String, 
             if n.generic_args.len > 0 {
                 push_diag_e(self, n.span, E_BAD_BOUND, $"`{n.name}` takes no type arguments")
             } else if n.assoc_args.len > 0 {
-                push_diag_e(self, n.assoc_args[0].span, E_BAD_ASSOC_ARG,
-                    $"`{n.name}` is not a single contract, so it has no associated types to constrain")
+                push_diag_e(
+                    self,
+                    n.assoc_args[0].span,
+                    E_BAD_ASSOC_ARG,
+                    $"`{n.name}` is not a single contract, so it has no associated types to constrain",
+                )
             } else {
                 lower_bound(self, subject, te, param, own, span, out, members, depth + 1)
             }
@@ -3372,35 +3552,64 @@ fn lower_named_bound(self: &Checker, subject: Ty, n: &NamedType, param: String, 
 
 // `Name(Item = T)` pins an associated type the contract declared; `Name(Item: B)` bounds it, as
 // `where X.Item: B` would. `T` and `B` resolve in the bound's own scope.
-fn apply_assoc_args(self: &Checker, n: &NamedType, param: String, span: SourceSpan,
-    out: &List(BoundAtom), members: &List(Member), depth: usize) {
+fn apply_assoc_args(
+    self: &Checker,
+    n: &NamedType,
+    param: String,
+    span: SourceSpan,
+    out: &List(BoundAtom),
+    members: &List(Member),
+    depth: usize,
+) {
     for i in 0..n.assoc_args.len {
         const a = &n.assoc_args[i]
         if assoc_named_before(n.assoc_args, i) {
-            push_diag_e(self, a.span, E_BAD_ASSOC_ARG,
-                $"`{a.name}` is constrained twice in one application of `{n.name}`")
+            push_diag_e(
+                self,
+                a.span,
+                E_BAD_ASSOC_ARG,
+                $"`{a.name}` is constrained twice in one application of `{n.name}`",
+            )
             continue
         }
         const m = member_named(members, a.name)
         if m.is_none() {
-            push_diag_e(self, a.span, E_BAD_ASSOC_ARG,
-                $"`{n.name}` declares no associated type `{a.name}`")
+            push_diag_e(
+                self,
+                a.span,
+                E_BAD_ASSOC_ARG,
+                $"`{n.name}` declares no associated type `{a.name}`",
+            )
             continue
         }
         if a.pinned {
             const t = resolve_type_expr(self, a.ty)
             if !self.engine.unify_exact(m.unwrap(), t).is_ok() {
-                push_diag_e(self, a.span, E_BAD_BOUND,
-                    $"`{param}.{a.name}` is fixed to two different types")
+                push_diag_e(
+                    self,
+                    a.span,
+                    E_BAD_BOUND,
+                    $"`{param}.{a.name}` is fixed to two different types",
+                )
             }
             continue
         }
         let sub: List(Member) = list(0, self.allocator)
-        lower_bound(self, m.unwrap(), a.ty, intern_path(self, param, a.name), "", span, out, &sub,
-            depth + 1)
+        lower_bound(
+            self,
+            m.unwrap(),
+            a.ty,
+            intern_path(self, param, a.name),
+            "",
+            span,
+            out,
+            &sub,
+            depth + 1,
+        )
         for &s in sub {
-            members.push(Member { name = intern_path(self, a.name, s.name), ty = s.ty,
-                decl = s.decl })
+            members.push(
+                Member { name = intern_path(self, a.name, s.name), ty = s.ty, decl = s.decl },
+            )
         }
         sub.deinit()
     }
@@ -3435,12 +3644,26 @@ fn is_contract_body(te: &TypeExpr) bool {
 // associated type a fresh variable the requirements solve, each derived one the type it names. The
 // requirements' atoms come first, then the parameters' bounds, then the associated types', which
 // read what the requirements solved. The associated types land in `members`.
-fn lower_contract(self: &Checker, subject: Ty, c: &ContractType, args: &List(Ty)?, param: String,
-    name: String, span: SourceSpan, out: &List(BoundAtom), members: &List(Member), depth: usize) {
+fn lower_contract(
+    self: &Checker,
+    subject: Ty,
+    c: &ContractType,
+    args: &List(Ty)?,
+    param: String,
+    name: String,
+    span: SourceSpan,
+    out: &List(BoundAtom),
+    members: &List(Member),
+    depth: usize,
+) {
     const n_args = if args.is_some() { args.unwrap().len } else { 0usize }
     if n_args != c.generics.len {
-        push_diag_e(self, span, E_BAD_BOUND,
-            $"`{name}` takes {c.generics.len} type argument(s), the bound gives {n_args}")
+        push_diag_e(
+            self,
+            span,
+            E_BAD_BOUND,
+            $"`{name}` takes {c.generics.len} type argument(s), the bound gives {n_args}",
+        )
         return
     }
     self.env.push_scope()
@@ -3474,8 +3697,17 @@ fn lower_contract(self: &Checker, subject: Ty, c: &ContractType, args: &List(Ty)
         }
         const v = member_named(&own, at.name).unwrap()
         let sub: List(Member) = list(0, self.allocator)
-        lower_bound(self, v, at.bound.unwrap(), intern_path(self, param, at.name), "", span, &post,
-            &sub, depth + 1)
+        lower_bound(
+            self,
+            v,
+            at.bound.unwrap(),
+            intern_path(self, param, at.name),
+            "",
+            span,
+            &post,
+            &sub,
+            depth + 1,
+        )
         for &s in sub {
             bind_contract_member(self, intern_path(self, at.name, s.name), s.ty, s.decl, &own)
         }
@@ -3508,8 +3740,13 @@ fn lower_contract(self: &Checker, subject: Ty, c: &ContractType, args: &List(Ty)
 
 // A contract's associated type, bound inside the contract by its name and as `Self.name`, and
 // recorded for the bound's caller.
-fn bind_contract_member(self: &Checker, name: String, ty: Ty, span: SourceSpan,
-    own: &List(Member)) {
+fn bind_contract_member(
+    self: &Checker,
+    name: String,
+    ty: Ty,
+    span: SourceSpan,
+    own: &List(Member),
+) {
     bind_type_name(self, name, ty, span)
     bind_type_name(self, intern_path(self, SELF_NAME, name), ty, span)
     own.push(Member { name = name, ty = ty, decl = span })
@@ -3517,8 +3754,15 @@ fn bind_contract_member(self: &Checker, name: String, ty: Ty, span: SourceSpan,
 
 // Lowers `te` on `subject` and binds its associated types under `path` in the current scope alone:
 // a contract parameter's bound, read inside the contract.
-fn lower_scoped(self: &Checker, subject: Ty, te: &TypeExpr, path: String, span: SourceSpan,
-    out: &List(BoundAtom), depth: usize) {
+fn lower_scoped(
+    self: &Checker,
+    subject: Ty,
+    te: &TypeExpr,
+    path: String,
+    span: SourceSpan,
+    out: &List(BoundAtom),
+    depth: usize,
+) {
     let sub: List(Member) = list(0, self.allocator)
     defer sub.deinit()
     lower_bound(self, subject, te, path, "", span, out, &sub, depth)
@@ -3530,8 +3774,12 @@ fn lower_scoped(self: &Checker, subject: Ty, te: &TypeExpr, path: String, span: 
 // E2140: `Self` names the type being declared and cannot be declared itself.
 fn refuse_self_name(self: &Checker, name: String, span: SourceSpan) {
     if name == SELF_NAME {
-        push_diag_e(self, span, E_SELF_DECLARED,
-            from_view("`Self` is reserved and cannot be declared"))
+        push_diag_e(
+            self,
+            span,
+            E_SELF_DECLARED,
+            from_view("`Self` is reserved and cannot be declared"),
+        )
     }
 }
 
@@ -3604,8 +3852,12 @@ fn lower_type_params(self: &Checker, id: NominalId, generics: GenericParam[]) {
             continue
         }
         if names_later_param(generics, i) {
-            push_diag_e(self, g.span, E_LATER_PARAM,
-                $"the bound on `{g.name}` names a later parameter - a bound reads only the parameters before it")
+            push_diag_e(
+                self,
+                g.span,
+                E_LATER_PARAM,
+                $"the bound on `{g.name}` names a later parameter - a bound reads only the parameters before it",
+            )
             continue
         }
         const b = self.env.lookup(g.name)
@@ -3633,8 +3885,10 @@ fn lower_type_params(self: &Checker, id: NominalId, generics: GenericParam[]) {
         m.ty = self.engine.zonk(m.ty)
         free_vars(&self.engine.interner, m.ty, self.engine.level, &assoc)
     }
-    self.nom_bounds.set(id, NomBounds { atoms = move atoms, members = move members,
-        assoc = move assoc })
+    self.nom_bounds.set(
+        id,
+        NomBounds { atoms = move atoms, members = move members, assoc = move assoc },
+    )
 }
 
 // The associated-type variables a resolved field or payload type names (`I.Item`): the variables
@@ -3654,13 +3908,24 @@ fn collect_assoc_vars(self: &Checker, t: Ty, out: &List(VarId)) {
 // associated types its definition's fields name. A ground instance has them solved; elsewhere an
 // argument that is a type parameter in scope gives its path binding (`I.Item` inside a generic
 // body), and anything else a fresh variable, so a definition's own variables never escape it.
-fn member_subst(self: &Checker, inst: Ty, params: &List(VarId), assoc: &List(VarId),
-    args: ChildSpan) Dict(VarId, Ty) {
+fn member_subst(
+    self: &Checker,
+    inst: Ty,
+    params: &List(VarId),
+    assoc: &List(VarId),
+    args: ChildSpan,
+) Dict(VarId, Ty) {
     if assoc.len > 0 {
         solve_instance(self, inst)
     }
-    let subst = self.nominals.instance_subst(inst, params, assoc, args, &self.engine.interner,
-        self.allocator)
+    let subst = self.nominals.instance_subst(
+        inst,
+        params,
+        assoc,
+        args,
+        &self.engine.interner,
+        self.allocator,
+    )
     for v in assoc {
         if !subst.contains(v) {
             subst.set(v, open_assoc(self, inst, v, args))
@@ -3781,8 +4046,13 @@ fn names_later_param(generics: GenericParam[], i: usize) bool {
 // function's atoms, and an argument that is one of its type parameters gains the associated types
 // they declare (`I.Item` from `FilterIter($I, $F)`). In a body they are checked at the type
 // expression (E2134); an argument still open waits for the instantiation that settles it.
-fn apply_nominal_bounds(self: &Checker, id: NominalId, args: &List(Ty), name: String,
-    span: SourceSpan) {
+fn apply_nominal_bounds(
+    self: &Checker,
+    id: NominalId,
+    args: &List(Ty),
+    name: String,
+    span: SourceSpan,
+) {
     const in_body = self.check_apps and !self.rigid_mode
     if !self.sig_open and !in_body {
         return
@@ -3824,8 +4094,14 @@ fn nominal_module(self: &Checker, id: NominalId) String {
     }
 }
 
-fn imply_bounds(self: &Checker, nb: &NomBounds, binds: &Dict(VarId, Ty), args: &List(Ty),
-    owner: String, span: SourceSpan) {
+fn imply_bounds(
+    self: &Checker,
+    nb: &NomBounds,
+    binds: &Dict(VarId, Ty),
+    args: &List(Ty),
+    owner: String,
+    span: SourceSpan,
+) {
     for &a in nb.atoms {
         const subject = atom_inst(self, a.subject, Some(binds))
         const shape = atom_inst(self, a.shape, Some(binds))
@@ -3850,8 +4126,14 @@ fn imply_bounds(self: &Checker, nb: &NomBounds, binds: &Dict(VarId, Ty), args: &
     for &m in nb.members {
         const base = sig_param_name(self, args[m.param])
         if base.is_some() {
-            bind_member(self, intern_path(self, base.unwrap(), m.path), atom_inst(self, m.ty,
-                    Some(binds)), span, true, m.decl)
+            bind_member(
+                self,
+                intern_path(self, base.unwrap(), m.path),
+                atom_inst(self, m.ty, Some(binds)),
+                span,
+                true,
+                m.decl,
+            )
         }
     }
 }
@@ -3877,8 +4159,14 @@ fn sig_param_name(self: &Checker, t: Ty) String? {
 // A bounded type applied in a body: its bounds checked in its defining module's view, as a call's
 // are in the callee's, and undone afterwards. Inside an instantiation the failure is reported at
 // the call that chose the arguments.
-fn check_app_bounds(self: &Checker, id: NominalId, nb: &NomBounds, binds: &Dict(VarId, Ty),
-    name: String, span: SourceSpan) {
+fn check_app_bounds(
+    self: &Checker,
+    id: NominalId,
+    nb: &NomBounds,
+    binds: &Dict(VarId, Ty),
+    name: String,
+    span: SourceSpan,
+) {
     if self.bound_depth >= MAX_BOUND_DEPTH {
         return
     }
@@ -3929,18 +4217,36 @@ fn validate_contract_decl(self: &Checker, td: &TypeDecl) {
                 const g = &c.generics[i]
                 refuse_self_name(self, g.name, g.span)
                 if g.bound.is_some() and names_later_param(c.generics, i) {
-                    push_diag_e(self, g.span, E_LATER_PARAM,
-                        $"the bound on `{g.name}` names a later parameter - a bound reads only the parameters before it")
+                    push_diag_e(
+                        self,
+                        g.span,
+                        E_LATER_PARAM,
+                        $"the bound on `{g.name}` names a later parameter - a bound reads only the parameters before it",
+                    )
                 }
                 args.push(self.engine.fresh_var())
             }
-            lower_contract(self, subject, &c, Some(&args), SELF_NAME, td.name, td.span, &scratch,
-                &members, 0usize)
+            lower_contract(
+                self,
+                subject,
+                &c,
+                Some(&args),
+                SELF_NAME,
+                td.name,
+                td.span,
+                &scratch,
+                &members,
+                0usize,
+            )
             args.deinit()
             for i in 0..c.requirements.len {
                 if i < scratch.len and !self.engine.occurs_in(subject_id, scratch[i].shape) {
-                    push_diag_e(self, c.requirements[i].span, E_REQUIREMENT_NO_SELF,
-                        $"requirement `{c.requirements[i].name}` does not mention `Self`, so no type can be said to satisfy it")
+                    push_diag_e(
+                        self,
+                        c.requirements[i].span,
+                        E_REQUIREMENT_NO_SELF,
+                        $"requirement `{c.requirements[i].name}` does not mention `Self`, so no type can be said to satisfy it",
+                    )
                 }
             }
         }
@@ -4119,8 +4425,13 @@ fn callable_fits(self: &Checker, have: &NFuncNode, want: &NFuncNode) Verdict {
         return Verdict.Fails
     }
     for i in 0..have.params.len {
-        if !param_fits(self, self.engine.interner.child_at(have.params, i), moves_at(have, i), want,
-            i) {
+        if !param_fits(
+            self,
+            self.engine.interner.child_at(have.params, i),
+            moves_at(have, i),
+            want,
+            i,
+        ) {
             return Verdict.Fails
         }
     }
@@ -4177,8 +4488,13 @@ type BoundCheck = struct {
 // Checks `fid`'s bounds in a speculative region, kept when nothing failed and `keep` is set, undone
 // otherwise; the diagnostics the probing calls raise are dropped either way. `with_copyable` false
 // leaves `copyable` to the drain, which reports it with its derivation.
-fn check_bounds(self: &Checker, fid: u32, binds: &Dict(VarId, Ty)?, keep: bool,
-    with_copyable: bool) BoundCheck {
+fn check_bounds(
+    self: &Checker,
+    fid: u32,
+    binds: &Dict(VarId, Ty)?,
+    keep: bool,
+    with_copyable: bool,
+) BoundCheck {
     const atoms = self.fn_bounds.get_ref(fid)
     if atoms.is_none() or self.bound_depth >= MAX_BOUND_DEPTH {
         return BoundCheck { failed = null, held = 0u32 }
@@ -4373,15 +4689,24 @@ fn shape_for(self: &Checker, a: &BoundAtom, subject: Ty) Ty {
 }
 
 fn append_ty(self: &Checker, t: Ty, sb: &StringBuilder) {
-    format_with_names(&self.engine.interner, self.engine.zonk(t), sb, Some(&self.nominals),
-        Some(&self.tp_names))
+    format_with_names(
+        &self.engine.interner,
+        self.engine.zonk(t),
+        sb,
+        Some(&self.nominals),
+        Some(&self.tp_names),
+    )
 }
 
 fn report_uninferable_spec(self: &Checker, p: &PendingSpec) {
     self.slot_uninferable = self.slot_uninferable + 1
     let name = self.templates.get_ref(p.function_id).unwrap().decl.name
-    push_diag_e(self, p.span, E_UNINFERRED,
-        $"cannot infer the type arguments of generic function `{name}` at this call site")
+    push_diag_e(
+        self,
+        p.span,
+        E_UNINFERRED,
+        $"cannot infer the type arguments of generic function `{name}` at this call site",
+    )
 }
 
 fn process_pending(self: &Checker, p: &PendingSpec) {
@@ -4449,11 +4774,17 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
     // instantiation's overlay during a nested drain.
     let node = self.node_of(p.span)
     if p.deref_index.is_some() and p.deref_on_arg {
-        self.results.update_arg_deref(node, p.deref_index.unwrap(),
-            ResolvedTarget.RtSpecialized(id.unwrap()))
+        self.results.update_arg_deref(
+            node,
+            p.deref_index.unwrap(),
+            ResolvedTarget.RtSpecialized(id.unwrap()),
+        )
     } else if p.deref_index.is_some() {
-        self.results.update_receiver_deref(node, p.deref_index.unwrap(),
-            ResolvedTarget.RtSpecialized(id.unwrap()))
+        self.results.update_receiver_deref(
+            node,
+            p.deref_index.unwrap(),
+            ResolvedTarget.RtSpecialized(id.unwrap()),
+        )
     } else if p.is_operator {
         let cur = self.results.resolved_ops.get(node)
         if cur.is_some() {
@@ -4469,8 +4800,14 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
 // keyed-lookup hit. Carried from an earlier demand means either a replay - counters burned, closure
 // environments re-registered, deps touched - or, when the entry or anything under it cannot be
 // replayed from here, an in-place re-instantiation at the id it holds.
-fn resolve_against(self: &Checker, p: &PendingSpec, key: move OwnedString, params: move List(Ty),
-    ret: Ty, sid: SpecId) SpecId? {
+fn resolve_against(
+    self: &Checker,
+    p: &PendingSpec,
+    key: move OwnedString,
+    params: move List(Ty),
+    ret: Ty,
+    sid: SpecId,
+) SpecId? {
     const alive = self.specs.get(sid).touched_gen == self.specs.gen
     if !alive {
         let ok = pick_concrete(self, p, &params, ret)
@@ -4652,8 +4989,12 @@ fn validate_literals(self: &Checker, from: usize, to: usize) {
         let unresolved = self.engine.is_var(z)
         if unresolved {
             let kind = if pl.is_float { "float" } else { "integer" }
-            push_diag_e(self, pl.span, E_UNINFERRED,
-                $"Cannot determine concrete type for {kind} literal `{pl.text}`")
+            push_diag_e(
+                self,
+                pl.span,
+                E_UNINFERRED,
+                $"Cannot determine concrete type for {kind} literal `{pl.text}`",
+            )
             continue
         }
         // The literal settled on a type - it has to be one a numeric literal can BE (E2102), and
@@ -4661,8 +5002,12 @@ fn validate_literals(self: &Checker, from: usize, to: usize) {
         ty_node(self, z) match {
             NPrim(p) => {
                 if !literal_prim_ok(p, pl.is_float) {
-                    push_diag_e(self, pl.span, E_PRIM_CONSTRAINT,
-                        $"type mismatch: expected one of the numeric types, got `{prim_name(p)}` for literal `{pl.text}`")
+                    push_diag_e(
+                        self,
+                        pl.span,
+                        E_PRIM_CONSTRAINT,
+                        $"type mismatch: expected one of the numeric types, got `{prim_name(p)}` for literal `{pl.text}`",
+                    )
                 } else if !pl.is_float {
                     check_int_range(self, pl.text, p, pl.span)
                 }
@@ -4723,8 +5068,12 @@ fn literal_prim_ok(p: PrimitiveKind, is_float: bool) bool {
 // `128i8` are told apart by the negation, exactly as the reference does.
 fn check_int_range(self: &Checker, text: String, p: PrimitiveKind, span: SourceSpan) {
     if int_out_of_range(text, p) {
-        push_diag_e(self, span, E_LITERAL_RANGE,
-            $"integer literal `{text}` is out of range for `{prim_name(p)}`")
+        push_diag_e(
+            self,
+            span,
+            E_LITERAL_RANGE,
+            $"integer literal `{text}` is out of range for `{prim_name(p)}`",
+        )
     }
 }
 
@@ -4921,8 +5270,14 @@ pub fn template_type_at(self: &Checker, fid: i32, offset: usize) TemplateHit? {
                 continue
             }
             if best.is_none() or f.span.length < best_len {
-                best = Some(TemplateHit { span = f.span, ty = f.ty, names = &tt.names,
-                    bounds = &tt.bounds })
+                best = Some(
+                    TemplateHit {
+                        span = f.span,
+                        ty = f.ty,
+                        names = &tt.names,
+                        bounds = &tt.bounds,
+                    },
+                )
                 best_len = f.span.length
             }
         }
@@ -5079,13 +5434,18 @@ fn bind_rigid_params(self: &Checker, fid: u32) {
         }
     }
     for &tp in tps {
-        self.env.bind(tp.name, Binding {
-            scheme = mono(self.engine.substitute_shared(self.engine.zonk(tp.ty), &rigid),
-                self.allocator),
-            decl = tp.decl,
-            is_const = true,
-            is_type_param = true,
-        })
+        self.env.bind(
+            tp.name,
+            Binding {
+                scheme = mono(
+                    self.engine.substitute_shared(self.engine.zonk(tp.ty), &rigid),
+                    self.allocator,
+                ),
+                decl = tp.decl,
+                is_const = true,
+                is_type_param = true,
+            },
+        )
     }
 }
 
@@ -5153,11 +5513,23 @@ fn is_ownership_code(code: String) bool {
         or code == E_BOUND_UNSATISFIED or code == E_SLOT_NOT_REFILLED or code == E_UNBOUNDED_CALL
 }
 
-fn instantiate(self: &Checker, p: &PendingSpec, key: move OwnedString, params: move List(Ty),
-    ret: Ty, at: SpecId? = null) SpecId? {
+fn instantiate(
+    self: &Checker,
+    p: &PendingSpec,
+    key: move OwnedString,
+    params: move List(Ty),
+    ret: Ty,
+    at: SpecId? = null,
+) SpecId? {
     if self.spec_depth >= MAX_SPEC_DEPTH {
-        push_diag_e(self, p.span, E_UNINFERRED,
-            from_view("generic instantiation exceeds the depth limit - infinitely recursive polymorphism?"))
+        push_diag_e(
+            self,
+            p.span,
+            E_UNINFERRED,
+            from_view(
+                "generic instantiation exceeds the depth limit - infinitely recursive polymorphism?",
+            ),
+        )
         key.deinit()
         params.deinit()
         return null
@@ -5166,8 +5538,17 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: move OwnedString, params: m
     // compiler bug, not an input error.
     let template = self.templates.get_ref(p.function_id).unwrap()
 
-    let fresh = new_specialization(p.function_id, key, template.decl.name, template.module,
-        template.decl, params, ret, inference_results(self.allocator), self.allocator)
+    let fresh = new_specialization(
+        p.function_id,
+        key,
+        template.decl.name,
+        template.module,
+        template.decl,
+        params,
+        ret,
+        inference_results(self.allocator),
+        self.allocator,
+    )
     let sid = 0 as SpecId
     let hints: List(SpecDep) = list(0, self.allocator)
     at match {
@@ -5251,10 +5632,17 @@ fn instantiate(self: &Checker, p: &PendingSpec, key: move OwnedString, params: m
     let frame = self.spec_frames.pop().unwrap()
     frame.hints.deinit()
     const clean = self.diagnostics.len == frame.diags0 and !had_calls
-    self.specs.set_cache_info(sid, frame.vars0, frame.synth0, frame.lambda0,
+    self.specs.set_cache_info(
+        sid,
+        frame.vars0,
+        frame.synth0,
+        frame.lambda0,
         self.engine.var_counter - frame.vars0 - frame.child_vars,
         self.next_synth - frame.synth0 - frame.child_synth,
-        self.next_lambda - frame.lambda0 - frame.child_lambda, frame.deps, clean)
+        self.next_lambda - frame.lambda0 - frame.child_lambda,
+        frame.deps,
+        clean,
+    )
 
     // The shared final zonk only walks the program tables; the overlay zonks here, while the engine
     // is live. Lambda records checked inside this instantiation zonk with it (the global closure
@@ -5495,8 +5883,12 @@ fn check_interp_into(self: &Checker, interp: &InterpolatedStringExpr, target: &E
 
 // One `NAME.append(part)` statement per non-empty part. A hole with a format spec passes it as a
 // trailing String argument - overload resolution finds the spec-taking `append`.
-fn push_append_stmts(self: &Checker, stmts: &List(Stmt), name: String,
-    interp: &InterpolatedStringExpr) {
+fn push_append_stmts(
+    self: &Checker,
+    stmts: &List(Stmt),
+    name: String,
+    interp: &InterpolatedStringExpr,
+) {
     for i in 0..interp.parts.len {
         interp.parts[i] match {
             Text(t) => {
@@ -5509,8 +5901,10 @@ fn push_append_stmts(self: &Checker, stmts: &List(Stmt), name: String,
             }
             Hole(h) => {
                 const spec_lit = h.format match {
-                    Some(spec) => synth_string_lit(self,
-                        self.results.add_synth_string(escape_backslashes(self, spec)))
+                    Some(spec) => synth_string_lit(
+                        self,
+                        self.results.add_synth_string(escape_backslashes(self, spec)),
+                    )
                     None => synth_string_lit(self, "")
                 }
                 if hole_is_place(h.expr) {
@@ -5542,18 +5936,22 @@ fn hole_is_place(e: &Expr) bool {
 fn synth_hole_format(self: &Checker, name: String, place: &Expr, spec_lit: move Expr) Expr {
     let wargs: List(CallArgument) = list(0, self.allocator)
     let args: List(CallArgument) = list(2, self.allocator)
-    args.push(CallArgument.Positional(synth_box(self, synth_method_call(self, name, "writer",
-                    wargs))))
+    args.push(
+        CallArgument.Positional(synth_box(self, synth_method_call(self, name, "writer", wargs))),
+    )
     args.push(CallArgument.Positional(synth_box(self, spec_lit)))
-    const ma = Expr.MemberAccess(MemberAccessExpr { span = synth_span(self), receiver = place,
-        member = "format" })
-    return Expr.Call(CallExpr { span = synth_span(self), callee = synth_box(self, ma),
-        args = frozen(args) })
+    const ma = Expr.MemberAccess(
+        MemberAccessExpr { span = synth_span(self), receiver = place, member = "format" },
+    )
+    return Expr.Call(
+        CallExpr { span = synth_span(self), callee = synth_box(self, ma), args = frozen(args) },
+    )
 }
 
 fn push_expr_stmt(self: &Checker, stmts: &List(Stmt), e: move Expr) {
-    stmts.push(Stmt.Expression(ExpressionStmt { span = synth_span(self),
-        expr = self.synth_box(e) }))
+    stmts.push(
+        Stmt.Expression(ExpressionStmt { span = synth_span(self), expr = self.synth_box(e) }),
+    )
 }
 
 // `$(…)` args onto `string_builder(capacity, allocator)`, full arity.
@@ -5657,15 +6055,20 @@ fn synth_string_lit(self: &Checker, text: String) Expr {
 }
 
 // `recv_name.method(args)` as a UFCS call node.
-fn synth_method_call(self: &Checker, recv_name: String, method: String,
-    args: move List(CallArgument)) Expr {
+fn synth_method_call(
+    self: &Checker,
+    recv_name: String,
+    method: String,
+    args: move List(CallArgument),
+) Expr {
     const ma = Expr.MemberAccess(MemberAccessExpr {
         span = synth_span(self),
         receiver = synth_box(self, synth_ident(self, recv_name)),
         member = method,
     })
-    return Expr.Call(CallExpr { span = synth_span(self), callee = synth_box(self, ma),
-        args = frozen(args) })
+    return Expr.Call(
+        CallExpr { span = synth_span(self), callee = synth_box(self, ma), args = frozen(args) },
+    )
 }
 
 fn synth_free_call(self: &Checker, name: String, args: move List(CallArgument)) Expr {
@@ -5780,8 +6183,12 @@ fn check_match_coverage(self: &Checker, m: &MatchExpr, scrutinee: Ty) {
         // A still-open scrutinee may yet become an enum; anything else concrete never will (E2030).
         let open = self.engine.is_var(peeled) or peeled.is_error()
         if !open and match_names_variant(self, m) {
-            push_diag_e(self, m.span, E_MATCH_NON_ENUM,
-                from_view("cannot match variant patterns on a non-enum type"))
+            push_diag_e(
+                self,
+                m.span,
+                E_MATCH_NON_ENUM,
+                from_view("cannot match variant patterns on a non-enum type"),
+            )
         }
         return
     }
@@ -5806,8 +6213,12 @@ fn check_match_coverage(self: &Checker, m: &MatchExpr, scrutinee: Ty) {
         }
     }
     if missing.len > 0 {
-        push_diag_e(self, m.span, E_MATCH_NON_EXHAUSTIVE,
-            $"non-exhaustive match: missing variant `{missing[0]}`")
+        push_diag_e(
+            self,
+            m.span,
+            E_MATCH_NON_EXHAUSTIVE,
+            $"non-exhaustive match: missing variant `{missing[0]}`",
+        )
     }
 }
 
@@ -5894,8 +6305,13 @@ fn check_pattern(self: &Checker, pat: &Pattern, expected: Ty, is_sub: bool = fal
             // on the pattern node so lowering can dispatch it (M11), like binary `==` does.
             let is_str = l.value match { String(_) => true, _ => false }
             if is_str {
-                let pick = operator_pick_2(self, "op_eq", self.engine.resolve(expected),
-                    self.engine.resolve(lt), l.span)
+                let pick = operator_pick_2(
+                    self,
+                    "op_eq",
+                    self.engine.resolve(expected),
+                    self.engine.resolve(lt),
+                    l.span,
+                )
                 if pick.is_some() {
                     let p = pick.unwrap()
                     self.results.record_operator(self.node_of(l.span), ResolvedOperator {
@@ -5966,8 +6382,12 @@ fn check_tuple_pattern(self: &Checker, t: &TuplePattern, expected: Ty) {
     }
     let es = elems.unwrap()
     if es.len != t.elements.len {
-        push_diag_e(self, t.span, E_MATCH_ARITY,
-            $"tuple pattern has {t.elements.len} element(s), the value has {es.len}")
+        push_diag_e(
+            self,
+            t.span,
+            E_MATCH_ARITY,
+            $"tuple pattern has {t.elements.len} element(s), the value has {es.len}",
+        )
         bind_unconstrained(self, t.elements)
         return
     }
@@ -6020,8 +6440,12 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
         }
     }
     if !found {
-        push_diag_e(self, ev.span, E_UNKNOWN_VARIANT,
-            $"unknown variant `{ev.name}` for type `{e.fqn}`")
+        push_diag_e(
+            self,
+            ev.span,
+            E_UNKNOWN_VARIANT,
+            $"unknown variant `{ev.name}` for type `{e.fqn}`",
+        )
         bind_unconstrained(self, ev.payloads)
         return
     }
@@ -6029,8 +6453,12 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
 
     let payloads = &e.variants[vnum as usize].payloads
     if payloads.len != ev.payloads.len {
-        push_diag_e(self, ev.span, E_MATCH_ARITY,
-            $"variant `{ev.name}` expects {payloads.len} binding(s), got {ev.payloads.len}")
+        push_diag_e(
+            self,
+            ev.span,
+            E_MATCH_ARITY,
+            $"variant `{ev.name}` expects {payloads.len} binding(s), got {ev.payloads.len}",
+        )
         bind_unconstrained(self, ev.payloads)
         return
     }
@@ -6062,8 +6490,10 @@ fn check_variable_pattern(self: &Checker, v: &VariablePattern, expected: Ty, is_
         let n = nr.unwrap()
         let idx = nullary_variant_index(self, n.id, v.name)
         if idx.is_some() {
-            self.results.record_target(self.node_of(v.span), ResolvedTarget.RtEnumVariant(n.id,
-                    idx.unwrap()))
+            self.results.record_target(
+                self.node_of(v.span),
+                ResolvedTarget.RtEnumVariant(n.id, idx.unwrap()),
+            )
             return
         }
         // A TOP-LEVEL bare identifier over an enum scrutinee names a variant, not a binding - use
@@ -6077,8 +6507,12 @@ fn check_variable_pattern(self: &Checker, v: &VariablePattern, expected: Ty, is_
             if ed.is_some() {
                 const def = ed.unwrap()
                 if !variant_named(&def.variants, v.name) {
-                    push_diag_e(self, v.span, E_UNKNOWN_VARIANT,
-                        $"unknown variant `{v.name}` for type `{def.fqn}`")
+                    push_diag_e(
+                        self,
+                        v.span,
+                        E_UNKNOWN_VARIANT,
+                        $"unknown variant `{v.name}` for type `{def.fqn}`",
+                    )
                     return
                 }
             }
@@ -6143,8 +6577,12 @@ fn check_assignment(self: &Checker, a: &AssignmentExpr) Ty {
             b match {
                 Some(bd) => {
                     if bd.is_const {
-                        push_diag_e(self, a.span, E_CONST_ASSIGN,
-                            $"cannot assign to `{id.name}`: it is declared `const`")
+                        push_diag_e(
+                            self,
+                            a.span,
+                            E_CONST_ASSIGN,
+                            $"cannot assign to `{id.name}`: it is declared `const`",
+                        )
                     }
                 }
                 None => {}
@@ -6168,8 +6606,12 @@ fn check_assignment(self: &Checker, a: &AssignmentExpr) Ty {
 
 fn check_scoped_mutability(self: &Checker, ma: &MemberAccessExpr, span: SourceSpan) {
     field_owner_elsewhere(self, ma) match {
-        Some(o) => push_diag_e(self, span, E_SCOPED_MUTABILITY,
-            $"cannot assign to field `{ma.member}` of `{o.fqn}` from outside its defining module `{o.module}` (scoped mutability)")
+        Some(o) => push_diag_e(
+            self,
+            span,
+            E_SCOPED_MUTABILITY,
+            $"cannot assign to field `{ma.member}` of `{o.fqn}` from outside its defining module `{o.module}` (scoped mutability)",
+        )
         None => {}
     }
 }
@@ -6291,8 +6733,14 @@ fn try_set_index_assignment(self: &Checker, a: &AssignmentExpr, ix: &IndexExpr) 
 fn check_move(self: &Checker, m: &MoveExpr) Ty {
     const inner = check_expr(self, m.operand)
     if !is_move_operand(m.operand) {
-        push_diag_e(self, m.span, E_MOVE_NOT_LVALUE,
-            from_view("`move` needs a place to take from; an expression with no storage of its own leaves nothing behind to mark moved"))
+        push_diag_e(
+            self,
+            m.span,
+            E_MOVE_NOT_LVALUE,
+            from_view(
+                "`move` needs a place to take from; an expression with no storage of its own leaves nothing behind to mark moved",
+            ),
+        )
         return inner
     }
     // Moving a field takes the same rights as writing one: the declaring module owns the type's
@@ -6300,8 +6748,12 @@ fn check_move(self: &Checker, m: &MoveExpr) Ty {
     m.operand.* match {
         MemberAccess(ma) => {
             field_owner_elsewhere(self, &ma) match {
-                Some(o) => push_diag_e(self, m.span, E_PARTIAL_MOVE,
-                    $"cannot move field `{ma.member}` out of `{o.fqn}` from outside its defining module `{o.module}`")
+                Some(o) => push_diag_e(
+                    self,
+                    m.span,
+                    E_PARTIAL_MOVE,
+                    $"cannot move field `{ma.member}` out of `{o.fqn}` from outside its defining module `{o.module}`",
+                )
                 None => {}
             }
         }
@@ -6321,15 +6773,25 @@ fn append_copy_blame(self: &Checker, ty: Ty, sb: &StringBuilder) {
     self.engine.copy_blame(ty, &hops)
     for i in 0..hops.len {
         sb.append("; `")
-        format_with_names(&self.engine.interner, self.engine.zonk(hops[i].owner), sb,
-            Some(&self.nominals), Some(&self.tp_names))
+        format_with_names(
+            &self.engine.interner,
+            self.engine.zonk(hops[i].owner),
+            sb,
+            Some(&self.nominals),
+            Some(&self.tp_names),
+        )
         const what = if hops[i].variant { "variant" } else { "field" }
         sb.append($"` is not copyable: {what} `{hops[i].field}` is ")
         hops[i].field_ty match {
             Some(ft) => {
                 sb.append("`")
-                format_with_names(&self.engine.interner, self.engine.zonk(ft), sb,
-                    Some(&self.nominals), Some(&self.tp_names))
+                format_with_names(
+                    &self.engine.interner,
+                    self.engine.zonk(ft),
+                    sb,
+                    Some(&self.nominals),
+                    Some(&self.tp_names),
+                )
                 sb.append("`")
             }
             None => sb.append("`owned`")
@@ -6363,8 +6825,12 @@ fn check_address_of(self: &Checker, a: &AddressOfExpr) Ty {
     let inner = check_expr(self, a.operand)
     // A reference to a value with no storage would outlive it (E2040).
     if !is_place_expr(a.operand) {
-        push_diag_e(self, a.span, E_ADDR_OF_TEMPORARY,
-            from_view("cannot take the address of a temporary - bind it to a variable first"))
+        push_diag_e(
+            self,
+            a.span,
+            E_ADDR_OF_TEMPORARY,
+            from_view("cannot take the address of a temporary - bind it to a variable first"),
+        )
     }
     return self.engine.mk_ref(inner)
 }
@@ -6406,8 +6872,12 @@ fn check_unary(self: &Checker, u: &UnaryExpr) Ty {
                 _ => false
             }
             if bad {
-                push_diag_e(self, u.span, E_OP_NO_IMPL,
-                    from_view("no `op_bnot` implementation for this operand type"))
+                push_diag_e(
+                    self,
+                    u.span,
+                    E_OP_NO_IMPL,
+                    from_view("no `op_bnot` implementation for this operand type"),
+                )
             }
             inner
         }
@@ -6447,8 +6917,12 @@ fn check_coalesce(self: &Checker, c: &CoalesceExpr) Ty {
     let inner = option_inner(self, lhs)
     if inner.is_none() {
         let _r = check_expr(self, c.rhs)
-        push_diag_e(self, c.span, E_TYPE_MISMATCH,
-            from_view("left operand of `??` must be an Option"))
+        push_diag_e(
+            self,
+            c.span,
+            E_TYPE_MISMATCH,
+            from_view("left operand of `??` must be an Option"),
+        )
         return self.engine.fresh_var()
     }
     let t = inner.unwrap()
@@ -6476,15 +6950,23 @@ fn check_null_prop(self: &Checker, np: &NullPropagationExpr) Ty {
     }
     let inner = option_inner(self, recv)
     if inner.is_none() {
-        push_diag_e(self, np.span, E_TYPE_MISMATCH,
-            from_view("null propagation `?.` requires an Option receiver"))
+        push_diag_e(
+            self,
+            np.span,
+            E_TYPE_MISMATCH,
+            from_view("null propagation `?.` requires an Option receiver"),
+        )
         return self.engine.fresh_var()
     }
     let t = inner.unwrap()
     let fty = struct_field_lookup(self, t, np.member)
     if fty.is_none() {
-        push_diag_e(self, np.span, E_TYPE_MISMATCH,
-            from_view("`?.` names no field on the Option's inner type"))
+        push_diag_e(
+            self,
+            np.span,
+            E_TYPE_MISMATCH,
+            from_view("`?.` names no field on the Option's inner type"),
+        )
         return self.engine.fresh_var()
     }
     let f = self.engine.resolve(fty.unwrap())
@@ -6512,8 +6994,14 @@ fn check_try(self: &Checker, t: &TryExpr) Ty {
     // A `defer` body runs on the way OUT of the function; there is no return path left for `?` to
     // take (E2091).
     if self.defer_depth > 0 {
-        push_diag_e(self, t.span, E_TRY_IN_DEFER,
-            from_view("`?` cannot be used inside a `defer` body - the function is already returning"))
+        push_diag_e(
+            self,
+            t.span,
+            E_TRY_IN_DEFER,
+            from_view(
+                "`?` cannot be used inside a `defer` body - the function is already returning",
+            ),
+        )
         return self.engine.fresh_var()
     }
     if self.fn_stack.len == 0 {
@@ -6526,8 +7014,12 @@ fn check_try(self: &Checker, t: &TryExpr) Ty {
     let pick = operator_pick(self, "op_try", &args, t.span)
     args.deinit()
     if pick.is_none() {
-        push_diag_e(self, t.span, E_NO_OP_TRY,
-            from_view("the `?` operator requires an `op_try` overload for the operand type"))
+        push_diag_e(
+            self,
+            t.span,
+            E_NO_OP_TRY,
+            from_view("the `?` operator requires an `op_try` overload for the operand type"),
+        )
         return self.engine.fresh_var()
     }
     let p = pick.unwrap()
@@ -6550,8 +7042,13 @@ fn check_try(self: &Checker, t: &TryExpr) Ty {
     // The early-returned `R` must fit the enclosing function's declared return type - the
     // constraint the desugar's `return r` arm imposes.
     let frame = &self.fn_stack[self.fn_stack.len - 1]
-    unify_expected(self, self.engine.interner.child_at(n.args, 1), frame.return_ty,
-        E_RETURN_MISMATCH, t.span)
+    unify_expected(
+        self,
+        self.engine.interner.child_at(n.args, 1),
+        frame.return_ty,
+        E_RETURN_MISMATCH,
+        t.span,
+    )
 
     self.results.record_operator(self.node_of(t.span), ResolvedOperator {
         function_id = p.id,
@@ -6578,8 +7075,12 @@ fn check_deref(self: &Checker, d: &DereferenceExpr) Ty {
     if !open {
         let derefable = ty_node(self, t) match { NRef(_) => true, NNominal(_) => true, _ => false }
         if !derefable {
-            push_diag_e(self, d.span, E_CANNOT_DEREF,
-                from_view("cannot dereference a value that is not a reference"))
+            push_diag_e(
+                self,
+                d.span,
+                E_CANNOT_DEREF,
+                from_view("cannot dereference a value that is not a reference"),
+            )
             return TY_ERROR
         }
     }
@@ -6716,8 +7217,12 @@ fn check_index(self: &Checker, idx: &IndexExpr) Ty {
     if !ranged {
         let is_bool = rindex == prim_of(PrimitiveKind.Bool)
         if is_bool {
-            push_diag_e(self, expr_span(idx.index), E_BAD_INDEX_TYPE,
-                from_view("cannot use `bool` as an index type"))
+            push_diag_e(
+                self,
+                expr_span(idx.index),
+                E_BAD_INDEX_TYPE,
+                from_view("cannot use `bool` as an index type"),
+            )
             return self.engine.fresh_var()
         }
     }
@@ -6796,8 +7301,13 @@ fn constrain_range_usize(self: &Checker, rindex: Ty, span: SourceSpan) {
     if n.args.len != 1 {
         return
     }
-    unify_expected(self, self.engine.interner.child_at(n.args, 0), ty_usize(), E_TYPE_MISMATCH,
-        span)
+    unify_expected(
+        self,
+        self.engine.interner.child_at(n.args, 0),
+        ty_usize(),
+        E_TYPE_MISMATCH,
+        span,
+    )
 }
 
 // User-defined indexing. Ref-form wins when it resolves; the reference checker additionally reports
@@ -6822,8 +7332,14 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty:
         // patterns are mutually exclusive by design - say so rather than silently picking (E2077).
         let both = index_operator(self, "op_index", base_ty, index_ty, idx.span)
         if both.is_some() {
-            push_diag_e(self, idx.span, E_INDEX_AMBIGUOUS,
-                from_view("both `op_index` and `op_index_ref` are declared for this type and index - declare only one"))
+            push_diag_e(
+                self,
+                idx.span,
+                E_INDEX_AMBIGUOUS,
+                from_view(
+                    "both `op_index` and `op_index_ref` are declared for this type and index - declare only one",
+                ),
+            )
         }
         let p = ref_pick.unwrap()
         // The declared return is `&T`; the expression's type is `T`.
@@ -6862,15 +7378,26 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty:
         return p.ret
     }
 
-    push_diag_e(self, idx.span, E_NOT_INDEXABLE,
-        from_view("type does not support indexing: declare `op_index_ref(&Self, Idx) &T` or `op_index(Self, Idx) T`"))
+    push_diag_e(
+        self,
+        idx.span,
+        E_NOT_INDEXABLE,
+        from_view(
+            "type does not support indexing: declare `op_index_ref(&Self, Idx) &T` or `op_index(Self, Idx) T`",
+        ),
+    )
     return self.engine.fresh_var()
 }
 
 // Resolve one indexing operator against the visible registry candidates. Unlike a call site this
 // must not report on failure - the caller tries several shapes and reports once at the end.
-fn index_operator(self: &Checker, name: String, self_ty: Ty, index_ty: Ty,
-    span: SourceSpan) OverloadPick? {
+fn index_operator(
+    self: &Checker,
+    name: String,
+    self_ty: Ty,
+    index_ty: Ty,
+    span: SourceSpan,
+) OverloadPick? {
     let args: List(Ty) = list(2, self.allocator)
     args.push(self_ty)
     args.push(index_ty)
@@ -6960,14 +7487,24 @@ fn report_ref_int_cast(self: &Checker, c: &CastExpr, from: Ty, to: Ty) {
 
     if f_prim.is_some() and t_ref and is_pointer_sized(f_prim.unwrap()) {
         if !is_zero_literal(c.operand) {
-            push_diag_e(self, c.span, E_INT_TO_REF,
-                from_view("cannot cast an integer to a reference; take the address of a value instead"))
+            push_diag_e(
+                self,
+                c.span,
+                E_INT_TO_REF,
+                from_view(
+                    "cannot cast an integer to a reference; take the address of a value instead",
+                ),
+            )
         }
         return
     }
     if f_ref and t_prim.is_some() and is_pointer_sized(t_prim.unwrap()) {
-        push_diag_w(self, c.span, W_REF_TO_INT,
-            from_view("casting a reference to an integer; the address cannot be cast back"))
+        push_diag_w(
+            self,
+            c.span,
+            W_REF_TO_INT,
+            from_view("casting a reference to an integer; the address cannot be cast back"),
+        )
     }
 }
 
@@ -7080,8 +7617,13 @@ fn literal_value_ty(self: &Checker, value: LiteralValue) Ty {
 // A suffixed numeric literal IS its suffix's primitive; an unsuffixed one is a fresh var the
 // context resolves, recorded so `validate_literals` can report the ones nothing ever pinned (E2001,
 // as in the reference) instead of letting an unresolved var drift into lowering.
-fn numeric_literal_ty(self: &Checker, span: SourceSpan, suffix: String, text: String,
-    is_float: bool) Ty {
+fn numeric_literal_ty(
+    self: &Checker,
+    span: SourceSpan,
+    suffix: String,
+    text: String,
+    is_float: bool,
+) Ty {
     if suffix.len > 0 {
         let p = prim_from_name(suffix)
         if p.is_some() {
@@ -7223,8 +7765,12 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
         // `size_of(Box)` where `Box` is `struct(T)`: a reified type has to be a CONCRETE one, so
         // the arguments must be spelled (E2104).
         if nominal_arity(self, tn.unwrap()) > 0 {
-            push_diag_e(self, id.span, E_BARE_GENERIC,
-                $"generic type `{id.name}` needs its type arguments here")
+            push_diag_e(
+                self,
+                id.span,
+                E_BARE_GENERIC,
+                $"generic type `{id.name}` needs its type arguments here",
+            )
             return TY_ERROR
         }
         return reified_type_of(self, nominal_with_fresh_args(self, tn.unwrap()))
@@ -7406,8 +7952,11 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     }
     // Registered by stable key: a re-demand's body pass reclaims the id the previous demand's
     // identically-ordered lambda held (see `begin_demand`).
-    let nid = register_collected(self, NominalDef.NomStruct(move sd),
-        $"{module_name}.__Closure_{lid}")
+    let nid = register_collected(
+        self,
+        NominalDef.NomStruct(move sd),
+        $"{module_name}.__Closure_{lid}",
+    )
 
     let sym = $"__flang_closure_call_{lid}"
     let sig_params: List(Ty) = list(params.len, self.allocator)
@@ -7582,8 +8131,12 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         // An unresolved iterable may still become something iterable; a concrete one without `iter`
         // never will (E2021).
         if !self.engine.is_var(z) and !z.is_error() {
-            push_diag_e(self, expr_span(fs.iterable), E_NO_ITER,
-                $"type is not iterable: no `{iter_name}` function takes it")
+            push_diag_e(
+                self,
+                expr_span(fs.iterable),
+                E_NO_ITER,
+                $"type is not iterable: no `{iter_name}` function takes it",
+            )
         }
         return self.engine.fresh_var()
     }
@@ -7609,8 +8162,12 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     }
     if np.is_none() {
         if !self.engine.is_var(state) and !state.is_error() {
-            push_diag_e(self, fs.span, E_NO_NEXT,
-                from_view("iterator state has no `next` function"))
+            push_diag_e(
+                self,
+                fs.span,
+                E_NO_NEXT,
+                from_view("iterator state has no `next` function"),
+            )
         }
         return self.engine.fresh_var()
     }
@@ -7631,8 +8188,12 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     let nret = self.engine.resolve(n.ret)
     let inner = option_inner(self, nret)
     if inner.is_none() and !self.engine.is_var(nret) and !nret.is_error() {
-        push_diag_e(self, fs.span, E_NEXT_RETURN,
-            from_view("`next` must return `Option(T)` - the loop ends when it yields `null`"))
+        push_diag_e(
+            self,
+            fs.span,
+            E_NEXT_RETURN,
+            from_view("`next` must return `Option(T)` - the loop ends when it yields `null`"),
+        )
     }
     return inner match {
         Some(t) => t
@@ -7671,8 +8232,12 @@ fn record_iter_release(self: &Checker, fs: &ForStmt, owned: Ty?) {
     defer no_args.deinit()
     const dp = receiver_pick(self, "deinit", state, &no_args, fs.span, fs.var_span)
     if dp.is_none() {
-        push_diag_e(self, fs.span, E_NO_OVERLOAD,
-            from_view("the loop owns its iterator, which is not copyable and declares no `deinit`"))
+        push_diag_e(
+            self,
+            fs.span,
+            E_NO_OVERLOAD,
+            from_view("the loop owns its iterator, which is not copyable and declares no `deinit`"),
+        )
         return
     }
     const d = dp.unwrap()
@@ -7734,8 +8299,12 @@ fn check_let(self: &Checker, ls: &LetStmt) {
     // A same-scope re-declaration is legal but hides the earlier binding for the rest of the block;
     // `_`-prefixed names opt out (W1002, reference parity).
     if self.env.exists_in_current(ls.name) and !starts_with_underscore(ls.name) {
-        push_diag_w(self, ls.span, W_SAME_SCOPE_SHADOW,
-            $"`{ls.name}` shadows an earlier declaration in the same scope")
+        push_diag_w(
+            self,
+            ls.span,
+            W_SAME_SCOPE_SHADOW,
+            $"`{ls.name}` shadows an earlier declaration in the same scope",
+        )
     }
     // `let x = []` has nothing to fix the element type (E2026). An annotated `let xs: [i32; 0] =
     // []` is fine - the annotation pins it.
@@ -7743,8 +8312,12 @@ fn check_let(self: &Checker, ls: &LetStmt) {
         ls.init match {
             Some(e) => {
                 if is_empty_array_literal(e) {
-                    push_diag_e(self, ls.span, E_EMPTY_ARRAY,
-                        $"cannot infer the element type of the empty array `{ls.name}` is bound to")
+                    push_diag_e(
+                        self,
+                        ls.span,
+                        E_EMPTY_ARRAY,
+                        $"cannot infer the element type of the empty array `{ls.name}` is bound to",
+                    )
                 }
             }
             None => {}
@@ -7915,8 +8488,12 @@ fn shift(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
     const width = prim_bit_width(p)
     const amount = parse_int_magnitude(lit.unwrap().text)
     if amount.is_some() and amount.unwrap() >= width as u64 {
-        push_diag_e(self, lit.unwrap().span, E_SHIFT_RANGE,
-            $"Shift amount `{lit.unwrap().text}` is out of range for `{prim_name(p)}` (0..{width - 1})")
+        push_diag_e(
+            self,
+            lit.unwrap().span,
+            E_SHIFT_RANGE,
+            $"Shift amount `{lit.unwrap().text}` is out of range for `{prim_name(p)}` (0..{width - 1})",
+        )
     }
     return arithmetic(self, bin, lhs, rhs)
 }
@@ -7951,8 +8528,12 @@ fn arithmetic(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
     return binary_dispatch(self, bin, l, r, false) match {
         Some(t) => t
         None => {
-            push_diag_e(self, bin.span, E_OP_NO_IMPL,
-                $"no `{name}` implementation for these operand types")
+            push_diag_e(
+                self,
+                bin.span,
+                E_OP_NO_IMPL,
+                $"no `{name}` implementation for these operand types",
+            )
             lhs
         }
     }
@@ -8017,8 +8598,12 @@ fn comparison(self: &Checker, bin: &BinaryExpr, lhs: Ty, rhs: Ty) Ty {
 
     // Both operands are nominals and nothing in the ladder matched, as written or through
     // `op_deref` - comparing them would be a bitwise compare of addresses. E2017.
-    push_diag_e(self, bin.span, E_OP_NO_IMPL,
-        $"no `{direct_op_name(bin.op)}` (or `op_cmp`) implementation for these operand types")
+    push_diag_e(
+        self,
+        bin.span,
+        E_OP_NO_IMPL,
+        $"no `{direct_op_name(bin.op)}` (or `op_cmp`) implementation for these operand types",
+    )
     return prim_of(PrimitiveKind.Bool)
 }
 
@@ -8038,8 +8623,14 @@ fn op_match_of(p: move OverloadPick, negate: bool, derived: BinaryOpDerived?) Op
     return OpMatch { pick = move p, negate = negate, derived = derived, ret = ret }
 }
 
-fn operator_match(self: &Checker, op: BinaryOp, span: SourceSpan, l: Ty, r: Ty,
-    is_cmp: bool) OpMatch? {
+fn operator_match(
+    self: &Checker,
+    op: BinaryOp,
+    span: SourceSpan,
+    l: Ty,
+    r: Ty,
+    is_cmp: bool,
+) OpMatch? {
     if !is_cmp {
         const pick = operator_pick_2(self, arith_op_name(op), l, r, span)
         return pick match {
@@ -8131,8 +8722,13 @@ fn both_nominal(self: &Checker, l: Ty, r: Ty) bool {
 
 // A nominal operand's `op_deref` chain: `picks[k]` is hop k+1, `tys[k]` the operand's type after
 // it. Stops at the first type that is not a nominal or has no `op_deref`.
-fn operand_chain(self: &Checker, t: Ty, span: SourceSpan, picks: &List(OverloadPick),
-    tys: &List(Ty)) {
+fn operand_chain(
+    self: &Checker,
+    t: Ty,
+    span: SourceSpan,
+    picks: &List(OverloadPick),
+    tys: &List(Ty),
+) {
     let vis = fn_visibility(self)
     defer vis.deinit()
     const dcands = deref_candidates(self, &vis)
@@ -8168,8 +8764,15 @@ fn operand_chain(self: &Checker, t: Ty, span: SourceSpan, picks: &List(OverloadP
 // Records the operator and the operand hops it resolved through: the left operand's first `li`
 // hops, then the right operand's first `ri`, on the operator node's deref chain. Returns the
 // expression's type.
-fn commit_binary(self: &Checker, bin: &BinaryExpr, m: &OpMatch, lc: &List(OverloadPick), li: usize,
-    rc: &List(OverloadPick), ri: usize) Ty {
+fn commit_binary(
+    self: &Checker,
+    bin: &BinaryExpr,
+    m: &OpMatch,
+    lc: &List(OverloadPick),
+    li: usize,
+    rc: &List(OverloadPick),
+    ri: usize,
+) Ty {
     const node = self.node_of(bin.span)
     if li + ri > 0 {
         let targets: List(ResolvedTarget) = list(li + ri, self.allocator)
@@ -8357,8 +8960,14 @@ fn report_argument_moves(self: &Checker, call: &CallExpr) {
 
 fn report_argument_move(self: &Checker, e: &Expr) {
     e.* match {
-        Move(m) => push_diag_e(self, m.span, E_MOVE_IN_ARGUMENT,
-            from_view("`move` in argument position: the parameter declares whether the call takes ownership - remove it"))
+        Move(m) => push_diag_e(
+            self,
+            m.span,
+            E_MOVE_IN_ARGUMENT,
+            from_view(
+                "`move` in argument position: the parameter declares whether the call takes ownership - remove it",
+            ),
+        )
         _ => {}
     }
 }
@@ -8381,8 +8990,12 @@ pub fn deinit(self: move NamedArgs) {
 // Each named argument's parameter index in candidate `c`, or null when a name is not one of `c`'s
 // parameters (the candidate is out). Parameters below `ufcs_offset` are the prepended receiver and
 // cannot be named.
-fn named_param_slots(self: &Checker, c: &FunctionScheme, named: &NamedArgs,
-    ufcs_offset: usize) List(usize)? {
+fn named_param_slots(
+    self: &Checker,
+    c: &FunctionScheme,
+    named: &NamedArgs,
+    ufcs_offset: usize,
+) List(usize)? {
     let dp = self.fn_decl_params.get_ref(c.id)
     if dp.is_none() {
         return null
@@ -8409,8 +9022,13 @@ fn named_param_slots(self: &Checker, c: &FunctionScheme, named: &NamedArgs,
 // argument), a Func-typed struct field, or a Func-typed value. Some(ty) is the call's type -
 // failures inside report a diagnostic and yield a fresh var so inference continues. Null means the
 // callee shape has no resolution path; the caller falls back.
-fn resolve_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty), pos_exprs: &List(&Expr),
-    named: &NamedArgs? = null) Ty? {
+fn resolve_call(
+    self: &Checker,
+    call: &CallExpr,
+    arg_tys: &List(Ty),
+    pos_exprs: &List(&Expr),
+    named: &NamedArgs? = null,
+) Ty? {
     return call.callee.* match {
         Identifier(ide) => resolve_direct_call(self, call, &ide, arg_tys, pos_exprs, named)
         MemberAccess(ma) => resolve_method_call(self, call, &ma, arg_tys, pos_exprs, named)
@@ -8420,8 +9038,14 @@ fn resolve_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty), pos_exprs: 
 
 // `foo(args)` - registry overloads win over value bindings, mirroring the reference checker's call
 // order; a value binding of function type is the fallback.
-fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, arg_tys: &List(Ty),
-    pos_exprs: &List(&Expr), named: &NamedArgs? = null) Ty? {
+fn resolve_direct_call(
+    self: &Checker,
+    call: &CallExpr,
+    ide: &IdentifierExpr,
+    arg_tys: &List(Ty),
+    pos_exprs: &List(&Expr),
+    named: &NamedArgs? = null,
+) Ty? {
     let vis = fn_visibility(self)
     defer vis.deinit()
     let cands = self.functions.lookup(ide.name, &vis) match {
@@ -8436,8 +9060,18 @@ fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, ar
         let ctx = PeelCtx { vis = &vis, chain = &chain }
         let spans = arg_span_list(self, pos_exprs, null)
         defer spans.deinit()
-        let pick = resolve_overload(self, &candidates, arg_tys, call.span, null, named, 0usize,
-            true, Some(&ctx), Some(&spans))
+        let pick = resolve_overload(
+            self,
+            &candidates,
+            arg_tys,
+            call.span,
+            null,
+            named,
+            0usize,
+            true,
+            Some(&ctx),
+            Some(&spans),
+        )
         candidates.deinit()
         if pick.is_none() and self.overload_deferred {
             self.overload_deferred = false
@@ -8446,8 +9080,9 @@ fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, ar
         if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
             return Some(self.engine.fresh_var())
         }
-        return Some(commit_pick(self, pick, ide.name, arg_tys.len, call.span, 0usize, pos_exprs,
-                named))
+        return Some(
+            commit_pick(self, pick, ide.name, arg_tys.len, call.span, 0usize, pos_exprs, named),
+        )
     }
     // A named argument cannot address a parameter of a function VALUE (no declaration, so no
     // parameter names) - leave the call for the caller's fallback rather than dropping the names
@@ -8462,8 +9097,14 @@ fn resolve_direct_call(self: &Checker, call: &CallExpr, ide: &IdentifierExpr, ar
 // `recv.method(args)` - a Func-typed struct field dispatches directly (the vtable pattern wins over
 // UFCS, as in the reference checker); otherwise the receiver becomes the first argument of a
 // registry overload, retried with the receiver adapted between value and reference forms.
-fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, arg_tys: &List(Ty),
-    pos_exprs: &List(&Expr), named: &NamedArgs? = null) Ty? {
+fn resolve_method_call(
+    self: &Checker,
+    call: &CallExpr,
+    ma: &MemberAccessExpr,
+    arg_tys: &List(Ty),
+    pos_exprs: &List(&Expr),
+    named: &NamedArgs? = null,
+) Ty? {
     let recv_ty = check_expr(self, ma.receiver)
 
     // A field holding a function value has no parameter names, so a named-argument call never
@@ -8486,8 +9127,12 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
         // `fba.allocator()` where `allocator` is a plain field: the name exists on the receiver, it
         // is just not callable (E2011). Only a name that is nowhere at all is "unresolved" (E2004).
         if struct_field_lookup(self, recv_ty, ma.member).is_some() {
-            push_diag_e(self, call.span, E_NO_OVERLOAD,
-                $"`{ma.member}` is a field of this type, not a callable method")
+            push_diag_e(
+                self,
+                call.span,
+                E_NO_OVERLOAD,
+                $"`{ma.member}` is a field of this type, not a callable method",
+            )
         } else {
             push_diag_e(self, call.span, E_UNKNOWN_IDENT, $"unresolved function `{ma.member}`")
         }
@@ -8504,8 +9149,17 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
         let full: List(Ty) = list(arg_tys.len + 1, self.allocator)
         full.push(recv_ty)
         full.push_all(arg_tys.as_slice())
-        return Some(park_call(self, call, ma.member, &full, pos_exprs, 1usize,
-                Some(self.engine.mk_ref(recv_ty))))
+        return Some(
+            park_call(
+                self,
+                call,
+                ma.member,
+                &full,
+                pos_exprs,
+                1usize,
+                Some(self.engine.mk_ref(recv_ty)),
+            ),
+        )
     }
 
     // Receiver adaptation: a value receiver also matches `&T` overloads and a reference receiver
@@ -8523,8 +9177,17 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     self.overload_deferred = false
     let spans = arg_span_list(self, pos_exprs, Some(expr_span(ma.receiver)))
     defer spans.deinit()
-    let pick = receiver_overload(self, &candidates, recv_ty, arg_tys, call.span, Some(adapted),
-        named, Some(&ctx), Some(&spans))
+    let pick = receiver_overload(
+        self,
+        &candidates,
+        recv_ty,
+        arg_tys,
+        call.span,
+        Some(adapted),
+        named,
+        Some(&ctx),
+        Some(&spans),
+    )
     if pick.is_some() {
         commit_deref_chain(self, &chain, pick_hops(&pick), call.span)
     }
@@ -8539,20 +9202,49 @@ fn resolve_method_call(self: &Checker, call: &CallExpr, ma: &MemberAccessExpr, a
     if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
         return Some(self.engine.fresh_var())
     }
-    return Some(commit_pick(self, pick, ma.member, arg_tys.len, call.span, 1usize, pos_exprs, named,
-            Some(recv_ty)))
+    return Some(
+        commit_pick(
+            self,
+            pick,
+            ma.member,
+            arg_tys.len,
+            call.span,
+            1usize,
+            pos_exprs,
+            named,
+            Some(recv_ty),
+        ),
+    )
 }
 
 // One overload-resolution attempt with `recv` prepended as the first argument. `alt_recv` is its
 // adapted value <-> &T shape, competing in the same ranked set.
-fn receiver_overload(self: &Checker, candidates: &List(&FunctionScheme), recv: Ty,
-    arg_tys: &List(Ty), span: SourceSpan, alt_recv: Ty? = null, named: &NamedArgs? = null,
-    peel: &PeelCtx? = null, arg_spans: &List(SourceSpan)? = null) OverloadPick? {
+fn receiver_overload(
+    self: &Checker,
+    candidates: &List(&FunctionScheme),
+    recv: Ty,
+    arg_tys: &List(Ty),
+    span: SourceSpan,
+    alt_recv: Ty? = null,
+    named: &NamedArgs? = null,
+    peel: &PeelCtx? = null,
+    arg_spans: &List(SourceSpan)? = null,
+) OverloadPick? {
     let full = list(arg_tys.len + 1, self.allocator)
     full.push(recv)
     full.push_all(arg_tys.as_slice())
-    let pick = resolve_overload(self, candidates, &full, span, alt_recv, named, 1usize, false, peel,
-        arg_spans)
+    let pick = resolve_overload(
+        self,
+        candidates,
+        &full,
+        span,
+        alt_recv,
+        named,
+        1usize,
+        false,
+        peel,
+        arg_spans,
+    )
     full.deinit()
     return pick
 }
@@ -8565,8 +9257,14 @@ fn receiver_overload(self: &Checker, candidates: &List(&FunctionScheme), recv: T
 //
 // Returns null when nothing matches, without reporting: a caller that tries several names reports
 // once at the end.
-fn receiver_pick(self: &Checker, name: String, recv: Ty, extra: &List(Ty), span: SourceSpan,
-    record_span: SourceSpan) OverloadPick? {
+fn receiver_pick(
+    self: &Checker,
+    name: String,
+    recv: Ty,
+    extra: &List(Ty),
+    span: SourceSpan,
+    record_span: SourceSpan,
+) OverloadPick? {
     let chain: List(OverloadPick) = list(0, self.allocator)
     defer chain.deinit()
     let pick = receiver_pick_into(self, name, recv, extra, span, &chain)
@@ -8580,16 +9278,28 @@ fn receiver_pick(self: &Checker, name: String, recv: Ty, extra: &List(Ty), span:
 // requirement (RFC-035). A by-value receiver is not adapted to a reference: `hash(self: Self)` met
 // by a `hash(&$T)`, or by a blanket `hash($T)` at `T = &Self`, would hash the address. The pick's
 // unifications are committed; the caller decides whether to keep them.
-fn satisfy_pick(self: &Checker, name: String, recv: Ty, extra: &List(Ty),
-    span: SourceSpan) OverloadPick? {
+fn satisfy_pick(
+    self: &Checker,
+    name: String,
+    recv: Ty,
+    extra: &List(Ty),
+    span: SourceSpan,
+) OverloadPick? {
     let chain: List(OverloadPick) = list(0, self.allocator)
     defer chain.deinit()
     return receiver_pick_into(self, name, recv, extra, span, &chain, false)
 }
 
 // The resolution behind `receiver_pick`: the winner's `op_deref` hops land in `chain`.
-fn receiver_pick_into(self: &Checker, name: String, recv: Ty, extra: &List(Ty), span: SourceSpan,
-    chain: &List(OverloadPick), take_address: bool = true) OverloadPick? {
+fn receiver_pick_into(
+    self: &Checker,
+    name: String,
+    recv: Ty,
+    extra: &List(Ty),
+    span: SourceSpan,
+    chain: &List(OverloadPick),
+    take_address: bool = true,
+) OverloadPick? {
     let vis = fn_visibility(self)
     defer vis.deinit()
     let cands = self.functions.lookup(name, &vis) match {
@@ -8623,8 +9333,13 @@ fn deref_candidates(self: &Checker, vis: &Visibility) List(&FunctionScheme)? {
 // call each hop before the winner: one target per hop, outermost first, plus a pending
 // specialization per generic hop (the drain rewrites that hop's entry to `RtSpecialized`, keyed by
 // `deref_index`). Records nothing for zero hops.
-fn commit_deref_chain(self: &Checker, chain: &List(OverloadPick), hops: usize, span: SourceSpan,
-    on_arg: bool = false) {
+fn commit_deref_chain(
+    self: &Checker,
+    chain: &List(OverloadPick),
+    hops: usize,
+    span: SourceSpan,
+    on_arg: bool = false,
+) {
     if hops == 0 {
         return
     }
@@ -8647,8 +9362,14 @@ fn commit_deref_chain(self: &Checker, chain: &List(OverloadPick), hops: usize, s
 // A committed pick of a generic overload becomes a pending specialization - drained once the
 // enclosing body's inference has settled (M10). `is_operator` selects which table the drain
 // rewrites: `resolved_ops` for operator nodes, `resolved_targets` for calls.
-fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &OverloadPick,
-    deref_index: usize? = null, deref_on_arg: bool = false) {
+fn note_pending(
+    self: &Checker,
+    span: SourceSpan,
+    is_operator: bool,
+    pick: &OverloadPick,
+    deref_index: usize? = null,
+    deref_on_arg: bool = false,
+) {
     if pick.inst.is_none() {
         return
     }
@@ -8686,9 +9407,17 @@ fn note_pending(self: &Checker, span: SourceSpan, is_operator: bool, pick: &Over
 // counts toward the winner's parameter arity but not toward `n_args`, which feeds the user-facing
 // diagnostic). `recv` is that receiver's type, and names it in the failure - which method is
 // missing matters far less than which type is missing it.
-fn commit_pick(self: &Checker, pick: move OverloadPick?, name: String, n_args: usize,
-    span: SourceSpan, recv_extra: usize, pos_exprs: &List(&Expr), named: &NamedArgs?,
-    recv: Ty? = null) Ty {
+fn commit_pick(
+    self: &Checker,
+    pick: move OverloadPick?,
+    name: String,
+    n_args: usize,
+    span: SourceSpan,
+    recv_extra: usize,
+    pos_exprs: &List(&Expr),
+    named: &NamedArgs?,
+    recv: Ty? = null,
+) Ty {
     return pick match {
         Some(p) => {
             self.results.record_target(self.node_of(span), ResolvedTarget.RtFunction(p.id))
@@ -8712,8 +9441,12 @@ fn commit_pick(self: &Checker, pick: move OverloadPick?, name: String, n_args: u
             recv match {
                 Some(r) => {
                     sb.append(" on `")
-                    format_with_names(&self.engine.interner, self.engine.resolve(r), &sb,
-                        Some(&self.nominals))
+                    format_with_names(
+                        &self.engine.interner,
+                        self.engine.resolve(r),
+                        &sb,
+                        Some(&self.nominals),
+                    )
                     sb.append("`")
                 }
                 None => {}
@@ -8727,8 +9460,13 @@ fn commit_pick(self: &Checker, pick: move OverloadPick?, name: String, n_args: u
 // A `move self` parameter takes the receiver's value, which a receiver reached through a reference
 // or an `op_deref` hop does not have to give: the pointee stays with its owner (RFC-033). A
 // receiver matched as written or auto-referenced is the ownership pass's business.
-fn check_consuming_receiver(self: &Checker, p: &OverloadPick, name: String, recv: Ty?,
-    span: SourceSpan) {
+fn check_consuming_receiver(
+    self: &Checker,
+    p: &OverloadPick,
+    name: String,
+    recv: Ty?,
+    span: SourceSpan,
+) {
     if recv.is_none() or p.params.len == 0 or !pick_param_moves(self, p.id, 0usize) {
         return
     }
@@ -8744,7 +9482,9 @@ fn check_consuming_receiver(self: &Checker, p: &OverloadPick, name: String, recv
         return
     }
     let sb = string_builder(128, self.allocator)
-    sb.append($"`{name}` takes ownership of its receiver, which is reached through a reference here - the value stays with its owner")
+    sb.append(
+        $"`{name}` takes ownership of its receiver, which is reached through a reference here - the value stays with its owner",
+    )
     append_copy_blame(self, slot, &sb)
     own_report(self, span, E_CONSUMING_RECEIVER, sb.to_string())
 }
@@ -8778,8 +9518,15 @@ fn pick_param_moves(self: &Checker, id: u32, idx: usize) bool {
 // Park a call whose overload choice depends on a type that has not settled: copy what the redo
 // needs and hand back a fresh var for the result. `resolve_pending_calls` finishes it after the
 // specialization drain, when the open argument has its real type.
-fn park_call(self: &Checker, call: &CallExpr, name: String, arg_tys: &List(Ty),
-    pos_exprs: &List(&Expr), recv_extra: usize, alt_recv: Ty?) Ty {
+fn park_call(
+    self: &Checker,
+    call: &CallExpr,
+    name: String,
+    arg_tys: &List(Ty),
+    pos_exprs: &List(&Expr),
+    recv_extra: usize,
+    alt_recv: Ty?,
+) Ty {
     let args: List(Ty) = list(arg_tys.len, self.allocator)
     args.push_all(arg_tys.as_slice())
     let pes: List(&Expr) = list(pos_exprs.len, self.allocator)
@@ -8827,18 +9574,41 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
             const recv_span: SourceSpan? = if pc.recv_extra > 0 { Some(pc.span) } else { null }
             let pspans = arg_span_list(self, &pc.pos_exprs, recv_span)
             defer pspans.deinit()
-            let pick = resolve_overload(self, &candidates, &pc.arg_tys, pc.span, pc.alt_recv, null,
-                pc.recv_extra, true, Some(&pctx), Some(&pspans))
+            let pick = resolve_overload(
+                self,
+                &candidates,
+                &pc.arg_tys,
+                pc.span,
+                pc.alt_recv,
+                null,
+                pc.recv_extra,
+                true,
+                Some(&pctx),
+                Some(&pspans),
+            )
             candidates.deinit()
             if pick.is_none() and self.overload_deferred {
                 self.overload_deferred = false
-                push_diag_e(self, pc.span, E_NO_OVERLOAD,
-                    $"ambiguous call to `{pc.name}`: several overloads match and the argument type never settled - annotate it")
+                push_diag_e(
+                    self,
+                    pc.span,
+                    E_NO_OVERLOAD,
+                    $"ambiguous call to `{pc.name}`: several overloads match and the argument type never settled - annotate it",
+                )
             } else {
                 const n_args = if pc.recv_extra > 0 { pc.arg_tys.len - 1 } else { pc.arg_tys.len }
                 const pc_recv: Ty? = if pc.recv_extra > 0 { Some(pc.arg_tys[0]) } else { null }
-                let t = commit_pick(self, pick, pc.name, n_args, pc.span, pc.recv_extra,
-                    &pc.pos_exprs, null, pc_recv)
+                let t = commit_pick(
+                    self,
+                    pick,
+                    pc.name,
+                    n_args,
+                    pc.span,
+                    pc.recv_extra,
+                    &pc.pos_exprs,
+                    null,
+                    pc_recv,
+                )
                 // The placeholder `park_call` handed the call site flowed into the enclosing
                 // inference; the resolved type has to reach those uses, not just the node.
                 const node = self.node_of(pc.span)
@@ -8900,8 +9670,14 @@ fn pick_is_variadic(self: &Checker, p: &OverloadPick) bool {
     return decl[decl.len - 1].is_variadic
 }
 
-fn materialize_arg_list(self: &Checker, p: &OverloadPick, pos_exprs: &List(&Expr),
-    named: &NamedArgs?, recv_extra: usize, span: SourceSpan) {
+fn materialize_arg_list(
+    self: &Checker,
+    p: &OverloadPick,
+    pos_exprs: &List(&Expr),
+    named: &NamedArgs?,
+    recv_extra: usize,
+    span: SourceSpan,
+) {
     if self.default_depth >= MAX_DEFAULT_DEPTH {
         return
     }
@@ -8931,8 +9707,9 @@ fn materialize_arg_list(self: &Checker, p: &OverloadPick, pos_exprs: &List(&Expr
         // literal - the reference's `BuildResolvedArguments` builds the same node, and the array
         // decays to the parameter's slice at the call.
         if decl_params[pi].is_variadic {
-            exprs.push(synth_box(self, synth_variadic_pack(self, pos_exprs, next_pos, p.params[pi],
-                        span)))
+            exprs.push(
+                synth_box(self, synth_variadic_pack(self, pos_exprs, next_pos, p.params[pi], span)),
+            )
             next_pos = pos_exprs.len
             continue
         }
@@ -8985,8 +9762,13 @@ fn materialize_arg_list(self: &Checker, p: &OverloadPick, pos_exprs: &List(&Expr
 // in this result set, and unified against the variadic parameter's slice element type so unsuffixed
 // literals pin. Synthetic span - node ids are span fingerprints, and this node exists nowhere in
 // the source.
-fn synth_variadic_pack(self: &Checker, pos_exprs: &List(&Expr), from: usize, param_ty: Ty,
-    span: SourceSpan) Expr {
+fn synth_variadic_pack(
+    self: &Checker,
+    pos_exprs: &List(&Expr),
+    from: usize,
+    param_ty: Ty,
+    span: SourceSpan,
+) Expr {
     // The pack shares the argument nodes the module arena owns.
     let elems: List(Expr) = list(pos_exprs.len - from, self.allocator)
     for e in pos_exprs.as_slice()[from..pos_exprs.len] {
@@ -9001,8 +9783,9 @@ fn synth_variadic_pack(self: &Checker, pos_exprs: &List(&Expr), from: usize, par
     // settle (an empty pack leaves `T` to the declaration, which already fixed it).
     let want = self.engine.resolve(param_ty)
     let elem = ty_node(self, want) match {
-        NNominal(nn) => if nn.args.len == 1 { Some(self.engine.interner.child_at(nn.args,
-                    0)) } else { null }
+        NNominal(nn) => if nn.args.len == 1 { Some(
+            self.engine.interner.child_at(nn.args, 0),
+        ) } else { null }
         _ => null
     }
     if elem.is_some() {
@@ -9088,8 +9871,14 @@ fn closure_arg_hint(self: &Checker, arg_tys: &List(Ty), span: SourceSpan) bool {
         let z = self.engine.resolve(arg_tys[i])
         let cls = closure_of(self, z)
         if cls.is_some() {
-            push_diag_e(self, span, E_CLOSURE_TO_FN,
-                from_view("a capturing closure cannot coerce to a bare `fn` parameter (it has no environment slot); pass it through a generic `$F` parameter instead"))
+            push_diag_e(
+                self,
+                span,
+                E_CLOSURE_TO_FN,
+                from_view(
+                    "a capturing closure cannot coerce to a bare `fn` parameter (it has no environment slot); pass it through a generic `$F` parameter instead",
+                ),
+            )
             return true
         }
     }
@@ -9098,8 +9887,14 @@ fn closure_arg_hint(self: &Checker, arg_tys: &List(Ty), span: SourceSpan) bool {
 
 // `recv.field(args)` where `field` is a Func-typed struct field - the vtable-dispatch pattern. Null
 // when the receiver is not a struct or has no Func field by that name - the UFCS path takes over.
-fn field_call(self: &Checker, recv_ty: Ty, name: String, arg_tys: &List(Ty), span: SourceSpan,
-    callee_id: NodeId) Ty? {
+fn field_call(
+    self: &Checker,
+    recv_ty: Ty,
+    name: String,
+    arg_tys: &List(Ty),
+    span: SourceSpan,
+    callee_id: NodeId,
+) Ty? {
     let fty = struct_field_lookup(self, recv_ty, name)
     if fty.is_none() {
         return null
@@ -9120,8 +9915,12 @@ fn field_call(self: &Checker, recv_ty: Ty, name: String, arg_tys: &List(Ty), spa
         _ => return null
     }
     if f.params.len != arg_tys.len {
-        push_diag_e(self, span, E_NO_OVERLOAD,
-            $"no matching overload for `{name}` with {arg_tys.len} argument(s)")
+        push_diag_e(
+            self,
+            span,
+            E_NO_OVERLOAD,
+            $"no matching overload for `{name}` with {arg_tys.len} argument(s)",
+        )
         return Some(self.engine.fresh_var())
     }
     for i in 0..arg_tys.len {
@@ -9156,8 +9955,12 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
     if cls.is_some() {
         let c = cls.unwrap()
         if c.params.len != arg_tys.len {
-            push_diag_e(self, span, E_NO_OVERLOAD,
-                $"no matching overload with {arg_tys.len} argument(s)")
+            push_diag_e(
+                self,
+                span,
+                E_NO_OVERLOAD,
+                $"no matching overload with {arg_tys.len} argument(s)",
+            )
             return self.engine.fresh_var()
         }
         for i in 0..arg_tys.len {
@@ -9173,8 +9976,12 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
     if ft.is_some() {
         let f = ft.unwrap()
         if f.params.len != arg_tys.len {
-            push_diag_e(self, span, E_NO_OVERLOAD,
-                $"no matching overload with {arg_tys.len} argument(s)")
+            push_diag_e(
+                self,
+                span,
+                E_NO_OVERLOAD,
+                $"no matching overload with {arg_tys.len} argument(s)",
+            )
             return self.engine.fresh_var()
         }
         for i in 0..arg_tys.len {
@@ -9195,8 +10002,14 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
         return TY_ERROR
     }
     if self.engine.is_rigid(z) and !rigid_callable(self, z) {
-        push_diag_e(self, span, E_UNBOUNDED_CALL,
-            from_view("this value's type is a type parameter with no callable bound - bound it by its shape: `where F: fn(...) R`"))
+        push_diag_e(
+            self,
+            span,
+            E_UNBOUNDED_CALL,
+            from_view(
+                "this value's type is a type parameter with no callable bound - bound it by its shape: `where F: fn(...) R`",
+            ),
+        )
         return TY_ERROR
     }
     if self.engine.is_var(z) {
@@ -9209,8 +10022,12 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
     }
     // Reference parity: a non-callable callee is "Unresolved function" (E2004), not an overload
     // failure - the name simply named nothing callable.
-    push_diag_e(self, span, E_UNKNOWN_IDENT,
-        from_view("unresolved function: expression of non-function type is not callable"))
+    push_diag_e(
+        self,
+        span,
+        E_UNKNOWN_IDENT,
+        from_view("unresolved function: expression of non-function type is not callable"),
+    )
     return self.engine.fresh_var()
 }
 
@@ -9241,8 +10058,16 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
     let chain: List(OverloadPick) = list(0, self.allocator)
     defer chain.deinit()
     let ctx = PeelCtx { vis = &vis, chain = &chain }
-    let pick = receiver_overload(self, &candidates, recv, arg_tys, span,
-        Some(self.engine.mk_ref(recv)), null, Some(&ctx))
+    let pick = receiver_overload(
+        self,
+        &candidates,
+        recv,
+        arg_tys,
+        span,
+        Some(self.engine.mk_ref(recv)),
+        null,
+        Some(&ctx),
+    )
     if pick.is_none() {
         return null
     }
@@ -9264,8 +10089,13 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
 // `ctx.chain`, outermost first. Stops at a receiver that is not a nominal or has no `op_deref`.
 // Hops are resolved non-speculatively, so a chain the winner does not use leaves its deref
 // unifications behind.
-fn deref_alternatives(self: &Checker, recv: Ty, span: SourceSpan, ctx: &PeelCtx,
-    alts: &List(RecvAlt)) {
+fn deref_alternatives(
+    self: &Checker,
+    recv: Ty,
+    span: SourceSpan,
+    ctx: &PeelCtx,
+    alts: &List(RecvAlt),
+) {
     let dcands = deref_candidates(self, ctx.vis)
     if dcands.is_none() {
         return
@@ -9378,10 +10208,18 @@ pub fn deinit(self: move PickInst) {
 // concrete type constructor is a constraint the arguments satisfied - `Dict($K,$V)` beats the
 // catch-all `$T`), then lower total cost (receiver adaptation, omitted defaults), then fewer
 // quantified vars, then registration order.
-fn resolve_overload(self: &Checker, candidates: &List(&FunctionScheme), arg_tys: &List(Ty),
-    span: SourceSpan, alt_recv: Ty? = null, named: &NamedArgs? = null, ufcs_offset: usize = 0usize,
-    report_ambiguity: bool = false, peel: &PeelCtx? = null,
-    arg_spans: &List(SourceSpan)? = null) OverloadPick? {
+fn resolve_overload(
+    self: &Checker,
+    candidates: &List(&FunctionScheme),
+    arg_tys: &List(Ty),
+    span: SourceSpan,
+    alt_recv: Ty? = null,
+    named: &NamedArgs? = null,
+    ufcs_offset: usize = 0usize,
+    report_ambiguity: bool = false,
+    peel: &PeelCtx? = null,
+    arg_spans: &List(SourceSpan)? = null,
+) OverloadPick? {
     // The receiver shapes, tried in tiers across all candidates (spec 7.2): as written (`arg_tys`
     // itself); when no candidate accepts that, `alt_recv` - the UFCS receiver adapted value <-> &T;
     // when none accepts that either, the wrapped values reached through `op_deref`. Only the first
@@ -9409,20 +10247,35 @@ fn resolve_overload(self: &Checker, candidates: &List(&FunctionScheme), arg_tys:
         if self.probe_bound_failed and bound_refused.is_none() {
             bound_refused = Some((st.len, 0usize))
         }
-        const spec = if probed.is_some() { scheme_specificity(self, &c.signature,
-                arg_tys) } else { 0u32 }
+        const spec = if probed.is_some() { scheme_specificity(
+            self,
+            &c.signature,
+            arg_tys,
+        ) } else { 0u32 }
         st.push(CandProbe { cost = probed, used = 0usize, spec = spec })
     }
     if alts.len > 0 and peel_needed(&st) {
         for ci in 0..candidates.len {
-            const ap = probe_candidate(self, candidates[ci], &alt_args[0], named, ufcs_offset, peel,
-                span)
+            const ap = probe_candidate(
+                self,
+                candidates[ci],
+                &alt_args[0],
+                named,
+                ufcs_offset,
+                peel,
+                span,
+            )
             if self.probe_bound_failed and bound_refused.is_none() {
                 bound_refused = Some((ci, 1usize))
             }
             if ap.is_some() {
-                st[ci].cost = Some(ProbeCost { coercions = ap.unwrap().coercions,
-                    penalty = ap.unwrap().penalty + alts[0].penalty, held = ap.unwrap().held })
+                st[ci].cost = Some(
+                    ProbeCost {
+                        coercions = ap.unwrap().coercions,
+                        penalty = ap.unwrap().penalty + alts[0].penalty,
+                        held = ap.unwrap().held,
+                    },
+                )
                 st[ci].used = 1usize
                 st[ci].spec = scheme_specificity(self, &candidates[ci].signature, arg_tys)
             }
@@ -9441,14 +10294,26 @@ fn resolve_overload(self: &Checker, candidates: &List(&FunctionScheme), arg_tys:
                 continue
             }
             for ai in first..alts.len {
-                let ap = probe_candidate(self, candidates[ci], &alt_args[ai], named, ufcs_offset,
-                    peel, span)
+                let ap = probe_candidate(
+                    self,
+                    candidates[ci],
+                    &alt_args[ai],
+                    named,
+                    ufcs_offset,
+                    peel,
+                    span,
+                )
                 if self.probe_bound_failed and bound_refused.is_none() {
                     bound_refused = Some((ci, ai + 1))
                 }
                 if ap.is_some() {
-                    st[ci].cost = Some(ProbeCost { coercions = ap.unwrap().coercions,
-                        penalty = ap.unwrap().penalty + alts[ai].penalty, held = ap.unwrap().held })
+                    st[ci].cost = Some(
+                        ProbeCost {
+                            coercions = ap.unwrap().coercions,
+                            penalty = ap.unwrap().penalty + alts[ai].penalty,
+                            held = ap.unwrap().held,
+                        },
+                    )
                     st[ci].used = ai + 1
                     st[ci].spec = scheme_specificity(self, &candidates[ci].signature, arg_tys)
                     break
@@ -9487,9 +10352,9 @@ fn resolve_overload(self: &Checker, candidates: &List(&FunctionScheme), arg_tys:
             const same_shape = coercions == best_coercions and spec == best_spec
             let better = best.is_none() or coercions < best_coercions
                 or (coercions == best_coercions and spec > best_spec) or (same_shape
-                and bounded > best_bounded) or (same_shape and bounded == best_bounded
-                and cost < best_cost) or (same_shape and bounded == best_bounded
-                and cost == best_cost and generics < best_generics)
+                    and bounded > best_bounded) or (same_shape and bounded == best_bounded
+                        and cost < best_cost) or (same_shape and bounded == best_bounded
+                            and cost == best_cost and generics < best_generics)
             if better {
                 best = Some(ci)
                 best_coercions = coercions
@@ -9522,8 +10387,14 @@ fn resolve_overload(self: &Checker, candidates: &List(&FunctionScheme), arg_tys:
     }
     if ambiguous {
         if report_ambiguity {
-            push_diag_e(self, span, E_NO_OVERLOAD,
-                from_view("ambiguous call: several overloads match equally well and an argument is an unsuffixed literal with no preferred type, so the choice would be arbitrary - add a literal suffix or annotate the value"))
+            push_diag_e(
+                self,
+                span,
+                E_NO_OVERLOAD,
+                from_view(
+                    "ambiguous call: several overloads match equally well and an argument is an unsuffixed literal with no preferred type, so the choice would be arbitrary - add a literal suffix or annotate the value",
+                ),
+            )
         }
         return null
     }
@@ -9559,8 +10430,8 @@ fn resolve_overload(self: &Checker, candidates: &List(&FunctionScheme), arg_tys:
         let arg = if i == 0 and best_used > 0 { alts[best_used - 1].ty } else { arg_tys[i] }
         const o = self.engine.unify(arg, fparams[i])
         const fitted = o match { Unified(_) => true, _ => false }
-        if fitted or !commit_arg_peel(self, arg, fparams[i], i, ufcs_offset, span, arg_spans,
-            peel) {
+        if fitted
+            or !commit_arg_peel(self, arg, fparams[i], i, ufcs_offset, span, arg_spans, peel) {
             report_unify(self, &o, E_TYPE_MISMATCH, span)
         }
     }
@@ -9598,22 +10469,39 @@ fn resolve_overload(self: &Checker, candidates: &List(&FunctionScheme), arg_tys:
     if w.signature.quantified.len() > 0 {
         let inst_params: List(Ty) = list(fparams.len, self.allocator)
         inst_params.push_all(fparams.as_slice())
-        install(&inst, Some(PickInst { tp_binds = move binds, params = move inst_params,
-            ret = f.ret }))
+        install(
+            &inst,
+            Some(PickInst { tp_binds = move binds, params = move inst_params, ret = f.ret }),
+        )
     } else {
         binds.deinit()
     }
     let hops = if best_used > 0 { alts[best_used - 1].hops } else { 0usize }
-    return Some(OverloadPick { id = w.id, ret = f.ret, params = move fparams, inst = move inst,
-        hops = hops })
+    return Some(
+        OverloadPick {
+            id = w.id,
+            ret = f.ret,
+            params = move fparams,
+            inst = move inst,
+            hops = hops,
+        },
+    )
 }
 
 // Commits a winning argument's `op_deref` hops: unifies through the chain and records it on the
 // argument's own node, the way a receiver's chain is recorded on the call node. Lowering replays it
 // before the call. False when the argument does not reach the parameter that way, leaving the
 // caller to report the mismatch it already has.
-fn commit_arg_peel(self: &Checker, arg: Ty, param: Ty, index: usize, ufcs_offset: usize,
-    span: SourceSpan, arg_spans: &List(SourceSpan)?, peel: &PeelCtx?) bool {
+fn commit_arg_peel(
+    self: &Checker,
+    arg: Ty,
+    param: Ty,
+    index: usize,
+    ufcs_offset: usize,
+    span: SourceSpan,
+    arg_spans: &List(SourceSpan)?,
+    peel: &PeelCtx?,
+) bool {
     if peel.is_none() or arg_spans.is_none() or index < ufcs_offset {
         return false
     }
@@ -9693,8 +10581,13 @@ type TieBreaker = enum {
     TieByShape
 }
 
-fn tie_breaker(self: &Checker, candidates: &List(&FunctionScheme), a: usize, b: usize,
-    arg_tys: &List(Ty)) TieBreaker {
+fn tie_breaker(
+    self: &Checker,
+    candidates: &List(&FunctionScheme),
+    a: usize,
+    b: usize,
+    arg_tys: &List(Ty),
+) TieBreaker {
     let fa = scheme_fn_ty(self, &candidates[a].signature)
     let fb = scheme_fn_ty(self, &candidates[b].signature)
     if fa.is_none() or fb.is_none() {
@@ -9767,8 +10660,8 @@ fn ty_has_free_var(self: &Checker, t: Ty) bool {
         NVar(_) => true
         NRef(inner) => ty_has_free_var(self, self.engine.resolve(inner))
         NArray(a) => ty_has_free_var(self, self.engine.resolve(a.elem))
-        NFunc(f) => ty_has_free_var(self, self.engine.resolve(f.ret)) or span_has_free_var(self,
-            f.params)
+        NFunc(f) => ty_has_free_var(self, self.engine.resolve(f.ret))
+            or span_has_free_var(self, f.params)
         NTuple(span) => span_has_free_var(self, span)
         NNominal(nn) => span_has_free_var(self, nn.args)
         _ => false
@@ -9823,8 +10716,14 @@ pub fn total(self: ProbeCost) u32 {
 // (RFC-020): an owner decays to the view it holds, never to a second owner. Unifies the first shape
 // that fits and returns the hops it took; null leaves the engine as it was found. `chain` collects
 // the hop picks when the caller is committing rather than probing.
-fn peel_arg(self: &Checker, arg: Ty, param: Ty, span: SourceSpan, ctx: &PeelCtx,
-    chain: &List(OverloadPick)?) usize? {
+fn peel_arg(
+    self: &Checker,
+    arg: Ty,
+    param: Ty,
+    span: SourceSpan,
+    ctx: &PeelCtx,
+    chain: &List(OverloadPick)?,
+) usize? {
     let dcands = deref_candidates(self, ctx.vis)
     if dcands.is_none() {
         return null
@@ -9890,9 +10789,15 @@ fn try_unify_arg(self: &Checker, arg: Ty, param: Ty) bool {
 
 // Speculatively check one candidate: null when it cannot take these arguments, else its ProbeCost
 // (fuller matches win via the omitted-defaults penalty, as in the reference checker).
-fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty),
-    named: &NamedArgs? = null, ufcs_offset: usize = 0usize, peel: &PeelCtx? = null,
-    span: SourceSpan = none_span()) ProbeCost? {
+fn probe_candidate(
+    self: &Checker,
+    c: &FunctionScheme,
+    arg_tys: &List(Ty),
+    named: &NamedArgs? = null,
+    ufcs_offset: usize = 0usize,
+    peel: &PeelCtx? = null,
+    span: SourceSpan = none_span(),
+) ProbeCost? {
     self.probe_bound_failed = false
     // A bounded candidate keeps its instantiation, to test its bounds against what the arguments
     // bound.
@@ -9943,8 +10848,8 @@ fn probe_candidate(self: &Checker, c: &FunctionScheme, arg_tys: &List(Ty),
         // The literal candidate-set constraint: a bare `10`'s open var would unify with ANY param -
         // `String` included, and declaration order would commit it. A pending numeric literal may
         // only meet a primitive, an open var (generics), or Option (wrap coercion).
-        if is_literal_var(self, arg_tys[i]) and !literal_can_take(self,
-            self.engine.interner.child_at(f.params, i)) {
+        if is_literal_var(self, arg_tys[i])
+            and !literal_can_take(self, self.engine.interner.child_at(f.params, i)) {
             ok = false
         }
         if ok {
@@ -10071,8 +10976,9 @@ fn scheme_fn_ty(self: &Checker, s: &Scheme) NFuncNode? {
 // nominal.
 fn variadic_elem(self: &Checker, param: Ty) Ty? {
     return ty_node(self, self.engine.resolve(param)) match {
-        NNominal(nn) => if nn.args.len == 1 { Some(self.engine.interner.child_at(nn.args,
-                    0)) } else { null }
+        NNominal(nn) => if nn.args.len == 1 { Some(
+            self.engine.interner.child_at(nn.args, 0),
+        ) } else { null }
         _ => null
     }
 }
@@ -10104,8 +11010,13 @@ fn variant_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty)) Ty? {
 // Bare `Variant(args)`: locals and functions win over variant names, so the constructor
 // interpretation only fires when the name has neither a value binding nor a visible function
 // candidate.
-fn unqualified_variant_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List(Ty),
-    span: SourceSpan, node: NodeId) Ty? {
+fn unqualified_variant_call(
+    self: &Checker,
+    ide: &IdentifierExpr,
+    arg_tys: &List(Ty),
+    span: SourceSpan,
+    node: NodeId,
+) Ty? {
     if name_is_value_bound(self, ide.name) {
         return null
     }
@@ -10241,8 +11152,12 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
         _ => false
     }
     if !is_structish {
-        push_diag_e(self, lit.span, E_NOT_A_STRUCT,
-            from_view("struct-literal syntax requires a struct type"))
+        push_diag_e(
+            self,
+            lit.span,
+            E_NOT_A_STRUCT,
+            from_view("struct-literal syntax requires a struct type"),
+        )
         for &fi0 in lit.fields {
             let _v0 = check_field_value(self, fi0)
         }
@@ -10303,8 +11218,12 @@ fn report_missing_fields(self: &Checker, ty: Ty, present: &List(String), span: S
             }
         }
         if !found {
-            push_diag_e(self, span, E_MISSING_FIELD,
-                $"struct literal missing field `{sd.fields[i].name}`")
+            push_diag_e(
+                self,
+                span,
+                E_MISSING_FIELD,
+                $"struct literal missing field `{sd.fields[i].name}`",
+            )
         }
     }
 }
@@ -10634,8 +11553,14 @@ fn construct_nullary(self: &Checker, id: NominalId, vname: String, span: SourceS
 // substituted against them, and each argument unified with its payload. Null when the nominal is
 // not an enum, names no such variant, or the argument count differs - callers fall through to the
 // other call forms. On success the variant target is recorded for lowering and go-to-definition.
-fn construct_variant(self: &Checker, id: NominalId, vname: String, arg_tys: &List(Ty),
-    span: SourceSpan, node: NodeId) Ty? {
+fn construct_variant(
+    self: &Checker,
+    id: NominalId,
+    vname: String,
+    arg_tys: &List(Ty),
+    span: SourceSpan,
+    node: NodeId,
+) Ty? {
     let ed = self.nominals.get(id).* match {
         NomEnum(e) => Some(move e)
         _ => null
@@ -10786,8 +11711,14 @@ fn zonk_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
         })
     }
     if !sig_concrete(self, &ps, ret) {
-        push_diag_e(self, info.span, E_UNINFERRED,
-            from_view("cannot infer the lambda's parameter or return types; annotate them or use the lambda where the types are pinned"))
+        push_diag_e(
+            self,
+            info.span,
+            E_UNINFERRED,
+            from_view(
+                "cannot infer the lambda's parameter or return types; annotate them or use the lambda where the types are pinned",
+            ),
+        )
     }
     return LambdaInfo {
         span = info.span,
@@ -10911,11 +11842,17 @@ fn resolve_fn_name_values(self: &Checker) {
             pick match {
                 Some(w) => {
                     if decl_moves(self, w.id) != f.moves {
-                        push_diag_e(self, pn.span, E_TYPE_MISMATCH,
-                            $"`{pn.name}` does not have the function type this slot requires: its parameters differ in `move`")
+                        push_diag_e(
+                            self,
+                            pn.span,
+                            E_TYPE_MISMATCH,
+                            $"`{pn.name}` does not have the function type this slot requires: its parameters differ in `move`",
+                        )
                     }
-                    self.results.record_target(self.node_of(pn.span),
-                        ResolvedTarget.RtFunction(w.id))
+                    self.results.record_target(
+                        self.node_of(pn.span),
+                        ResolvedTarget.RtFunction(w.id),
+                    )
                     note_pending(self, pn.span, false, &w)
                     const o = self.engine.unify(f.ret, w.ret)
                     report_unify(self, &o, E_TYPE_MISMATCH, pn.span)
@@ -10923,8 +11860,12 @@ fn resolve_fn_name_values(self: &Checker) {
                 // Function types match EXACTLY - there is no coercion between `fn(i32) i32` and
                 // `fn(i64) i64` (E2011). Left silent, the name would reach lowering with no target
                 // and refuse the whole function instead.
-                None => push_diag_e(self, pn.span, E_NO_OVERLOAD,
-                    $"no overload of `{pn.name}` has the function type this slot requires")
+                None => push_diag_e(
+                    self,
+                    pn.span,
+                    E_NO_OVERLOAD,
+                    $"no overload of `{pn.name}` has the function type this slot requires",
+                )
             }
         }
         self.current_module = saved
@@ -11266,8 +12207,14 @@ fn own_slot_root(self: &Checker, p: &OwnPass, e: &Expr) NodeId? {
 }
 
 // One body's pass. Takes ownership of `lent` and `captured`.
-fn own_run(self: &Checker, body: &BlockExpr, lent: move List(NodeId), captured: move List(NodeId),
-    returns: bool, slots: move List(NodeId) = list(0, null)) {
+fn own_run(
+    self: &Checker,
+    body: &BlockExpr,
+    lent: move List(NodeId),
+    captured: move List(NodeId),
+    returns: bool,
+    slots: move List(NodeId) = list(0, null),
+) {
     // `slots` is moved into the pass below; its span is the body's, for the exit check.
     let p = OwnPass {
         moved = list(0, self.allocator),
@@ -11315,8 +12262,12 @@ fn own_lambda(self: &Checker, p: &OwnPass, lam: &LambdaExpr) {
     const captures = &info.unwrap().captures
     for &cap in captures {
         if own_has_moves(p, cap.decl) and own_claim(p, self.node_of(lam.body.span)) {
-            own_report(self, lam.span, E_USE_AFTER_MOVE,
-                $"`{cap.name}` was moved and cannot be captured")
+            own_report(
+                self,
+                lam.span,
+                E_USE_AFTER_MOVE,
+                $"`{cap.name}` was moved and cannot be captured",
+            )
         }
     }
     if !own_claim(p, self.node_of(lam.span)) {
@@ -11333,8 +12284,8 @@ fn own_lambda(self: &Checker, p: &OwnPass, lam: &LambdaExpr) {
         }
     }
     const ret = self.engine.resolve(info.unwrap().ret)
-    own_run(self, lam.body, lent, captured, ret != TY_VOID and ret != TY_NEVER, list(0,
-            self.allocator))
+    own_run(self, lam.body, lent, captured, ret != TY_VOID
+        and ret != TY_NEVER, list(0, self.allocator))
 }
 
 fn own_deinit(p: move OwnPass) {
@@ -11556,14 +12507,20 @@ fn own_unowned_scrutinee(self: &Checker, p: &OwnPass, e: &Expr) BorrowedRec? {
         Some(id) => id.name
         None => ""
     }
-    return Some(BorrowedRec { decl = self.node_of(expr_span(e)), from = from,
-        read_only = lent.is_some() })
+    return Some(
+        BorrowedRec { decl = self.node_of(expr_span(e)), from = from, read_only = lent.is_some() },
+    )
 }
 
 fn own_borrow_pattern(self: &Checker, p: &OwnPass, pat: &Pattern, from: BorrowedRec) {
     pat.* match {
-        Variable(v) => p.borrowed.push(BorrowedRec { decl = self.node_of(v.span), from = from.from,
-            read_only = from.read_only })
+        Variable(v) => p.borrowed.push(
+            BorrowedRec {
+                decl = self.node_of(v.span),
+                from = from.from,
+                read_only = from.read_only,
+            },
+        )
         EnumVariant(ev) => {
             for &sub in ev.payloads {
                 own_borrow_pattern(self, p, sub, from)
@@ -11578,9 +12535,13 @@ fn own_borrow_pattern(self: &Checker, p: &OwnPass, pat: &Pattern, from: Borrowed
             for &f in st.fields {
                 f.binding match {
                     Some(sub) => own_borrow_pattern(self, p, sub, from)
-                    None => p.borrowed.push(BorrowedRec { decl = self.node_of(f.span),
-                        from = from.from,
-                        read_only = from.read_only })
+                    None => p.borrowed.push(
+                        BorrowedRec {
+                            decl = self.node_of(f.span),
+                            from = from.from,
+                            read_only = from.read_only,
+                        },
+                    )
                 }
             }
         }
@@ -11715,8 +12676,13 @@ fn own_lent_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr, what: String
     let sb = string_builder(160, self.allocator)
     sb.append($"`{id.name}` is not owned here: {what}; declare `{id.name}: move ")
     own_type(self, id.span) match {
-        Some(ty) => format_with_names(&self.engine.interner, self.engine.zonk(ty), &sb,
-            Some(&self.nominals), Some(&self.tp_names))
+        Some(ty) => format_with_names(
+            &self.engine.interner,
+            self.engine.zonk(ty),
+            &sb,
+            Some(&self.nominals),
+            Some(&self.tp_names),
+        )
         None => {}
     }
     sb.append("` to own it")
@@ -11724,8 +12690,13 @@ fn own_lent_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr, what: String
     own_report(self, id.span, E_NOT_OWNED, sb.to_string())
 }
 
-fn own_borrowed_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr, b: BorrowedRec,
-    what: String) {
+fn own_borrowed_error(
+    self: &Checker,
+    p: &OwnPass,
+    id: &IdentifierExpr,
+    b: BorrowedRec,
+    what: String,
+) {
     let sb = string_builder(160, self.allocator)
     if b.from.len > 0 {
         sb.append($"`{id.name}` names part of `{b.from}`, which is not owned here")
@@ -11743,7 +12714,9 @@ fn own_captured_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr) {
         return
     }
     let sb = string_builder(160, self.allocator)
-    sb.append($"`{id.name}` is captured by reference: the closure cannot take its value out of the enclosing binding")
+    sb.append(
+        $"`{id.name}` is captured by reference: the closure cannot take its value out of the enclosing binding",
+    )
     own_taker_note(p, &sb)
     own_blame(self, id.span, &sb)
     own_report(self, id.span, E_NOT_OWNED, sb.to_string())
@@ -11875,8 +12848,14 @@ fn own_ident(self: &Checker, p: &OwnPass, id: &IdentifierExpr, slot: OwnSlot) {
 // Reports a use of the place `name.path` (`path` "" for the binding itself) when a move recorded on
 // the binding reaches it: the place or an enclosing one was moved, or a field below it was moved
 // out and left it incomplete.
-fn own_moved_use(self: &Checker, p: &OwnPass, decl: NodeId, name: String, path: String,
-    span: SourceSpan) {
+fn own_moved_use(
+    self: &Checker,
+    p: &OwnPass,
+    decl: NodeId,
+    name: String,
+    path: String,
+    span: SourceSpan,
+) {
     const node = self.node_of(span)
     const above = own_moved_above(p, decl, path)
     if above.is_some() {
@@ -11894,8 +12873,12 @@ fn own_moved_use(self: &Checker, p: &OwnPass, decl: NodeId, name: String, path: 
     const shown = place_text(name, path)
     defer shown.deinit()
     const field = if path.len == 0 { below.unwrap() } else { below.unwrap()[path.len + 1..] }
-    own_report(self, span, E_USE_AFTER_MOVE,
-        $"`{shown.view}` is incomplete: field `{field}` was moved out - assign it before using `{shown.view}`")
+    own_report(
+        self,
+        span,
+        E_USE_AFTER_MOVE,
+        $"`{shown.view}` is incomplete: field `{field}` was moved out - assign it before using `{shown.view}`",
+    )
 }
 
 fn place_text(name: String, path: String) OwnedString {
@@ -11979,8 +12962,12 @@ fn own_place_site(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) {
     }
     e.* match {
         MemberAccess(ma) => own_field_move(self, p, &ma, e)
-        Index(_) => own_move_storage(self, p, e,
-            "an element stays in its container - take it out with `pop`, `remove` or a drain")
+        Index(_) => own_move_storage(
+            self,
+            p,
+            e,
+            "an element stays in its container - take it out with `pop`, `remove` or a drain",
+        )
         _ => own_move_storage(self, p, e, "the value behind a reference stays with its owner")
     }
 }
@@ -12005,8 +12992,12 @@ fn own_field_move(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr, e: &Expr) 
     if elsewhere.is_some() {
         const o = elsewhere.unwrap()
         if own_claim(p, node) {
-            own_report(self, ma.span, E_PARTIAL_MOVE,
-                $"cannot move field `{ma.member}` out of `{o.fqn}` from outside its defining module `{o.module}`")
+            own_report(
+                self,
+                ma.span,
+                E_PARTIAL_MOVE,
+                $"cannot move field `{ma.member}` out of `{o.fqn}` from outside its defining module `{o.module}`",
+            )
         }
         return
     }
@@ -12018,7 +13009,9 @@ fn own_field_move(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr, e: &Expr) 
         return
     }
     let sb = string_builder(160, self.allocator)
-    sb.append($"field `{ma.member}` cannot be moved out: its base is not owned here - a value reached through a reference, or a parameter without `move`, keeps its fields")
+    sb.append(
+        $"field `{ma.member}` cannot be moved out: its base is not owned here - a value reached through a reference, or a parameter without `move`, keeps its fields",
+    )
     own_taker_note(p, &sb)
     own_report(self, ma.span, E_NOT_OWNED, sb.to_string())
 }
@@ -12106,10 +13099,18 @@ fn own_move(self: &Checker, p: &OwnPass, m: &MoveExpr, slot: OwnSlot) {
     m.operand.* match {
         Identifier(id) => own_move_binding(self, p, &id, m.span, slot)
         MemberAccess(ma) => own_field_move(self, p, &ma, m.operand)
-        Index(_) => own_move_storage(self, p, m.operand,
-            "an element stays in its container - take it out with `pop`, `remove` or a drain")
-        Dereference(_) => own_move_storage(self, p, m.operand,
-            "the value behind a reference stays with its owner")
+        Index(_) => own_move_storage(
+            self,
+            p,
+            m.operand,
+            "an element stays in its container - take it out with `pop`, `remove` or a drain",
+        )
+        Dereference(_) => own_move_storage(
+            self,
+            p,
+            m.operand,
+            "the value behind a reference stays with its owner",
+        )
         _ => {}
     }
 }
@@ -12138,8 +13139,8 @@ fn own_move_storage(self: &Checker, p: &OwnPass, e: &Expr, why: String) {
 // Follows the base chain a container writes: `(self.entries + i).key`, `self.ptr[i]`, `(p + n).*`.
 fn own_through_owned_field(self: &Checker, e: &Expr) bool {
     return e.* match {
-        MemberAccess(ma) => own_owned_field_here(self, &ma) or own_through_owned_field(self,
-            ma.receiver)
+        MemberAccess(ma) => own_owned_field_here(self, &ma)
+            or own_through_owned_field(self, ma.receiver)
         Index(ix) => own_through_owned_field(self, ix.receiver)
         Dereference(d) => own_through_owned_field(self, d.operand)
         Binary(b) => own_through_owned_field(self, b.lhs) or own_through_owned_field(self, b.rhs)
@@ -12194,8 +13195,13 @@ fn own_field_of_nominal(self: &Checker, ma: &MemberAccessExpr) bool {
     }
 }
 
-fn own_move_binding(self: &Checker, p: &OwnPass, id: &IdentifierExpr, move_span: SourceSpan,
-    slot: OwnSlot) {
+fn own_move_binding(
+    self: &Checker,
+    p: &OwnPass,
+    id: &IdentifierExpr,
+    move_span: SourceSpan,
+    slot: OwnSlot,
+) {
     const d = own_local_decl(self, self.node_of(id.span))
     if d.is_none() {
         return
@@ -12220,8 +13226,12 @@ fn own_note_redundant(self: &Checker, p: &OwnPass, span: SourceSpan, name: Strin
     if self.spec_depth > 0 or !own_claim(p, self.node_of(span)) {
         return
     }
-    push_diag_i(self, span, I_REDUNDANT_MOVE,
-        $"redundant `move`: returning `{name}` already moves it")
+    push_diag_i(
+        self,
+        span,
+        I_REDUNDANT_MOVE,
+        $"redundant `move`: returning `{name}` already moves it",
+    )
 }
 
 // A `move` at a site that does not consume does nothing. It is a warning rather than an error so a
@@ -12237,8 +13247,12 @@ fn own_warn_no_consume(self: &Checker, p: &OwnPass, span: SourceSpan) {
     if !own_claim(p, self.node_of(span)) {
         return
     }
-    push_diag_w(self, span, W_MOVE_NO_CONSUME,
-        from_view("`move` here does not consume anything - the destination copies"))
+    push_diag_w(
+        self,
+        span,
+        W_MOVE_NO_CONSUME,
+        from_view("`move` here does not consume anything - the destination copies"),
+    )
 }
 
 fn own_struct_lit(self: &Checker, p: &OwnPass, sl: &StructLiteralExpr) {
@@ -12448,8 +13462,12 @@ fn own_relocate(self: &Checker, p: &OwnPass, src: &Expr) {
     if own_slice_elem_copyable(self, expr_span(src)) or own_through_owned_field(self, src) {
         return
     }
-    own_no_place(self, p, expr_span(src),
-        "`move_to` takes non-copyable elements only out of an `owned` field this module declares")
+    own_no_place(
+        self,
+        p,
+        expr_span(src),
+        "`move_to` takes non-copyable elements only out of an `owned` field this module declares",
+    )
 }
 
 fn own_slice_elem_copyable(self: &Checker, span: SourceSpan) bool {
@@ -12458,8 +13476,9 @@ fn own_slice_elem_copyable(self: &Checker, span: SourceSpan) bool {
         return true
     }
     const elem = ty_node(self, peel_refs(self, t.unwrap())) match {
-        NNominal(n) => if n.args.len == 1 { Some(self.engine.interner.child_at(n.args,
-                    0)) } else { null }
+        NNominal(n) => if n.args.len == 1 { Some(
+            self.engine.interner.child_at(n.args, 0),
+        ) } else { null }
         _ => null
     }
     return elem.is_none() or ty_copyable(self, elem.unwrap())
@@ -12542,8 +13561,15 @@ fn own_protocol(self: &Checker, p: &OwnPass, node_span: SourceSpan, operand: &Ex
     const _kind = own_receiver(self, p, &callee, operand)
 }
 
-fn own_arg(self: &Checker, p: &OwnPass, callee: &OwnCallee, arg: &Expr, idx: usize, name: String,
-    uses: &List(OwnUse)) {
+fn own_arg(
+    self: &Checker,
+    p: &OwnPass,
+    callee: &OwnCallee,
+    arg: &Expr,
+    idx: usize,
+    name: String,
+    uses: &List(OwnUse),
+) {
     if callee.payload {
         own_expr(self, p, arg, own_value())
         return
@@ -12639,8 +13665,12 @@ fn own_overlap(self: &Checker, p: &OwnPass, a: &OwnUse, b: &OwnUse) {
         return
     }
     const how = if a.kind == USE_MOVE { "takes ownership of" } else { "shares" }
-    own_report(self, span, E_MOVE_AND_LEND,
-        $"this call {how} a value another argument also reaches: the overlap holds owned state")
+    own_report(
+        self,
+        span,
+        E_MOVE_AND_LEND,
+        $"this call {how} a value another argument also reaches: the overlap holds owned state",
+    )
 }
 
 // One step below a place's root binding. `field` is "" for an element.
@@ -12990,8 +14020,14 @@ fn own_check_slots_filled(self: &Checker, p: &OwnPass, span: SourceSpan) {
         if !own_claim(p, self.node_of(span)) {
             return
         }
-        push_diag_e(self, span, E_SLOT_NOT_REFILLED,
-            from_view("a `&move` slot is left empty: the value was taken out and none put back - assign through it before returning"))
+        push_diag_e(
+            self,
+            span,
+            E_SLOT_NOT_REFILLED,
+            from_view(
+                "a `&move` slot is left empty: the value was taken out and none put back - assign through it before returning",
+            ),
+        )
         return
     }
 }
@@ -13162,10 +14198,17 @@ fn own_if_directive(self: &Checker, p: &OwnPass, ifd: &IfDirectiveStmt) {
     }
 }
 
-pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
-    sources: &List(OwnedString), file_paths: &List(OwnedString), generators: &TemplateState,
-    order: &List(usize)? = null, recollect: &List(bool)? = null,
-    demanded: &List(bool)? = null) TypeCheckResult {
+pub fn check_all(
+    self: &Checker,
+    modules: &List(Module),
+    paths: &List(String),
+    sources: &List(OwnedString),
+    file_paths: &List(OwnedString),
+    generators: &TemplateState,
+    order: &List(usize)? = null,
+    recollect: &List(bool)? = null,
+    demanded: &List(bool)? = null,
+) TypeCheckResult {
     let seq = visit_sequence(self, modules.len, order)
     defer seq.deinit()
     self.nominals.clear_solved()
@@ -13249,8 +14292,12 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
         resolve_nominal_bodies(self, &modules[i], paths[i])
         self.ref_logging = false
         stash_nominal_diags(self, paths[i], diags_from, false)
-        stash_resolve_burn(self, paths[i], self.engine.var_counter - vars_from,
-            type_param_count(&modules[i]))
+        stash_resolve_burn(
+            self,
+            paths[i],
+            self.engine.var_counter - vars_from,
+            type_param_count(&modules[i]),
+        )
     }
     const nominals_ns = elapsed_ns(nominals_start)
     // Whether re-resolution changed what any retiring nominal says. Added and removed names are
@@ -13275,8 +14322,8 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
     const fns_before = self.functions.next_id
     self.engine.set_nominal_registry(&self.nominals)
     for i in seq {
-        const skip = bodies_carry and !needs_collect(recollect, i) and sig_cache_ok(self, paths[i],
-            self.engine.var_counter)
+        const skip = bodies_carry and !needs_collect(recollect, i)
+            and sig_cache_ok(self, paths[i], self.engine.var_counter)
         if skip {
             replay_signature_cache(self, paths[i])
             continue
@@ -13359,8 +14406,8 @@ pub fn check_all(self: &Checker, modules: &List(Module), paths: &List(String),
         if !is_demanded(demanded, i) {
             continue
         }
-        const replay = slots_carry and !needs_collect(recollect, i) and body_cache_ok(self,
-            paths[i])
+        const replay = slots_carry and !needs_collect(recollect, i)
+            and body_cache_ok(self, paths[i])
         const t = if replay {
             replay_body_slot(self, paths[i])
         } else {
@@ -13586,8 +14633,12 @@ fn replay_body_diags(self: &Checker, path: String) {
 
 // The module's diag-cache entry, created on first use. Null when there is no entry yet and nothing
 // to stash either - an all-clean module never allocates one.
-fn module_diags_entry(self: &Checker, path: String, from: usize,
-    force: bool = false) &ModuleNomDiags? {
+fn module_diags_entry(
+    self: &Checker,
+    path: String,
+    from: usize,
+    force: bool = false,
+) &ModuleNomDiags? {
     if self.nominal_diags.get_ref(path).is_none() {
         if from == self.diagnostics.len and !force {
             return null
@@ -13728,8 +14779,12 @@ fn run_signature_pass(self: &Checker, module: &Module, path: String, sources: &L
     finish_sig_capture(self, path, &w, collect_default_texts(self, module, sources))
 }
 
-fn finish_sig_capture(self: &Checker, path: String, w: &SigWatermark,
-    default_texts: move List(OwnedString)) {
+fn finish_sig_capture(
+    self: &Checker,
+    path: String,
+    w: &SigWatermark,
+    default_texts: move List(OwnedString),
+) {
     const clean = self.next_synth == w.synth and self.next_lambda == w.lambda
         and self.results.resolved_targets.len() == w.targets + self.ref_new
         and self.results.resolved_ops.len() == w.ops and self.results.desugars.len() == w.desugars
@@ -14467,8 +15522,11 @@ fn harvest_spec_caches(self: &Checker) {
                 None => {}
             }
         }
-        self.specs.finish_harvest(i as SpecId, facts, sig_concrete(self, &sp.concrete_params,
-                sp.concrete_return))
+        self.specs.finish_harvest(
+            i as SpecId,
+            facts,
+            sig_concrete(self, &sp.concrete_params, sp.concrete_return),
+        )
     }
 }
 
@@ -14622,8 +15680,11 @@ fn render_def_fingerprint(def: &NominalDef, sb: &StringBuilder) {
 // caller's cached slot holds the callee's default AST and the node types its materializations
 // produced, so a value change with an unchanged scheme must still invalidate. Empty when the caller
 // supplied no sources (test fixtures), which skips the comparison.
-fn collect_default_texts(self: &Checker, module: &Module,
-    sources: &List(OwnedString)) List(OwnedString) {
+fn collect_default_texts(
+    self: &Checker,
+    module: &Module,
+    sources: &List(OwnedString),
+) List(OwnedString) {
     let out: List(OwnedString) = list(0, self.allocator)
     if sources.len == 0 {
         return out
@@ -14633,8 +15694,9 @@ fn collect_default_texts(self: &Checker, module: &Module,
             Function(fd) => {
                 for &p in fd.params {
                     p.default_value match {
-                        Some(d) => out.push(from_view(default_text_of(sources, expr_span(d)),
-                                self.allocator))
+                        Some(d) => out.push(
+                            from_view(default_text_of(sources, expr_span(d)), self.allocator),
+                        )
                         None => {}
                     }
                 }
@@ -14968,8 +16030,11 @@ test "a changed alias invalidates a carried body" {
     // Module a's struct field baked `Size` in expanded form; editing the alias in module b must
     // re-resolve a's body, surfacing the f64-vs-i32 return mismatch. A carried body left stale
     // would keep i32 and stay silent.
-    let r = redemand_errors("pub type Size = i32\n", "pub type Size = f64\n",
-        "import b\ntype H = struct { s: Size }\nfn f(h: H) i32 { return h.s }\n")
+    let r = redemand_errors(
+        "pub type Size = i32\n",
+        "pub type Size = f64\n",
+        "import b\ntype H = struct { s: Size }\nfn f(h: H) i32 { return h.s }\n",
+    )
     assert_eq(r.first, 0 as usize, "the i32 alias type-checks")
     assert_true(r.second > 0, "the f64 alias re-resolves the carried body and errors")
 }
@@ -14978,9 +16043,11 @@ test "a carried body replays its cached diagnostics" {
     // The duplicate-field error lives in module a's body resolution. Re-demanding with only b dirty
     // skips that pass for a, so the error must come from the per-module cache, not from re-running
     // it.
-    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
-        "type H = struct { x: i32\nx: i32 }\nfn main() i32 { return 0 }\n")
+        "type H = struct { x: i32\nx: i32 }\nfn main() i32 { return 0 }\n",
+    )
     assert_eq(r.first, 1 as usize, "the duplicate field is reported cold")
     assert_eq(r.second, 1 as usize, "and exactly once again on the re-demand")
 }
@@ -14988,9 +16055,11 @@ test "a carried body replays its cached diagnostics" {
 test "a carried signature replays its cached diagnostics" {
     // The duplicate-signature error (E2103) lives in module a's signature pass. Re-demanding with
     // only b dirty skips that pass for a, so the error must come from the signature tier's cache.
-    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
-        "fn dup(x: i32) i32 { return x }\nfn dup(x: i32) i32 { return x }\nfn main() i32 { return 0 }\n")
+        "fn dup(x: i32) i32 { return x }\nfn dup(x: i32) i32 { return x }\nfn main() i32 { return 0 }\n",
+    )
     assert_eq(r.first, 1 as usize, "the duplicate signature is reported cold")
     assert_eq(r.second, 1 as usize, "and exactly once again on the re-demand")
 }
@@ -14998,16 +16067,22 @@ test "a carried signature replays its cached diagnostics" {
 test "an edited signature re-resolves its callers" {
     // Module a's call re-checks against the registry, so b's re-collected signature must have
     // replaced the carried one - a stale scheme would keep the zero-argument call resolving.
-    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
-        "pub fn helper(x: i32) i32 { return x }\n", "import b\nfn main() i32 { return helper() }\n")
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
+        "pub fn helper(x: i32) i32 { return x }\n",
+        "import b\nfn main() i32 { return helper() }\n",
+    )
     assert_eq(r.first, 0 as usize, "the zero-argument call resolves cold")
     assert_true(r.second > 0, "the new arity makes the old call an error")
 }
 
 test "a removed function stops resolving" {
     // The unclaimed retirement must be purged, not left resolving at its old id.
-    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
-        "pub fn other() i32 { return 2 }\n", "import b\nfn main() i32 { return helper() }\n")
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
+        "pub fn other() i32 { return 2 }\n",
+        "import b\nfn main() i32 { return helper() }\n",
+    )
     assert_eq(r.first, 0 as usize, "the call resolves while the function exists")
     assert_true(r.second > 0, "naming the removed function is reported")
 }
@@ -15018,9 +16093,11 @@ test "an upstream shift in the variable stream re-anchors a carried constant" {
     // pinned i32), so a's carried handle names b's variable. Replaying a's cache would bind the
     // float initializer against that i32 and error; the position check forces a's pass to re-run
     // and re-anchor instead.
-    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
         "pub fn helper(pad: i32 = 7) i32 { return pad }\n",
-        "const F = 1.5\nfn main() f64 { return F }\n")
+        "const F = 1.5\nfn main() f64 { return F }\n",
+    )
     assert_eq(r.first, 0 as usize, "the float constant type-checks cold")
     assert_eq(r.second, 0 as usize, "and still does once b mints a variable before it")
 }
@@ -15029,9 +16106,11 @@ test "carried constants and default values survive a re-demand" {
     // Module a is skipped whole in the signature tier: `scaled`'s scheme and default carry, and
     // LOCAL's variable is re-minted by the burn and re-bound by the constants pass. Any of those
     // going stale surfaces as a spurious error on the re-demand.
-    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
-        "fn scaled(x: i32, k: i32 = 2) i32 { return x }\nconst LOCAL = 3\nfn main() i32 { return scaled(LOCAL) }\n")
+        "fn scaled(x: i32, k: i32 = 2) i32 { return x }\nconst LOCAL = 3\nfn main() i32 { return scaled(LOCAL) }\n",
+    )
     assert_eq(r.first, 0 as usize, "the program type-checks cold")
     assert_eq(r.second, 0 as usize, "and identically on the re-demand")
 }
@@ -15041,9 +16120,11 @@ test "a carried slot restores its closures and specializations" {
     // only b dirty replays the slot: the pick log re-instantiates `id` and the closure environment
     // re-registers at the id its retirement remembers. Any of that going stale surfaces as a
     // spurious error.
-    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
-        "fn id(x: move $T) $T { return x }\nfn main() i32 {\n    const k = 2\n    let f = fn(x: i32) i32 { x + k }\n    return id(5)\n}\n")
+        "fn id(x: move $T) $T { return x }\nfn main() i32 {\n    const k = 2\n    let f = fn(x: i32) i32 { x + k }\n    return id(5)\n}\n",
+    )
     assert_eq(r.first, 0 as usize, "the program type-checks cold")
     assert_eq(r.second, 0 as usize, "and identically when the slot replays")
 }
@@ -15051,9 +16132,11 @@ test "a carried slot restores its closures and specializations" {
 test "a body-tier diagnostic replays from the slot cache" {
     // The mismatch lives in module a's body window. Re-demanding with only b dirty replays a's
     // slot, so the error must come from the slot's cached diagnostics, not from re-running it.
-    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
-        "fn wrong() i32 { let t = (1i32, 2i32)\nreturn t }\nfn main() i32 { return 0 }\n")
+        "fn wrong() i32 { let t = (1i32, 2i32)\nreturn t }\nfn main() i32 { return 0 }\n",
+    )
     assert_eq(r.first, 1 as usize, "the mismatch is reported cold")
     assert_eq(r.second, 1 as usize, "and exactly once again on the replay")
 }
@@ -15062,8 +16145,11 @@ test "a changed field type re-runs carried bodies" {
     // Module a's member access baked P.v as i32. The re-collected P reclaims its id, so name-set
     // checks see nothing; the definition fingerprint is what must notice and send a's body back to
     // source, where the f64 field breaks the i32 return.
-    let r = redemand_errors("pub type P = struct { v: i32 }\n", "pub type P = struct { v: f64 }\n",
-        "import b\nfn f(p: P) i32 { return p.v }\nfn main() i32 { return 0 }\n")
+    let r = redemand_errors(
+        "pub type P = struct { v: i32 }\n",
+        "pub type P = struct { v: f64 }\n",
+        "import b\nfn f(p: P) i32 { return p.v }\nfn main() i32 { return 0 }\n",
+    )
     assert_eq(r.first, 0 as usize, "the i32 field type-checks")
     assert_true(r.second > 0, "the f64 field re-resolves the carried body and errors")
 }
@@ -15072,9 +16158,11 @@ test "an upstream body edit re-anchors the carried slots" {
     // Demand 2's b mints a different number of body-tier variables, which shifts every later slot's
     // stream position; the anchors force those slots to re-run rather than replay handles that now
     // name someone else's variables.
-    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { let z = 2\nreturn z }\n",
-        "fn id(x: move $T) $T { return x }\nfn main() i32 { return id(5) }\n")
+        "fn id(x: move $T) $T { return x }\nfn main() i32 { return id(5) }\n",
+    )
     assert_eq(r.first, 0 as usize, "the program type-checks cold")
     assert_eq(r.second, 0 as usize, "and identically once the stream shifts")
 }
@@ -15137,9 +16225,11 @@ test "an edited template body re-instantiates carried specializations" {
     // Module b's generic body changes without its scheme changing, so no global invalidation fires;
     // the stale marking on the carried specialization is what forces the re-check that reports the
     // f64-vs-i32 mismatch.
-    let r = redemand_errors("pub fn pick(x: move $T) $T { return x }\n",
+    let r = redemand_errors(
+        "pub fn pick(x: move $T) $T { return x }\n",
         "pub fn pick(x: move $T) $T { const bad: i32 = 1.5\nreturn x }\n",
-        "import b\nfn main() i32 { return pick(5) }\n")
+        "import b\nfn main() i32 { return pick(5) }\n",
+    )
     assert_eq(r.first, 0 as usize, "the original template type-checks")
     assert_true(r.second > 0, "the edited body re-instantiates and reports")
 }
@@ -15148,9 +16238,11 @@ test "a specialization diagnostic re-emits on every demand" {
     // The error lives inside the template body, so it surfaces per instantiation. The frame that
     // emitted it is non-reusable; the replayed slot's pick re-instantiates it in place, and the
     // diagnostic count stays stable instead of dropping to zero or doubling.
-    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
-        "fn bad(x: $T) i32 { const oops: i32 = 1.5\nreturn 0 }\nfn main() i32 { return bad(5i32) }\n")
+        "fn bad(x: $T) i32 { const oops: i32 = 1.5\nreturn 0 }\nfn main() i32 { return bad(5i32) }\n",
+    )
     assert_eq(r.first, 1 as usize, "the template-body error is reported cold")
     assert_eq(r.second, 1 as usize, "and exactly once again on the replay")
 }
@@ -15159,9 +16251,11 @@ test "an uninferable literal in a template body reports on every demand" {
     // The E2001 fires in the slot's drain range, outside the capture window, so the module's own
     // cache stays valid and only the flagged-literal marking keeps the specialization from being
     // reused with its diagnostic silently dropped.
-    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
-        "fn f(x: $T) i32 { let v = 1\nreturn 0 }\nfn main() i32 { return f(2i32) }\n")
+        "fn f(x: $T) i32 { let v = 1\nreturn 0 }\nfn main() i32 { return f(2i32) }\n",
+    )
     assert_eq(r.first, 1 as usize, "the unpinned literal is reported cold")
     assert_eq(r.second, 1 as usize, "and exactly once again on the replay")
 }
@@ -15170,9 +16264,11 @@ test "a reused specialization replays its closure environment" {
     // The capturing closure lives inside the template body, so its environment registers per
     // instantiation - a reused entry must re-register it at the id it held, or the re-demand
     // diverges.
-    let r = redemand_errors("pub fn helper() i32 { return 1 }\n",
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
-        "fn wrap(x: $T) i32 {\n    const k = 1i32\n    let f = fn(y: i32) i32 { y + k }\n    return 0\n}\nfn main() i32 { return wrap(4i32) }\n")
+        "fn wrap(x: $T) i32 {\n    const k = 1i32\n    let f = fn(y: i32) i32 { y + k }\n    return 0\n}\nfn main() i32 { return wrap(4i32) }\n",
+    )
     assert_eq(r.first, 0 as usize, "the program type-checks cold")
     assert_eq(r.second, 0 as usize, "and identically when the entry is reused")
 }
@@ -15247,8 +16343,11 @@ test "a removed call site sweeps its specialization" {
     let gens2 = template_state(null)
     let res2 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens2, null, Some(&recollect))
     assert_eq(count_error_diags(&chk.diagnostics), 0 as usize, "the edited caller type-checks")
-    assert_eq(res2.specializations.len(), 0 as usize,
-        "the entry nothing demanded any more is swept")
+    assert_eq(
+        res2.specializations.len(),
+        0 as usize,
+        "the entry nothing demanded any more is swept",
+    )
 
     res1.deinit()
     res2.deinit()
@@ -15285,16 +16384,22 @@ test "non-generic type alias resolves cross-module" {
     // `alias_a` declares `type VarId = u32`; `alias_b` imports it and uses the alias in a
     // signature. Before the alias registry, `VarId` surfaced as E2003 unknown type, so a clean run
     // (zero errors) is the regression.
-    let errors = count_check_errors(["pub type VarId = u32\n",
-            "import alias_a\nfn f(x: VarId) u32 { return x }\n"], ["alias_a", "alias_b"])
+    let errors = count_check_errors(
+        ["pub type VarId = u32\n", "import alias_a\nfn f(x: VarId) u32 { return x }\n"],
+        ["alias_a", "alias_b"],
+    )
     assert_true(errors == 0, "cross-module alias program type-checks with no errors")
 }
 
 test "payload variant construction type-checks" {
     // Qualified single- and multi-payload construction on a non-generic enum. Before this fix the
     // callee's receiver checked as a value and surfaced E2004 unknown identifier.
-    let errors = count_check_errors(["pub type Shape = enum { Dot\nCircle(i32)\nRect(i32, i32) }\nfn f() Shape { return Shape.Circle(3) }\nfn g() Shape { return Shape.Rect(1, 2) }\n"],
-        ["shapes"])
+    let errors = count_check_errors(
+        [
+            "pub type Shape = enum { Dot\nCircle(i32)\nRect(i32, i32) }\nfn f() Shape { return Shape.Circle(3) }\nfn g() Shape { return Shape.Rect(1, 2) }\n",
+        ],
+        ["shapes"],
+    )
     assert_true(errors == 0, "payload variant construction type-checks with no errors")
 }
 
@@ -15302,27 +16407,39 @@ test "generic and unqualified variant construction type-checks" {
     // Generic enum: qualified `Opt.S(3)`, unqualified `S(3)`, and bare payload-less `N` in
     // expression position - each instantiates the enum's type param fresh and unifies it via the
     // declared return.
-    let errors = count_check_errors(["pub type Opt = enum(T) { N\nS(T) }\nfn f() Opt(i32) { return Opt.S(3) }\nfn g() Opt(i32) { return S(3) }\nfn h() Opt(i32) { return N }\n"],
-        ["opts"])
-    assert_true(errors == 0,
-        "generic and unqualified variant construction type-checks with no errors")
+    let errors = count_check_errors(
+        [
+            "pub type Opt = enum(T) { N\nS(T) }\nfn f() Opt(i32) { return Opt.S(3) }\nfn g() Opt(i32) { return S(3) }\nfn h() Opt(i32) { return N }\n",
+        ],
+        ["opts"],
+    )
+    assert_true(
+        errors == 0,
+        "generic and unqualified variant construction type-checks with no errors",
+    )
 }
 
 test "variant payload type mismatch is reported" {
     // A float payload against an i32 variant - no coercion path exists (bool would widen: bool
     // coerces to any integer by design; a string literal resolves to Error poison in these
     // stdlib-less tests).
-    let errors = count_check_errors(["pub type Shape = enum { Circle(i32) }\nfn f(x: f64) Shape { return Shape.Circle(x) }\n"],
-        ["shapes"])
+    let errors = count_check_errors(
+        ["pub type Shape = enum { Circle(i32) }\nfn f(x: f64) Shape { return Shape.Circle(x) }\n"],
+        ["shapes"],
+    )
     assert_true(errors > 0, "f64 payload against i32 variant reports a type error")
 }
 
 test "module-level constants resolve cross-module" {
     // An imported `pub const` and a same-module unannotated const both resolve as identifiers;
     // before the constant registry each surfaced E2004 unknown identifier.
-    let errors = count_check_errors(["pub const LIMIT: u32 = 8\n",
-            "import consts_a\nconst LOCAL = 3\nfn f() u32 { return LIMIT }\nfn g() u32 { return LOCAL }\n"],
-        ["consts_a", "consts_b"])
+    let errors = count_check_errors(
+        [
+            "pub const LIMIT: u32 = 8\n",
+            "import consts_a\nconst LOCAL = 3\nfn f() u32 { return LIMIT }\nfn g() u32 { return LOCAL }\n",
+        ],
+        ["consts_a", "consts_b"],
+    )
     assert_true(errors == 0, "constant reads type-check with no errors")
 }
 
@@ -15330,88 +16447,134 @@ test "qualified payload-less enum variant access type-checks" {
     // `Ord.Less` is a MemberAccess on a type-name receiver. Before this fix the receiver checked as
     // a value and surfaced E2004 unknown identifier; a clean run (zero errors) returning the enum
     // type is the regression.
-    let errors = count_check_errors(["pub type Ord = enum { Less = -1\nEqual = 0\nGreater = 1 }\nfn f() Ord { return Ord.Less }\n"],
-        ["cmp"])
+    let errors = count_check_errors(
+        [
+            "pub type Ord = enum { Less = -1\nEqual = 0\nGreater = 1 }\nfn f() Ord { return Ord.Less }\n",
+        ],
+        ["cmp"],
+    )
     assert_true(errors == 0, "qualified enum variant access type-checks with no errors")
 }
 
 test "direct call unifies args and returns the instantiated type" {
-    let errors = count_check_errors(["fn add(a: i32, b: i32) i32 { return a }\nfn f() i32 { return add(1, 2) }\n"],
-        ["calls_direct"])
+    let errors = count_check_errors(
+        ["fn add(a: i32, b: i32) i32 { return a }\nfn f() i32 { return add(1, 2) }\n"],
+        ["calls_direct"],
+    )
     assert_true(errors == 0, "direct call type-checks with no errors")
 }
 
 test "overloads pick the arity-matching candidate" {
-    let errors = count_check_errors(["fn pick(a: i32) i32 { return a }\nfn pick(a: i32, b: i32) i32 { return b }\nfn f() i32 { return pick(1) }\nfn g() i32 { return pick(1, 2) }\n"],
-        ["calls_arity"])
+    let errors = count_check_errors(
+        [
+            "fn pick(a: i32) i32 { return a }\nfn pick(a: i32, b: i32) i32 { return b }\nfn f() i32 { return pick(1) }\nfn g() i32 { return pick(1, 2) }\n",
+        ],
+        ["calls_arity"],
+    )
     assert_true(errors == 0, "arity overload resolution type-checks with no errors")
 }
 
 test "trailing default params may be omitted at the call site" {
-    let errors = count_check_errors(["fn scaled(a: i32, k: i32 = 2) i32 { return a }\nfn f() i32 { return scaled(3) }\nfn g() i32 { return scaled(3, 4) }\n"],
-        ["calls_defaults"])
+    let errors = count_check_errors(
+        [
+            "fn scaled(a: i32, k: i32 = 2) i32 { return a }\nfn f() i32 { return scaled(3) }\nfn g() i32 { return scaled(3, 4) }\n",
+        ],
+        ["calls_defaults"],
+    )
     assert_true(errors == 0, "defaulted-param calls type-check with no errors")
 }
 
 test "ufcs receiver becomes the first argument, adapted between value and ref" {
-    let errors = count_check_errors(["pub type Pt = struct { x: i32 }\nfn shift(p: &Pt, d: i32) i32 { return d }\nfn f(p: &Pt) i32 { return p.shift(2) }\nfn g(p: Pt) i32 { return p.shift(2) }\n"],
-        ["calls_ufcs"])
+    let errors = count_check_errors(
+        [
+            "pub type Pt = struct { x: i32 }\nfn shift(p: &Pt, d: i32) i32 { return d }\nfn f(p: &Pt) i32 { return p.shift(2) }\nfn g(p: Pt) i32 { return p.shift(2) }\n",
+        ],
+        ["calls_ufcs"],
+    )
     assert_true(errors == 0, "ufcs calls type-check with no errors")
 }
 
 test "func-typed struct field dispatches as an indirect call" {
-    let errors = count_check_errors(["pub type Ops = struct { scale: fn(i32) i32 }\nfn f(o: &Ops) i32 { return o.scale(3) }\n"],
-        ["calls_field"])
+    let errors = count_check_errors(
+        ["pub type Ops = struct { scale: fn(i32) i32 }\nfn f(o: &Ops) i32 { return o.scale(3) }\n"],
+        ["calls_field"],
+    )
     assert_true(errors == 0, "field call type-checks with no errors")
 }
 
 test "func-typed param called by name is an indirect call" {
-    let errors = count_check_errors(["fn apply(op: fn(i32) i32, x: i32) i32 { return op(x) }\n"],
-        ["calls_indirect"])
+    let errors = count_check_errors(
+        ["fn apply(op: fn(i32) i32, x: i32) i32 { return op(x) }\n"],
+        ["calls_indirect"],
+    )
     assert_true(errors == 0, "indirect call through a param type-checks with no errors")
 }
 
 test "wrong argument type in a call is reported" {
     // f64 against i32 has no coercion path (bool would widen by design; string literals are Error
     // poison in these stdlib-less tests).
-    let errors = count_check_errors(["fn takes(a: i32) i32 { return a }\nfn f(x: f64) i32 { return takes(x) }\n"],
-        ["calls_mismatch"])
+    let errors = count_check_errors(
+        ["fn takes(a: i32) i32 { return a }\nfn f(x: f64) i32 { return takes(x) }\n"],
+        ["calls_mismatch"],
+    )
     assert_true(errors > 0, "f64 argument against i32 param reports an error")
 }
 
 test "a ref-form index operator types as its pointee" {
-    let errors = count_check_errors(["type Box = struct { v: i32 }\nfn op_index_ref(b: &Box, i: usize) &i32 { return &b.v }\nfn f(b: &Box) i32 { return b[0usize] }\n"],
-        ["ix_ref"])
+    let errors = count_check_errors(
+        [
+            "type Box = struct { v: i32 }\nfn op_index_ref(b: &Box, i: usize) &i32 { return &b.v }\nfn f(b: &Box) i32 { return b[0usize] }\n",
+        ],
+        ["ix_ref"],
+    )
     assert_true(errors == 0, "`&T` return means the index yields `T`")
 }
 
 test "a value-form index operator types as its return" {
-    let errors = count_check_errors(["type Box = struct { v: i32 }\nfn op_index(b: &Box, i: usize) i32 { return b.v }\nfn f(b: &Box) i32 { return b[0usize] }\n"],
-        ["ix_val"])
+    let errors = count_check_errors(
+        [
+            "type Box = struct { v: i32 }\nfn op_index(b: &Box, i: usize) i32 { return b.v }\nfn f(b: &Box) i32 { return b[0usize] }\n",
+        ],
+        ["ix_val"],
+    )
     assert_true(errors == 0, "the operator's return type is the index's type")
 }
 
 test "indexing a type with no operator is reported" {
-    let errors = count_check_errors(["type Box = struct { v: i32 }\nfn f(b: &Box) i32 { return b[0usize] }\n"],
-        ["ix_none"])
+    let errors = count_check_errors(
+        ["type Box = struct { v: i32 }\nfn f(b: &Box) i32 { return b[0usize] }\n"],
+        ["ix_none"],
+    )
     assert_true(errors == 1, "a non-indexable base is E2028, not a silent fresh var")
 }
 
 test "a generic struct literal named without type arguments is E2019" {
-    let errors = count_check_errors(["type Pair = struct(T) { a: T, b: T }\nfn f() i64 { let p = Pair { a = 1i64, b = 2i64 } return p.a }\n"],
-        ["underinst"])
+    let errors = count_check_errors(
+        [
+            "type Pair = struct(T) { a: T, b: T }\nfn f() i64 { let p = Pair { a = 1i64, b = 2i64 } return p.a }\n",
+        ],
+        ["underinst"],
+    )
     assert_true(errors >= 1, "a named generic literal must spell its arguments (or use `.{ ... }`)")
 }
 
 test "a generic struct literal with explicit arguments checks clean" {
-    let errors = count_check_errors(["type Pair = struct(T) { a: T, b: T }\nfn f() i64 { let p = Pair(i64) { a = 1, b = 2 } return p.a }\n"],
-        ["inst"])
+    let errors = count_check_errors(
+        [
+            "type Pair = struct(T) { a: T, b: T }\nfn f() i64 { let p = Pair(i64) { a = 1, b = 2 } return p.a }\n",
+        ],
+        ["inst"],
+    )
     assert_true(errors == 0, "explicit arguments instantiate the literal")
 }
 
 test "a bool index is rejected before any operator lookup" {
-    let errors = count_check_errors(["type Box = struct { v: i32 }\nfn op_index(b: &Box, i: bool) i32 { return b.v }\nfn f(b: &Box) i32 { return b[true] }\n"],
-        ["ix_bool"])
+    let errors = count_check_errors(
+        [
+            "type Box = struct { v: i32 }\nfn op_index(b: &Box, i: bool) i32 { return b.v }\nfn f(b: &Box) i32 { return b[true] }\n",
+        ],
+        ["ix_bool"],
+    )
     assert_true(errors == 1, "`bool` never indexes, even where an overload would take it")
 }
 
@@ -15422,30 +16585,46 @@ test "a bool index is rejected before any operator lookup" {
 const OPTION_SRC: String = "pub type Option = enum(T) {\n    None,\n    Some(T),\n}\n"
 
 test "match arms join a Some arm and a null arm into an optional" {
-    let errors = count_check_errors([OPTION_SRC,
-            "import core.option\ntype E = enum { A(i32) B }\nfn f(e: &E) i32? { return e.* match { A(v) => Some(v), B => null } }\nfn g(e: &E) i32? { return e.* match { B => null, A(v) => Some(v) } }\n"],
-        ["core.option", "arm_join"])
+    let errors = count_check_errors(
+        [
+            OPTION_SRC,
+            "import core.option\ntype E = enum { A(i32) B }\nfn f(e: &E) i32? { return e.* match { A(v) => Some(v), B => null } }\nfn g(e: &E) i32? { return e.* match { B => null, A(v) => Some(v) } }\n",
+        ],
+        ["core.option", "arm_join"],
+    )
     assert_true(errors == 0, "explicit Some joins with null in either arm order")
 }
 
 test "a bare value arm does not implicitly wrap into an optional" {
-    let errors = count_check_errors([OPTION_SRC,
-            "import core.option\ntype E = enum { A(i32) B }\nfn f(e: &E) i32? { return e.* match { A(v) => v, B => null } }\n"],
-        ["core.option", "arm_bare"])
+    let errors = count_check_errors(
+        [
+            OPTION_SRC,
+            "import core.option\ntype E = enum { A(i32) B }\nfn f(e: &E) i32? { return e.* match { A(v) => v, B => null } }\n",
+        ],
+        ["core.option", "arm_bare"],
+    )
     assert_true(errors > 0, "`T` never becomes `Option(T)` without `Some`")
 }
 
 test "if/else branches join the same way match arms do" {
-    let errors = count_check_errors([OPTION_SRC,
-            "import core.option\nfn f(c: bool, v: i32) i32? { if c { return Some(v) } else { return null } }\nfn g(c: bool, v: i32) i32? { return if c { Some(v) } else { null } }\n"],
-        ["core.option", "branch_join"])
+    let errors = count_check_errors(
+        [
+            OPTION_SRC,
+            "import core.option\nfn f(c: bool, v: i32) i32? { if c { return Some(v) } else { return null } }\nfn g(c: bool, v: i32) i32? { return if c { Some(v) } else { null } }\n",
+        ],
+        ["core.option", "branch_join"],
+    )
     assert_true(errors == 0, "a `Some` branch and a `null` branch settle on `Option(T)`")
 }
 
 test "a bare value branch does not implicitly wrap into an optional" {
-    let errors = count_check_errors([OPTION_SRC,
-            "import core.option\nfn f(c: bool, v: i32) i32? { if c { return v } else { return null } }\n"],
-        ["core.option", "branch_bare"])
+    let errors = count_check_errors(
+        [
+            OPTION_SRC,
+            "import core.option\nfn f(c: bool, v: i32) i32? { if c { return v } else { return null } }\n",
+        ],
+        ["core.option", "branch_bare"],
+    )
     assert_true(errors > 0, "return of bare `T` against `T?` is an error")
 }
 
@@ -15453,8 +16632,12 @@ test "unary operators type from their operand, not a fresh var" {
     // `-x` on f64 must record f64 - the fresh-var fallback made lowering emit integer negation over
     // a double (docs/known-issues.md). The wrong-result-type variants prove the node carries the
     // operand's type rather than an unconstrained var that unifies with anything.
-    let errors = count_check_errors(["fn f(x: f64) f64 { return -x }\nfn g(x: u32) u32 { return ~x }\nfn h(b: bool) bool { return !b }\n"],
-        ["unary_ok"])
+    let errors = count_check_errors(
+        [
+            "fn f(x: f64) f64 { return -x }\nfn g(x: u32) u32 { return ~x }\nfn h(b: bool) bool { return !b }\n",
+        ],
+        ["unary_ok"],
+    )
     assert_true(errors == 0, "neg/bitnot/not over matching operand types check clean")
 
     let neg_errors = count_check_errors(["fn f(x: f64) i32 { return -x }\n"], ["unary_neg_ty"])
@@ -15469,21 +16652,27 @@ test "logical not requires a bool operand" {
 // M8: `??` and `?`.
 
 test "coalesce unwraps or chains by the right operand's shape" {
-    let errors = count_check_errors([OPTION_SRC,
-            "import core.option\nfn f(o: i32?, d: i32) i32 { return o ?? d }\nfn g(a: i32?, b: i32?) i32? { return a ?? b }\n"],
-        ["core.option", "coalesce_ok"])
+    let errors = count_check_errors(
+        [
+            OPTION_SRC,
+            "import core.option\nfn f(o: i32?, d: i32) i32 { return o ?? d }\nfn g(a: i32?, b: i32?) i32? { return a ?? b }\n",
+        ],
+        ["core.option", "coalesce_ok"],
+    )
     assert_true(errors == 0, "Option(T) ?? T and Option(T) ?? Option(T) both check clean")
 }
 
 test "coalesce rejects a mismatched fallback and a non-Option left side" {
-    let mismatch = count_check_errors([OPTION_SRC,
-            "import core.option\nfn f(o: i32?, d: f64) i32 { return o ?? d }\n"], ["core.option",
-            "coalesce_bad_rhs"])
+    let mismatch = count_check_errors(
+        [OPTION_SRC, "import core.option\nfn f(o: i32?, d: f64) i32 { return o ?? d }\n"],
+        ["core.option", "coalesce_bad_rhs"],
+    )
     assert_true(mismatch > 0, "f64 fallback against Option(i32) is a mismatch")
 
-    let bare = count_check_errors([OPTION_SRC,
-            "import core.option\nfn g(x: i32) i32 { return x ?? 0 }\n"], ["core.option",
-            "coalesce_bad_lhs"])
+    let bare = count_check_errors(
+        [OPTION_SRC, "import core.option\nfn g(x: i32) i32 { return x ?? 0 }\n"],
+        ["core.option", "coalesce_bad_lhs"],
+    )
     assert_true(bare > 0, "`??` over a non-Option left side is rejected")
 }
 
@@ -15493,23 +16682,38 @@ const TRY_SRC: String = "pub type TryResult = enum(T, R) {\n    Continue(T),\n  
 const OPTION_TRY_SRC: String = "import core.try\npub type Option = enum(T) {\n    None,\n    Some(T),\n}\npub fn op_try(self: move Option($T)) TryResult(T, Option($U)) {\n    return self match {\n        Some(v) => TryResult.Continue(move v),\n        None => TryResult.Return(None),\n    }\n}\n"
 
 test "postfix ? types as the Continue payload and constrains the return" {
-    let errors = count_check_errors([TRY_SRC, OPTION_TRY_SRC,
-            "import core.option\nfn f(o: i32?) i32? { let v = o? return Some(v + 1) }\n"],
-        ["core.try", "core.option", "try_ok"])
+    let errors = count_check_errors(
+        [
+            TRY_SRC,
+            OPTION_TRY_SRC,
+            "import core.option\nfn f(o: i32?) i32? { let v = o? return Some(v + 1) }\n",
+        ],
+        ["core.try", "core.option", "try_ok"],
+    )
     assert_true(errors == 0, "`o?` continues with i32 inside a fn returning i32?")
 }
 
 test "postfix ? in a function with an incompatible return is rejected" {
-    let errors = count_check_errors([TRY_SRC, OPTION_TRY_SRC,
-            "import core.option\nfn f(o: i32?) i32 { let v = o? return v }\n"], ["core.try",
-            "core.option", "try_bad_ret"])
+    let errors = count_check_errors(
+        [
+            TRY_SRC,
+            OPTION_TRY_SRC,
+            "import core.option\nfn f(o: i32?) i32 { let v = o? return v }\n",
+        ],
+        ["core.try", "core.option", "try_bad_ret"],
+    )
     assert_true(errors > 0, "the early-returned Option cannot fit a bare i32 return")
 }
 
 test "postfix ? without an op_try overload is E2092" {
-    let errors = count_check_errors([TRY_SRC, OPTION_TRY_SRC,
-            "import core.option\ntype Plain = struct { v: i32 }\nfn f(p: Plain) i32 { let v = p? return v }\n"],
-        ["core.try", "core.option", "try_none"])
+    let errors = count_check_errors(
+        [
+            TRY_SRC,
+            OPTION_TRY_SRC,
+            "import core.option\ntype Plain = struct { v: i32 }\nfn f(p: Plain) i32 { let v = p? return v }\n",
+        ],
+        ["core.try", "core.option", "try_none"],
+    )
     assert_true(errors > 0, "`?` on a type with no op_try is rejected")
 }
 
@@ -15522,29 +16726,55 @@ const INTERP_SB_SRC: String = "import core.string\nimport core.option\npub type 
 const INTERP_STRING_SRC: String = "pub type String = struct { ptr: &u8, len: usize }\n"
 
 test "interpolation desugars: appends resolve and the result is to_string's type" {
-    let errors = count_check_errors([OPTION_SRC, INTERP_STRING_SRC, INTERP_SB_SRC,
-            "import std.string_builder\nfn f(x: i32) i32 { const s = $\"got {x} ok\" s.deinit() return x }\n"],
-        ["core.option", "core.string", "std.string_builder", "interp_ok"])
-    assert_true(errors == 0,
-        "the segment appends and the hole's format resolve; the result takes Owned's UFCS surface")
+    let errors = count_check_errors(
+        [
+            OPTION_SRC,
+            INTERP_STRING_SRC,
+            INTERP_SB_SRC,
+            "import std.string_builder\nfn f(x: i32) i32 { const s = $\"got {x} ok\" s.deinit() return x }\n",
+        ],
+        ["core.option", "core.string", "std.string_builder", "interp_ok"],
+    )
+    assert_true(
+        errors == 0,
+        "the segment appends and the hole's format resolve; the result takes Owned's UFCS surface",
+    )
 
-    let hole_errors = count_check_errors([OPTION_SRC, INTERP_STRING_SRC, INTERP_SB_SRC,
-            "import std.string_builder\nfn f() i32 { const s = $\"got {no_such_name}\" return 0 }\n"],
-        ["core.option", "core.string", "std.string_builder", "interp_bad_hole"])
+    let hole_errors = count_check_errors(
+        [
+            OPTION_SRC,
+            INTERP_STRING_SRC,
+            INTERP_SB_SRC,
+            "import std.string_builder\nfn f() i32 { const s = $\"got {no_such_name}\" return 0 }\n",
+        ],
+        ["core.option", "core.string", "std.string_builder", "interp_bad_hole"],
+    )
     assert_true(hole_errors > 0, "an unknown identifier inside a hole is reported")
 }
 
 test "into-builder interpolation appends onto the target and is void" {
-    let errors = count_check_errors([OPTION_SRC, INTERP_STRING_SRC, INTERP_SB_SRC,
-            "import std.string_builder\nfn g(sb: &StringBuilder, x: i32) { $sb\"v={x}\" }\n"],
-        ["core.option", "core.string", "std.string_builder", "interp_into"])
+    let errors = count_check_errors(
+        [
+            OPTION_SRC,
+            INTERP_STRING_SRC,
+            INTERP_SB_SRC,
+            "import std.string_builder\nfn g(sb: &StringBuilder, x: i32) { $sb\"v={x}\" }\n",
+        ],
+        ["core.option", "core.string", "std.string_builder", "interp_into"],
+    )
     assert_true(errors == 0, "the target's append overloads resolve; the statement is void")
 }
 
 test "a hole's format spec reaches format, and a place is read rather than appended" {
-    let errors = count_check_errors([OPTION_SRC, INTERP_STRING_SRC, INTERP_SB_SRC,
-            "import std.string_builder\nfn f(x: i32) i32 { const s = $\"n={x:04}\" s.deinit() return x }\n"],
-        ["core.option", "core.string", "std.string_builder", "interp_spec"])
+    let errors = count_check_errors(
+        [
+            OPTION_SRC,
+            INTERP_STRING_SRC,
+            INTERP_SB_SRC,
+            "import std.string_builder\nfn f(x: i32) i32 { const s = $\"n={x:04}\" s.deinit() return x }\n",
+        ],
+        ["core.option", "core.string", "std.string_builder", "interp_spec"],
+    )
     assert_true(errors == 0, "`{x:04}` resolves as x.format(sb.writer(), \"04\")")
 }
 
@@ -15595,8 +16825,10 @@ test "a recorded span round-trips to the id it was minted from" {
 }
 
 test "the result names the file each id belongs to" {
-    let res = check_result_of(["pub fn g() i32 { return 1 }\n",
-            "import a\nfn h() i32 { return g() }\n"], ["a", "b"])
+    let res = check_result_of(
+        ["pub fn g() i32 { return 1 }\n", "import a\nfn h() i32 { return g() }\n"],
+        ["a", "b"],
+    )
     assert_true(res.path_of(0i32).unwrap() == "a", "file 0 is the first module")
     assert_true(res.path_of(1i32).unwrap() == "b", "file 1 is the second")
     assert_true(res.path_of(2i32).is_none(), "past the end is unknown")
@@ -15606,8 +16838,10 @@ test "the result names the file each id belongs to" {
 }
 
 test "struct fields and enum variants carry their declaration span" {
-    let res = check_result_of(["pub type P = struct { x: i32\ny: i32 }\npub type E = enum { A\nB(i32) }\n"],
-        ["m"])
+    let res = check_result_of(
+        ["pub type P = struct { x: i32\ny: i32 }\npub type E = enum { A\nB(i32) }\n"],
+        ["m"],
+    )
     let fields_spanned: usize = 0
     let variants_spanned: usize = 0
     for i in 0..(res.nominals.next_id as usize) {
@@ -15638,8 +16872,12 @@ test "struct fields and enum variants carry their declaration span" {
 }
 
 test "a generic call instantiates once per concrete signature" {
-    let res = check_result_of(["pub fn id(x: $T) T { return x }\nfn main() i32 { let a = id(1) let b = id(2) let c = id(true) if c { return a } return b }\n"],
-        ["m"])
+    let res = check_result_of(
+        [
+            "pub fn id(x: $T) T { return x }\nfn main() i32 { let a = id(1) let b = id(2) let c = id(true) if c { return a } return b }\n",
+        ],
+        ["m"],
+    )
     // Two i32 calls share one specialization; the bool call adds one.
     assert_eq(res.specializations.len(), 2 as usize, "two concrete signatures, two specializations")
     let s0 = res.specializations.get(0 as u32)
@@ -15655,8 +16893,12 @@ test "structural specificity outranks quantifier count in overload ranking" {
     // receiver carries a concrete constructor, so it must win. The overloads' return types differ
     // (i32 vs bool): if the catch-all wins, `main` returns bool from an i32 function and
     // the check errors — 0 errors proves the structured overload won.
-    let errs = count_check_errors(["pub type Pair = struct(A, B) { a: A b: B }\npub fn pick(x: Pair($A, $B)) i32 { return 1 }\npub fn pick(x: $T) bool { return true }\nfn main() i32 { let p: Pair(i32, u8) p.a = 1i32 p.b = 2u8 return pick(p) }\n"],
-        ["m"])
+    let errs = count_check_errors(
+        [
+            "pub type Pair = struct(A, B) { a: A b: B }\npub fn pick(x: Pair($A, $B)) i32 { return 1 }\npub fn pick(x: $T) bool { return true }\nfn main() i32 { let p: Pair(i32, u8) p.a = 1i32 p.b = 2u8 return pick(p) }\n",
+        ],
+        ["m"],
+    )
     assert_eq(errs, 0 as usize, "the structured overload wins despite more quantified vars")
 }
 
@@ -15701,8 +16943,14 @@ fn resolved_call(src: String, callee: String) ResolvedCall {
 }
 
 // Render `fid`'s signature into `sb` and read the hop chain on `node` when `fid` is `callee`.
-fn note_resolved(res: &TypeCheckResult, node: NodeId, fid: u32, callee: String, sb: &StringBuilder,
-    hops: &usize) {
+fn note_resolved(
+    res: &TypeCheckResult,
+    node: NodeId,
+    fid: u32,
+    callee: String,
+    sb: &StringBuilder,
+    hops: &usize,
+) {
     let scheme = res.functions.find_by_id(fid)
     if scheme.is_none() or scheme.unwrap().name != callee {
         return
@@ -15726,7 +16974,9 @@ fn with_wrap(rest: String) OwnedString {
 }
 
 test "ranking: a concrete parameter beats a catch-all on a direct call" {
-    let src = with_wrap("pub fn f(x: Inner) i64 { return 1 }\npub fn f(x: $T) i64 { return 2 }\nfn main() i64 { let i: Inner return f(i) }\n")
+    let src = with_wrap(
+        "pub fn f(x: Inner) i64 { return 1 }\npub fn f(x: $T) i64 { return 2 }\nfn main() i64 { let i: Inner return f(i) }\n",
+    )
     defer src.deinit()
     let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
@@ -15734,7 +16984,9 @@ test "ranking: a concrete parameter beats a catch-all on a direct call" {
 }
 
 test "ranking: a value receiver as written beats adapting it to a reference parameter" {
-    let src = with_wrap("pub fn f(x: &Inner) i64 { return 1 }\npub fn f(x: $T) i64 { return 2 }\nfn main(i: Inner) i64 { return i.f() }\n")
+    let src = with_wrap(
+        "pub fn f(x: &Inner) i64 { return 1 }\npub fn f(x: $T) i64 { return 2 }\nfn main(i: Inner) i64 { return i.f() }\n",
+    )
     defer src.deinit()
     let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
@@ -15743,7 +16995,9 @@ test "ranking: a value receiver as written beats adapting it to a reference para
 }
 
 test "ranking: a value receiver adapts to a reference parameter when nothing takes it as written" {
-    let src = with_wrap("pub fn f(x: &Inner) i64 { return 1 }\nfn main(i: Inner) i64 { return i.f() }\n")
+    let src = with_wrap(
+        "pub fn f(x: &Inner) i64 { return 1 }\nfn main(i: Inner) i64 { return i.f() }\n",
+    )
     defer src.deinit()
     let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
@@ -15752,7 +17006,9 @@ test "ranking: a value receiver adapts to a reference parameter when nothing tak
 }
 
 test "ranking: a direct hit beats an equally specific overload through op_deref" {
-    let src = with_wrap("pub fn f(x: &Wrap) i64 { return 1 }\npub fn f(x: &Inner) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n")
+    let src = with_wrap(
+        "pub fn f(x: &Wrap) i64 { return 1 }\npub fn f(x: &Inner) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n",
+    )
     defer src.deinit()
     let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
@@ -15761,7 +17017,9 @@ test "ranking: a direct hit beats an equally specific overload through op_deref"
 }
 
 test "ranking: a catch-all matched as written beats a concrete overload through op_deref" {
-    let src = with_wrap("pub fn f(x: &Inner) i64 { return 1 }\npub fn f(x: $I) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n")
+    let src = with_wrap(
+        "pub fn f(x: &Inner) i64 { return 1 }\npub fn f(x: $I) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n",
+    )
     defer src.deinit()
     let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
@@ -15770,7 +17028,9 @@ test "ranking: a catch-all matched as written beats a concrete overload through 
 }
 
 test "ranking: the peel also runs through a generic wrapper" {
-    let src = with_wrap("pub type Box = struct(T) { pad: i64 inner: T }\npub fn op_deref(b: &Box($T)) &T { return &b.inner }\npub fn f(x: &Inner) i64 { return 1 }\nfn main(b: &Box(Inner)) i64 { return b.f() }\n")
+    let src = with_wrap(
+        "pub type Box = struct(T) { pad: i64 inner: T }\npub fn op_deref(b: &Box($T)) &T { return &b.inner }\npub fn f(x: &Inner) i64 { return 1 }\nfn main(b: &Box(Inner)) i64 { return b.f() }\n",
+    )
     defer src.deinit()
     let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
@@ -15779,7 +17039,9 @@ test "ranking: the peel also runs through a generic wrapper" {
 }
 
 test "ranking: the peel chains through two wrappers" {
-    let src = with_wrap("pub type Outer = struct { tag: i64 w: Wrap }\npub fn op_deref(o: &Outer) &Wrap { return &o.w }\npub fn f(x: &Inner) i64 { return 1 }\nfn main(o: &Outer) i64 { return o.f() }\n")
+    let src = with_wrap(
+        "pub type Outer = struct { tag: i64 w: Wrap }\npub fn op_deref(o: &Outer) &Wrap { return &o.w }\npub fn f(x: &Inner) i64 { return 1 }\nfn main(o: &Outer) i64 { return o.f() }\n",
+    )
     defer src.deinit()
     let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
@@ -15790,7 +17052,9 @@ test "ranking: the peel chains through two wrappers" {
 test "ranking: a wrapper declares the member a catch-all would otherwise take" {
     // The `Dict.any(fn(k, v) ...)` shape: std.iter's `any($I, $F)` matches the wrapper as written,
     // so the wrapper declares its own `any` rather than relying on the peel.
-    let src = with_wrap("pub fn any(x: &Inner, pred: $F) bool { return pred(x.value, x.value) }\npub fn any(w: &Wrap, pred: $F) bool { return w.inner.any(pred) }\npub fn any(it: $I, pred: $F) bool { return pred(0i64) }\nfn main(w: &Wrap) bool { return w.any(fn(a, b) { a == b }) }\n")
+    let src = with_wrap(
+        "pub fn any(x: &Inner, pred: $F) bool { return pred(x.value, x.value) }\npub fn any(w: &Wrap, pred: $F) bool { return w.inner.any(pred) }\npub fn any(it: $I, pred: $F) bool { return pred(0i64) }\nfn main(w: &Wrap) bool { return w.any(fn(a, b) { a == b }) }\n",
+    )
     defer src.deinit()
     let r = resolved_call(src.view, "any")
     defer r.signature.deinit()
@@ -15799,7 +17063,9 @@ test "ranking: a wrapper declares the member a catch-all would otherwise take" {
 }
 
 test "ranking: indexing resolves op_index_ref through op_deref, like the call it desugars to" {
-    let src = with_wrap("pub fn op_index_ref(x: &Inner, i: usize) &i64 { return &x.value }\nfn main(w: &Wrap) i64 { return w[0usize] }\n")
+    let src = with_wrap(
+        "pub fn op_index_ref(x: &Inner, i: usize) &i64 { return &x.value }\nfn main(w: &Wrap) i64 { return w[0usize] }\n",
+    )
     defer src.deinit()
     let r = resolved_call(src.view, "op_index_ref")
     defer r.signature.deinit()
@@ -15808,7 +17074,9 @@ test "ranking: indexing resolves op_index_ref through op_deref, like the call it
 }
 
 test "ranking: for resolves iter through op_deref, like the call it desugars to" {
-    let src = with_wrap("pub type It = struct { n: i64 }\npub fn iter(x: &Inner) It { return It { n = x.value } }\npub fn next(it: &It) i64? { if it.n == 0 { return null } it.n = it.n - 1 return Some(it.n) }\nfn main(w: &Wrap) i64 { let t = 0i64 for x in w { t = t + x } return t }\n")
+    let src = with_wrap(
+        "pub type It = struct { n: i64 }\npub fn iter(x: &Inner) It { return It { n = x.value } }\npub fn next(it: &It) i64? { if it.n == 0 { return null } it.n = it.n - 1 return Some(it.n) }\nfn main(w: &Wrap) i64 { let t = 0i64 for x in w { t = t + x } return t }\n",
+    )
     defer src.deinit()
     let r = resolved_call(src.view, "iter")
     defer r.signature.deinit()
@@ -15817,7 +17085,9 @@ test "ranking: for resolves iter through op_deref, like the call it desugars to"
 }
 
 test "ranking: the catch-all still wins when nothing through the peel matches" {
-    let src = with_wrap("pub type Other = struct { n: i64 }\npub fn f(x: &Other) i64 { return 1 }\npub fn f(x: $I) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n")
+    let src = with_wrap(
+        "pub type Other = struct { n: i64 }\npub fn f(x: &Other) i64 { return 1 }\npub fn f(x: $I) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n",
+    )
     defer src.deinit()
     let r = resolved_call(src.view, "f")
     defer r.signature.deinit()
@@ -15831,30 +17101,47 @@ test "generic template bodies only report when instantiated" {
     let silent = count_check_errors(["pub fn bad(x: $T) T { return no_such_fn(x) }\n"], ["m"])
     assert_true(silent == 0, "an uninstantiated template is never validated")
 
-    let loud = count_check_errors(["pub fn bad(x: $T) T { return no_such_fn(x) }\nfn main() i32 { return bad(1) }\n"],
-        ["m"])
+    let loud = count_check_errors(
+        ["pub fn bad(x: $T) T { return no_such_fn(x) }\nfn main() i32 { return bad(1) }\n"],
+        ["m"],
+    )
     assert_true(loud > 0, "instantiating the template surfaces its body errors")
 }
 
 test "a nested generic call specializes transitively" {
-    let res = check_result_of(["pub fn inner(x: $T) T { return x }\npub fn outer(x: $T) T { return inner(x) }\nfn main() i32 { return outer(7) }\n"],
-        ["m"])
+    let res = check_result_of(
+        [
+            "pub fn inner(x: $T) T { return x }\npub fn outer(x: $T) T { return inner(x) }\nfn main() i32 { return outer(7) }\n",
+        ],
+        ["m"],
+    )
     // outer(i32) instantiates, and its body's inner(x) pick drains into inner(i32).
     assert_eq(res.specializations.len(), 2 as usize, "outer and inner both specialize")
 }
 
 test "a self-recursive generic reuses its own specialization" {
-    let res = check_result_of(["pub fn rec(x: $T, n: i32) T { if n > 0 { return rec(x, n - 1) } return x }\nfn main() i32 { return rec(3, 2) }\n"],
-        ["m"])
-    assert_eq(res.specializations.len(), 1 as usize,
-        "recursion hits the registered key, no second entry")
+    let res = check_result_of(
+        [
+            "pub fn rec(x: $T, n: i32) T { if n > 0 { return rec(x, n - 1) } return x }\nfn main() i32 { return rec(3, 2) }\n",
+        ],
+        ["m"],
+    )
+    assert_eq(
+        res.specializations.len(),
+        1 as usize,
+        "recursion hits the registered key, no second entry",
+    )
 }
 test "a generic member call inside a partially-fixed generic instantiates" {
     // Regression: `set2(self: &D(Key, $V), ...)` is generic only through a NESTED type argument. A
     // broken `declares_generic` walked this as concrete, phase 3 checked the template with V
     // unbound, and the stray pick could never infer `cap`'s type arguments.
-    let errors = count_check_errors(["type Key = struct { n: usize }\ntype D = struct(K, V) { n: usize\n    k: K\n    v: V\n}\nfn cap(self: &D($K, $V)) usize { return self.n }\nfn set2(self: &D(Key, $V), value: V) usize { return self.cap() }\nfn main() i32 {\n    let d: D(Key, i32) = D(Key, i32) { n = 0usize, k = Key { n = 1usize }, v = 3i32 }\n    const c = d.set2(5i32)\n    return 0\n}\n"],
-        ["m"])
+    let errors = count_check_errors(
+        [
+            "type Key = struct { n: usize }\ntype D = struct(K, V) { n: usize\n    k: K\n    v: V\n}\nfn cap(self: &D($K, $V)) usize { return self.n }\nfn set2(self: &D(Key, $V), value: V) usize { return self.cap() }\nfn main() i32 {\n    let d: D(Key, i32) = D(Key, i32) { n = 0usize, k = Key { n = 1usize }, v = 3i32 }\n    const c = d.set2(5i32)\n    return 0\n}\n",
+        ],
+        ["m"],
+    )
     assert_true(errors == 0, "cap's K and V pin from set2's concrete receiver")
 }
 
@@ -15900,58 +17187,83 @@ test "unannotated lambda params pin through a generic callable slot" {
     for e in res.lambdas {
         // The instantiation's body re-check unified the fresh param var with i32; the zonked record
         // must be concrete.
-        assert_eq(e.value.params[0], prim_of(PrimitiveKind.I32),
-            "param pinned to i32 through the instantiation")
+        assert_eq(
+            e.value.params[0],
+            prim_of(PrimitiveKind.I32),
+            "param pinned to i32 through the instantiation",
+        )
     }
     res.deinit()
 }
 
 test "a closure may assign a captured name (RFC-033)" {
-    let errs = count_check_errors(["fn take(f: $F) i32 where F: fn(i32) i32 { return f(1) }\nfn main() i32 { let k: i32 = 1\n return take(fn(v: i32) i32 { k = 2\n return v }) + k }\n"],
-        ["m"])
+    let errs = count_check_errors(
+        [
+            "fn take(f: $F) i32 where F: fn(i32) i32 { return f(1) }\nfn main() i32 { let k: i32 = 1\n return take(fn(v: i32) i32 { k = 2\n return v }) + k }\n",
+        ],
+        ["m"],
+    )
     assert_eq(errs, 0 as usize, "captures are by reference")
 }
 
 // `&move` slots (RFC-033). Declarable in `core` alone, so these check through a core-named module.
 
 test "a core module may take from a slot when it refills it" {
-    let errs = count_check_errors(["type H = struct { owned fd: i32 }
+    let errs = count_check_errors(
+        [
+            "type H = struct { owned fd: i32 }
 pub fn exchange(a: &move H, b: &move H) { let tmp = move a.*
  a.* = move b.*
  b.* = move tmp }
-"],
-        ["core.slots"])
+",
+        ],
+        ["core.slots"],
+    )
     assert_eq(errs, 0 as usize, "the take is paired with a refill on the only exit")
 }
 
 test "a slot left empty is refused" {
-    let errs = count_check_errors(["type H = struct { owned fd: i32 }
+    let errs = count_check_errors(
+        ["type H = struct { owned fd: i32 }
 pub fn take(a: &move H) H { return move a.* }
 "],
-        ["core.slots"])
+        ["core.slots"],
+    )
     assert_true(errs > 0, "the value left and none was put back (E2137)")
 }
 
 test "a slot emptied on one branch only is refused" {
-    let errs = count_check_errors(["type H = struct { owned fd: i32 }
+    let errs = count_check_errors(
+        [
+            "type H = struct { owned fd: i32 }
 pub fn maybe(a: &move H, b: move H, c: bool) H { let tmp = move a.*
  if c { a.* = move b
  return tmp }
  return tmp }
-"],
-        ["core.slots"])
+",
+        ],
+        ["core.slots"],
+    )
     assert_true(errs > 0, "the branch that returns without refilling is reported")
 }
 
 test "a nested closure captures through the enclosing one (RFC-033)" {
-    let errs = count_check_errors(["fn take(f: $F) i32 where F: fn(i32) i32 { return f(1) }\nfn main() i32 { let a: i32 = 1\n return take(fn(x: i32) i32 { let g = fn(y: i32) i32 { return y + a }\n return g(x) + a }) }\n"],
-        ["m"])
+    let errs = count_check_errors(
+        [
+            "fn take(f: $F) i32 where F: fn(i32) i32 { return f(1) }\nfn main() i32 { let a: i32 = 1\n return take(fn(x: i32) i32 { let g = fn(y: i32) i32 { return y + a }\n return g(x) + a }) }\n",
+        ],
+        ["m"],
+    )
     assert_eq(errs, 0 as usize, "transitive captures check")
 }
 
 test "a capturing closure cannot fill a bare fn slot (E2111 hint)" {
-    let errs = count_check_errors(["fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { let k = 1\n return apply(fn(v: i32) i32 { v + k }, 2) }\n"],
-        ["m"])
+    let errs = count_check_errors(
+        [
+            "fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { let k = 1\n return apply(fn(v: i32) i32 { v + k }, 2) }\n",
+        ],
+        ["m"],
+    )
     assert_true(errs > 0, "closure into fn slot reports")
 }
 

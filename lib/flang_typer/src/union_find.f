@@ -137,11 +137,12 @@ pub fn rollback(self: &UnionFind($K)) where K: copyable {
 
 // Record one mutation in the innermost open region. No-op outside a checkpoint, so non-speculative
 // callers pay nothing - not even building the entry.
-fn record_undo(self: &UnionFind($K), key: K, old_parent: K, old_size: usize,
-    was_new: bool) where K: copyable {
+fn record_undo(self: &UnionFind($K), key: K, old_parent: K, old_size: usize, was_new: bool)
+where K: copyable {
     if !self.undo.is_open() {
         return
     }
-    self.undo.record(.{ key = key, old_parent = old_parent, old_size = old_size,
-        was_new = was_new })
+    self.undo.record(
+            .{ key = key, old_parent = old_parent, old_size = old_size, was_new = was_new },
+    )
 }

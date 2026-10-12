@@ -76,8 +76,10 @@ fn reserve(self: &UnmanagedDeque($T), required: usize, allocator: &Allocator) {
         new_cap = required
     }
 
-    const buf = allocator.alloc(new_cap * size_of(T),
-        align_of(T)).expect("deque: allocation failed")
+    const buf = allocator.alloc(
+        new_cap * size_of(T),
+        align_of(T),
+    ).expect("deque: allocation failed")
     const new_ptr: &T = buf.ptr as &T
 
     // The live window moves in logical order, flattened to start at index 0.

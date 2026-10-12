@@ -100,8 +100,10 @@ pub fn unmanaged_list(capacity: usize, allocator: &Allocator) UnmanagedList($T) 
         let empty: UnmanagedList(T)
         return move empty
     }
-    const buf = allocator.alloc(capacity * size_of(T),
-        align_of(T)).expect("list: allocation failed")
+    const buf = allocator.alloc(
+        capacity * size_of(T),
+        align_of(T),
+    ).expect("list: allocation failed")
     return .{ ptr = buf.ptr as &T, len = 0usize, cap = capacity }
 }
 
@@ -160,8 +162,8 @@ pub fn list(source: $T[], allocator: &Allocator? = null) List(T) where T: copyab
 // allocates nothing. Panics when the allocation fails.
 //
 // - `allocator`: grows and frees the storage. Pass the same one to every allocating call.
-pub fn filled_unmanaged_list(count: usize, value: $T,
-    allocator: &Allocator) UnmanagedList(T) where T: copyable {
+pub fn filled_unmanaged_list(count: usize, value: $T, allocator: &Allocator) UnmanagedList(T)
+where T: copyable {
     let out: UnmanagedList(T) = unmanaged_list(count, allocator)
     for _i in 0..count {
         out.push(value, allocator)
@@ -173,8 +175,8 @@ pub fn filled_unmanaged_list(count: usize, value: $T,
 // nothing. Panics when the allocation fails.
 //
 // - `allocator`: kept for the list's whole life. Null is the global allocator.
-pub fn filled_list(count: usize, value: $T,
-    allocator: &Allocator? = null) List(T) where T: copyable {
+pub fn filled_list(count: usize, value: $T, allocator: &Allocator? = null) List(T)
+where T: copyable {
     const alloc = allocator.or_global()
     return .{ __storage = filled_unmanaged_list(count, value, alloc), allocator = alloc }
 }
@@ -546,14 +548,14 @@ pub fn max(self: &UnmanagedList($T)) T? where T: copyable {
 }
 
 // Returns the element with the smallest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn min_by(self: &UnmanagedList($T), key: $F) T? where T: copyable, F: fn(T) $K,
-    K: copyable + Ordered {
+pub fn min_by(self: &UnmanagedList($T), key: $F) T?
+where T: copyable, F: fn(T) $K, K: copyable + Ordered {
     return self.as_slice().min_by(key)
 }
 
 // Returns the element with the largest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn max_by(self: &UnmanagedList($T), key: $F) T? where T: copyable, F: fn(T) $K,
-    K: copyable + Ordered {
+pub fn max_by(self: &UnmanagedList($T), key: $F) T?
+where T: copyable, F: fn(T) $K, K: copyable + Ordered {
     return self.as_slice().max_by(key)
 }
 
@@ -613,8 +615,8 @@ where F: fn(T) U {
 }
 
 // Returns a new list of the elements `keep` accepts, in order.
-pub fn filter(s: &UnmanagedList($T), keep: $F,
-    allocator: &Allocator) UnmanagedList(T) where T: copyable, F: fn(T) bool {
+pub fn filter(s: &UnmanagedList($T), keep: $F, allocator: &Allocator) UnmanagedList(T)
+where T: copyable, F: fn(T) bool {
     let out: UnmanagedList(T) = unmanaged_list(s.len, allocator)
     for i in 0..s.len {
         if keep(s[i]) {
@@ -625,8 +627,8 @@ pub fn filter(s: &UnmanagedList($T), keep: $F,
 }
 
 // Returns a new list of the elements `drop` rejects, in order: `filter` with the predicate negated.
-pub fn remove(s: &UnmanagedList($T), drop: $F,
-    allocator: &Allocator) UnmanagedList(T) where T: copyable, F: fn(T) bool {
+pub fn remove(s: &UnmanagedList($T), drop: $F, allocator: &Allocator) UnmanagedList(T)
+where T: copyable, F: fn(T) bool {
     let out: UnmanagedList(T) = unmanaged_list(s.len, allocator)
     for i in 0..s.len {
         let dropped: bool = drop(s[i])
@@ -638,8 +640,8 @@ pub fn remove(s: &UnmanagedList($T), drop: $F,
 }
 
 // Returns a new list of everything after the first `n` elements; empty when `n` exceeds the length.
-pub fn drop_first(s: &UnmanagedList($T), n: usize,
-    allocator: &Allocator) UnmanagedList(T) where T: copyable {
+pub fn drop_first(s: &UnmanagedList($T), n: usize, allocator: &Allocator) UnmanagedList(T)
+where T: copyable {
     let out: UnmanagedList(T) = unmanaged_list(s.len, allocator)
     let start = if n > s.len { s.len } else { n }
     for i in start..s.len {
@@ -660,8 +662,8 @@ pub fn reversed(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) w
 }
 
 // Returns a new list of the last `n` elements, or all of them when `n` exceeds the length.
-pub fn take_last(s: &UnmanagedList($T), n: usize,
-    allocator: &Allocator) UnmanagedList(T) where T: copyable {
+pub fn take_last(s: &UnmanagedList($T), n: usize, allocator: &Allocator) UnmanagedList(T)
+where T: copyable {
     let out: UnmanagedList(T) = unmanaged_list(n, allocator)
     let start = if n > s.len { 0 as usize } else { s.len - n }
     for i in start..s.len {
@@ -671,8 +673,12 @@ pub fn take_last(s: &UnmanagedList($T), n: usize,
 }
 
 // Returns a new list pairing elements positionally with `other`, stopping at the shorter.
-pub fn zip(s: &UnmanagedList($T), other: &UnmanagedList($B),
-    allocator: &Allocator) UnmanagedList((T, B)) where T: copyable, B: copyable {
+pub fn zip(
+    s: &UnmanagedList($T),
+    other: &UnmanagedList($B),
+    allocator: &Allocator,
+) UnmanagedList((T, B))
+where T: copyable, B: copyable {
     let n = if s.len < other.len { s.len } else { other.len }
     let out: UnmanagedList((T, B)) = unmanaged_list(n, allocator)
     for i in 0..n {
@@ -682,8 +688,12 @@ pub fn zip(s: &UnmanagedList($T), other: &UnmanagedList($B),
 }
 
 // Splits into two new lists, (accepted, rejected) by `pred`, each in order.
-pub fn partition(s: &UnmanagedList($T), pred: $F, allocator: &Allocator) (UnmanagedList(T),
-    UnmanagedList(T)) where T: copyable, F: fn(T) bool {
+pub fn partition(
+    s: &UnmanagedList($T),
+    pred: $F,
+    allocator: &Allocator,
+) (UnmanagedList(T), UnmanagedList(T))
+where T: copyable, F: fn(T) bool {
     let yes: UnmanagedList(T) = unmanaged_list(0, allocator)
     let no: UnmanagedList(T) = unmanaged_list(0, allocator)
     for i in 0..s.len {
@@ -698,8 +708,8 @@ pub fn partition(s: &UnmanagedList($T), pred: $F, allocator: &Allocator) (Unmana
 
 // Returns a new list of every inner list's elements, in order, in one allocation sized from the
 // inner lengths. The inner lists are left untouched; their elements are copied bitwise.
-pub fn flatten(s: &UnmanagedList(List($T)),
-    allocator: &Allocator) UnmanagedList(T) where T: copyable {
+pub fn flatten(s: &UnmanagedList(List($T)), allocator: &Allocator) UnmanagedList(T)
+where T: copyable {
     let total: usize = 0
     for i in 0..s.len {
         total = total + s[i].len
@@ -747,8 +757,9 @@ pub type Drain = struct(T) {
 
 // Takes the list's elements: it reads as empty until the drain is released.
 pub fn drain(self: &UnmanagedList($T)) Drain(T) {
-    let out: Drain(T) = .{ __list = self, taken = 0, count = self.len, from_back = false,
-        __unique = no_copy() }
+    let out: Drain(
+        T,
+    ) = .{ __list = self, taken = 0, count = self.len, from_back = false, __unique = no_copy() }
     self.len = 0
     return out
 }
@@ -756,8 +767,9 @@ pub fn drain(self: &UnmanagedList($T)) Drain(T) {
 // Takes the list's elements last to first, the order `pop` yields them in. The untaken ones are
 // already at the front, so releasing this drain moves nothing.
 pub fn drain_rev(self: &UnmanagedList($T)) Drain(T) {
-    let out: Drain(T) = .{ __list = self, taken = 0, count = self.len, from_back = true,
-        __unique = no_copy() }
+    let out: Drain(
+        T,
+    ) = .{ __list = self, taken = 0, count = self.len, from_back = true, __unique = no_copy() }
     self.len = 0
     return out
 }
@@ -783,8 +795,10 @@ pub fn next(self: &Drain($T)) T? {
 pub fn deinit(self: move Drain($T)) {
     const left = self.count - self.taken
     if self.taken > 0 and !self.from_back {
-        move_to(slice_from_raw_parts(self.__list.ptr + self.taken, left),
-            slice_from_raw_parts(self.__list.ptr, left))
+        move_to(
+            slice_from_raw_parts(self.__list.ptr + self.taken, left),
+            slice_from_raw_parts(self.__list.ptr, left),
+        )
     }
     self.__list.len = left
 }
@@ -867,19 +881,19 @@ pub fn deinit(self: move Drain($T)) {
 
     // Returns a new list pairing elements positionally with `other`, stopping at the shorter.
     pub fn zip(self: &#(Name)($T), other: &#(Name)($B), allocator: &Allocator? = null) List((T,
-            B)) where T: copyable, B: copyable {
-        const alloc = allocator ?? self.allocator
-        return .{ __storage = self.__storage.zip(other.op_deref(), alloc), allocator = alloc }
-    }
+        B)) where T: copyable, B: copyable {
+            const alloc = allocator ?? self.allocator
+            return .{ __storage = self.__storage.zip(other.op_deref(), alloc), allocator = alloc }
+        }
 
     // Splits into two new lists, (accepted, rejected) by `pred`, each in order.
     pub fn partition(self: &#(Name)($T), pred: $F,
         allocator: &Allocator? = null) (List(T), List(T)) where T: copyable, F: fn(T) bool {
-        const alloc = allocator ?? self.allocator
-        let parts = self.__storage.partition(pred, alloc)
-        return (.{ __storage = move parts.0, allocator = alloc }, .{ __storage = move parts.1,
-            allocator = alloc })
-    }
+            const alloc = allocator ?? self.allocator
+            let parts = self.__storage.partition(pred, alloc)
+            return (.{ __storage = move parts.0, allocator = alloc }, .{ __storage = move parts.1,
+                allocator = alloc })
+        }
 
     // Returns a new list of every inner list's elements, in order, in one allocation sized from the
     // inner lengths. The inner lists are left untouched.

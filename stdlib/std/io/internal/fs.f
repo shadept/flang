@@ -55,8 +55,14 @@ const FS_R_ERR: i32 = 2
 // =============================================================================
 
 #foreign fn __flang_fs_opendir(path: &u8, out_dir: &usize, out_err: &i32) i32
-#foreign fn __flang_fs_readdir(dir: usize, name_buf: &u8, cap: usize, out_len: &usize,
-    out_kind: &i32, out_err: &i32) i32
+#foreign fn __flang_fs_readdir(
+    dir: usize,
+    name_buf: &u8,
+    cap: usize,
+    out_len: &usize,
+    out_kind: &i32,
+    out_err: &i32,
+) i32
 #foreign fn __flang_fs_closedir(dir: usize, out_err: &i32) i32
 #foreign fn __flang_fs_stat(path: &u8, out_kind: &i32, out_size: &u64, out_err: &i32) i32
 #foreign fn __flang_fs_mkdir(path: &u8, out_err: &i32) i32
@@ -253,8 +259,14 @@ pub fn next(self: &RawDir) RawDirEntry? {
         return null
     }
     let err: i32 = 0
-    const status = __flang_fs_readdir(self.handle, self.name_buf.ptr, FS_NAME_BUF_CAP,
-        &self.current_name_len, &self.current_kind, &err)
+    const status = __flang_fs_readdir(
+        self.handle,
+        self.name_buf.ptr,
+        FS_NAME_BUF_CAP,
+        &self.current_name_len,
+        &self.current_kind,
+        &err,
+    )
     if status == FS_R_OK {
         return Some(RawDirEntry {
             name = from_c_string(self.name_buf.ptr, Some(self.current_name_len)),

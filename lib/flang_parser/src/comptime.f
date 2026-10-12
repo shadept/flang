@@ -310,9 +310,11 @@ pub fn ct_eval(env: &CtEnv, e: &Expr) Result(CtValue, CtError) {
                     Some(v) => Ok(CtValue.S(v))
                     None => ct_eval(env, c.rhs)
                 }
-                _ => ct_err("E2118",
+                _ => ct_err(
+                    "E2118",
                     $"left operand of `??` must be an optional (a dict lookup), got {describe(&lhs)}",
-                    c.span)
+                    c.span,
+                )
             }
         }
         Binary(b) => ct_eval_binary(env, &b)
@@ -410,8 +412,11 @@ fn ct_eval_binary(env: &CtEnv, b: &BinaryExpr) Result(CtValue, CtError) {
             _ => {}
         }
     }
-    return ct_err("E2118",
-        $"`{binary_op_text(b.op)}` cannot be applied to {describe(&l)} and {describe(&r)}", b.span)
+    return ct_err(
+        "E2118",
+        $"`{binary_op_text(b.op)}` cannot be applied to {describe(&l)} and {describe(&r)}",
+        b.span,
+    )
 }
 
 fn binary_op_text(op: BinaryOp) String {
@@ -449,8 +454,12 @@ fn ct_index(env: &CtEnv, ix: &IndexExpr) Result(CtValue, CtError) {
     }
 }
 
-fn ct_slice(env: &CtEnv, recv: &CtValue, rg: &RangeExpr, span: SourceSpan) Result(CtValue,
-    CtError) {
+fn ct_slice(
+    env: &CtEnv,
+    recv: &CtValue,
+    rg: &RangeExpr,
+    span: SourceSpan,
+) Result(CtValue, CtError) {
     const items: List(CtValue) = recv.* match {
         List(l) => move l
         _ => return ct_err("E2118", $"cannot slice {describe(recv)}", span)
@@ -484,8 +493,13 @@ fn ct_expect_int(env: &CtEnv, e: &Expr) Result(i64, CtError) {
     const v = ct_eval(env, e)?
     return v match {
         I(i) => Ok(i)
-        _ => Err(CtError { code = "E2118", message = $"expected an integer, got {describe(&v)}",
-            span = expr_span(e) })
+        _ => Err(
+            CtError {
+                code = "E2118",
+                message = $"expected an integer, got {describe(&v)}",
+                span = expr_span(e),
+            },
+        )
     }
 }
 
@@ -509,26 +523,33 @@ fn ct_call(env: &CtEnv, c: &CallExpr) Result(CtValue, CtError) {
     if name == "type_info" {
         return arg match {
             TypeInfo(_) => Ok(move arg)
-            Value(_) => ct_err("E2118",
+            Value(_) => ct_err(
+                "E2118",
                 $"`type_info` expects a type, got a value (`type_of` reads a value's type)",
-                arg_span)
+                arg_span,
+            )
             _ => ct_err("E2118", $"`type_info` expects a type, got {describe(&arg)}", arg_span)
         }
     }
     if name == "type_of" {
         return arg match {
             Value(t) => Ok(CtValue.TypeInfo(t))
-            TypeInfo(_) => ct_err("E2118",
+            TypeInfo(_) => ct_err(
+                "E2118",
                 $"`type_of` expects a value, got a type (`type_info` reads a type's info)",
-                arg_span)
+                arg_span,
+            )
             _ => ct_err("E2118", $"`type_of` expects a value, got {describe(&arg)}", arg_span)
         }
     }
     if name == "type_named" {
         const tn: String = arg match {
             S(s) => s
-            _ => return ct_err("E2118", $"`type_named` expects a string, got {describe(&arg)}",
-                arg_span)
+            _ => return ct_err(
+                "E2118",
+                $"`type_named` expects a string, got {describe(&arg)}",
+                arg_span,
+            )
         }
         env.lookup.resolve(env.lookup.ctx, tn) match {
             Some(td) => return Ok(CtValue.TypeInfo(type_info_of_decl(env, td)))
@@ -538,8 +559,11 @@ fn ct_call(env: &CtEnv, c: &CallExpr) Result(CtValue, CtError) {
     const text: String = arg match {
         S(s) => s
         Ident(i) => i
-        _ => return ct_err("E2118",
-            $"`{name}` expects a string or identifier, got {describe(&arg)}", arg_span)
+        _ => return ct_err(
+            "E2118",
+            $"`{name}` expects a string or identifier, got {describe(&arg)}",
+            arg_span,
+        )
     }
     if name == "lower" {
         return Ok(CtValue.S(lower_case(env, text)))
@@ -553,8 +577,12 @@ fn ct_call(env: &CtEnv, c: &CallExpr) Result(CtValue, CtError) {
     return ct_err("E2116", $"unknown compile-time function `{name}`", c.span)
 }
 
-fn ct_member(env: &CtEnv, recv: &CtValue, member: String, span: SourceSpan) Result(CtValue,
-    CtError) {
+fn ct_member(
+    env: &CtEnv,
+    recv: &CtValue,
+    member: String,
+    span: SourceSpan,
+) Result(CtValue, CtError) {
     return recv.* match {
         NsPlatform => {
             if member == "os" {
@@ -596,8 +624,11 @@ fn ct_member(env: &CtEnv, recv: &CtValue, member: String, span: SourceSpan) Resu
             ct_err("E2116", $"unknown compile-time member `{member}`", span)
         }
         TypeInfo(t) => ct_type_member(env, &t, member, span)
-        Value(_) => ct_err("E2116",
-            $"cannot access member `{member}` on a value (`type_of(value)` is its type)", span)
+        Value(_) => ct_err(
+            "E2116",
+            $"cannot access member `{member}` on a value (`type_of(value)` is its type)",
+            span,
+        )
         Field(f) => {
             if member == "name" {
                 return Ok(CtValue.S(f.name))
@@ -606,9 +637,11 @@ fn ct_member(env: &CtEnv, recv: &CtValue, member: String, span: SourceSpan) Resu
                 return Ok(CtValue.TypeInfo(type_info_of(env, f.type_expr)))
             }
             if member == "offset" {
-                return ct_err("E2120",
+                return ct_err(
+                    "E2120",
                     $"`offset` is not available at template time (layout is computed after expansion)",
-                    span)
+                    span,
+                )
             }
             ct_err("E2116", $"cannot access member `{member}` on a field", span)
         }
@@ -650,8 +683,12 @@ fn ct_member(env: &CtEnv, recv: &CtValue, member: String, span: SourceSpan) Resu
 }
 
 // `core.rtti.TypeInfo` members, derived from the declaration's syntax.
-fn ct_type_member(env: &CtEnv, t: &CtTypeInfo, member: String, span: SourceSpan) Result(CtValue,
-    CtError) {
+fn ct_type_member(
+    env: &CtEnv,
+    t: &CtTypeInfo,
+    member: String,
+    span: SourceSpan,
+) Result(CtValue, CtError) {
     if member == "name" {
         return Ok(CtValue.S(t.name))
     }
@@ -662,16 +699,20 @@ fn ct_type_member(env: &CtEnv, t: &CtTypeInfo, member: String, span: SourceSpan)
         return Ok(CtValue.Kind(t.kind))
     }
     if member == "size" or member == "align" {
-        return ct_err("E2120",
+        return ct_err(
+            "E2120",
             $"`{member}` is not available at template time (layout is computed after expansion)",
-            span)
+            span,
+        )
     }
     if member == "copyable" {
         return t.copyable match {
             Some(b) => Ok(CtValue.B(b))
-            None => ct_err("E2120",
+            None => ct_err(
+                "E2120",
                 $"`copyable` is not available at template time (it is derived after type resolution)",
-                span)
+                span,
+            )
         }
     }
     const from_ty = t.source match {
@@ -679,9 +720,11 @@ fn ct_type_member(env: &CtEnv, t: &CtTypeInfo, member: String, span: SourceSpan)
         _ => false
     }
     if from_ty {
-        return ct_err("E2120",
+        return ct_err(
+            "E2120",
             $"`{member}` is not available on a type parameter in `#if` (only `name`, `kind` and `copyable` are)",
-            span)
+            span,
+        )
     }
     if member == "type_params" or member == "type_args" {
         let empty: List(CtValue) = list(0, Some(env.alloc))
@@ -1187,8 +1230,12 @@ fn pascal_case(env: &CtEnv, text: String) String {
 // Resolves every decl-level #if in the module, immediately after projection: only the active
 // branch's declarations survive into the module's decl list (nested #if resolves recursively).
 // Invalid conditions produce diagnostics and drop both branches.
-pub fn flatten_module_decls(m: &Module, ctx: &ComptimeCtx, diags: &List(Diagnostic),
-    allocator: &Allocator? = null) {
+pub fn flatten_module_decls(
+    m: &Module,
+    ctx: &ComptimeCtx,
+    diags: &List(Diagnostic),
+    allocator: &Allocator? = null,
+) {
     let flattened: List(Decl) = list(m.decls.len, allocator)
     splice_decls(m.decls.as_slice(), ctx, diags, &flattened)
     m.set_decls(flattened)

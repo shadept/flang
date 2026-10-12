@@ -77,8 +77,11 @@ pub fn hint_sites(m: &Module, allocator: &Allocator? = null) List(HintSite) {
 // the ANALYZED module's node ids. The two binder sequences pair positionally by name; pairing stops
 // at the first mismatch (a binder added, removed or renamed), so hints below that divergence wait
 // for the next analysis while everything above keeps rendering at live offsets.
-pub fn live_hint_sites(live_text: String, analyzed: &Module,
-    allocator: &Allocator? = null) List(HintSite) {
+pub fn live_hint_sites(
+    live_text: String,
+    analyzed: &Module,
+    allocator: &Allocator? = null,
+) List(HintSite) {
     let doc = parse_doc(live_text, allocator)
     let live = module_binders(&doc.module, allocator)
     let anal = module_binders(analyzed, allocator)

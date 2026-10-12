@@ -173,8 +173,12 @@ fn overrides_from(docs: &DocumentStore, allocator: &Allocator?) Dict(String, Str
 
 // Analyze the project rooted at `dir` and add it to the workspace. Null when the manifest is
 // unreadable or its source glob matches nothing.
-pub fn open_project(self: &Workspace, dir: String, docs: &DocumentStore,
-    allocator: &Allocator? = null) ProjectId? {
+pub fn open_project(
+    self: &Workspace,
+    dir: String,
+    docs: &DocumentStore,
+    allocator: &Allocator? = null,
+) ProjectId? {
     const loaded = self.load_project(dir, docs, allocator)
     if loaded.is_none() {
         return null
@@ -185,8 +189,13 @@ pub fn open_project(self: &Workspace, dir: String, docs: &DocumentStore,
 
 // Re-check an open project, re-parsing only `dirty` paths. The module set is assumed unchanged; a
 // changed set (created/deleted file, edited manifest) needs `reopen_project`.
-pub fn reanalyze_project(self: &Workspace, idx: ProjectId, dirty: &Set(String),
-    docs: &DocumentStore, allocator: &Allocator? = null) {
+pub fn reanalyze_project(
+    self: &Workspace,
+    idx: ProjectId,
+    dirty: &Set(String),
+    docs: &DocumentStore,
+    allocator: &Allocator? = null,
+) {
     let p = &self.projects[idx]
     let ov = overrides_from(docs, allocator)
     reanalyze(&p.unit, &p.ctx, dirty, Some(&ov), allocator)
@@ -196,8 +205,12 @@ pub fn reanalyze_project(self: &Workspace, idx: ProjectId, dirty: &Set(String),
 
 // Rebuild an open project from scratch: fresh manifest, fresh module set. Keeps the old analysis
 // when the rebuild fails (manifest gone mid-edit).
-pub fn reopen_project(self: &Workspace, idx: ProjectId, docs: &DocumentStore,
-    allocator: &Allocator? = null) bool {
+pub fn reopen_project(
+    self: &Workspace,
+    idx: ProjectId,
+    docs: &DocumentStore,
+    allocator: &Allocator? = null,
+) bool {
     let dir = from_view(self.projects[idx].dir.view, allocator)
     const fresh = self.load_project(dir.view, docs, allocator)
     dir.deinit()
@@ -208,8 +221,12 @@ pub fn reopen_project(self: &Workspace, idx: ProjectId, docs: &DocumentStore,
     return true
 }
 
-fn load_project(self: &Workspace, dir: String, docs: &DocumentStore,
-    allocator: &Allocator?) OpenProject? {
+fn load_project(
+    self: &Workspace,
+    dir: String,
+    docs: &DocumentStore,
+    allocator: &Allocator?,
+) OpenProject? {
     const manifest = $"{dir}/flang.toml"
     const text = read_text(manifest.view)
     manifest.deinit()

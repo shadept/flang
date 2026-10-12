@@ -203,12 +203,16 @@ test "map_err translates an Err and leaves an Ok alone" {
 
 test "and_then chains a fallible step without nesting" {
     const ok: Result(i32, String) = Ok(4)
-    const chained: Result(i32, String) = ok.and_then(fn(v: i32) Result(i32,
-            String) { return Ok(v + 1) })
+    const chained: Result(
+        i32,
+        String,
+    ) = ok.and_then(fn(v: i32) Result(i32, String) { return Ok(v + 1) })
     assert_eq(chained.unwrap(), 5, "chained through")
 
-    const bailed: Result(i32, String) = ok.and_then(fn(v: i32) Result(i32,
-            String) { return Err("bail") })
+    const bailed: Result(
+        i32,
+        String,
+    ) = ok.and_then(fn(v: i32) Result(i32, String) { return Err("bail") })
     assert_true(bailed.is_err(), "inner failure surfaces")
 }
 

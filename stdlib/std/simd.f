@@ -147,8 +147,12 @@ test "v128_from_u64x2 packs correctly" {
 }
 
 test "v128_from_u32x4 packs correctly" {
-    const v = v128_from_u32x4(0x0102_0304 as u32, 0x0506_0708 as u32, 0x090A_0B0C as u32,
-        0x0D0E_0F10 as u32)
+    const v = v128_from_u32x4(
+        0x0102_0304 as u32,
+        0x0506_0708 as u32,
+        0x090A_0B0C as u32,
+        0x0D0E_0F10 as u32,
+    )
     let out: [u8; 16] = [0; 16]
     v128_store(&out[0], v)
     assert_eq(out[0] as u32, 4u32, "low byte of first u32")

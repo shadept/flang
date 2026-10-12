@@ -178,8 +178,7 @@ pub fn walk_dir(root: String, allocator: &Allocator? = null) Result(WalkIter, Fs
         path_len_before = root_len,
     })
 
-    return Ok(WalkIter { stack = move stack, path_buf = move sb, last_error = null,
-        done = false })
+    return Ok(WalkIter { stack = move stack, path_buf = move sb, last_error = null, done = false })
 }
 
 pub fn iter(self: &WalkIter) &WalkIter {

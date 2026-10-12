@@ -80,8 +80,13 @@ pub type LspServer = struct {
     next_id: i64
 }
 
-pub fn lsp_server(r: Reader, w: Writer, stdlib_path: String = "", version: String = "0.0.0",
-    log_access: bool = false) LspServer {
+pub fn lsp_server(
+    r: Reader,
+    w: Writer,
+    stdlib_path: String = "",
+    version: String = "0.0.0",
+    log_access: bool = false,
+) LspServer {
     return .{
         reader = r,
         writer = w,
@@ -278,8 +283,13 @@ fn encode_pos(e: &Encoder, p: Position) {
     e.end_map()
 }
 
-fn encode_span_range(e: &Encoder, idx: &LineIndex, text: String, span: SourceSpan,
-    enc: PositionEncoding) {
+fn encode_span_range(
+    e: &Encoder,
+    idx: &LineIndex,
+    text: String,
+    span: SourceSpan,
+    enc: PositionEncoding,
+) {
     e.begin_map(0)
     e.key("start")
     encode_pos(e, idx.to_position(text, span.start, enc))
@@ -989,8 +999,13 @@ fn on_document_symbol(self: &LspServer, msg: &RpcMessage) {
     write_frame(self.writer, sb.as_view())
 }
 
-fn encode_symbols(e: &Encoder, syms: &List(DocSymbol), idx: &LineIndex, text: String,
-    enc: PositionEncoding) {
+fn encode_symbols(
+    e: &Encoder,
+    syms: &List(DocSymbol),
+    idx: &LineIndex,
+    text: String,
+    enc: PositionEncoding,
+) {
     e.begin_seq(syms.len)
     for &s in syms {
         e.begin_map(0)
@@ -1200,8 +1215,13 @@ fn respond_null(self: &LspServer, msg: &RpcMessage) {
 
 // One LSP LocationLink from `origin` (in the requesting file) to `target`, both resolved inside
 // project `pi`. The target's range doubles as its selection range.
-fn encode_link(self: &LspServer, e: &Encoder, pi: ProjectId, origin: SourceSpan,
-    target: SourceSpan) {
+fn encode_link(
+    self: &LspServer,
+    e: &Encoder,
+    pi: ProjectId,
+    origin: SourceSpan,
+    target: SourceSpan,
+) {
     const unit = &self.ws.projects[pi].unit
     const origin_text = unit.sources[origin.file_id as usize].view
     let origin_idx = line_index(origin_text)
@@ -1266,8 +1286,8 @@ fn decl_label(self: &LspServer, pi: ProjectId, span: SourceSpan) String? {
     }
     while end > span.start and (text[end - 1] == ' ' or text[end - 1] == '\n'
         or text[end - 1] == '\r' or text[end - 1] == '\t') {
-        end = end - 1
-    }
+            end = end - 1
+        }
     if end <= span.start {
         return null
     }
@@ -1538,8 +1558,14 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
 
 // The hover response: `label` as a flang code block, `doc` (consumed) as markdown prose below it,
 // over `span` in `text`.
-fn respond_hover(self: &LspServer, msg: &RpcMessage, label: move OwnedString,
-    doc: move OwnedString?, text: String, span: SourceSpan) {
+fn respond_hover(
+    self: &LspServer,
+    msg: &RpcMessage,
+    label: move OwnedString,
+    doc: move OwnedString?,
+    text: String,
+    span: SourceSpan,
+) {
     let sb = string_builder(512)
     defer sb.deinit()
     let jenc = json_encoder(sb.writer())
@@ -1967,8 +1993,8 @@ fn on_inlay_hint(self: &LspServer, msg: &RpcMessage) {
             continue
         }
         const ty = type_of_node(result, site.node)
-        if ty.is_none() or !renderable_ty(result, ty.unwrap(), vars) or is_void_ty(result,
-            ty.unwrap()) {
+        if ty.is_none() or !renderable_ty(result, ty.unwrap(), vars)
+            or is_void_ty(result, ty.unwrap()) {
             continue
         }
         const rendered = render_ty(result, ty.unwrap(), Some(vars))
@@ -2182,8 +2208,10 @@ fn frame_into(sb: &StringBuilder, body: String) {
 test "initialize negotiates utf-8 when offered" {
     let input = string_builder(512)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-16\",\"utf-8\"]}}}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"general\":{\"positionEncodings\":[\"utf-16\",\"utf-8\"]}}}}",
+    )
 
     let out = string_builder(512)
     defer out.deinit()
@@ -2199,15 +2227,19 @@ test "initialize negotiates utf-8 when offered" {
     assert_true(contains(out.as_view(), "\"save\":true"), "save notifications requested")
     assert_true(contains(out.as_view(), "\"documentSymbolProvider\":true"), "symbols advertised")
     assert_true(contains(out.as_view(), "\"foldingRangeProvider\":true"), "folding advertised")
-    assert_true(contains(out.as_view(), "\"workspaceSymbolProvider\":true"),
-        "workspace symbols advertised")
+    assert_true(
+        contains(out.as_view(), "\"workspaceSymbolProvider\":true"),
+        "workspace symbols advertised",
+    )
 }
 
 test "initialize falls back to utf-16" {
     let input = string_builder(256)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}",
+    )
 
     let out = string_builder(512)
     defer out.deinit()
@@ -2222,8 +2254,10 @@ test "initialize falls back to utf-16" {
 test "initialized reports server status with version and folders" {
     let input = string_builder(512)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"workspaceFolders\":[{\"uri\":\"file:///c%3A/w\",\"name\":\"w\"}]}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"workspaceFolders\":[{\"uri\":\"file:///c%3A/w\",\"name\":\"w\"}]}}",
+    )
     frame_into(&input, "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}")
 
     let out = string_builder(1024)
@@ -2272,10 +2306,14 @@ test "exit without shutdown returns 1" {
 test "didOpen and didChange replace the buffer, didClose drops it" {
     let input = string_builder(1024)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":1,\"text\":\"const A: i32 = 1\"}}}")
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":2},\"contentChanges\":[{\"text\":\"const B: i32 = 2\"}]}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":1,\"text\":\"const A: i32 = 1\"}}}",
+    )
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":2},\"contentChanges\":[{\"text\":\"const B: i32 = 2\"}]}}",
+    )
 
     let out = string_builder(2048)
     defer out.deinit()
@@ -2292,8 +2330,10 @@ test "didOpen and didChange replace the buffer, didClose drops it" {
 
     let input2 = string_builder(256)
     defer input2.deinit()
-    frame_into(&input2,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\"}}}")
+    frame_into(
+        &input2,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\"}}}",
+    )
     let mr2 = mem_reader(input2.as_view())
     srv.reader = mr2.reader()
     srv.run()
@@ -2303,8 +2343,10 @@ test "didOpen and didChange replace the buffer, didClose drops it" {
 test "a keystroke publishes syntax diagnostics and a fix clears them" {
     let input = string_builder(1024)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":1,\"text\":\"fn broken( {\"}}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":1,\"text\":\"fn broken( {\"}}}",
+    )
 
     let out = string_builder(4096)
     defer out.deinit()
@@ -2312,15 +2354,19 @@ test "a keystroke publishes syntax diagnostics and a fix clears them" {
     let srv = lsp_server(mr.reader(), out.writer())
     defer srv.deinit()
     srv.run()
-    assert_true(contains(out.as_view(), "\"method\":\"textDocument/publishDiagnostics\""),
-        "diagnostics published on open")
+    assert_true(
+        contains(out.as_view(), "\"method\":\"textDocument/publishDiagnostics\""),
+        "diagnostics published on open",
+    )
     assert_true(contains(out.as_view(), "\"severity\":1"), "the parse error is an error")
     assert_true(contains(out.as_view(), "\"source\":\"flang\""), "labelled as ours")
 
     let input2 = string_builder(512)
     defer input2.deinit()
-    frame_into(&input2,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":2},\"contentChanges\":[{\"text\":\"fn ok() { return }\"}]}}")
+    frame_into(
+        &input2,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":2},\"contentChanges\":[{\"text\":\"fn ok() { return }\"}]}}",
+    )
     let out2 = string_builder(1024)
     defer out2.deinit()
     let mr2 = mem_reader(input2.as_view())
@@ -2333,10 +2379,14 @@ test "a keystroke publishes syntax diagnostics and a fix clears them" {
 test "documentSymbol answers with the outline" {
     let input = string_builder(1024)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":1,\"text\":\"pub fn go() i32 { return 1 }\\npub type P = struct { x: i32 }\"}}}")
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/documentSymbol\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\"}}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":1,\"text\":\"pub fn go() i32 { return 1 }\\npub type P = struct { x: i32 }\"}}}",
+    )
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/documentSymbol\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\"}}}",
+    )
 
     let out = string_builder(4096)
     defer out.deinit()
@@ -2356,8 +2406,10 @@ test "documentSymbol answers with the outline" {
 test "documentSymbol for an unknown document answers null" {
     let input = string_builder(512)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/documentSymbol\",\"params\":{\"textDocument\":{\"uri\":\"file:///nope.f\"}}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/documentSymbol\",\"params\":{\"textDocument\":{\"uri\":\"file:///nope.f\"}}}",
+    )
 
     let out = string_builder(512)
     defer out.deinit()
@@ -2371,10 +2423,14 @@ test "documentSymbol for an unknown document answers null" {
 test "foldingRange answers with delimiter folds" {
     let input = string_builder(1024)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":1,\"text\":\"fn a() {\\n    let x = 1\\n    return\\n}\"}}}")
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"textDocument/foldingRange\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\"}}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":1,\"text\":\"fn a() {\\n    let x = 1\\n    return\\n}\"}}}",
+    )
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"textDocument/foldingRange\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\"}}}",
+    )
 
     let out = string_builder(4096)
     defer out.deinit()
@@ -2383,15 +2439,19 @@ test "foldingRange answers with delimiter folds" {
     defer srv.deinit()
     srv.run()
 
-    assert_true(contains(out.as_view(), "\"id\":6,\"result\":[{\"startLine\":0,\"endLine\":2}]"),
-        "the body folds, closing brace stays visible")
+    assert_true(
+        contains(out.as_view(), "\"id\":6,\"result\":[{\"startLine\":0,\"endLine\":2}]"),
+        "the body folds, closing brace stays visible",
+    )
 }
 
 test "workspace/symbol with no open projects answers an empty list" {
     let input = string_builder(512)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"go\"}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"go\"}}",
+    )
 
     let out = string_builder(512)
     defer out.deinit()
@@ -2405,10 +2465,14 @@ test "workspace/symbol with no open projects answers an empty list" {
 test "workspace/symbol answers matches with kinds, containers and locations" {
     let input = string_builder(1024)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"\"}}")
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"po\"}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"\"}}",
+    )
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"po\"}}",
+    )
 
     let out = string_builder(8192)
     defer out.deinit()
@@ -2441,8 +2505,10 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
     srv.run()
 
     assert_true(contains(out.as_view(), "\"id\":8,\"result\":["), "empty query answered")
-    assert_true(contains(out.as_view(), "\"name\":\"x\",\"kind\":8,\"containerName\":\"Point\""),
-        "member carries its container")
+    assert_true(
+        contains(out.as_view(), "\"name\":\"x\",\"kind\":8,\"containerName\":\"Point\""),
+        "member carries its container",
+    )
     assert_true(contains(out.as_view(), "\"name\":\"point\",\"kind\":12"), "function with kind")
     assert_true(contains(out.as_view(), "\"name\":\"Point\",\"kind\":23"), "struct with kind")
     assert_true(contains(out.as_view(), "\"range\":{\"start\":{\"line\":"), "location has a range")
@@ -2524,8 +2590,10 @@ fn demo_run(request: String, out: &StringBuilder) {
 test "hover on a local read renders name and type" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":8,\"character\":11}}}",
-        &out)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":8,\"character\":11}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "```flang"), "flang code block")
     assert_true(contains(out.as_view(), "let a: i32"), "scope intro, name and type")
 }
@@ -2533,16 +2601,20 @@ test "hover on a local read renders name and type" {
 test "hover on a for-loop binder renders the element type" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":5,\"character\":8}}}",
-        &out)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":5,\"character\":8}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "for v: i32"), "loop variable hover with its intro")
 }
 
 test "hover on a callee names the function" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":3,\"character\":13}}}",
-        &out)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":3,\"character\":13}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "point"), "function named")
     assert_true(contains(out.as_view(), "i32"), "signature or type shown")
 }
@@ -2550,8 +2622,10 @@ test "hover on a callee names the function" {
 test "definition on a call lands on the declaration" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":3,\"character\":13}}}",
-        &out)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":3,\"character\":13}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "\"id\":13,\"result\":[{"), "a location came back")
     assert_true(contains(out.as_view(), "\"uri\":\"file:///t/m.f\""), "same file")
     assert_true(contains(out.as_view(), "\"start\":{\"line\":0,"), "the declaration line")
@@ -2563,11 +2637,15 @@ fn demo_import_run(request: String, out: &StringBuilder, links: bool = false) {
     const src = "import t.extra\nimport t.missing\npub fn go() i32 { return extra() }\n"
     let input = string_builder(1024)
     if links {
-        frame_into(&input,
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"textDocument\":{\"definition\":{\"linkSupport\":true}}}}}")
+        frame_into(
+            &input,
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{\"textDocument\":{\"definition\":{\"linkSupport\":true}}}}}",
+        )
     }
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/imp.f\",\"version\":1,\"text\":\"import t.extra\\nimport t.missing\\npub fn go() i32 { return extra() }\\n\"}}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/imp.f\",\"version\":1,\"text\":\"import t.extra\\nimport t.missing\\npub fn go() i32 { return extra() }\\n\"}}}",
+    )
     frame_into(&input, request)
     defer input.deinit()
     let mr = mem_reader(input.as_view())
@@ -2601,23 +2679,34 @@ fn demo_import_run(request: String, out: &StringBuilder, links: bool = false) {
 test "definition on an import lands on the imported file" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_import_run("{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/imp.f\"},\"position\":{\"line\":0,\"character\":10}}}",
-        &out)
+    demo_import_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/imp.f\"},\"position\":{\"line\":0,\"character\":10}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "\"id\":40,\"result\":[{"), "a location came back")
     assert_true(contains(out.as_view(), "t.extra"), "the imported module's file")
-    assert_true(contains(out.as_view(), "\"start\":{\"line\":0,\"character\":0}"),
-        "its first position")
+    assert_true(
+        contains(out.as_view(), "\"start\":{\"line\":0,\"character\":0}"),
+        "its first position",
+    )
     assert_true(!contains(out.as_view(), "imp.f\"}"), "not the importing file itself")
 }
 
 test "definition on an import is a link over the whole dotted path when the client takes links" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_import_run("{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/imp.f\"},\"position\":{\"line\":0,\"character\":10}}}",
-        &out, true)
-    assert_true(contains(out.as_view(),
-            "\"id\":42,\"result\":[{\"originSelectionRange\":{\"start\":{\"line\":0,\"character\":7},\"end\":{\"line\":0,\"character\":14}}"),
-        "origin is `t.extra`, keyword excluded")
+    demo_import_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/imp.f\"},\"position\":{\"line\":0,\"character\":10}}}",
+        &out,
+        true,
+    )
+    assert_true(
+        contains(
+            out.as_view(),
+            "\"id\":42,\"result\":[{\"originSelectionRange\":{\"start\":{\"line\":0,\"character\":7},\"end\":{\"line\":0,\"character\":14}}",
+        ),
+        "origin is `t.extra`, keyword excluded",
+    )
     assert_true(contains(out.as_view(), "\"targetUri\":\"file://"), "a link target")
     assert_true(contains(out.as_view(), "t.extra\",\"targetRange\""), "the imported module's file")
 }
@@ -2625,107 +2714,151 @@ test "definition on an import is a link over the whole dotted path when the clie
 test "definition on an unresolved import answers empty, not the name tiers" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_import_run("{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/imp.f\"},\"position\":{\"line\":1,\"character\":10}}}",
-        &out)
+    demo_import_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/imp.f\"},\"position\":{\"line\":1,\"character\":10}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "\"id\":41,\"result\":[]"), "empty result")
 }
 
 test "hover on a function parameter renders its type" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":0,\"character\":13}}}",
-        &out)
-    assert_true(contains(out.as_view(), "```flang\\nparam q: i32\\n```"),
-        "parameter with its intro, name and type")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":0,\"character\":13}}}",
+        &out,
+    )
+    assert_true(
+        contains(out.as_view(), "```flang\\nparam q: i32\\n```"),
+        "parameter with its intro, name and type",
+    )
 }
 
 test "hover inside a generic body answers with its type parameter" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":11,\"character\":31}}}",
-        &out)
-    assert_true(contains(out.as_view(), "param x: T"),
-        "the body's own type parameter answers, not an instantiation's type")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":11,\"character\":31}}}",
+        &out,
+    )
+    assert_true(
+        contains(out.as_view(), "param x: T"),
+        "the body's own type parameter answers, not an instantiation's type",
+    )
 }
 
 test "hover on a callee inside a generic body shows the declaration" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":18,\"character\":33}}}",
-        &out)
-    assert_true(contains(out.as_view(), "pub fn point(q: i32) i32"),
-        "callee hover matches the non-generic behaviour")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":18,\"character\":33}}}",
+        &out,
+    )
+    assert_true(
+        contains(out.as_view(), "pub fn point(q: i32) i32"),
+        "callee hover matches the non-generic behaviour",
+    )
 }
 
 test "hover on a generic callee shows its declaration" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":26,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":17,\"character\":32}}}",
-        &out)
-    assert_true(contains(out.as_view(), "pub fn pick(x: $T) $T"),
-        "generic declaration slice, body cut at the brace")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":26,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":17,\"character\":32}}}",
+        &out,
+    )
+    assert_true(
+        contains(out.as_view(), "pub fn pick(x: $T) $T"),
+        "generic declaration slice, body cut at the brace",
+    )
 }
 
 test "hover on a callee inside an uninstantiated generic answers by name" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":27,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":20,\"character\":33}}}",
-        &out)
-    assert_true(contains(out.as_view(), "pub fn point(q: i32) i32"),
-        "no overlay exists, the registry answers like goto does")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":27,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":20,\"character\":33}}}",
+        &out,
+    )
+    assert_true(
+        contains(out.as_view(), "pub fn point(q: i32) i32"),
+        "no overlay exists, the registry answers like goto does",
+    )
 }
 
 test "hover on a member field renders the field type" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":28,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":21,\"character\":37}}}",
-        &out)
-    assert_true(contains(out.as_view(), "```flang\\nfield x: i32\\n```"),
-        "field intro, name and type")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":28,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":21,\"character\":37}}}",
+        &out,
+    )
+    assert_true(
+        contains(out.as_view(), "```flang\\nfield x: i32\\n```"),
+        "field intro, name and type",
+    )
 }
 
 test "definition on a member field lands on the field declaration" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":29,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":21,\"character\":37}}}",
-        &out)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":29,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":21,\"character\":37}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "\"id\":29,\"result\":[{"), "a location came back")
-    assert_true(contains(out.as_view(), "\"line\":1,\"character\":22"),
-        "the field inside the struct, not some same-named global")
+    assert_true(
+        contains(out.as_view(), "\"line\":1,\"character\":22"),
+        "the field inside the struct, not some same-named global",
+    )
 }
 
 test "a param shadowing a function name hovers as the param" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":22,\"character\":45}}}",
-        &out)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":22,\"character\":45}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "point: i32"), "the binder's annotation answers")
-    assert_true(!contains(out.as_view(), "pub fn point"),
-        "the same-named function does not hijack the hover")
+    assert_true(
+        !contains(out.as_view(), "pub fn point"),
+        "the same-named function does not hijack the hover",
+    )
 }
 
 test "the qualifier of Enum.Variant resolves to the enum, the member to the variant" {
     let out = string_builder(4096)
     defer out.deinit()
     // definition on `E` in `E.A`
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":24,\"character\":27}}}",
-        &out)
-    assert_true(contains(out.as_view(), "\"line\":23,\"character\":0"),
-        "qualifier lands on the enum declaration")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":24,\"character\":27}}}",
+        &out,
+    )
+    assert_true(
+        contains(out.as_view(), "\"line\":23,\"character\":0"),
+        "qualifier lands on the enum declaration",
+    )
 
     let out2 = string_builder(4096)
     defer out2.deinit()
     // definition on `A` in `E.A`
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":34,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":24,\"character\":29}}}",
-        &out2)
-    assert_true(contains(out2.as_view(), "\"line\":23,\"character\":20"),
-        "member lands on the variant inside the enum body")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":34,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":24,\"character\":29}}}",
+        &out2,
+    )
+    assert_true(
+        contains(out2.as_view(), "\"line\":23,\"character\":20"),
+        "member lands on the variant inside the enum body",
+    )
 
     let out3 = string_builder(4096)
     defer out3.deinit()
     // hover on `E` in `E.A`
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":35,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":24,\"character\":27}}}",
-        &out3)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":35,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":24,\"character\":27}}}",
+        &out3,
+    )
     assert_true(contains(out3.as_view(), "pub type E = enum"), "qualifier hovers as the enum")
 }
 
@@ -2733,33 +2866,47 @@ test "definition on a projection lands on the associated type, its root on the t
     let out = string_builder(4096)
     defer out.deinit()
     // definition on `Item` in `I.Item`
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":36,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":34,\"character\":25}}}",
-        &out)
-    assert_true(contains(out.as_view(), "\"start\":{\"line\":31,\"character\":4}"),
-        "`Item` lands on the contract's `type Item`")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":36,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":34,\"character\":25}}}",
+        &out,
+    )
+    assert_true(
+        contains(out.as_view(), "\"start\":{\"line\":31,\"character\":4}"),
+        "`Item` lands on the contract's `type Item`",
+    )
 
     let out2 = string_builder(4096)
     defer out2.deinit()
     // definition on `I` in `I.Item`
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":37,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":34,\"character\":22}}}",
-        &out2)
-    assert_true(contains(out2.as_view(), "\"start\":{\"line\":34,\"character\":18}"),
-        "`I` lands on the `$I` that introduces it")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":37,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":34,\"character\":22}}}",
+        &out2,
+    )
+    assert_true(
+        contains(out2.as_view(), "\"start\":{\"line\":34,\"character\":18}"),
+        "`I` lands on the `$I` that introduces it",
+    )
 
     let out3 = string_builder(4096)
     defer out3.deinit()
     // hover on `Item` in `I.Item`
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":38,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":34,\"character\":25}}}",
-        &out3)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":38,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":34,\"character\":25}}}",
+        &out3,
+    )
     assert_true(contains(out3.as_view(), "type Item"), "hovers as the associated type")
 
     let out4 = string_builder(4096)
     defer out4.deinit()
     // references on `Item` in `I.Item`: the declaration and the use
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":39,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":34,\"character\":25},\"context\":{\"includeDeclaration\":true}}}",
-        &out4)
-    assert_true(contains(out4.as_view(), "\"start\":{\"line\":31,\"character\":4}"),
-        "the declaration")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":39,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":34,\"character\":25},\"context\":{\"includeDeclaration\":true}}}",
+        &out4,
+    )
+    assert_true(
+        contains(out4.as_view(), "\"start\":{\"line\":31,\"character\":4}"),
+        "the declaration",
+    )
     assert_true(contains(out4.as_view(), "\"start\":{\"line\":34,\"character\":22}"), "the use")
 }
 
@@ -2774,14 +2921,22 @@ fn definition_lands(id: i32, line: i32, ch: i32, want: String) bool {
 }
 
 test "definition on a type parameter, a where subject and a bare associated type" {
-    assert_true(definition_lands(50, 35, 24, "\"start\":{\"line\":35,\"character\":17}"),
-        "a bare `I` lands on its `$I`")
-    assert_true(definition_lands(51, 35, 44, "\"start\":{\"line\":31,\"character\":4}"),
-        "`Item` in the `where I.Item:` subject lands on the contract's `type Item`")
-    assert_true(definition_lands(52, 35, 42, "\"start\":{\"line\":35,\"character\":17}"),
-        "the subject's root lands on its `$I`")
-    assert_true(definition_lands(53, 32, 25, "\"start\":{\"line\":31,\"character\":4}"),
-        "a bare `Item` inside its contract lands on its declaration")
+    assert_true(
+        definition_lands(50, 35, 24, "\"start\":{\"line\":35,\"character\":17}"),
+        "a bare `I` lands on its `$I`",
+    )
+    assert_true(
+        definition_lands(51, 35, 44, "\"start\":{\"line\":31,\"character\":4}"),
+        "`Item` in the `where I.Item:` subject lands on the contract's `type Item`",
+    )
+    assert_true(
+        definition_lands(52, 35, 42, "\"start\":{\"line\":35,\"character\":17}"),
+        "the subject's root lands on its `$I`",
+    )
+    assert_true(
+        definition_lands(53, 32, 25, "\"start\":{\"line\":31,\"character\":4}"),
+        "a bare `Item` inside its contract lands on its declaration",
+    )
 }
 
 // Hits `pos` (line, character) with a hover request and checks the answer holds `want`.
@@ -2799,60 +2954,82 @@ test "hover on a type parameter reads typevar, on Self the type it names" {
     assert_true(hover_shows(61, 32, 19, "pub type It = contract"), "`Self` in a contract")
     assert_true(hover_shows(62, 32, 25, "type Item"), "a bare associated type")
     assert_true(hover_shows(63, 36, 35, "pub type Node = struct(T)"), "`Self` in a struct")
-    assert_true(hover_shows(64, 37, 55, "param f: F where F: fn(T) T"),
-        "a generic body's parameter shows its type parameter and its bound, not an instantiation's")
+    assert_true(
+        hover_shows(64, 37, 55, "param f: F where F: fn(T) T"),
+        "a generic body's parameter shows its type parameter and its bound, not an instantiation's",
+    )
 }
 
 test "hover on a callee shows the function's docstring" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":17,\"character\":33}}}",
-        &out)
-    assert_true(contains(out.as_view(), "pub fn pick(x: $T) $T\\n```\\n\\nsee Wide"),
-        "the comment run above the declaration follows the code block")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":17,\"character\":33}}}",
+        &out,
+    )
+    assert_true(
+        contains(out.as_view(), "pub fn pick(x: $T) $T\\n```\\n\\nsee Wide"),
+        "the comment run above the declaration follows the code block",
+    )
 }
 
 test "hover on a member field shows the field's docstring" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":29,\"character\":37}}}",
-        &out)
-    assert_true(contains(out.as_view(), "field y: i32\\n```\\n\\nThe y."),
-        "indented field docstring")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":29,\"character\":37}}}",
+        &out,
+    )
+    assert_true(
+        contains(out.as_view(), "field y: i32\\n```\\n\\nThe y."),
+        "indented field docstring",
+    )
 }
 
 test "hover on keywords and annotations answers null" {
     let out = string_builder(4096)
     defer out.deinit()
     // `while` keyword
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":13,\"character\":5}}}",
-        &out)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":13,\"character\":5}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "\"id\":23,\"result\":null"), "no void whole-loop hover")
 
     let out2 = string_builder(4096)
     defer out2.deinit()
     // the `i32` inside go's parameter annotation
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":2,\"character\":14}}}",
-        &out2)
-    assert_true(contains(out2.as_view(), "\"id\":24,\"result\":null"),
-        "no whole-statement hover from an annotation")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":2,\"character\":14}}}",
+        &out2,
+    )
+    assert_true(
+        contains(out2.as_view(), "\"id\":24,\"result\":null"),
+        "no whole-statement hover from an annotation",
+    )
 }
 
 test "definition resolves a non-indexed type through the registry" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":10,\"character\":8}}}",
-        &out)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":10,\"character\":8}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "\"id\":21,\"result\":[{"), "a location came back")
-    assert_true(contains(out.as_view(), "\"uri\":\"file:///t/dep.f\""),
-        "the dependency module's file")
+    assert_true(
+        contains(out.as_view(), "\"uri\":\"file:///t/dep.f\""),
+        "the dependency module's file",
+    )
 }
 
 test "definition on a type name falls back to the symbol index" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":4,\"character\":12}}}",
-        &out)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":4,\"character\":12}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "\"id\":14,\"result\":[{"), "a location came back")
     assert_true(contains(out.as_view(), "\"line\":1,"), "the struct declaration line")
 }
@@ -2860,8 +3037,10 @@ test "definition on a type name falls back to the symbol index" {
 test "typeDefinition on a struct-typed local lands on the struct" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"textDocument/typeDefinition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":4,\"character\":8}}}",
-        &out)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"textDocument/typeDefinition\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":4,\"character\":8}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "\"id\":15,\"result\":[{"), "a location came back")
     assert_true(contains(out.as_view(), "\"line\":1,"), "the struct declaration line")
 }
@@ -2869,8 +3048,10 @@ test "typeDefinition on a struct-typed local lands on the struct" {
 test "references on a parameter finds declaration and reads" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":0,\"character\":34},\"context\":{\"includeDeclaration\":true}}}",
-        &out)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":16,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":0,\"character\":34},\"context\":{\"includeDeclaration\":true}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "\"id\":16,\"result\":[{"), "locations came back")
     assert_true(contains(out.as_view(), "\"character\":34"), "the read site listed")
     assert_true(contains(out.as_view(), "\"character\":13"), "the declaration listed")
@@ -2879,8 +3060,10 @@ test "references on a parameter finds declaration and reads" {
 test "inlayHint lists annotation-less binders with their types" {
     let out = string_builder(8192)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"textDocument/inlayHint\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"}}}",
-        &out)
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"textDocument/inlayHint\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"}}}",
+        &out,
+    )
     assert_true(contains(out.as_view(), "\"label\":\": i32\""), "int binders hinted")
     assert_true(contains(out.as_view(), "\"label\":\": P\""), "struct binder hinted")
     assert_true(contains(out.as_view(), "\"kind\":1"), "typed as type hints")
@@ -2889,17 +3072,23 @@ test "inlayHint lists annotation-less binders with their types" {
 test "inlayHint answers empty when the edited buffer shares no binders" {
     let out = string_builder(8192)
     defer out.deinit()
-    let input = demo_input("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\",\"version\":2},\"contentChanges\":[{\"text\":\"pub fn nothing() { }\"}]}}")
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"textDocument/inlayHint\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"}}}")
+    let input = demo_input(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\",\"version\":2},\"contentChanges\":[{\"text\":\"pub fn nothing() { }\"}]}}",
+    )
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"textDocument/inlayHint\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"}}}",
+    )
     defer input.deinit()
     let mr = mem_reader(input.as_view())
     let srv = lsp_server(mr.reader(), out.writer())
     defer srv.deinit()
     demo_project_into(&srv)
     srv.run()
-    assert_true(contains(out.as_view(), "\"id\":31,\"result\":[]"),
-        "nothing pairs, nothing renders")
+    assert_true(
+        contains(out.as_view(), "\"id\":31,\"result\":[]"),
+        "nothing pairs, nothing renders",
+    )
 }
 
 test "inlayHint follows unsaved edits to live positions" {
@@ -2911,37 +3100,48 @@ test "inlayHint follows unsaved edits to live positions" {
     src.deinit()
     let input = demo_input(change.view)
     change.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"textDocument/inlayHint\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"}}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"textDocument/inlayHint\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"}}}",
+    )
     defer input.deinit()
     let mr = mem_reader(input.as_view())
     let srv = lsp_server(mr.reader(), out.writer())
     defer srv.deinit()
     demo_project_into(&srv)
     srv.run()
-    assert_true(contains(out.as_view(),
-            "\"position\":{\"line\":4,\"character\":9},\"label\":\": i32\""),
-        "the first hint renders one line below its analyzed position")
+    assert_true(
+        contains(out.as_view(), "\"position\":{\"line\":4,\"character\":9},\"label\":\": i32\""),
+        "the first hint renders one line below its analyzed position",
+    )
     assert_true(contains(out.as_view(), "\"label\":\": P\""), "later binders keep pairing")
 }
 
 test "signatureHelp inside a call shows the declaration and active parameter" {
     let out = string_builder(4096)
     defer out.deinit()
-    demo_run("{\"jsonrpc\":\"2.0\",\"id\":18,\"method\":\"textDocument/signatureHelp\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":3,\"character\":18}}}",
-        &out)
-    assert_true(contains(out.as_view(), "\"label\":\"pub fn point(q: i32) i32\""),
-        "declaration slice as the signature label")
-    assert_true(contains(out.as_view(), "\"parameters\":[{\"label\":\"q: i32\"}]"),
-        "parameter label sliced out")
+    demo_run(
+        "{\"jsonrpc\":\"2.0\",\"id\":18,\"method\":\"textDocument/signatureHelp\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"},\"position\":{\"line\":3,\"character\":18}}}",
+        &out,
+    )
+    assert_true(
+        contains(out.as_view(), "\"label\":\"pub fn point(q: i32) i32\""),
+        "declaration slice as the signature label",
+    )
+    assert_true(
+        contains(out.as_view(), "\"parameters\":[{\"label\":\"q: i32\"}]"),
+        "parameter label sliced out",
+    )
     assert_true(contains(out.as_view(), "\"activeParameter\":0"), "first argument active")
 }
 
 test "hover outside any analyzed project answers null" {
     let input = string_builder(512)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///nowhere.f\"},\"position\":{\"line\":0,\"character\":0}}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":19,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///nowhere.f\"},\"position\":{\"line\":0,\"character\":0}}}",
+    )
     let out = string_builder(512)
     defer out.deinit()
     let mr = mem_reader(input.as_view())
@@ -2954,10 +3154,14 @@ test "hover outside any analyzed project answers null" {
 test "formatting answers one whole-document edit" {
     let input = string_builder(1024)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":1,\"text\":\"fn go() {\\n        return\\n}\\n\"}}}")
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"textDocument/formatting\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\"},\"options\":{\"tabSize\":4}}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":1,\"text\":\"fn go() {\\n        return\\n}\\n\"}}}",
+    )
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"textDocument/formatting\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\"},\"options\":{\"tabSize\":4}}}",
+    )
 
     let out = string_builder(4096)
     defer out.deinit()
@@ -2967,19 +3171,27 @@ test "formatting answers one whole-document edit" {
     srv.run()
 
     assert_true(contains(out.as_view(), "\"id\":40,\"result\":[{"), "an edit came back")
-    assert_true(contains(out.as_view(), "\"start\":{\"line\":0,\"character\":0}"),
-        "edit starts at the top")
-    assert_true(contains(out.as_view(), "\"newText\":\"fn go() {\\n    return\\n}\\n\""),
-        "over-indent reduced to four spaces")
+    assert_true(
+        contains(out.as_view(), "\"start\":{\"line\":0,\"character\":0}"),
+        "edit starts at the top",
+    )
+    assert_true(
+        contains(out.as_view(), "\"newText\":\"fn go() {\\n    return\\n}\\n\""),
+        "over-indent reduced to four spaces",
+    )
 }
 
 test "formatting a clean document answers no edits" {
     let input = string_builder(1024)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":1,\"text\":\"fn go() {\\n    return\\n}\\n\"}}}")
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/formatting\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\"}}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\",\"version\":1,\"text\":\"fn go() {\\n    return\\n}\\n\"}}}",
+    )
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"textDocument/formatting\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.f\"}}}",
+    )
 
     let out = string_builder(4096)
     defer out.deinit()
@@ -2993,8 +3205,10 @@ test "formatting a clean document answers no edits" {
 test "unknown request errors, unknown notification is ignored" {
     let input = string_builder(512)
     defer input.deinit()
-    frame_into(&input,
-        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"textDocument/rename\",\"params\":{}}")
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"textDocument/rename\",\"params\":{}}",
+    )
     frame_into(&input, "{\"jsonrpc\":\"2.0\",\"method\":\"$/setTrace\",\"params\":{}}")
 
     let out = string_builder(512)
@@ -3004,8 +3218,10 @@ test "unknown request errors, unknown notification is ignored" {
     defer srv.deinit()
     srv.run()
 
-    assert_true(contains(out.as_view(), "\"id\":9,\"error\":{\"code\":-32601"),
-        "request answered with MethodNotFound")
+    assert_true(
+        contains(out.as_view(), "\"id\":9,\"error\":{\"code\":-32601"),
+        "request answered with MethodNotFound",
+    )
     assert_true(!contains(out.as_view(), "setTrace"), "notification produced no traffic")
 }
 

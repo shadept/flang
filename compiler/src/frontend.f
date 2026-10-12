@@ -74,8 +74,12 @@ fn auto_color() bool {
 // Render diagnostics across a multi-module project, selecting each one's source and path by its
 // span's file id. Spanless diagnostics fall back to the first source. Each file's line index is
 // built once and reused.
-pub fn render_project_diagnostics(diags: &List(Diagnostic), paths: &List(OwnedString),
-    sources: &List(OwnedString), style: &RenderStyle) {
+pub fn render_project_diagnostics(
+    diags: &List(Diagnostic),
+    paths: &List(OwnedString),
+    sources: &List(OwnedString),
+    style: &RenderStyle,
+) {
     let indexes: Dict(usize, LineIndex) = dict()
     defer indexes.deinit()
 

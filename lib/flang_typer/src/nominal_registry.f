@@ -134,8 +134,15 @@ pub fn deinit(self: move NominalRegistry) {
 /// `params` and `assoc` are the definition's `type_params` and `assoc_params`; `args` the
 /// instance's own arguments. An associated type maps to what the instance solved it to, and stays
 /// a variable when the instance is not solved (not ground, or not seen by the checker).
-pub fn instance_subst(self: &NominalRegistry, inst: Ty, params: &List(VarId), assoc: &List(VarId),
-    args: ChildSpan, it: &TypeInterner, alloc: &Allocator?) Dict(VarId, Ty) {
+pub fn instance_subst(
+    self: &NominalRegistry,
+    inst: Ty,
+    params: &List(VarId),
+    assoc: &List(VarId),
+    args: ChildSpan,
+    it: &TypeInterner,
+    alloc: &Allocator?,
+) Dict(VarId, Ty) {
     let subst: Dict(VarId, Ty) = dict(params.len + assoc.len, alloc)
     for i in 0..params.len {
         if i >= args.len {
@@ -168,8 +175,11 @@ pub fn clear_solved(self: &NominalRegistry) {
 //
 // Caller is responsible for checking duplicates first - registering an FQN twice overwrites the
 // index and leaks the previous definition.
-pub fn register(self: &NominalRegistry, def: move NominalDef,
-    fqn_owned: move OwnedString) NominalId {
+pub fn register(
+    self: &NominalRegistry,
+    def: move NominalDef,
+    fqn_owned: move OwnedString,
+) NominalId {
     let id: NominalId = self.next_id
     self.next_id = id + 1
     let idx = self.owned_fqns.len
@@ -214,8 +224,12 @@ fn with_fqn(def: move NominalDef, new_fqn: String) NominalDef {
 // Re-register a definition under an id the registry handed out before, using the FQN view it
 // already owns. `next_id` is untouched, so an id retired by `evict` and put back here keeps naming
 // the same declaration.
-pub fn register_at(self: &NominalRegistry, id: NominalId, def: move NominalDef,
-    fqn_stable: String) {
+pub fn register_at(
+    self: &NominalRegistry,
+    id: NominalId,
+    def: move NominalDef,
+    fqn_stable: String,
+) {
     let fixed = with_fqn(def, fqn_stable)
     self.defs.set(id, fixed)
     self.by_fqn.set(fqn_stable, id)
@@ -443,8 +457,12 @@ pub fn lookup(self: &NominalRegistry, name: String, vis: &Visibility) NomLookup 
 // First visible enum declaring a variant `name` with exactly `arity` payloads. Registration order
 // breaks ties - qualify with the enum name when two visible enums share a variant shape. ponytail:
 // linear scan over every def per call; index variant names if checker profiles flag it.
-pub fn lookup_variant(self: &NominalRegistry, name: String, arity: usize,
-    vis: &Visibility) NominalId? {
+pub fn lookup_variant(
+    self: &NominalRegistry,
+    name: String,
+    arity: usize,
+    vis: &Visibility,
+) NominalId? {
     for i in 0..(self.next_id as usize) {
         let found = self.defs.get_ref(i as NominalId)
         if found.is_none() {

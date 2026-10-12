@@ -132,8 +132,10 @@ fn fill(r: &BufferedReader) {
     if r.pos > 0 {
         if r.end > r.pos {
             let leftover = r.end - r.pos
-            copy_to(slice_from_raw_parts(r.buf.ptr + r.pos, leftover),
-                slice_from_raw_parts(r.buf.ptr, leftover))
+            copy_to(
+                slice_from_raw_parts(r.buf.ptr + r.pos, leftover),
+                slice_from_raw_parts(r.buf.ptr, leftover),
+            )
             r.pos = 0
             r.end = leftover
         } else {

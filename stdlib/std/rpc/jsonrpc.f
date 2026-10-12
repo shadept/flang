@@ -339,7 +339,9 @@ test "frame round-trip" {
 }
 
 test "read_frame skips unknown headers" {
-    let mr = mem_reader("Content-Type: application/vscode-jsonrpc; charset=utf-8\r\nContent-Length: 2\r\n\r\n{}")
+    let mr = mem_reader(
+        "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\nContent-Length: 2\r\n\r\n{}",
+    )
     const got = read_frame(mr.reader())
     assert_true(got.is_ok(), "extra headers are skipped")
     let payload = got.unwrap()
@@ -381,7 +383,9 @@ test "missing Content-Length is MissingLength" {
 }
 
 test "parse request" {
-    const got = parse_message("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}")
+    const got = parse_message(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}",
+    )
     assert_true(got.is_ok(), "request parses")
     let msg = got.unwrap()
     defer msg.deinit()
@@ -426,9 +430,11 @@ test "write_notification exact bytes" {
     let sb = string_builder(64)
     defer sb.deinit()
     write_notification(sb.writer(), "initialized")
-    assert_eq(sb.as_view(),
+    assert_eq(
+        sb.as_view(),
         "Content-Length: 40\r\n\r\n{\"jsonrpc\":\"2.0\",\"method\":\"initialized\"}",
-        "transcript-exact output")
+        "transcript-exact output",
+    )
 }
 
 test "write_response echoes integer id without fraction" {
@@ -461,9 +467,10 @@ test "write_error shape" {
     defer sb.deinit()
     const nul = json_null()
     write_error(sb.writer(), &nul, METHOD_NOT_FOUND, "no such method")
-    assert_true(contains(sb.as_view(),
-            "\"error\":{\"code\":-32601,\"message\":\"no such method\"}"),
-        "error object carries code and message")
+    assert_true(
+        contains(sb.as_view(), "\"error\":{\"code\":-32601,\"message\":\"no such method\"}"),
+        "error object carries code and message",
+    )
     assert_true(contains(sb.as_view(), "\"id\":null"), "unknown id is null")
 }
 
@@ -474,8 +481,10 @@ test "write_request with params" {
     defer params.deinit()
     params.as_object().unwrap().json_set("n", json_number(2.0))
     write_request(sb.writer(), 1, "window/workDoneProgress/create", Some(&params))
-    assert_true(contains(sb.as_view(), "\"id\":1,\"method\":\"window/workDoneProgress/create\""),
-        "request carries id and method")
+    assert_true(
+        contains(sb.as_view(), "\"id\":1,\"method\":\"window/workDoneProgress/create\""),
+        "request carries id and method",
+    )
     assert_true(contains(sb.as_view(), "\"params\":{\"n\":2}"), "params serialized in place")
 }
 

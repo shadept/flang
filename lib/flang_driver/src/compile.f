@@ -26,8 +26,11 @@ import flang_driver.lower
 // Lower `unit` to FIR and compile+link it to an executable at `output_path` (the backend appends a
 // platform extension if missing). The unit must be error-free - callers check `error_count` first;
 // a unit that failed to type-check has no usable types to lower.
-pub fn build_unit(unit: &AnalyzedUnit, output_path: String,
-    allocator: &Allocator? = null) Result(BuildResult, BuildError) {
+pub fn build_unit(
+    unit: &AnalyzedUnit,
+    output_path: String,
+    allocator: &Allocator? = null,
+) Result(BuildResult, BuildError) {
     let m = lower_module(&unit.module, &unit.result, allocator)
     let opts = build_options(output_path, allocator)
     let r = compile(&m, &opts)
@@ -57,17 +60,40 @@ pub fn build_unit(unit: &AnalyzedUnit, output_path: String,
 // cannot link for. `tests`, when given, builds a test binary instead of the program: it is parallel
 // to `modules` and marks the ones whose `test {}` blocks to run, `name_filter` narrows those by
 // label, and the entry point becomes the generated runner rather than the project's `main`.
-pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &TypeCheckResult,
-    output_path: String, comptime_ctx: ComptimeCtx, source_paths: &List(OwnedString),
-    libs: &List(OwnedString), ldflags: &List(OwnedString), stats: bool = false,
-    keep_c: bool = false, release: bool = false, demanded: &List(bool)? = null,
-    profile_runtime: String? = null, profile_all: bool = false, profile_out: String? = null,
-    profile_nodes: u32 = 0, profile_depth: u32 = 0, emit_only: bool = false,
-    tests: &List(bool)? = null, name_filter: String? = null,
-    allocator: &Allocator? = null) Result(BuildResult, BuildError) {
+pub fn build_program(
+    modules: &List(Module),
+    fqns: &List(OwnedString),
+    result: &TypeCheckResult,
+    output_path: String,
+    comptime_ctx: ComptimeCtx,
+    source_paths: &List(OwnedString),
+    libs: &List(OwnedString),
+    ldflags: &List(OwnedString),
+    stats: bool = false,
+    keep_c: bool = false,
+    release: bool = false,
+    demanded: &List(bool)? = null,
+    profile_runtime: String? = null,
+    profile_all: bool = false,
+    profile_out: String? = null,
+    profile_nodes: u32 = 0,
+    profile_depth: u32 = 0,
+    emit_only: bool = false,
+    tests: &List(bool)? = null,
+    name_filter: String? = null,
+    allocator: &Allocator? = null,
+) Result(BuildResult, BuildError) {
     const lower_start = monotonic_ns()
-    let m = lower_program(modules, fqns, result, comptime_ctx, demanded, tests, name_filter,
-        allocator)
+    let m = lower_program(
+        modules,
+        fqns,
+        result,
+        comptime_ctx,
+        demanded,
+        tests,
+        name_filter,
+        allocator,
+    )
     const lower_ns = elapsed_ns(lower_start)
     if stats and m.skip_notes.len > 0 {
         const hdr = $"  {m.functions.len} function(s) emitted, {m.skip_notes.len} skipped:"
@@ -106,7 +132,9 @@ pub fn build_program(modules: &List(Module), fqns: &List(OwnedString), result: &
                 continue
             }
             if !announced {
-                println("warning: lowering refused project function(s) - they are NOT in the binary:")
+                println(
+                    "warning: lowering refused project function(s) - they are NOT in the binary:",
+                )
                 announced = true
             }
             const line = $"    {n}"
@@ -233,8 +261,10 @@ fn print_refusal_chain(m: &IrModule, sym: String) {
 // Every `<mod>.c` sitting beside a `<mod>.f` in the module set. A `.c` the compiler itself emitted
 // is skipped: the harness writes `<test>.c` next to `<test>.f`, and linking a previous build's
 // output would duplicate every symbol in it.
-fn companion_c_files(source_paths: &List(OwnedString),
-    allocator: &Allocator? = null) List(OwnedString) {
+fn companion_c_files(
+    source_paths: &List(OwnedString),
+    allocator: &Allocator? = null,
+) List(OwnedString) {
     let found: List(OwnedString) = list(0, allocator)
     for i in 0..source_paths.len {
         const path = source_paths[i].view

@@ -416,8 +416,11 @@ pub fn record_arg_list(self: &InferenceResults, id: NodeId, exprs: move List(&Ex
     }
 }
 
-pub fn record_receiver_deref(self: &InferenceResults, id: NodeId,
-    chain: move List(ResolvedTarget)) {
+pub fn record_receiver_deref(
+    self: &InferenceResults,
+    id: NodeId,
+    chain: move List(ResolvedTarget),
+) {
     self.receiver_derefs.set(id, chain)
     if self.cap_on {
         self.cap_derefs.push(id)
@@ -447,8 +450,12 @@ pub fn update_arg_deref(self: &InferenceResults, id: NodeId, index: usize, targe
 
 // Rewrite one hop of a recorded deref chain to its specialization - the M10 drain's counterpart of
 // `record_target`'s rewrite.
-pub fn update_receiver_deref(self: &InferenceResults, id: NodeId, index: usize,
-    target: ResolvedTarget) {
+pub fn update_receiver_deref(
+    self: &InferenceResults,
+    id: NodeId,
+    index: usize,
+    target: ResolvedTarget,
+) {
     let l = self.receiver_derefs.get_ref(id)
     if l.is_none() {
         return

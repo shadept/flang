@@ -439,21 +439,21 @@ fn lex_number(self: &Lexer) TokenKind {
 
     if text[start] == '0' and start + 1 < text.len and (text[start + 1] == 'x'
         or text[start + 1] == 'X') {
-        self.position = start + 2
-        while self.position < text.len and (is_hex_digit(text[self.position])
-            or text[self.position] == '_') {
-            self.position = self.position + 1
+            self.position = start + 2
+            while self.position < text.len and (is_hex_digit(text[self.position])
+                or text[self.position] == '_') {
+                    self.position = self.position + 1
+                }
+            // A hex literal takes the same `u8`/`i32`/... suffixes as a decimal one (`0xffu8`) -
+            // returning before the suffix scan left the suffix behind as a stray identifier token.
+            self.scan_int_suffix()
+            return TokenKind.Integer
         }
-        // A hex literal takes the same `u8`/`i32`/... suffixes as a decimal one (`0xffu8`) -
-        // returning before the suffix scan left the suffix behind as a stray identifier token.
-        self.scan_int_suffix()
-        return TokenKind.Integer
-    }
 
     while self.position < text.len and (is_digit(text[self.position])
         or text[self.position] == '_') {
-        self.position = self.position + 1
-    }
+            self.position = self.position + 1
+        }
 
     if self.position < text.len and text[self.position] == '.' and self.position + 1 < text.len
         and is_digit(text[self.position + 1]) {
@@ -461,8 +461,8 @@ fn lex_number(self: &Lexer) TokenKind {
         self.position = self.position + 1
         while self.position < text.len and (is_digit(text[self.position])
             or text[self.position] == '_') {
-            self.position = self.position + 1
-        }
+                self.position = self.position + 1
+            }
     }
 
     if self.position < text.len and (text[self.position] == 'e' or text[self.position] == 'E') {
@@ -473,8 +473,8 @@ fn lex_number(self: &Lexer) TokenKind {
         }
         while self.position < text.len and (is_digit(text[self.position])
             or text[self.position] == '_') {
-            self.position = self.position + 1
-        }
+                self.position = self.position + 1
+            }
     }
 
     if self.position < text.len and text[self.position] == 'f' and self.position + 1 < text.len

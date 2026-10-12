@@ -283,9 +283,19 @@ fn format_once(source: String, cfg: &FmtConfig) Result(OwnedString, FmtError) {
 //     kinds plus the CST node each belongs to (so `-` in `a - b` spaces
 //     while `-a` glues, `(` of a call glues while `(A, B)` of a tuple type
 //     does not)
-//   - a line's indentation is brace depth, plus one step per group (`(`,
-//     `[`) still open at the break, plus one step when the line starts
-//     with a binary operator or `.`-chain continuation
+//   - a bracketed comma list is a group, laid out flat or broken. Broken
+//     puts each element on a line of its own one step deeper, ending in a
+//     comma, and the closer back at the indent of the opener's line; an
+//     array of short elements fills its lines instead. A
+//     group breaks when its author broke the line after its opener, or
+//     when a line it sits on overflows `max_width` and it is the outermost
+//     flat group there. Overflow is found by rendering: a pass that marks
+//     a group to break is rerun until a pass marks none.
+//   - a `where` clause is a group the body's `{` closes, and a signature
+//     holding one moves `where` to its own line before any group breaks
+//   - a brace body indents one step from the line its `{` sits on, not
+//     counting operator continuation; a line starting with a binary
+//     operator or `.`-chain continuation indents one more step
 //   - blank-line runs clamp to `max_blank_lines`
 //   - a comment on its own line is indented like the code around it; a
 //     comment trailing code gets exactly one space before `//`
@@ -294,11 +304,55 @@ fn format_once(source: String, cfg: &FmtConfig) Result(OwnedString, FmtError) {
 // token text, and hole spacing is the author's.
 // ─────────────────────────────────────────────────────────────────────────
 
-// A place the current line may legally break: just after a list comma. `offset` indexes into the
-// line buffer; `indent` is the continuation indentation (in spaces) the split-off remainder gets.
+// The widest array element a broken array still fills its lines with.
+const FILL_ELEMENT_WIDTH: usize = 10
+
+// A place the current line may break: just before `and` / `or`, or after a comma of a filled group.
+// `offset` indexes into the line
+// buffer; `indent` is the indentation (in spaces) the split-off remainder gets, `extra` the part of
+// it that is operator continuation.
 type WrapPoint = struct {
     offset: usize
     indent: usize
+    extra: usize
+}
+
+// What an open bracket or brace is to the layout:
+//   Body  - a brace body: statements, fields, variants, arms
+//   Group - a bracketed list, a `where` clause, or any other `(` / `[`
+//   Sig   - a signature whose `where` clause may move to a line of its own
+type CtxKind = enum {
+    Body
+    Group
+    Sig
+}
+
+type Ctx = struct {
+    kind: CtxKind
+    // Indent of a line that closes it, and of a line inside it.
+    base: usize
+    content: usize
+    // Only a breakable group is ever broken; any other bracket keeps its authored layout.
+    breakable: bool
+    broken: bool
+    // Broken, it fills each line with elements instead of one per line.
+    fill: bool
+    // The opener's token index, which names the group across passes.
+    key: usize
+}
+
+// A list group about to open: the next opening bracket the renderer emits is its opener.
+type GroupSpec = struct {
+    key: usize
+    breakable: bool
+    broken: bool
+    fill: bool
+}
+
+// The opening and closing bracket of a list, as child indices of its node.
+type ListSpan = struct {
+    open: usize
+    close: usize
 }
 
 type Renderer = struct {
@@ -313,13 +367,25 @@ type Renderer = struct {
     eol: String
     // Break opportunities on the current line, in order.
     wrap_points: List(WrapPoint)
-    // Nesting state while streaming tokens.
-    brace_depth: usize
-    group_depth: usize
+    // Open brackets and braces, innermost last.
+    ctx: List(Ctx)
+    next_group: GroupSpec?
+    // The indent the current line opened with, and the part of it that is operator continuation.
+    line_indent: usize
+    line_extra: usize
+    // Where a comment starts on the current line; overflow measures the code before it.
+    comment_col: usize?
+    // The outermost flat group on the current line: the one an overflow breaks.
+    line_cand: usize?
+    // Per token index: a group an earlier pass broke for overflow. Shared by every pass.
+    breaks: &List(bool)
+    // Groups this pass newly broke. A pass that breaks any is stale and reruns.
+    new_breaks: usize
+    // The pending line break is the layout's and is never joined.
+    force_break: bool
+    // Inside a generator definition, whose layout is the author's.
+    gen_depth: usize
     interp_depth: usize
-    // group_depth as it was when each currently-open brace opened. A brace resets continuation
-    // indent: groups opened before it stop counting.
-    group_marks: List(usize)
     // Newlines seen in trivia since the last emitted token or comment.
     pending_newlines: usize
     // Horizontal whitespace seen since then (drives authored-spacing fallbacks, e.g. inside
@@ -331,12 +397,6 @@ type Renderer = struct {
     // dropped while false.
     started: bool
     prev_kind: TokenKind
-    // Inside a `where` clause, opened at brace depth `where_depth`: a line breaking there continues
-    // the signature and indents one step, until the body's `{`.
-    in_where: bool
-    where_depth: usize
-    // A function's clause ends at its block, a contract's at its own body.
-    where_in_fn: bool
     // The last token was a prefix `-` / `!` / `~`: nothing may separate it from its operand (`Less
     // = -1`).
     prev_prefix: bool
@@ -358,25 +418,41 @@ type Renderer = struct {
 }
 
 fn render_module(cst: &CstNode, cfg: &FmtConfig, eol: String) OwnedString {
+    let breaks: List(bool) = filled_list(cst.cst.tokens.len, false)
+    defer breaks.deinit()
+    loop {
+        let pass = render_pass(cst, cfg, eol, &breaks)
+        if pass.is_some() {
+            return pass.unwrap()
+        }
+    }
+}
+
+// One walk under the groups broken so far. Null when the walk broke more, so its output is stale.
+fn render_pass(cst: &CstNode, cfg: &FmtConfig, eol: String, breaks: &List(bool)) OwnedString? {
     let r = Renderer {
         out = string_builder(cst.end + 16),
         line = string_builder(128),
         cfg = cfg,
         eol = eol,
         wrap_points = list(0),
-        brace_depth = 0,
-        group_depth = 0,
+        ctx = list(16),
+        next_group = null,
+        line_indent = 0,
+        line_extra = 0,
+        comment_col = null,
+        line_cand = null,
+        breaks = breaks,
+        new_breaks = 0,
+        force_break = false,
+        gen_depth = 0,
         interp_depth = 0,
-        group_marks = list(0),
         pending_newlines = 0,
         gap_had_space = false,
         line_has_comment = false,
         started = false,
         prev_kind = TokenKind.Eof,
         prev_prefix = false,
-        in_where = false,
-        where_depth = 0usize,
-        where_in_fn = false,
         prev_parent = NodeKind.Module,
         source = cst.cst.source,
         tokens = &cst.cst.tokens,
@@ -387,16 +463,38 @@ fn render_module(cst: &CstNode, cfg: &FmtConfig, eol: String) OwnedString {
     flush_line(&r)
     r.line.deinit()
     r.wrap_points.deinit()
-    r.group_marks.deinit()
-    return r.out.to_string()
+    r.ctx.deinit()
+    if r.new_breaks > 0 {
+        r.out.deinit()
+        return null
+    }
+    return Some(r.out.to_string())
 }
 
 fn flush_line(r: &Renderer) {
+    note_overflow(r)
     if r.line.len > 0 {
         r.out.append(r.line.as_view())
         r.line.clear()
     }
     r.wrap_points.clear()
+    r.comment_col = null
+}
+
+// A line past `max_width` breaks the outermost flat group on it, from the next pass on.
+fn note_overflow(r: &Renderer) {
+    if r.cfg.max_width == 0 or r.line_cand.is_none() {
+        return
+    }
+    const width = r.comment_col ?? r.line.len
+    if width <= r.cfg.max_width {
+        return
+    }
+    const key = r.line_cand.unwrap()
+    if !r.breaks[key] {
+        r.breaks[key] = true
+        r.new_breaks = r.new_breaks + 1
+    }
 }
 
 fn render_node(r: &Renderer, node: &CstNode, parent: NodeKind) {
@@ -410,30 +508,413 @@ fn render_node(r: &Renderer, node: &CstNode, parent: NodeKind) {
         render_block(r, node, false)
         return
     }
+    if node.kind == NodeKind.GeneratorDef {
+        r.gen_depth = r.gen_depth + 1
+        render_children(r, node)
+        r.gen_depth = r.gen_depth - 1
+        return
+    }
+    if node.kind == NodeKind.FunctionDecl {
+        render_fn(r, node)
+        return
+    }
+    if is_comma_list(node.kind) {
+        render_list(r, node)
+        return
+    }
+    render_children(r, node)
+}
+
+fn render_children(r: &Renderer, node: &CstNode) {
     for i in 0..node.child_count() {
-        const child = node.child(i)
-        child match {
-            NodeChild(inner) => {
-                render_node(r, &inner, node.kind)
-                maybe_insert_separator(r, node, i)
-            }
-            TokenChild(tok) => {
-                if tok.kind == TokenKind.Semicolon and r.cfg.remove_semicolons
-                    and is_statement_kind(node.kind) {
-                    // A statement separator becomes the line break it stood in for.
-                    skip_token_keep_trivia(r, tok)
-                    if r.pending_newlines == 0 {
-                        r.pending_newlines = 1
-                    }
-                } else if tok.kind == TokenKind.Comma and skip_comma(r, node, i) {
-                    skip_token_keep_trivia(r, tok)
-                } else {
-                    maybe_insert_trailing_comma(r, node, tok)
-                    render_token(r, tok, node.kind)
+        render_child(r, node, i)
+    }
+}
+
+// The `i`th child of `node`, under the separator policy when it is a token.
+fn render_child(r: &Renderer, node: &CstNode, i: usize) {
+    const child = node.child(i)
+    child match {
+        NodeChild(inner) => {
+            render_node(r, &inner, node.kind)
+            maybe_insert_separator(r, node, i)
+        }
+        TokenChild(tok) => {
+            if tok.kind == TokenKind.Semicolon and r.cfg.remove_semicolons
+                and is_statement_kind(node.kind) {
+                // A statement separator becomes the line break it stood in for.
+                skip_token_keep_trivia(r, tok)
+                if r.pending_newlines == 0 {
+                    r.pending_newlines = 1
                 }
+            } else if tok.kind == TokenKind.Comma and skip_comma(r, node, i) {
+                skip_token_keep_trivia(r, tok)
+            } else {
+                maybe_insert_trailing_comma(r, node, tok)
+                render_token(r, tok, node.kind)
             }
         }
     }
+}
+
+// A bracketed comma list: one group from its opener to its closer.
+fn render_list(r: &Renderer, node: &CstNode) {
+    const span = list_span(node)
+    if span.is_none() {
+        render_children(r, node)
+        return
+    }
+    const s = span.unwrap()
+    for i in 0..node.child_count() {
+        const child = node.child(i)
+        child match {
+            TokenChild(tok) => list_token(r, node, i, tok, s)
+            NodeChild(_) => render_child(r, node, i)
+        }
+    }
+}
+
+// A token of a list's node: the opener opens its group, the closer closes it, and a broken group
+// starts a line after each comma.
+fn list_token(r: &Renderer, node: &CstNode, i: usize, tok: &Token, s: ListSpan) {
+    if i == s.open {
+        r.next_group = Some(group_spec(r, node, tok, s))
+        render_token(r, tok, node.kind)
+        if top_broken(r) {
+            break_after(r)
+        }
+        return
+    }
+    if i == s.close {
+        if top_broken(r) {
+            break_before(r, tok)
+        }
+        maybe_insert_trailing_comma(r, node, tok)
+        render_token(r, tok, node.kind)
+        return
+    }
+    render_child(r, node, i)
+    if tok.kind != TokenKind.Comma or i <= s.open or i >= s.close or !top_broken(r) {
+        return
+    }
+    if top_group(r).unwrap().fill {
+        record_fill_point(r)
+    } else {
+        break_after(r)
+    }
+}
+
+// A filled group may break after this comma, starting the next line at the group's content.
+fn record_fill_point(r: &Renderer) {
+    const content = top_group(r).unwrap().content
+    r.wrap_points.push(WrapPoint { offset = r.line.len, indent = content, extra = 0 })
+}
+
+// A function: its parameter list is a group and its `where` clause another. The signature holding a
+// `where` is a group of its own around both, so an overflow moves `where` to its own line before
+// either list breaks.
+fn render_fn(r: &Renderer, node: &CstNode) {
+    const span = list_span(node)
+    if span.is_none() {
+        render_children(r, node)
+        return
+    }
+    const s = span.unwrap()
+    const where_i = where_index(node, s.close)
+    let in_where = false
+    for i in 0..node.child_count() {
+        const child = node.child(i)
+        child match {
+            TokenChild(tok) => {
+                if i == s.open and where_i.is_some() {
+                    open_sig(r, node, where_i.unwrap())
+                }
+                if where_i.is_some() and i == where_i.unwrap() {
+                    open_where(r, tok)
+                    in_where = true
+                } else if in_where {
+                    where_token(r, node, i, tok)
+                } else {
+                    list_token(r, node, i, tok, s)
+                }
+            }
+            NodeChild(inner) => {
+                if in_where and inner.kind == NodeKind.BlockExpr {
+                    close_where(r, &child)
+                    in_where = false
+                }
+                render_child(r, node, i)
+            }
+        }
+    }
+    // A foreign function's clause ends with the declaration.
+    if in_where {
+        close_ctx(r)
+    }
+}
+
+// Opened at the parameter list and keyed by the `where` token: broken, `where` starts a line.
+fn open_sig(r: &Renderer, node: &CstNode, where_i: usize) {
+    const before = last_token_of(&node.child(where_i - 1)).unwrap()
+    const w = first_token_of(&node.child(where_i)).unwrap()
+    const key = token_index(r.tokens, w.offset)
+    const breakable = can_break(r)
+    const authored = spans_newline(r.source, before.offset + before.text.len, w.offset)
+    const base = r.line_indent - r.line_extra
+    push_ctx(r, Ctx {
+        kind = CtxKind.Sig,
+        base = base,
+        content = base,
+        breakable = breakable,
+        broken = breakable and (authored or r.breaks[key]),
+        fill = false,
+        key = key,
+    })
+}
+
+// `where` closes the signature's group and opens the bound list's, keyed one token past it.
+fn open_where(r: &Renderer, tok: &Token) {
+    const sig = r.ctx.last()
+    if sig.is_some() and sig.unwrap().kind == CtxKind.Sig {
+        if sig.unwrap().broken {
+            break_before(r, tok)
+        }
+        close_ctx(r)
+    }
+    render_token(r, tok, NodeKind.FunctionDecl)
+    const key = token_index(r.tokens, tok.offset) + 1
+    const breakable = can_break(r)
+    const authored = spans_newline(r.source, tok.offset + tok.text.len, r.tokens[key].offset)
+    push_ctx(r, Ctx {
+        kind = CtxKind.Group,
+        base = r.line_indent,
+        content = r.line_indent + r.cfg.indent,
+        breakable = breakable,
+        broken = breakable and (authored or r.breaks[key]),
+        fill = false,
+        key = key,
+    })
+    if top_broken(r) {
+        break_after(r)
+    }
+}
+
+// A token of the bound list: a broken list starts a line after each comma, and its last comma
+// follows the trailing-comma policy.
+fn where_token(r: &Renderer, node: &CstNode, i: usize, tok: &Token) {
+    if tok.kind != TokenKind.Comma {
+        render_child(r, node, i)
+        return
+    }
+    if ends_bound_list(node, i) and skip_trailing(r, node, i) {
+        skip_token_keep_trivia(r, tok)
+        return
+    }
+    render_token(r, tok, node.kind)
+    if top_broken(r) {
+        break_after(r)
+    }
+}
+
+// The body's `{` closes the bound list: on a line of its own after a broken list, which takes its
+// trailing comma first.
+fn close_where(r: &Renderer, block: &CstChild) {
+    if top_broken(r) {
+        const ends_on_comma = r.prev_kind == TokenKind.Comma
+        if mode_on(r.cfg.trailing_comma) and !ends_on_comma and !r.line_has_comment {
+            r.line.append(",")
+        }
+        const open = first_token_of(block).unwrap()
+        break_before(r, &open)
+    }
+    close_ctx(r)
+}
+
+// Child index of a function's `where`, searched after its parameter list.
+fn where_index(node: &CstNode, from: usize) usize? {
+    for i in from..node.child_count() {
+        const is_where = node.child(i) match {
+            TokenChild(t) => t.kind == TokenKind.Identifier and t.text == "where"
+            NodeChild(_) => false
+        }
+        if is_where {
+            return Some(i)
+        }
+    }
+    return null
+}
+
+// Whether comma `i` is the last thing in a `where` list: the body or the declaration's end follows.
+fn ends_bound_list(node: &CstNode, i: usize) bool {
+    if i + 1 >= node.child_count() {
+        return true
+    }
+    return node.child(i + 1) match {
+        NodeChild(n) => n.kind == NodeKind.BlockExpr
+        TokenChild(_) => false
+    }
+}
+
+// The opener and closer of a list node: its first opening bracket of the list's kind and the first
+// matching closer after it. Null for a node written without them.
+fn list_span(node: &CstNode) ListSpan? {
+    const closer = list_closer(node.kind)
+    const opener = if closer == TokenKind.CloseBracket {
+        TokenKind.OpenBracket
+    } else if closer == TokenKind.CloseBrace {
+        TokenKind.OpenBrace
+    } else {
+        TokenKind.OpenParenthesis
+    }
+    let open: usize? = null
+    for i in 0..node.child_count() {
+        const kind = node.child(i) match {
+            TokenChild(t) => t.kind
+            NodeChild(_) => TokenKind.Eof
+        }
+        if open.is_none() and kind == opener {
+            open = Some(i)
+        } else if open.is_some() and kind == closer {
+            return Some(ListSpan { open = open.unwrap(), close = i })
+        }
+    }
+    return null
+}
+
+fn group_spec(r: &Renderer, node: &CstNode, tok: &Token, s: ListSpan) GroupSpec {
+    const key = token_index(r.tokens, tok.offset)
+    const breakable = can_break(r) and nodes_between(node, s) > 0
+    const authored = spans_newline(r.source, tok.offset + tok.text.len, r.tokens[key + 1].offset)
+    return .{
+        key = key,
+        breakable = breakable,
+        broken = breakable and (authored or r.breaks[key]),
+        fill = node.kind == NodeKind.ArrayLiteralExpr and all_short(r, node, s),
+    }
+}
+
+// Whether every element between the brackets is written on one line in at most `FILL_ELEMENT_WIDTH`
+// columns, as rustfmt's short-array rule has it.
+fn all_short(r: &Renderer, node: &CstNode, s: ListSpan) bool {
+    for i in (s.open + 1)..s.close {
+        const child = node.child(i)
+        const is_node = child match {
+            NodeChild(_) => true
+            TokenChild(_) => false
+        }
+        if !is_node {
+            continue
+        }
+        const first = first_token_of(&child).unwrap()
+        const last = last_token_of(&child).unwrap()
+        const end = last.offset + last.text.len
+        if end - first.offset > FILL_ELEMENT_WIDTH or spans_newline(r.source, first.offset, end) {
+            return false
+        }
+    }
+    return true
+}
+
+// Groups re-flow only where layout is the formatter's: a width is set, and no generator template or
+// interpolated string holds them.
+fn can_break(r: &Renderer) bool {
+    return r.cfg.max_width > 0 and r.gen_depth == 0 and r.interp_depth == 0
+}
+
+fn nodes_between(node: &CstNode, s: ListSpan) usize {
+    let n: usize = 0
+    for i in (s.open + 1)..s.close {
+        node.child(i) match {
+            NodeChild(_) => { n = n + 1 }
+            TokenChild(_) => {}
+        }
+    }
+    return n
+}
+
+// Index of the token at `offset`. Tokens are in source order.
+fn token_index(tokens: &List(Token), offset: usize) usize {
+    let lo = 0usize
+    let hi = tokens.len
+    while lo < hi {
+        const mid = lo + (hi - lo) / 2
+        if tokens[mid].offset < offset {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    return lo
+}
+
+// The pending break is the layout's: the next token starts a line.
+fn break_after(r: &Renderer) {
+    r.force_break = true
+    if r.pending_newlines == 0 {
+        r.pending_newlines = 1
+    }
+}
+
+// `tok` starts a line, through its own leading newline when it has one.
+fn break_before(r: &Renderer, tok: &Token) {
+    r.force_break = true
+    if r.pending_newlines == 0 and !leading_has_newline(r, tok) {
+        r.pending_newlines = 1
+    }
+}
+
+fn push_ctx(r: &Renderer, c: Ctx) {
+    r.ctx.push(c)
+    if c.breakable and !c.broken and r.line_cand.is_none() {
+        r.line_cand = Some(c.key)
+    }
+}
+
+// Leaving a brace body puts the groups around it back on the line.
+fn close_ctx(r: &Renderer) {
+    const c = r.ctx.pop()
+    if c.is_none() {
+        return
+    }
+    if c.unwrap().kind == CtxKind.Body and r.line_cand.is_none() {
+        r.line_cand = outermost_flat(r)
+    }
+}
+
+// The outermost breakable group still flat since the innermost brace body.
+fn outermost_flat(r: &Renderer) usize? {
+    let from = 0usize
+    for i in 0..r.ctx.len {
+        if r.ctx[i].kind == CtxKind.Body {
+            from = i + 1
+        }
+    }
+    for i in from..r.ctx.len {
+        const c = r.ctx[i]
+        if c.breakable and !c.broken {
+            return Some(c.key)
+        }
+    }
+    return null
+}
+
+// The innermost context when it is a group.
+fn top_group(r: &Renderer) Ctx? {
+    const top = r.ctx.last()
+    if top.is_none() or top.unwrap().kind != CtxKind.Group {
+        return null
+    }
+    return top
+}
+
+fn top_broken(r: &Renderer) bool {
+    const g = top_group(r)
+    return g.is_some() and g.unwrap().broken
+}
+
+fn in_flat_group(r: &Renderer) bool {
+    const g = top_group(r)
+    return g.is_some() and !g.unwrap().broken
 }
 
 fn is_statement_kind(kind: NodeKind) bool {
@@ -449,8 +930,8 @@ fn render_if(r: &Renderer, node: &CstNode, stmt_pos: bool) {
     for i in 0..node.child_count() {
         node.child(i) match {
             TokenChild(t) => { if t.kind == TokenKind.Else {
-                    has_else = true
-                } }
+                has_else = true
+            } }
             NodeChild(_) => {}
         }
     }
@@ -561,12 +1042,7 @@ fn skip_comma(r: &Renderer, node: &CstNode, i: usize) bool {
         if is_tuple_kind(parent) and element_count(node) < 2 {
             return false
         }
-        return r.cfg.trailing_comma match {
-            No => true
-            // Kept when the list is multiline, dropped on one line.
-            Multiline => !newline_after_child(node, i)
-            Always => false
-        }
+        return skip_trailing(r, node, i)
     }
 
     if is_separator_body(parent) {
@@ -576,6 +1052,26 @@ fn skip_comma(r: &Renderer, node: &CstNode, i: usize) bool {
     }
 
     return false
+}
+
+// Whether the comma ending a list, at child `i`, goes.
+fn skip_trailing(r: &Renderer, node: &CstNode, i: usize) bool {
+    return r.cfg.trailing_comma match {
+        No => true
+        // Kept when the list is multiline, dropped on one line.
+        Multiline => !list_multiline(r, node, i)
+        Always => false
+    }
+}
+
+// Whether the list holding comma `i` lays out one element per line: its group's mode, or for a list
+// the formatter does not lay out, whether a line break follows the comma.
+fn list_multiline(r: &Renderer, node: &CstNode, i: usize) bool {
+    const g = top_group(r)
+    if g.is_some() and g.unwrap().breakable {
+        return g.unwrap().broken
+    }
+    return newline_after_child(node, i)
 }
 
 // Append a trailing comma before a closer that starts its own line.
@@ -588,6 +1084,11 @@ fn maybe_insert_trailing_comma(r: &Renderer, node: &CstNode, tok: &Token) {
         return
     }
     if !mode_on(r.cfg.trailing_comma) {
+        return
+    }
+    // A flat group joins its closer onto the line whatever the source did.
+    const g = top_group(r)
+    if g.is_some() and g.unwrap().breakable and !g.unwrap().broken {
         return
     }
     // Adding the comma to a one-element tuple form would turn `(T)` into the tuple `(T,)`.
@@ -816,7 +1317,7 @@ fn render_token(r: &Renderer, tok: &Token, parent: NodeKind) {
         // operator (and its leading space) lands.
         if (tok.kind == TokenKind.And or tok.kind == TokenKind.Or) and r.interp_depth == 0
             and parent != NodeKind.GeneratorDef {
-            record_wrap_point(r, 1)
+            record_wrap_point(r)
         }
         let space = needs_space(r, tok.kind, parent)
         const fresh = maybe_wrap(r, tok.text.len + if space { 1usize } else { 0usize })
@@ -831,16 +1332,12 @@ fn render_token(r: &Renderer, tok: &Token, parent: NodeKind) {
     r.gap_had_space = false
 
     r.line.append(tok.text)
-    track_where(r, tok, parent)
     update_depths(r, tok.kind)
-    if tok.kind == TokenKind.Comma and r.interp_depth == 0 and is_comma_list(parent) {
-        record_wrap_point(r, 0)
-    }
     // Prefix when the CST says so, or when what precedes cannot end an expression (an enum
     // discriminant's `-1` sits outside any UnaryExpr).
     r.prev_prefix = (tok.kind == TokenKind.Minus or tok.kind == TokenKind.Bang
         or tok.kind == TokenKind.Tilde) and (parent == NodeKind.UnaryExpr
-        or !ends_expression(r.prev_kind))
+            or !ends_expression(r.prev_kind))
     r.prev_kind = tok.kind
     r.prev_parent = parent
     r.started = true
@@ -848,18 +1345,21 @@ fn render_token(r: &Renderer, tok: &Token, parent: NodeKind) {
     emit_trailing(r, tok)
 }
 
-// Whether the pending line break may be re-flowed into a space, leaving `max_width` to decide the
-// layout. Only a lone newline qualifies (blank lines and comment-carrying breaks are the author's),
-// and only where the wrap pass could put a break back:
-//   - inside an open `(` / `[` group (commas and operators re-break), or
+// Whether the pending line break may be re-flowed into a space, leaving the layout to decide. Only
+// a lone newline qualifies (blank lines and comment-carrying breaks are the author's), never a
+// break the layout itself asked for, and only where the layout could put a break back:
+//   - inside a group, whose mode decides its breaks, or
 //   - before `and` / `or`, whose continuation style wrap reproduces, or
 //   - before `-`, `(` or `[` continuing the expression above. These three are the tokens that could
 //     equally open a statement of their own, so a break in front of one draws two statements where
 //     the parse has one. Joining is what removes the ambiguity; `.`, `and` and the rest cannot be
 //     misread at the start of a line and keep their authored break.
-// A brace body resets the group count, so statements inside a lambda or block passed as an argument
-// are never merged.
+// A brace body is not a group, so statements inside a lambda or block passed as an argument are
+// never merged.
 fn joinable(r: &Renderer, next: TokenKind, parent: NodeKind) bool {
+    if r.force_break {
+        return false
+    }
     if !r.cfg.join_lines or r.cfg.max_width == 0 {
         return false
     }
@@ -875,8 +1375,7 @@ fn joinable(r: &Renderer, next: TokenKind, parent: NodeKind) bool {
     if r.interp_depth > 0 {
         return false
     }
-    const eff = r.group_depth - open_groups_at_brace(r)
-    if eff > 0 {
+    if top_group(r).is_some() {
         return true
     }
     if next == TokenKind.OpenParenthesis or next == TokenKind.OpenBracket
@@ -922,11 +1421,13 @@ fn maybe_wrap(r: &Renderer, incoming: usize) bool {
         r.line.append_byte(' ' as u8)
     }
     r.line.append(rest.view)
+    r.line_indent = wp.indent
+    r.line_extra = wp.extra
     const fresh = rest.len == 0
     rest.deinit()
 
-    // Points that moved to the new line keep working, re-based onto it - a long joined list may
-    // need several breaks.
+    // Points that moved to the new line keep working, re-based onto it - a long chain may need
+    // several breaks.
     let kept: List(WrapPoint) = list(0)
     for i in 0..r.wrap_points.len {
         const p = r.wrap_points[i]
@@ -934,6 +1435,7 @@ fn maybe_wrap(r: &Renderer, incoming: usize) bool {
             kept.push(WrapPoint {
                 offset = wp.indent + (p.offset - s),
                 indent = p.indent,
+                extra = p.extra,
             })
         }
     }
@@ -941,20 +1443,13 @@ fn maybe_wrap(r: &Renderer, incoming: usize) bool {
     return fresh
 }
 
-// `min_extra` is 1 for a break before `and` / `or`: the operator starts the next line and indents
-// as a continuation even with no group open.
-fn record_wrap_point(r: &Renderer, min_extra: usize) {
-    let eff = r.group_depth - open_groups_at_brace(r)
-    if eff < min_extra {
-        eff = min_extra
-    }
-    if eff == 0 and in_where_clause(r) {
-        eff = 1
-    }
-    r.wrap_points.push(WrapPoint {
-        offset = r.line.len,
-        indent = (r.brace_depth + eff) * r.cfg.indent,
-    })
+// A break before `and` / `or` continues the expression one step deeper; inside a flat group the
+// group's own step already shows it.
+fn record_wrap_point(r: &Renderer) {
+    const top = r.ctx.last()
+    const content = if top.is_some() { top.unwrap().content } else { 0usize }
+    const extra = if in_flat_group(r) { 0usize } else { r.cfg.indent }
+    r.wrap_points.push(WrapPoint { offset = r.line.len, indent = content + extra, extra = extra })
 }
 
 fn handle_trivia(r: &Renderer, t: &Trivia) {
@@ -989,7 +1484,11 @@ fn emit_comment(r: &Renderer, text: String) {
         emit_line_break(r, TokenKind.Identifier)
         r.pending_newlines = 0
     } else {
+        r.comment_col = Some(r.line.len)
         r.line.append(" ")
+    }
+    if r.comment_col.is_none() {
+        r.comment_col = Some(r.line.len)
     }
     r.line.append(body)
     r.gap_had_space = false
@@ -1008,80 +1507,55 @@ fn emit_line_break(r: &Renderer, next: TokenKind) {
     }
     r.pending_newlines = 0
     r.line_has_comment = false
+    r.force_break = false
     flush_line(r)
     for n in 0..(blanks + 1) {
         r.out.append(r.eol)
     }
 
-    let depth = r.brace_depth
-    if next == TokenKind.CloseBrace and depth > 0 {
-        depth = depth - 1
-    }
-    // Groups opened before the innermost open brace stop contributing: inside `f(x, .{ <here> })`
-    // the block's brace governs, not f's paren.
-    let groups = r.group_depth - open_groups_at_brace(r)
-    if (next == TokenKind.CloseParenthesis or next == TokenKind.CloseBracket) and groups > 0 {
-        groups = groups - 1
-    }
-    let extra = groups
-    if extra == 0 and (is_continuation_start(next, r.prev_kind) or in_where_clause(r)) {
-        extra = 1
-    }
-    const spaces = (depth + extra) * r.cfg.indent
-    for n in 0..spaces {
+    const extra = continuation_extra(r, next)
+    r.line_indent = line_base(r, next) + extra
+    r.line_extra = extra
+    for n in 0..r.line_indent {
         r.line.append_byte(' ' as u8)
     }
+    r.line_cand = outermost_flat(r)
 }
 
-// A `where` opens on the declaration's own token (a function's or a contract's) and closes at that
-// declaration's body: a function's block, or the contract's own brace. An anonymous contract inside
-// a function's clause opens a brace of its own without closing it.
-fn track_where(r: &Renderer, tok: &Token, parent: NodeKind) {
-    const owns_clause = parent == NodeKind.FunctionDecl or parent == NodeKind.ContractType
-    if tok.kind == TokenKind.Identifier and tok.text == "where" and owns_clause {
-        r.in_where = true
-        r.where_depth = r.brace_depth
-        r.where_in_fn = parent == NodeKind.FunctionDecl
-        return
-    }
-    if !r.in_where or tok.kind != TokenKind.OpenBrace or r.brace_depth != r.where_depth {
-        return
-    }
-    const body = if r.where_in_fn { NodeKind.BlockExpr } else { NodeKind.ContractType }
-    if parent == body {
-        r.in_where = false
-    }
-}
-
-fn in_where_clause(r: &Renderer) bool {
-    return r.in_where and r.brace_depth == r.where_depth
-}
-
-fn open_groups_at_brace(r: &Renderer) usize {
-    if r.group_marks.len == 0 {
+// Where a line starting with `next` indents, continuation aside: a closer back at its opener's
+// line, anything else inside the innermost bracket or brace.
+fn line_base(r: &Renderer, next: TokenKind) usize {
+    const top = r.ctx.last()
+    if top.is_none() {
         return 0
     }
-    const at = r.group_marks[r.group_marks.len - 1]
-    return if at < r.group_depth { at } else { r.group_depth }
+    if is_closer(next) {
+        return top.unwrap().base
+    }
+    return top.unwrap().content
+}
+
+// A line opening with an operator or `.` continues the expression above, one step deeper. Inside a
+// flat group the group's own step already shows it.
+fn continuation_extra(r: &Renderer, next: TokenKind) usize {
+    if is_closer(next) or in_flat_group(r) {
+        return 0
+    }
+    return if is_continuation_start(next, r.prev_kind) { r.cfg.indent } else { 0usize }
+}
+
+fn is_closer(kind: TokenKind) bool {
+    return kind == TokenKind.CloseBrace or kind == TokenKind.CloseParenthesis
+        or kind == TokenKind.CloseBracket
 }
 
 fn update_depths(r: &Renderer, kind: TokenKind) {
-    if kind == TokenKind.OpenBrace {
-        r.brace_depth = r.brace_depth + 1
-        r.group_marks.push(r.group_depth)
+    if kind == TokenKind.OpenBrace or kind == TokenKind.OpenParenthesis
+        or kind == TokenKind.OpenBracket {
+        open_ctx(r, kind)
     }
-    if kind == TokenKind.CloseBrace and r.brace_depth > 0 {
-        r.brace_depth = r.brace_depth - 1
-        if r.group_marks.len > 0 {
-            r.group_marks.pop()
-        }
-    }
-    if kind == TokenKind.OpenParenthesis or kind == TokenKind.OpenBracket {
-        r.group_depth = r.group_depth + 1
-    }
-    if (kind == TokenKind.CloseParenthesis or kind == TokenKind.CloseBracket)
-        and r.group_depth > 0 {
-        r.group_depth = r.group_depth - 1
+    if is_closer(kind) {
+        close_ctx(r)
     }
     if kind == TokenKind.InterpStringStart {
         r.interp_depth = r.interp_depth + 1
@@ -1089,6 +1563,48 @@ fn update_depths(r: &Renderer, kind: TokenKind) {
     if kind == TokenKind.InterpStringEnd and r.interp_depth > 0 {
         r.interp_depth = r.interp_depth - 1
     }
+}
+
+// A list's opener opens the group announced for it. Any other brace opens a body, indented from its
+// line without that line's continuation step; any other bracket a group that keeps its layout.
+fn open_ctx(r: &Renderer, kind: TokenKind) {
+    const spec = r.next_group
+    r.next_group = null
+    if spec.is_some() {
+        const g = spec.unwrap()
+        push_ctx(r, Ctx {
+            kind = CtxKind.Group,
+            base = r.line_indent,
+            content = r.line_indent + r.cfg.indent,
+            breakable = g.breakable,
+            broken = g.broken,
+            fill = g.fill,
+            key = g.key,
+        })
+        return
+    }
+    if kind == TokenKind.OpenBrace {
+        const base = r.line_indent - r.line_extra
+        push_ctx(r, Ctx {
+            kind = CtxKind.Body,
+            base = base,
+            content = base + r.cfg.indent,
+            breakable = false,
+            broken = false,
+            fill = false,
+            key = 0,
+        })
+        return
+    }
+    push_ctx(r, Ctx {
+        kind = CtxKind.Group,
+        base = r.line_indent,
+        content = r.line_indent + r.cfg.indent,
+        breakable = false,
+        broken = false,
+        fill = false,
+        key = 0,
+    })
 }
 
 // A line starting with one of these continues the previous line's expression and indents one extra
@@ -1520,8 +2036,14 @@ fn push_words(words: &List(String), content: String) {
 // Greedy fill: a line takes words until the next would pass `width`, but never breaks before
 // passing `threshold` - a huge word may push a line over `width` instead of leaving a short line
 // behind.
-fn flush_paragraph(sb: &StringBuilder, words: &List(String), indent: usize, width: usize,
-    threshold: usize, eol: String) {
+fn flush_paragraph(
+    sb: &StringBuilder,
+    words: &List(String),
+    indent: usize,
+    width: usize,
+    threshold: usize,
+    eol: String,
+) {
     if words.len == 0 {
         return
     }
@@ -1570,8 +2092,8 @@ fn ensure_single_trailing_newline(source: String, eol: String) OwnedString {
     let end = source.len
     while end > 0 and (source[end - 1] == ' ' or source[end - 1] == '	' or source[end - 1] == '\n'
         or source[end - 1] == '\r') {
-        end = end - 1
-    }
+            end = end - 1
+        }
     let sb = string_builder(end + 2)
     sb.append(source[0..end])
     if end > 0 {
@@ -1654,8 +2176,10 @@ test "an open parenthesis glues to a name and stands off after a keyword or oper
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "type Box = struct(T) { v: T }\n#allow(W2004)\nfn f(a: i32) (i32, i32) {\n    let b: Box(i32) = Box(i32) { v = a }\n    let t = (a, b.v)\n    if (a + (b.v)) > 0 {\n        return (t.0, t.1)\n    }\n    return t\n}\n",
-        "names, struct literals and annotations glue; tuple, grouping and keyword parens stand off")
+    assert_true(
+        out.view == "type Box = struct(T) { v: T }\n#allow(W2004)\nfn f(a: i32) (i32, i32) {\n    let b: Box(i32) = Box(i32) { v = a }\n    let t = (a, b.v)\n    if (a + (b.v)) > 0 {\n        return (t.0, t.1)\n    }\n    return t\n}\n",
+        "names, struct literals and annotations glue; tuple, grouping and keyword parens stand off",
+    )
 }
 
 test "unary and call positions glue" {
@@ -1668,12 +2192,16 @@ test "unary and call positions glue" {
 
 test "indentation recomputed from nesting" {
     const cfg = default_config()
-    const r = format_source("fn f() {\nlet x = 1\n        if x > 0 {\n   return\n      }\n}\n",
-        &cfg)
+    const r = format_source(
+        "fn f() {\nlet x = 1\n        if x > 0 {\n   return\n      }\n}\n",
+        &cfg,
+    )
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "fn f() {\n    let x = 1\n    if x > 0 {\n        return\n    }\n}\n",
-        "reindented")
+    assert_true(
+        out.view == "fn f() {\n    let x = 1\n    if x > 0 {\n        return\n    }\n}\n",
+        "reindented",
+    )
 }
 
 test "operator continuation lines join when they fit" {
@@ -1684,14 +2212,73 @@ test "operator continuation lines join when they fit" {
     assert_true(out.view == "fn f(a: bool, b: bool) bool {\n    return a or b\n}\n", "joined")
 }
 
-test "group newlines join and re-wrap at width" {
+test "a list too long for its line breaks one element per line" {
     let cfg = default_config()
     assert_true(set_option(&cfg, "max-width", "24"), "width set")
     const r = format_source("fn f() {\n    ggg(aaaaaaaa,\n    bbbbbbbb,\n    cccccccc)\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "fn f() {\n    ggg(aaaaaaaa,\n        bbbbbbbb,\n        cccccccc)\n}\n",
-        "rewrapped")
+    assert_true(
+        out.view == "fn f() {\n    ggg(\n        aaaaaaaa,\n        bbbbbbbb,\n        cccccccc,\n    )\n}\n",
+        "one per line, trailing comma, closer at the opener's indent",
+    )
+}
+
+test "an overflowing line breaks its outermost group first" {
+    let cfg = default_config()
+    assert_true(set_option(&cfg, "max-width", "30"), "width set")
+    const r = format_source("fn f() {\n    g(h(aaaaaaaa, bbbbbbbb), cccccccc)\n}\n", &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(
+        out.view == "fn f() {\n    g(\n        h(aaaaaaaa, bbbbbbbb),\n        cccccccc,\n    )\n}\n",
+        "the inner list fits once the outer one breaks",
+    )
+}
+
+test "a broken array of short elements fills its lines" {
+    let cfg = default_config()
+    assert_true(set_option(&cfg, "max-width", "24"), "width set")
+    const r = format_source(
+        "fn f() {
+    let a = [
+        11,
+        22,
+        33, 44, 55, 66, 77]
+    let b = [
+        long_name_1,
+        x]
+}
+",
+        &cfg,
+    )
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(
+        out.view == "fn f() {
+    let a = [
+        11, 22, 33, 44,
+        55, 66, 77,
+    ]
+    let b = [
+        long_name_1,
+        x,
+    ]
+}
+",
+        "short elements fill, one long element puts every element on its own line",
+    )
+}
+
+test "a list broken after its opener stays broken" {
+    const cfg = default_config()
+    const r = format_source("fn f() {\n    g(\n        a, b)\n}\n", &cfg)
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(
+        out.view == "fn f() {\n    g(\n        a,\n        b,\n    )\n}\n",
+        "authored break kept",
+    )
 }
 
 test "a call split before its argument list is joined" {
@@ -1699,8 +2286,10 @@ test "a call split before its argument list is joined" {
     const r = format_source("fn f() i32 {\n    let b = take\n    (4)\n    return b\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "fn f() i32 {\n    let b = take(4)\n    return b\n}\n",
-        "the parser reads one call, so the layout shows one")
+    assert_true(
+        out.view == "fn f() i32 {\n    let b = take(4)\n    return b\n}\n",
+        "the parser reads one call, so the layout shows one",
+    )
 }
 
 test "a continuing minus is joined" {
@@ -1708,8 +2297,10 @@ test "a continuing minus is joined" {
     const r = format_source("fn f() i32 {\n    let a = one()\n    - 3\n    return a\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "fn f() i32 {\n    let a = one() - 3\n    return a\n}\n",
-        "a leading `-` continues the line above and reads as a statement otherwise")
+    assert_true(
+        out.view == "fn f() i32 {\n    let a = one() - 3\n    return a\n}\n",
+        "a leading `-` continues the line above and reads as a statement otherwise",
+    )
 }
 
 test "a paren opening a statement is left alone" {
@@ -1721,13 +2312,46 @@ test "a paren opening a statement is left alone" {
     assert_true(out.view == src, "nothing precedes it that could end an expression")
 }
 
-test "a wrapped where clause indents as a continuation until the body" {
-    let cfg = default_config()
-    const src = "fn f(x: $T) T where T: copyable,\n    U: Eq + Hash {\n    return x\n}\n"
+test "a where clause that fits joins the signature line" {
+    const cfg = default_config()
+    const src = "fn f(x: $T) T where T: copyable,\n    U: Eq + Hash, {\n    return x\n}\n"
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == src, "the bound list keeps its step; the body is back at depth 1")
+    assert_true(
+        out.view == "fn f(x: $T) T where T: copyable, U: Eq + Hash {\n    return x\n}\n",
+        "joined, trailing comma dropped",
+    )
+}
+
+test "an overflowing signature moves where to its own line first" {
+    let cfg = default_config()
+    assert_true(set_option(&cfg, "max-width", "40"), "width set")
+    const r = format_source(
+        "fn f(x: $T, y: $U) T where T: copyable, U: Eq {\n    return x\n}\n",
+        &cfg,
+    )
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(
+        out.view == "fn f(x: $T, y: $U) T\nwhere T: copyable, U: Eq {\n    return x\n}\n",
+        "where at the declaration's indent, parameters flat",
+    )
+}
+
+test "an overflowing where list breaks one bound per line" {
+    let cfg = default_config()
+    assert_true(set_option(&cfg, "max-width", "30"), "width set")
+    const r = format_source(
+        "fn f(x: $T) T where T: copyable, U: Eq + Hash {\n    return x\n}\n",
+        &cfg,
+    )
+    let out = r.unwrap()
+    defer out.deinit()
+    assert_true(
+        out.view == "fn f(x: $T) T\nwhere\n    T: copyable,\n    U: Eq + Hash,\n{\n    return x\n}\n",
+        "bounds indented with a trailing comma, the body's brace alone",
+    )
 }
 
 test "join-lines false indents the continuation instead" {
@@ -1736,8 +2360,10 @@ test "join-lines false indents the continuation instead" {
     const r = format_source("fn f() i32 {\n    let b = take\n    (4)\n    return b\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "fn f() i32 {\n    let b = take\n        (4)\n    return b\n}\n",
-        "the break is kept, so the indent carries the parse")
+    assert_true(
+        out.view == "fn f() i32 {\n    let b = take\n        (4)\n    return b\n}\n",
+        "the break is kept, so the indent carries the parse",
+    )
 }
 
 test "join-lines false keeps authored breaks" {
@@ -1746,8 +2372,10 @@ test "join-lines false keeps authored breaks" {
     const r = format_source("fn f(a: bool, b: bool) bool {\n    return a\n        or b\n}\n", &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "fn f(a: bool, b: bool) bool {\n    return a\n        or b\n}\n",
-        "kept split")
+    assert_true(
+        out.view == "fn f(a: bool, b: bool) bool {\n    return a\n        or b\n}\n",
+        "kept split",
+    )
 }
 
 test "blank lines and comments block joining" {
@@ -1770,12 +2398,16 @@ test "statements inside a lambda argument never join" {
 
 test "trailing comment gets one space, own-line comment indents" {
     const cfg = default_config()
-    const r = format_source("fn f() {\n    let x = 1      // note\n        // next\n    return\n}\n",
-        &cfg)
+    const r = format_source(
+        "fn f() {\n    let x = 1      // note\n        // next\n    return\n}\n",
+        &cfg,
+    )
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "fn f() {\n    let x = 1 // note\n    // next\n    return\n}\n",
-        "comments placed")
+    assert_true(
+        out.view == "fn f() {\n    let x = 1 // note\n    // next\n    return\n}\n",
+        "comments placed",
+    )
 }
 
 test "interpolated strings keep authored spacing" {
@@ -1790,12 +2422,16 @@ test "interpolated strings keep authored spacing" {
 test "multiline lists gain a trailing comma, single-line lists lose it" {
     let cfg = default_config()
     assert_true(set_option(&cfg, "join-lines", "false"), "keep layout")
-    const r = format_source("fn f(a: i32, b: i32,) i32 {\n    return g(\n        a,\n        b\n    )\n}\n",
-        &cfg)
+    const r = format_source(
+        "fn f(a: i32, b: i32,) i32 {\n    return g(\n        a,\n        b\n    )\n}\n",
+        &cfg,
+    )
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "fn f(a: i32, b: i32) i32 {\n    return g(\n        a,\n        b,\n    )\n}\n",
-        "trailing commas normalized")
+    assert_true(
+        out.view == "fn f(a: i32, b: i32) i32 {\n    return g(\n        a,\n        b,\n    )\n}\n",
+        "trailing commas normalized",
+    )
 }
 
 test "trailing-comma no strips multiline trailing commas" {
@@ -1814,8 +2450,10 @@ test "narrow comment prose refills to width" {
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "// aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm nnn ooo ppp qqq rrr sss ttt uuu vvv www xxx\n// yyy zzz aab aac aad aae aaf aag aah aai aaj aak aal aam aan aao\nfn f() {}\n",
-        "refilled")
+    assert_true(
+        out.view == "// aaa bbb ccc ddd eee fff ggg hhh iii jjj kkk lll mmm nnn ooo ppp qqq rrr sss ttt uuu vvv www xxx\n// yyy zzz aab aac aad aae aaf aag aah aai aaj aak aal aam aan aao\nfn f() {}\n",
+        "refilled",
+    )
 }
 
 test "list and ruler comments are not reflowed" {
@@ -1839,12 +2477,16 @@ test "reflow-comments false keeps narrow prose" {
 
 test "newline-separated match arm commas are stripped" {
     const cfg = default_config()
-    const r = format_source("fn f(a: i32) i32 {\n    return a match {\n        1 => 2,\n        else => 3,\n    }\n}\n",
-        &cfg)
+    const r = format_source(
+        "fn f(a: i32) i32 {\n    return a match {\n        1 => 2,\n        else => 3,\n    }\n}\n",
+        &cfg,
+    )
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "fn f(a: i32) i32 {\n    return a match {\n        1 => 2\n        else => 3\n    }\n}\n",
-        "arm commas dropped")
+    assert_true(
+        out.view == "fn f(a: i32) i32 {\n    return a match {\n        1 => 2\n        else => 3\n    }\n}\n",
+        "arm commas dropped",
+    )
 }
 
 test "single-line bodies keep their commas" {
@@ -1856,15 +2498,19 @@ test "single-line bodies keep their commas" {
     assert_true(out.view == src, "single-line arms unchanged")
 }
 
-test "over-long call wraps at its last fitting comma" {
+test "an overflowing parameter list breaks one parameter per line" {
     let cfg = default_config()
     assert_true(set_option(&cfg, "max-width", "40"), "width set")
-    const r = format_source("fn f(aaaaaaaa: i32, bbbbbbbb: i32, cccccccc: i32, dddddddd: i32) i32 {\n    return 0\n}\n",
-        &cfg)
+    const r = format_source(
+        "fn f(aaaaaaaa: i32, bbbbbbbb: i32, cccccccc: i32, dddddddd: i32) i32 {\n    return 0\n}\n",
+        &cfg,
+    )
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "fn f(aaaaaaaa: i32, bbbbbbbb: i32,\n    cccccccc: i32, dddddddd: i32) i32 {\n    return 0\n}\n",
-        "wrapped at comma")
+    assert_true(
+        out.view == "fn f(\n    aaaaaaaa: i32,\n    bbbbbbbb: i32,\n    cccccccc: i32,\n    dddddddd: i32,\n) i32 {\n    return 0\n}\n",
+        "the return type follows the closer",
+    )
 }
 
 test "max-width 0 disables wrapping" {
@@ -1945,17 +2591,20 @@ test "one-element tuple commas are grammar, not style" {
 
 test "semicolon chains break into one statement per line" {
     const cfg = default_config()
-    const r = format_source("fn f(sb: &StringBuilder) {
+    const r = format_source(
+        "fn f(sb: &StringBuilder) {
     g() match {
         1 => { sb.append(\"a\"); sb.append(\"b\"); sb.append(\"c\") }
         else => {}
     }
 }
 ",
-        &cfg)
+        &cfg,
+    )
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "fn f(sb: &StringBuilder) {
+    assert_true(
+        out.view == "fn f(sb: &StringBuilder) {
     g() match {
         1 => {
             sb.append(\"a\")
@@ -1966,7 +2615,8 @@ test "semicolon chains break into one statement per line" {
     }
 }
 ",
-        "arm body reflowed")
+        "arm body reflowed",
+    )
 }
 
 test "semicolons keep leaves them alone" {
@@ -1984,16 +2634,19 @@ test "semicolons keep leaves them alone" {
 
 test "statement ifs go multiline, guards included" {
     const cfg = default_config()
-    const r = format_source("fn f(x: bool) i32 {
+    const r = format_source(
+        "fn f(x: bool) i32 {
     if x { return 1 }
     if x { g() } else { h() }
     return 0
 }
 ",
-        &cfg)
+        &cfg,
+    )
     let out = r.unwrap()
     defer out.deinit()
-    assert_true(out.view == "fn f(x: bool) i32 {
+    assert_true(
+        out.view == "fn f(x: bool) i32 {
     if x {
         return 1
     }
@@ -2005,7 +2658,8 @@ test "statement ifs go multiline, guards included" {
     return 0
 }
 ",
-        "stmt ifs broken")
+        "stmt ifs broken",
+    )
 }
 
 test "expression ifs may stay single-line" {

@@ -31,8 +31,12 @@ import flang_typer.result
 
 // Whether each of `decl`'s parameters needs a shadow copy, parallel to `decl.params`. A parameter
 // that is not a by-value aggregate answers `true`, which its caller ignores.
-pub fn shadowed_params(decl: &FunctionDecl, result: &TypeCheckResult, overlay: &InferenceResults?,
-    allocator: &Allocator? = null) List(bool) {
+pub fn shadowed_params(
+    decl: &FunctionDecl,
+    result: &TypeCheckResult,
+    overlay: &InferenceResults?,
+    allocator: &Allocator? = null,
+) List(bool) {
     let out: List(bool) = list(decl.params.len, allocator)
     const body = decl.body
     for &p in decl.params {
@@ -46,8 +50,13 @@ pub fn shadowed_params(decl: &FunctionDecl, result: &TypeCheckResult, overlay: &
 }
 
 // One parameter. True means the body writes through it or lets its address escape.
-pub fn needs_shadow(name: String, body: &BlockExpr, result: &TypeCheckResult,
-    overlay: &InferenceResults?, allocator: &Allocator? = null) bool {
+pub fn needs_shadow(
+    name: String,
+    body: &BlockExpr,
+    result: &TypeCheckResult,
+    overlay: &InferenceResults?,
+    allocator: &Allocator? = null,
+) bool {
     // The names that alias the parameter's storage: the parameter, plus whatever a pattern bound
     // out of it. Scope is ignored; a name kept live past its arm costs an extra copy.
     let aliases: List(String) = list(4, allocator)
@@ -58,8 +67,12 @@ pub fn needs_shadow(name: String, body: &BlockExpr, result: &TypeCheckResult,
 
 // ── the walk ───────────────────────────────────────────────────────────
 
-fn block_escapes(b: &BlockExpr, al: &List(String), r: &TypeCheckResult,
-    ov: &InferenceResults?) bool {
+fn block_escapes(
+    b: &BlockExpr,
+    al: &List(String),
+    r: &TypeCheckResult,
+    ov: &InferenceResults?,
+) bool {
     if stmts_escape(b.stmts, al, r, ov) {
         return true
     }
@@ -111,8 +124,8 @@ fn stmt_escapes(s: &Stmt, al: &List(String), r: &TypeCheckResult, ov: &Inference
         While(w) => expr_escapes(w.condition, al, r, ov) or block_escapes(w.body, al, r, ov)
         Loop(l) => block_escapes(l.body, al, r, ov)
         // Bare statement lists, not blocks: `#if` introduces no scope.
-        IfDirective(d) => stmts_escape(d.then_stmts, al, r, ov) or stmts_escape(d.else_stmts, al, r,
-            ov)
+        IfDirective(d) => stmts_escape(d.then_stmts, al, r, ov)
+            or stmts_escape(d.else_stmts, al, r, ov)
     }
 }
 
@@ -197,8 +210,12 @@ fn call_escapes(c: &CallExpr, al: &List(String), r: &TypeCheckResult, ov: &Infer
     return false
 }
 
-fn match_escapes(m: &MatchExpr, al: &List(String), r: &TypeCheckResult,
-    ov: &InferenceResults?) bool {
+fn match_escapes(
+    m: &MatchExpr,
+    al: &List(String),
+    r: &TypeCheckResult,
+    ov: &InferenceResults?,
+) bool {
     if expr_escapes(m.scrutinee, al, r, ov) {
         return true
     }

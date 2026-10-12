@@ -70,8 +70,11 @@ pub fn multimap(allocator: &Allocator) MultiMap($K, $V) {
 pub fn add(self: &MultiMap($K, $V), key: move K, value: move V) {
     const idx = self.pool.len as u32
     self.pool.push(Slot(V) { value = move value, next = NONE }, self.allocator)
-    const chain = self.chains.get_or_insert_with(key, fn() { Chain { first = NONE, last = NONE,
-            count = 0u32 } }, self.allocator)
+    const chain = self.chains.get_or_insert_with(
+        key,
+        fn() { Chain { first = NONE, last = NONE, count = 0u32 } },
+        self.allocator,
+    )
     if chain.last == NONE {
         chain.first = idx
     } else {

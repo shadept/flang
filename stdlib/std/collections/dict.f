@@ -256,8 +256,12 @@ pub fn add(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: 
 
 // String-key `add` for `UnmanagedDict(OwnedString, V)`: `key` is a borrowed view, copied into an
 // owned key only when it is inserted.
-pub fn add(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V,
-    allocator: &Allocator) bool {
+pub fn add(
+    self: &UnmanagedDict(OwnedString, $V),
+    key: String,
+    value: move V,
+    allocator: &Allocator,
+) bool {
     if self.find_entry(key).is_some() {
         return false
     }
@@ -274,8 +278,13 @@ pub fn add(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V,
 //
 // The reference is valid until the next insert, which may move the table. Panics when the table
 // cannot grow.
-pub fn get_or_insert_with(self: &UnmanagedDict($K, $V), key: move K, make: $F,
-    allocator: &Allocator) &V where F: fn() V {
+pub fn get_or_insert_with(
+    self: &UnmanagedDict($K, $V),
+    key: move K,
+    make: $F,
+    allocator: &Allocator,
+) &V
+where F: fn() V {
     const found = self.find_entry(key)
     if found.is_some() {
         const entry = found.unwrap()
@@ -307,8 +316,12 @@ pub fn set(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: 
 
 // String-key insert for `UnmanagedDict(OwnedString, V)`: the key is a borrowed view, copied into an
 // owned key only when it is new to the table.
-pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V,
-    allocator: &Allocator) {
+pub fn set(
+    self: &UnmanagedDict(OwnedString, $V),
+    key: String,
+    value: move V,
+    allocator: &Allocator,
+) {
     const existing = self.find_index(key)
     if existing.is_some() {
         const i = existing.unwrap()
@@ -338,8 +351,8 @@ pub fn deinit(self: move UnmanagedDict($K, $V), allocator: &Allocator) {
 // Copies every entry of `other` into this dict, overwriting the value under a key both have.
 // Entries are copied bitwise: an owned key or value is then owned by both dicts, and only one may
 // deinit it. Panics when the table cannot grow.
-pub fn merge(self: &UnmanagedDict($K, $V), other: &UnmanagedDict(K, V),
-    allocator: &Allocator) where K: copyable, V: copyable {
+pub fn merge(self: &UnmanagedDict($K, $V), other: &UnmanagedDict(K, V), allocator: &Allocator)
+where K: copyable, V: copyable {
     for e in other.iter() {
         self.set(e.key, e.value, allocator)
     }
@@ -515,8 +528,7 @@ pub fn get_or(self: &UnmanagedDict($K, $V), key: K, fallback: move V) V where V:
 
 // The value for `key`, or `make()` when absent - the lazy counterpart of `get_or`, for fallbacks
 // that are expensive (or effectful) to build.
-pub fn get_or_else(self: &UnmanagedDict($K, $V), key: K, make: $F) V where V: copyable,
-    F: fn() V {
+pub fn get_or_else(self: &UnmanagedDict($K, $V), key: K, make: $F) V where V: copyable, F: fn() V {
     let v = self.get(key)
     if v.is_some() {
         return v.unwrap()
@@ -613,8 +625,10 @@ pub type DictDrain = struct(K, V) {
 
 // Starts a drain. The dict reads as empty while it runs; `deinit` puts back what was not taken.
 pub fn drain(self: &UnmanagedDict($K, $V)) DictDrain(K, V) {
-    let out: DictDrain(K, V) = .{ __dict = self, current = 0, taken = 0, count = self.length,
-        __unique = no_copy() }
+    let out: DictDrain(
+        K,
+        V,
+    ) = .{ __dict = self, current = 0, taken = 0, count = self.length, __unique = no_copy() }
     self.length = 0
     return out
 }
@@ -705,8 +719,8 @@ pub fn values(self: &UnmanagedDict($K, $V)) ValuesIter(K, V) {
 
 // Returns a new dict with the same keys and `f(key, value)` as each value. Keys are copied bitwise;
 // an owned key is then owned by both dicts, and only one may deinit it.
-pub fn map_values(self: &UnmanagedDict($K, $V), f: $F, allocator: &Allocator) UnmanagedDict(K,
-    $U) where K: copyable, F: fn(K, V) U {
+pub fn map_values(self: &UnmanagedDict($K, $V), f: $F, allocator: &Allocator) UnmanagedDict(K, $U)
+where K: copyable, F: fn(K, V) U {
     let out: UnmanagedDict(K, U)
     for e in self.iter() {
         out.set(e.key, f(e.key, e.value), allocator)
@@ -716,8 +730,8 @@ pub fn map_values(self: &UnmanagedDict($K, $V), f: $F, allocator: &Allocator) Un
 
 // Returns a new dict of the entries `pred(key, value)` accepts. Keys and values are copied bitwise;
 // an owned key or value is then owned by both dicts, and only one may deinit it.
-pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) UnmanagedDict(K,
-    V) where K: copyable, V: copyable, F: fn(K, V) bool {
+pub fn filter(self: &UnmanagedDict($K, $V), pred: $F, allocator: &Allocator) UnmanagedDict(K, V)
+where K: copyable, V: copyable, F: fn(K, V) bool {
     let out: UnmanagedDict(K, V)
     for e in self.iter() {
         if pred(e.key, e.value) {
@@ -929,8 +943,11 @@ test "string keys are copied on insert and looked up by view" {
     assert_true(!d.contains("two"), "gone")
     d.deinit()
     assert_eq(counting.allocs, 3 as usize, "two keys and one table")
-    assert_eq(counting.deallocs, counting.allocs,
-        "keys and table freed through the dict's allocator")
+    assert_eq(
+        counting.deallocs,
+        counting.allocs,
+        "keys and table freed through the dict's allocator",
+    )
 }
 
 test "keys and values iterate the live entries" {

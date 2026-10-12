@@ -375,8 +375,8 @@ pub fn deinit(self: move ZipLongestIter($I, $J)) {
     release(self.fill_b)
 }
 
-pub fn next(self: &ZipLongestIter($I, $J)) (I.Item, J.Item)? where I.Item: copyable,
-    J.Item: copyable {
+pub fn next(self: &ZipLongestIter($I, $J)) (I.Item, J.Item)?
+where I.Item: copyable, J.Item: copyable {
     let a = self.a.next()
     let b = self.b.next()
     if a.is_none() {
@@ -393,8 +393,12 @@ pub fn next(self: &ZipLongestIter($I, $J)) (I.Item, J.Item)? where I.Item: copya
 
 // Like `zip`, but runs to the LONGER side, substituting `fill_a` / `fill_b` for the exhausted
 // iterator's elements.
-pub fn zip_longest(a: move $I, b: move $J, fill_a: move I.Item,
-    fill_b: move J.Item) ZipLongestIter(I, J) {
+pub fn zip_longest(
+    a: move $I,
+    b: move $J,
+    fill_a: move I.Item,
+    fill_b: move J.Item,
+) ZipLongestIter(I, J) {
     return .{ a = move a, b = move b, fill_a = move fill_a, fill_b = move fill_b }
 }
 
@@ -682,8 +686,7 @@ pub fn fold(it: move $I, init: move $A, f: move $F) A where I: Iterator, F: fn(A
 }
 
 // Fold seeded with the first element; null when empty.
-pub fn reduce(it: move $I, f: move $F) I.Item? where I: Iterator,
-    F: fn(I.Item, I.Item) I.Item {
+pub fn reduce(it: move $I, f: move $F) I.Item? where I: Iterator, F: fn(I.Item, I.Item) I.Item {
     return it.next() match {
         Some(first) => Some(fold(it, first, f))
         None => null
@@ -816,8 +819,8 @@ pub fn max(it: move $I) I.Item? where I: Iterator(Item: copyable + Ordered) {
 }
 
 // Element with the smallest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn min_by(it: move $I, key: $F) I.Item? where I: Iterator(Item: copyable),
-    F: fn(I.Item) $K, K: copyable + Ordered {
+pub fn min_by(it: move $I, key: $F) I.Item?
+where I: Iterator(Item: copyable), F: fn(I.Item) $K, K: copyable + Ordered {
     let first = it.next()
     if first.is_none() {
         return null
@@ -835,8 +838,8 @@ pub fn min_by(it: move $I, key: $F) I.Item? where I: Iterator(Item: copyable),
 }
 
 // Element with the largest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn max_by(it: move $I, key: $F) I.Item? where I: Iterator(Item: copyable),
-    F: fn(I.Item) $K, K: copyable + Ordered {
+pub fn max_by(it: move $I, key: $F) I.Item?
+where I: Iterator(Item: copyable), F: fn(I.Item) $K, K: copyable + Ordered {
     let first = it.next()
     if first.is_none() {
         return null

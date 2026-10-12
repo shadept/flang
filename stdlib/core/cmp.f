@@ -307,8 +307,10 @@ pub fn op_cmp(a: ($T1, $T2, $T3, $T4, $T5, $T6, $T7), b: (T1, T2, T3, T4, T5, T6
     return op_cmp(a.6, b.6)
 }
 
-pub fn op_cmp(a: ($T1, $T2, $T3, $T4, $T5, $T6, $T7, $T8), b: (T1, T2, T3, T4, T5, T6, T7,
-        T8)) Ord {
+pub fn op_cmp(
+    a: ($T1, $T2, $T3, $T4, $T5, $T6, $T7, $T8),
+    b: (T1, T2, T3, T4, T5, T6, T7, T8),
+) Ord {
     const c0 = op_cmp(a.0, b.0)
     if c0 != Ord.Equal {
         return c0

@@ -305,9 +305,13 @@ fn starts_list_item(body: String) bool {
 }
 
 test "doc_markdown fences indented runs and keeps list continuations" {
-    const md = doc_markdown("Prose that\nwraps.\n\n  let x = 1\n  x + 1\n\n  - first item\n    continued\n2. second\nTail.")
-    assert_true(md.view == "Prose that\nwraps.\n\n```flang\n  let x = 1\n  x + 1\n```\n\n  - first item\n  continued\n2. second\nTail.",
-        "code fenced, list continuation indented, prose untouched")
+    const md = doc_markdown(
+        "Prose that\nwraps.\n\n  let x = 1\n  x + 1\n\n  - first item\n    continued\n2. second\nTail.",
+    )
+    assert_true(
+        md.view == "Prose that\nwraps.\n\n```flang\n  let x = 1\n  x + 1\n```\n\n  - first item\n  continued\n2. second\nTail.",
+        "code fenced, list continuation indented, prose untouched",
+    )
     md.deinit()
     const plain = doc_markdown("Just prose.")
     assert_true(plain.view == "Just prose.", "prose passes through")

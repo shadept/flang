@@ -116,9 +116,17 @@ pub type Specialization = struct {
 
 // A fresh record with its reuse bookkeeping zeroed; `register` / `replace_at` stamp the demand
 // generation and assign the id.
-pub fn new_specialization(function_id: u32, key: move OwnedString, name: String, module: String,
-    decl: &FunctionDecl, concrete_params: move List(Ty), concrete_return: Ty,
-    overlay: move InferenceResults, allocator: &Allocator? = null) Specialization {
+pub fn new_specialization(
+    function_id: u32,
+    key: move OwnedString,
+    name: String,
+    module: String,
+    decl: &FunctionDecl,
+    concrete_params: move List(Ty),
+    concrete_return: Ty,
+    overlay: move InferenceResults,
+    allocator: &Allocator? = null,
+) Specialization {
     return Specialization {
         id = 0 as SpecId,
         function_id = function_id,
@@ -186,8 +194,13 @@ pub fn deinit(self: move SpecializationRegistry) {
 
 // Canonical key for `(function_id, concrete_params)`. Two specialisations with identical signatures
 // share an id.
-pub fn key_for(it: &TypeInterner, function_id: u32, params: &List(Ty), ret: Ty,
-    allocator: &Allocator? = null) OwnedString {
+pub fn key_for(
+    it: &TypeInterner,
+    function_id: u32,
+    params: &List(Ty),
+    ret: Ty,
+    allocator: &Allocator? = null,
+) OwnedString {
     let sb = string_builder(64, allocator)
     defer sb.deinit()
     sb.append(function_id)
@@ -318,9 +331,18 @@ pub fn take_deps(self: &SpecializationRegistry, id: SpecId) List(SpecDep) {
 // Frame bookkeeping, recorded when an instantiation's body re-check finishes: the stream anchors,
 // the frame's own counter burns, the deps its drain resolved, and whether the frame stayed
 // replayable (`reusable` is finalized at harvest).
-pub fn set_cache_info(self: &SpecializationRegistry, id: SpecId, vars_at: u32, synth_at: u32,
-    lambda_at: u32, own_vars: u32, own_synth: u32, own_lambda: u32, deps: move List(SpecDep),
-    reusable: bool) {
+pub fn set_cache_info(
+    self: &SpecializationRegistry,
+    id: SpecId,
+    vars_at: u32,
+    synth_at: u32,
+    lambda_at: u32,
+    own_vars: u32,
+    own_synth: u32,
+    own_lambda: u32,
+    deps: move List(SpecDep),
+    reusable: bool,
+) {
     let s = self.specs.get_ref(id).unwrap()
     s.vars_at = vars_at
     s.synth_at = synth_at
@@ -337,8 +359,12 @@ pub fn set_cache_info(self: &SpecializationRegistry, id: SpecId, vars_at: u32, s
 // Demand-end harvest: the closure facts a reuse replays, and the signature-concreteness half of
 // `reusable` - a signature that never settled cannot be told from one a later demand's pick would
 // pin differently.
-pub fn finish_harvest(self: &SpecializationRegistry, id: SpecId, closures: move List(ClosureFact),
-    sig_is_concrete: bool) {
+pub fn finish_harvest(
+    self: &SpecializationRegistry,
+    id: SpecId,
+    closures: move List(ClosureFact),
+    sig_is_concrete: bool,
+) {
     let s = self.specs.get_ref(id).unwrap()
     install(&s.closures, closures)
     if !sig_is_concrete {
@@ -380,8 +406,10 @@ pub fn reset(self: &SpecializationRegistry) {
 // A keeps retired results whole). `decl` stays a shallow AST copy and name/module stay views -
 // their storage is retired, not freed. The overlay copies share desugar blocks and view the
 // original result's string buffers, so the copy lives only as long as its source's retirement.
-pub fn carried_copy(self: &SpecializationRegistry,
-    allocator: &Allocator? = null) SpecializationRegistry {
+pub fn carried_copy(
+    self: &SpecializationRegistry,
+    allocator: &Allocator? = null,
+) SpecializationRegistry {
     // The dicts fill as locals and wrap at the end - growing a container through a local struct's
     // field is the two-field-hop hazard.
     let by_key: Dict(String, SpecId) = dict(allocator)
@@ -545,8 +573,16 @@ fn probe_spec(function_id: u32, name: String) Specialization {
     const key = key_for(&it, function_id, &no_params, ret)
     // The probe's declaration outlives the specialization it is handed to, as a module's does.
     const decl_ref = box(or_global(null), decl)
-    return new_specialization(function_id, key, name, "m", decl_ref, no_params, ret,
-        inference_results())
+    return new_specialization(
+        function_id,
+        key,
+        name,
+        "m",
+        decl_ref,
+        no_params,
+        ret,
+        inference_results(),
+    )
 }
 
 // Replace a specialization's concrete signature - used when a signature that entered instantiation

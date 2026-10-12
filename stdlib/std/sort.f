@@ -384,8 +384,8 @@ fn _node_power(n: usize, start_a: usize, start_b: usize, end_b: usize) u32 {
 }
 
 // Stable merge of s[lo..mid] and s[mid..hi] using `scratch` as staging.
-fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: $F) where T: copyable,
-    F: fn(T, T) Ord {
+fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: $F)
+where T: copyable, F: fn(T, T) Ord {
     if lo >= mid or mid >= hi {
         return
     }
@@ -524,9 +524,11 @@ test "quicksort already sorted" {
 }
 
 test "quicksort large" {
-    let arr = [37i32, 12, 88, 4, 21, 77, 56, 9, 63, 42, 11, 84, 29, 55, 18, 73, 66, 33, 2, 48, 91,
-        25, 70, 14, 80, 58, 6, 39, 67, 23, 5, 19, 50, 72, 13, 44, 30, 61, 17, 36, 95, 7, 31, 64, 52,
-        27, 1, 46, 83, 10]
+    let arr = [
+        37i32, 12, 88, 4, 21, 77, 56, 9, 63, 42, 11, 84, 29, 55, 18, 73, 66, 33, 2, 48, 91, 25, 70,
+        14, 80, 58, 6, 39, 67, 23, 5, 19, 50, 72, 13, 44, 30, 61, 17, 36, 95, 7, 31, 64, 52, 27, 1,
+        46, 83, 10,
+    ]
     let s: i32[] = arr
     quicksort(s)
     assert_true(is_sorted(s), "50 elements sorted")
@@ -571,9 +573,11 @@ test "powersort basic" {
 }
 
 test "powersort large mixed" {
-    let arr = [37i32, 12, 88, 4, 21, 77, 56, 9, 63, 42, 11, 84, 29, 55, 18, 73, 66, 33, 2, 48, 91,
-        25, 70, 14, 80, 58, 6, 39, 67, 23, 5, 19, 50, 72, 13, 44, 30, 61, 17, 36, 95, 7, 31, 64, 52,
-        27, 1, 46, 83, 10]
+    let arr = [
+        37i32, 12, 88, 4, 21, 77, 56, 9, 63, 42, 11, 84, 29, 55, 18, 73, 66, 33, 2, 48, 91, 25, 70,
+        14, 80, 58, 6, 39, 67, 23, 5, 19, 50, 72, 13, 44, 30, 61, 17, 36, 95, 7, 31, 64, 52, 27, 1,
+        46, 83, 10,
+    ]
     let s: i32[] = arr
     powersort(s)
     assert_true(is_sorted(s), "after sort")
@@ -583,8 +587,10 @@ test "powersort large mixed" {
 
 test "powersort two ascending runs" {
     // Input with two already-sorted runs - exercises the merge path.
-    let arr = [1i32, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 2, 4,
-        6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40]
+    let arr = [
+        1i32, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 2, 4, 6, 8,
+        10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40,
+    ]
     let s: i32[] = arr
     powersort(s)
     assert_true(is_sorted(s), "merged runs sorted")
@@ -594,9 +600,11 @@ test "powersort two ascending runs" {
 
 test "powersort descending run reversal" {
     // A long strictly-descending prefix exercises the reverse path.
-    let arr = [50i32, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31,
-        30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7,
-        6, 5, 4, 3, 2, 1]
+    let arr = [
+        50i32, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29,
+        28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5,
+        4, 3, 2, 1,
+    ]
     let s: i32[] = arr
     powersort(s)
     assert_true(is_sorted(s), "descending becomes ascending")
@@ -606,9 +614,11 @@ test "powersort descending run reversal" {
 
 test "powersort many runs" {
     // Alternating pattern creates many short runs - exercises the run-stack merge scheduling.
-    let arr = [10i32, 20, 5, 15, 25, 1, 11, 21, 31, 3, 13, 23, 33, 43, 7, 17, 27, 37, 47, 2, 12, 22,
-        32, 42, 52, 4, 14, 24, 34, 44, 54, 64, 6, 16, 26, 36, 46, 56, 8, 18, 28, 38, 48, 58, 68, 9,
-        19, 29, 39, 49]
+    let arr = [
+        10i32, 20, 5, 15, 25, 1, 11, 21, 31, 3, 13, 23, 33, 43, 7, 17, 27, 37, 47, 2, 12, 22, 32,
+        42, 52, 4, 14, 24, 34, 44, 54, 64, 6, 16, 26, 36, 46, 56, 8, 18, 28, 38, 48, 58, 68, 9, 19,
+        29, 39, 49,
+    ]
     let s: i32[] = arr
     powersort(s)
     assert_true(is_sorted(s), "many-run input sorted")

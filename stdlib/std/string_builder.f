@@ -56,8 +56,10 @@ pub fn string_builder_with_allocator(allocator: &Allocator) StringBuilder {
 
 // Create a new empty StringBuilder with the given initial capacity.
 #deprecated("use string_builder(capacity, allocator)")
-pub fn string_builder_with_capacity_and_allocator(capacity: usize,
-    allocator: &Allocator?) StringBuilder {
+pub fn string_builder_with_capacity_and_allocator(
+    capacity: usize,
+    allocator: &Allocator?,
+) StringBuilder {
     return string_builder(capacity, allocator)
 }
 
@@ -154,8 +156,10 @@ pub fn to_string(sb: &StringBuilder, allocator: &Allocator) OwnedString {
     // Null-terminate for C FFI compatibility
     const term = buf.ptr + sb.len
     term.* = 0
-    const result = OwnedString { view = .{ ptr = buf.ptr, len = sb.len },
-        allocator = Some(allocator) }
+    const result = OwnedString {
+        view = .{ ptr = buf.ptr, len = sb.len },
+        allocator = Some(allocator),
+    }
     sb.ptr = 0usize as &u8
     sb.len = 0
     return result

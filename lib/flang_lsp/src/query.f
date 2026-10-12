@@ -59,8 +59,11 @@ pub fn import_at(module: &Module, offset: usize) ImportRef? {
                 if span_contains(id.span, offset) {
                     const path = id.path.join(".")
                     const end = id.span.start + id.span.length
-                    const span = SourceSpan { file_id = id.span.file_id, start = end - path.len,
-                        length = path.len }
+                    const span = SourceSpan {
+                        file_id = id.span.file_id,
+                        start = end - path.len,
+                        length = path.len,
+                    }
                     return Some(ImportRef { path = move path, span = span })
                 }
             }
@@ -271,8 +274,13 @@ pub fn member_field(result: &TypeCheckResult, recv: Ty, name: String) FieldHit? 
 // The field a cursor in member position names: `text[wstart..]` is the word, the receiver is
 // whatever typed node ends at the dot before it (`?.` peeled). Null when the cursor is not in
 // member position or the receiver has no such field - a UFCS method, say.
-pub fn member_at(result: &TypeCheckResult, fid: i32, text: String, wstart: usize,
-    wname: String) FieldHit? {
+pub fn member_at(
+    result: &TypeCheckResult,
+    fid: i32,
+    text: String,
+    wstart: usize,
+    wname: String,
+) FieldHit? {
     if wstart == 0 or text[wstart - 1] != '.' {
         return null
     }
@@ -331,8 +339,13 @@ pub fn target_decl_span(result: &TypeCheckResult, target: &ResolvedTarget) Sourc
 // Where the cursor's word points, given the target covering it. `Enum.Variant` records ONE variant
 // target spanning the whole reference, so a cursor on the qualifier - the word the target starts
 // at, with a `.` right after it - names the ENUM; everything else resolves as its target does.
-pub fn cursor_decl_span(result: &TypeCheckResult, hit: &TargetHit, text: String, wstart: usize,
-    wend: usize) SourceSpan? {
+pub fn cursor_decl_span(
+    result: &TypeCheckResult,
+    hit: &TargetHit,
+    text: String,
+    wstart: usize,
+    wend: usize,
+) SourceSpan? {
     const on_qualifier = hit.span.start == wstart and wend < text.len and text[wend] == '.'
     return hit.target match {
         RtEnumVariant(nom, _) => if on_qualifier { nominal_span(result, nom) }
@@ -446,8 +459,12 @@ pub fn nominal_decl_span(result: &TypeCheckResult, ty: Ty) SourceSpan? {
 
 // Render `ty` the way diagnostics do: short nominal names, `&`/array sugar. `vars` names a generic
 // signature's free type variables (`checker.type_param_names`).
-pub fn render_ty(result: &TypeCheckResult, ty: Ty, vars: &Dict(VarId, String)? = null,
-    allocator: &Allocator? = null) OwnedString {
+pub fn render_ty(
+    result: &TypeCheckResult,
+    ty: Ty,
+    vars: &Dict(VarId, String)? = null,
+    allocator: &Allocator? = null,
+) OwnedString {
     let sb = string_builder(32, allocator)
     let reg: &NominalRegistry? = Some(&result.nominals)
     format_with_names(&result.interner, ty, &sb, reg, vars)
@@ -468,8 +485,8 @@ pub fn renderable_ty(result: &TypeCheckResult, ty: Ty, vars: &Dict(VarId, String
         NRef(inner) => renderable_ty(result, inner, vars)
         NArray(a) => renderable_ty(result, a.elem, vars)
         NNominal(nn) => children_renderable(result, nn.args, vars)
-        NFunc(f) => children_renderable(result, f.params, vars) and renderable_ty(result, f.ret,
-            vars)
+        NFunc(f) => children_renderable(result, f.params, vars)
+            and renderable_ty(result, f.ret, vars)
         NTuple(span) => children_renderable(result, span, vars)
         NRecord(_) => false
         else => true
@@ -506,8 +523,11 @@ pub fn same_target(a: &ResolvedTarget, b: &ResolvedTarget) bool {
 // Every use-site span resolving to `target`, project-wide. The declaration itself is not included
 // (except the ConstDecl node, which carries its own RtConst entry); callers wanting it add
 // `target_decl_span`.
-pub fn reference_spans(result: &TypeCheckResult, target: &ResolvedTarget,
-    allocator: &Allocator? = null) List(SourceSpan) {
+pub fn reference_spans(
+    result: &TypeCheckResult,
+    target: &ResolvedTarget,
+    allocator: &Allocator? = null,
+) List(SourceSpan) {
     let out: List(SourceSpan) = list(8, allocator)
     for e in result.resolved_targets.iter() {
         const v = e.value

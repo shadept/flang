@@ -100,7 +100,7 @@ fn close(h: move File) {}                   // takes ownership: `h.close()` move
 
 **Generic:** `$T` introduces, `T` refers. Example: `fn identity(x: $T) T { return x }`
 
-**Bounds:** `fn max(s: $T[]) T? where T: copyable`, `where I: Iterator, F: fn(I.Item) bool`, `where T: Eq + Hash`, `where I: Iterator, I.Item: Hash` - a bound is a contract (see Contracts); `where` is contextual. A struct's, enum's or contract's bounds sit on its parameter list instead (see Structs).
+**Bounds:** `fn max(s: $T[]) T? where T: copyable`, `where I: Iterator, F: fn(I.Item) bool`, `where T: Eq + Hash`, `where I: Iterator, I.Item: Hash` - a bound is a contract (see Contracts); `where` is contextual. A trailing comma after the last bound is allowed. A struct's, enum's or contract's bounds sit on its parameter list instead (see Structs).
 
 **Foreign:** `#foreign fn malloc(size: usize) &u8?` — no body, C calling convention, not mangled.
 

@@ -124,12 +124,18 @@ test "out-of-range positions clamp" {
     defer idx.deinit()
 
     const past_line = Position { line = 9, character = 0 }
-    assert_eq(idx.to_offset(text, past_line, PositionEncoding.Utf16), 5,
-        "line past the end clamps to text end")
+    assert_eq(
+        idx.to_offset(text, past_line, PositionEncoding.Utf16),
+        5,
+        "line past the end clamps to text end",
+    )
 
     const past_char = Position { line = 0, character = 99 }
-    assert_eq(idx.to_offset(text, past_char, PositionEncoding.Utf16), 2,
-        "character past the line clamps before the terminator")
+    assert_eq(
+        idx.to_offset(text, past_char, PositionEncoding.Utf16),
+        2,
+        "character past the line clamps before the terminator",
+    )
 }
 
 test "crlf terminators are excluded from line content" {
@@ -138,10 +144,16 @@ test "crlf terminators are excluded from line content" {
     defer idx.deinit()
 
     const past_char = Position { line = 0, character = 99 }
-    assert_eq(idx.to_offset(text, past_char, PositionEncoding.Utf16), 2,
-        "clamp lands before the \\r")
+    assert_eq(
+        idx.to_offset(text, past_char, PositionEncoding.Utf16),
+        2,
+        "clamp lands before the \\r",
+    )
 
     const second = Position { line = 1, character = 1 }
-    assert_eq(idx.to_offset(text, second, PositionEncoding.Utf16), 5,
-        "second line starts after the \\r\\n")
+    assert_eq(
+        idx.to_offset(text, second, PositionEncoding.Utf16),
+        5,
+        "second line starts after the \\r\\n",
+    )
 }

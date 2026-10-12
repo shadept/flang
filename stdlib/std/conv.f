@@ -125,8 +125,12 @@ pub fn format_i64(val: i64, buf: u8[], base: u8 = 10) Result(usize, ConvError) {
 // Caveat: the integer portion is extracted via `as u64`, so values whose magnitude exceeds 2^64
 // aren't representable and will truncate. Non-finite inputs (NaN, infinity) aren't handled
 // specially.
-pub fn format_f64(val: f64, buf: u8[], precision: usize = 6, trim_zeros: bool = true) Result(usize,
-    ConvError) {
+pub fn format_f64(
+    val: f64,
+    buf: u8[],
+    precision: usize = 6,
+    trim_zeros: bool = true,
+) Result(usize, ConvError) {
     let abs_val = val
     let negative = false
     if val < 0.0 {
@@ -314,8 +318,12 @@ pub fn format_f64_hex(val: f64, buf: u8[]) Result(usize, ConvError) {
 //
 // Required buffer capacity: `precision + 9` bytes
 // (sign + digit + '.' + precision + 'e' + sign + 3 exponent digits).
-pub fn format_f64_exp(val: f64, buf: u8[], precision: usize = 6,
-    uppercase: bool = false) Result(usize, ConvError) {
+pub fn format_f64_exp(
+    val: f64,
+    buf: u8[],
+    precision: usize = 6,
+    uppercase: bool = false,
+) Result(usize, ConvError) {
     if val != val {
         return write_word(buf, "nan")
     }

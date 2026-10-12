@@ -1203,8 +1203,8 @@ pub fn mentions_generic(te: &TypeExpr) bool {
 // Whether `te` names `name` as a type: `name` itself, `name.Item`, or anywhere inside.
 pub fn mentions_name(te: &TypeExpr, name: String) bool {
     return te.* match {
-        Named(n) => n.name == name or any_names(n.generic_args, name) or assoc_names(n.assoc_args,
-            name)
+        Named(n) => n.name == name or any_names(n.generic_args, name)
+            or assoc_names(n.assoc_args, name)
         Projection(p) => mentions_name(p.base, name)
         Reference(r) => mentions_name(r.inner, name)
         Optional(o) => mentions_name(o.inner, name)

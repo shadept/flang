@@ -344,7 +344,7 @@ let a = align_of(Point)
 
 ### 2.12 Trailing Commas
 
-Comma-separated lists accept a trailing comma uniformly: function-call arguments, struct/enum literal fields, parameter lists, generic type parameters, enum variant declarations, match arms (when commas are used as separators inside a single arm body), array literals, etc. The single-element tuple `(x,)` keeps its distinct meaning — the trailing comma is what makes `(x,)` a 1-tuple rather than a grouped expression.
+Comma-separated lists accept a trailing comma uniformly: function-call arguments, struct/enum literal fields, parameter lists, `where` bound lists, generic type parameters, enum variant declarations, match arms (when commas are used as separators inside a single arm body), array literals, etc. The single-element tuple `(x,)` keeps its distinct meaning — the trailing comma is what makes `(x,)` a 1-tuple rather than a grouped expression.
 
 ### 2.13 Comments
 

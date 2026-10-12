@@ -32,8 +32,11 @@ const PROF_NAMES = "__flang_prof_names"
 // are the module's display names where one exists (`module.path.name(&Type,u32)`), the raw symbol
 // otherwise. Returns the buffer backing the name-table global; the caller keeps it alive until the
 // backend has consumed `m`, then deinits it.
-pub fn instrument_profile(m: &IrModule, all: bool = false,
-    allocator: &Allocator? = null) OwnedString {
+pub fn instrument_profile(
+    m: &IrModule,
+    all: bool = false,
+    allocator: &Allocator? = null,
+) OwnedString {
     let names = string_builder(m.functions.len * 24, allocator)
     let count: usize = 0
     for i in 0..m.functions.len {
@@ -75,8 +78,8 @@ pub fn instrument_profile(m: &IrModule, all: bool = false,
 // Whether a symbol belongs to the stdlib: its module path mangles to a `std__`/`core__` prefix, and
 // a stdlib const-init helper wraps that in `__finit_`.
 fn is_stdlib_symbol(name: String) bool {
-    return starts_with(name, "std__") or starts_with(name, "core__") or starts_with(name,
-        "__finit_std__") or starts_with(name, "__finit_core__")
+    return starts_with(name, "std__") or starts_with(name, "core__")
+        or starts_with(name, "__finit_std__") or starts_with(name, "__finit_core__")
 }
 
 // Enter at the top of the entry block, exit at the bottom of every block that returns. A block

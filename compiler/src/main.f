@@ -355,7 +355,9 @@ fn print_help() {
 
     println("  -r, --release       optimize the generated C (-O2 / /O2)")
     println("  -p, --profile       instrument the project's functions for profiling (implies")
-    println("                      --release); the binary prints a profile on exit, see std.profile")
+    println(
+        "                      --release); the binary prints a profile on exit, see std.profile",
+    )
     println("  -P, --profile-all   like --profile, but instrument the stdlib too")
     println("      --profile-out <path>    also write folded stacks there (flamegraph input)")
     println("      --profile-nodes <n>     call-path pool size (default 1048576)")
@@ -703,8 +705,14 @@ fn expand_all(items: &List(OwnedString), missing: &List(OwnedString)) List(Owned
 }
 
 // Shared render -> gate -> lower -> link tail for both build modes.
-fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &BuildOpts,
-    libs: &List(OwnedString), ldflags: &List(OwnedString)) i32 {
+fn finish_build(
+    unit: &AnalyzedProject,
+    label: String,
+    out: String,
+    opts: &BuildOpts,
+    libs: &List(OwnedString),
+    ldflags: &List(OwnedString),
+) i32 {
     const style = resolve_style(opts.color)
     render_project_diagnostics(&unit.diagnostics, &unit.file_paths, &unit.sources, &style)
 
@@ -733,7 +741,9 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
     if unit.demanded.len > 0 {
         dm = Some(&unit.demanded)
     }
-    const prof_c = if opts.profile { $"{opts.stdlib_path.view}/std/profile.c" } else { from_view("") }
+    const prof_c = if opts.profile { $"{opts.stdlib_path.view}/std/profile.c" } else { from_view(
+        "",
+    ) }
     defer prof_c.deinit()
     let prof_rt: String? = null
     if opts.profile {
@@ -760,10 +770,28 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
     }
 
     let prof_out: String? = if opts.profile_out.len > 0 { Some(opts.profile_out) } else { null }
-    let result = build_program(&unit.modules, &unit.fqns, &unit.result, out, opts.target,
-        &unit.file_paths, libs, ldflags, opts.stats, opts.keep_c, opts.release, dm, prof_rt,
-        opts.profile_all, prof_out, opts.profile_nodes, opts.profile_depth, opts.emit_c_only, tests,
-        name_filter)
+    let result = build_program(
+        &unit.modules,
+        &unit.fqns,
+        &unit.result,
+        out,
+        opts.target,
+        &unit.file_paths,
+        libs,
+        ldflags,
+        opts.stats,
+        opts.keep_c,
+        opts.release,
+        dm,
+        prof_rt,
+        opts.profile_all,
+        prof_out,
+        opts.profile_nodes,
+        opts.profile_depth,
+        opts.emit_c_only,
+        tests,
+        name_filter,
+    )
     if result.is_err() {
         report_build_error(&result.unwrap_err(), label)
         return 1
@@ -778,8 +806,13 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
     if opts.testing and !opts.emit_c_only {
         if opts.stats {
             print_memory(unit)
-            print_timings(unit, artifact.lower_ns, artifact.translate_ns, artifact.cc_ns,
-                elapsed_ns(opts.start_ns))
+            print_timings(
+                unit,
+                artifact.lower_ns,
+                artifact.translate_ns,
+                artifact.cc_ns,
+                elapsed_ns(opts.start_ns),
+            )
         }
         return run_test_binary(built)
     }
@@ -789,8 +822,13 @@ fn finish_build(unit: &AnalyzedProject, label: String, out: String, opts: &Build
     println(msg.view)
     if opts.stats {
         print_memory(unit)
-        print_timings(unit, artifact.lower_ns, artifact.translate_ns, artifact.cc_ns,
-            elapsed_ns(opts.start_ns))
+        print_timings(
+            unit,
+            artifact.lower_ns,
+            artifact.translate_ns,
+            artifact.cc_ns,
+            elapsed_ns(opts.start_ns),
+        )
     }
     return 0
 }
@@ -837,8 +875,13 @@ fn run_test_binary(built: String) i32 {
 // Under `--stats`: where the wall time went, one line per phase, with the typechecker broken into
 // its own phases beneath it. "other" is the remainder - project manifest, glob, diagnostics
 // rendering, teardown - and is the cue that a phase worth naming is still unaccounted for.
-fn print_timings(unit: &AnalyzedProject, lower_ns: u64, translate_ns: u64, cc_ns: u64,
-    total_ns: u64) {
+fn print_timings(
+    unit: &AnalyzedProject,
+    lower_ns: u64,
+    translate_ns: u64,
+    cc_ns: u64,
+    total_ns: u64,
+) {
     const p = unit.result.phases
     println("timings:")
     print_phase("read + parse", unit.parse_ns, total_ns, false)
@@ -856,8 +899,12 @@ fn print_timings(unit: &AnalyzedProject, lower_ns: u64, translate_ns: u64, cc_ns
     print_phase("emit C", translate_ns, total_ns, false)
     print_phase("cc + link", cc_ns, total_ns, false)
     const named = unit.parse_ns + unit.check_ns + lower_ns + translate_ns + cc_ns
-    print_phase("other", if named < total_ns { total_ns - named } else { 0 as u64 }, total_ns,
-        false)
+    print_phase(
+        "other",
+        if named < total_ns { total_ns - named } else { 0 as u64 },
+        total_ns,
+        false,
+    )
     print_phase("total", total_ns, total_ns, false)
 }
 

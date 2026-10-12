@@ -532,8 +532,10 @@ pub fn deinit(self: move IrModule) {
 
 // Replace the display-name map wholesale (scoped mutability keeps the field module-private).
 // Returns the previous map so the caller can free it.
-pub fn set_displays(self: &IrModule, displays: move Dict(String, OwnedString)) Dict(String,
-    OwnedString) {
+pub fn set_displays(
+    self: &IrModule,
+    displays: move Dict(String, OwnedString),
+) Dict(String, OwnedString) {
     return replace(&self.displays, displays)
 }
 
@@ -707,8 +709,11 @@ pub fn remap_operand(op: Operand, subst: &Dict(u32, Operand)) Operand {
     }
 }
 
-pub fn clone_operand_list(args: &List(Operand), subst: &Dict(u32, Operand),
-    alloc: &Allocator?) List(Operand) {
+pub fn clone_operand_list(
+    args: &List(Operand),
+    subst: &Dict(u32, Operand),
+    alloc: &Allocator?,
+) List(Operand) {
     let out: List(Operand) = list(args.len, alloc)
     for i in 0..args.len {
         out.push(remap_operand(args[i], subst))
@@ -722,8 +727,11 @@ pub fn clone_ir_type_list(tys: &List(IrType), alloc: &Allocator?) List(IrType) {
     return out
 }
 
-pub fn clone_block_target(t: &BlockTarget, subst: &Dict(u32, Operand),
-    alloc: &Allocator?) BlockTarget {
+pub fn clone_block_target(
+    t: &BlockTarget,
+    subst: &Dict(u32, Operand),
+    alloc: &Allocator?,
+) BlockTarget {
     return BlockTarget {
         label = t.label,
         args = clone_operand_list(&t.args, subst, alloc),
@@ -810,8 +818,11 @@ pub fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator
     }
 }
 
-pub fn rewrite_terminator(t: &Terminator, subst: &Dict(u32, Operand),
-    alloc: &Allocator?) Terminator {
+pub fn rewrite_terminator(
+    t: &Terminator,
+    subst: &Dict(u32, Operand),
+    alloc: &Allocator?,
+) Terminator {
     return t.* match {
         Br(target) => Terminator.Br(clone_block_target(&target, subst, alloc))
         BrIf(b) => Terminator.BrIf(BrIfTerm {
