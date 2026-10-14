@@ -1,7 +1,9 @@
 // Core math functions and integer type limits.
 //
-// Provides generic arithmetic utilities (abs, min, max, clamp, pow, gcd, lcm) and compile-time
-// constants for the min/max values of all integer types.
+// Provides generic arithmetic utilities (abs, min, max, clamp, div_floor, mod_floor, pow, gcd, lcm)
+// and compile-time constants for the min/max values of all integer types.
+
+import std.test
 
 // =============================================================================
 // Unsigned Integer Limits
@@ -82,6 +84,25 @@ pub fn clamp(x: $T, lower: T, upper: T) T where T: copyable + Ordered {
     return max(lower, min(x, upper))
 }
 
+// Returns a / b rounded toward negative infinity, where `/` rounds toward zero: div_floor(-7, 2) is
+// -4.
+pub fn div_floor(a: $T, b: T) T where T: copyable {
+    const q = a / b
+    if a % b != 0 and (a < 0) != (b < 0) {
+        return q - 1
+    }
+    return q
+}
+
+// Returns the remainder of div_floor(a, b), which takes the sign of b: mod_floor(-7, 2) is 1.
+pub fn mod_floor(a: $T, b: T) T where T: copyable {
+    const r = a % b
+    if r != 0 and (r < 0) != (b < 0) {
+        return r + b
+    }
+    return r
+}
+
 // =============================================================================
 // Powers and Logarithms
 // =============================================================================
@@ -144,4 +165,13 @@ pub fn lcm(a: $T, b: T) T where T: copyable {
         return 0
     }
     return abs(a) / gcd(a, b) * abs(b)
+}
+
+test "div_floor and mod_floor round toward negative infinity" {
+    assert_eq(div_floor(-7i64, 2i64), -4i64, "-7 / 2")
+    assert_eq(mod_floor(-7i64, 2i64), 1i64, "-7 % 2")
+    assert_eq(div_floor(7i64, -2i64), -4i64, "7 / -2")
+    assert_eq(mod_floor(7i64, -2i64), -1i64, "7 % -2")
+    assert_eq(div_floor(-8i64, 2i64), -4i64, "exact negative")
+    assert_eq(mod_floor(6i32, 3i32), 0i32, "exact positive")
 }

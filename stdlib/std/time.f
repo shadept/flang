@@ -1,99 +1,52 @@
-import std.io.print
-
-// std.time - high-resolution monotonic clock for measuring intervals.
+// Dates, times, durations, time zones and clocks, through one import. Modelled on C# (DateOnly,
+// TimeOnly, TimeSpan, DateTimeOffset), Temporal (Instant, PlainDateTime), Python and Rust; every
+// value counts 100 ns ticks, as C# does.
 //
-// `monotonic_ns()` returns nanoseconds since an unspecified epoch that is stable for the lifetime
-// of the process. The reading IS NOT wall-clock time - it doesn't jump under NTP corrections,
-// daylight saving, or manual clock changes - and IS NOT persistable across process restarts. Use it
-// to time blocks of code, nothing else.
+//   Instant         a point on the timeline, UTC                     std.time.instant
+//   DateTime        a calendar date and wall-clock time, no zone     std.time.datetime
+//   Date, Time      either half of a DateTime                        std.time.date, std.time.time
+//   OffsetDateTime  an Instant and the UTC offset it was read at     std.time.zone
+//   TimeZone        UTC, a fixed offset, or an IANA zone             std.time.zone
+//   Duration        exact elapsed time                               std.time.duration
+//   Period          years, months and days on the calendar           std.time.duration
+//   Month, Weekday  integer enums, and the calendar arithmetic       std.time.calendar
 //
-// Backed by `QueryPerformanceCounter` on Windows and `clock_gettime(CLOCK_MONOTONIC, ...)` on POSIX
-// via time.c.
+// Formatting writes ISO 8601 / RFC 3339 by default, or a strftime pattern: `$"{d:%d %B %Y}"`.
 //
-// A first-class `Time` / `Duration` value type, wall-clock readings, formatting, and parsing will
-// live elsewhere when needed - this module is intentionally narrow.
+// Every parser reads the whole string and returns Result(T, TimeError). The one-argument parsers
+// read ISO 8601 only:
 //
-// Typical use:
+//   parse_date             2026-10-14, +012026-10-14, -000044-03-15
+//   parse_time             13:45, 13:45:30, 13:45:30.1234567
+//   parse_datetime         date, then T, t or a space, then time; a date alone is midnight; no offset
+//   parse_instant          RFC 3339: date, time and offset, ...Z, ...+01:00, ...-0500
+//   parse_offset_datetime  as parse_instant, keeping the offset
+//   parse_duration         PT1H30M, P1DT12H, -PT0.5S (a day is 24 hours; Y, M, W refused)
+//   parse_period           P1Y2M3D, P2W, -P1M (a week is 7 days)
 //
-//   const t0 = monotonic_ns()
-//   do_work()
-//   const elapsed = elapsed_ns(t0)
-//   const msg = $"work took {ns_to_millis(elapsed)} ms"
-//   defer msg.deinit()
-//   println(msg.as_view())
+// Other text:
 //
-// Or with the lighter `Stopwatch` wrapper:
+//   parse_offset_datetime(s, tz), parse_instant(s, tz)
+//       any ISO 8601 date or date-time, offset or not; without one it is wall-clock time in `tz`
+//       (TimeZone.Utc, or `system_zone()?` for local time)
+//   parse_date / parse_time / parse_datetime / parse_offset_datetime / parse_instant (s, pattern)
+//       the strftime codes `format` writes, read back: parse_date("4/7/2026", "%d/%m/%Y");
+//       parse_offset_datetime(s, pattern, tz) falls back to `tz` when the text has no zone
+//   parse_rfc5322    email and HTTP dates: Tue, 14 Oct 2026 09:30:00 +0100
+//   parse_zone       a zone field: UTC, +01:00, UTC+1, EST, Europe/Lisbon
 //
-//   let sw = stopwatch()
-//   do_work()
-//   const ms = sw.elapsed_millis()
+// Pattern rules are in std.time.internal.parse. Seconds take a fraction after `.` or `,`, up to 9
+// digits; digits past the 7th (100 ns) are dropped. A leap second (:60) reads as :59. Errors:
+// BadFormat for text of the wrong shape, InvalidDate / InvalidTime / InvalidOffset for a field out
+// of range, OutOfRange for a value past years -9999..9999 (in UTC for an instant) or a Duration or
+// Period field too large, UnknownZone for a zone name the database lacks.
 
-#foreign fn __flang_monotonic_ns() u64
-
-// Read the monotonic clock. Returns nanoseconds since the process's monotonic epoch (unspecified -
-// only differences are meaningful).
-pub fn monotonic_ns() u64 {
-    return __flang_monotonic_ns()
-}
-
-// Nanoseconds elapsed from the reading `start` until now. Caller is responsible for capturing
-// `start` via `monotonic_ns()` first. If `start` is in the future (clock-skew across cores in
-// degenerate cases) the result is `0` rather than wrapping.
-pub fn elapsed_ns(start: u64) u64 {
-    const now = __flang_monotonic_ns()
-    if now < start {
-        return 0
-    }
-    return now - start
-}
-
-// Convert a nanosecond duration to seconds as f64. Convenience for formatting - internal math
-// should stay in ns to avoid float drift.
-pub fn ns_to_seconds(ns: u64) f64 {
-    return (ns as f64) / 1000000000.0
-}
-
-pub fn ns_to_millis(ns: u64) f64 {
-    return (ns as f64) / 1000000.0
-}
-
-pub fn ns_to_micros(ns: u64) f64 {
-    return (ns as f64) / 1000.0
-}
-
-// Convenience wrapper that captures a start instant and reports elapsed time on demand. Cheap to
-// copy (one u64). Reset via `restart()` to reuse the same instance across phases.
-pub type Stopwatch = struct {
-    start_ns: u64
-}
-
-// Start a new stopwatch reading the monotonic clock at construction.
-pub fn stopwatch() Stopwatch {
-    return .{ start_ns = __flang_monotonic_ns() }
-}
-
-// Reset to "now". Use between phases when you want a single Stopwatch to time multiple back-to-back
-// intervals.
-pub fn restart(self: &Stopwatch) {
-    self.start_ns = __flang_monotonic_ns()
-}
-
-pub fn elapsed_ns(self: Stopwatch) u64 {
-    const now = __flang_monotonic_ns()
-    if now < self.start_ns {
-        return 0
-    }
-    return now - self.start_ns
-}
-
-pub fn elapsed_micros(self: Stopwatch) f64 {
-    return ns_to_micros(self.elapsed_ns())
-}
-
-pub fn elapsed_millis(self: Stopwatch) f64 {
-    return ns_to_millis(self.elapsed_ns())
-}
-
-pub fn elapsed_seconds(self: Stopwatch) f64 {
-    return ns_to_seconds(self.elapsed_ns())
-}
+pub import std.time.calendar
+pub import std.time.clock
+pub import std.time.date
+pub import std.time.datetime
+pub import std.time.duration
+pub import std.time.instant
+pub import std.time.stopwatch
+pub import std.time.time
+pub import std.time.zone

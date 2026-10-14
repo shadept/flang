@@ -148,6 +148,39 @@ have `op_cmp` overloads in `core.cmp` the ladder never consults for them.
 
 ---
 
+### Unary `-` on a User Type Type-Checks but Lowering Refuses It
+
+**Status:** Open
+**Affected:** `lib/flang_driver/src/lower.f` (unary lowering)
+
+`-d` where `d`'s type declares `op_neg` (spec 5.2) checks, then lowering refuses the function
+("unsupported construct"); `op_neg(d)` works. std.time declares `op_neg` on `Duration` and `Period`
+and calls it by name until this is fixed.
+
+---
+
+### An Unsuffixed Integer Literal Cast to an Enum Is Refused by Lowering
+
+**Status:** Open
+**Affected:** `lib/flang_driver/src/lower.f` (casts)
+
+`12 as Month` checks, then lowering refuses the function ("cast shape"); `12i32 as Month` works.
+The literal's type is never settled before the cast reaches lowering.
+
+---
+
+### A Nominal and a Primitive Operand Never Reach an Operator Function
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (`arithmetic`)
+
+`d * 3i64` with `fn op_mul(a: Duration, n: i64) Duration` declared is E2102 ("expected one of i8 |
+... got `Duration`"): a pair with a primitive side goes down the built-in path and never consults
+the operator functions. Two nominal operands dispatch (`Date + Period`). std.time scales a
+Duration with `d.mul(n)` / `d.div(n)` instead.
+
+---
+
 ### `std.collections.iter` Is Disabled - RESOLVED
 
 **Status:** Resolved 2026-10-11 (RFC-035)

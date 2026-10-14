@@ -99,7 +99,12 @@ foreach (var (dir, os, arch) in targets)
 
     // Runtime sidecars: the hand-written companion .c files the generated C
     // links against. Copied flat (names are unique) so each seed directory is
-    // a closed set - HEAD's stdlib may drift, the seed must not care.
+    // a closed set - HEAD's stdlib may drift, the seed must not care. The old
+    // set goes first: the seed builds every *.c, so a renamed sidecar left
+    // behind would define its symbols twice.
+    foreach (var c in Directory.EnumerateFiles(seedDir, "*.c"))
+        if (Path.GetFileName(c) != "flang.c")
+            File.Delete(c);
     foreach (var c in Directory.EnumerateFiles(stdlibDir, "*.c", SearchOption.AllDirectories))
         File.Copy(c, Path.Combine(seedDir, Path.GetFileName(c)), overwrite: true);
 

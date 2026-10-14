@@ -1123,10 +1123,11 @@ std/              standard modules: text (string, string_builder), allocator, op
 std/collections/  List, Dict, Set, Stack, Deque, Bitset, the iterator combinators, Journal, MultiMap, StringPool
 std/encoding/     serialization (JSON, codec)
 std/io/           input/output, filesystem, readers/writers
+std/time/         Date, Time, DateTime, Instant, OffsetDateTime, Duration, Period, TimeZone, clocks
 ```
 
 A folder with a façade module beside it - `std.collections` alongside `std/collections/`, `std.io`
-alongside `std/io/` - re-exports every child through `pub import`, so `import std.collections`
+alongside `std/io/`, `std.time` alongside `std/time/` - re-exports every child through `pub import`, so `import std.collections`
 brings in every collection and `import std.collections.list` just the one.
 
 **Collections come in a managed and an unmanaged flavour**. `UnmanagedList(T)` is
