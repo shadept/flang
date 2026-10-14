@@ -159,10 +159,11 @@ and calls it by name until this is fixed.
 
 ---
 
-### An Unsuffixed Integer Literal Cast to an Enum Is Refused by Lowering
+### An Unsuffixed Integer Literal Cast to an Enum Is Refused by Lowering - RESOLVED
 
-**Status:** Open
-**Affected:** `lib/flang_driver/src/lower.f` (casts)
+**Status:** Resolved 2026-10-14. `check_cast` binds a literal operand of an enum cast to the `i32`
+tag type, and refuses a literal tag no variant carries (E2020). Original report follows.
+**Affected:** `lib/flang_typer/src/checker.f` (`check_cast`)
 
 `12 as Month` checks, then lowering refuses the function ("cast shape"); `12i32 as Month` works.
 The literal's type is never settled before the cast reaches lowering.

@@ -1242,6 +1242,9 @@ Examples:
 ```flang
 let p: &i32 = &x
 let y: String = p as String  // ERROR: invalid cast `&i32` to `String`
+
+type Month = enum { January = 1, December = 12 }
+let m = 13 as Month          // ERROR: no variant of this enum has the tag `13`
 ```
 
 Solution:

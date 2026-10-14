@@ -555,6 +555,21 @@ pub fn variant_tag(def: &EnumDef, index: usize) i64 {
     }
 }
 
+// Whether a variant of the enum at `id` has discriminant `tag`. False for structs.
+pub fn enum_has_tag(self: &NominalRegistry, id: NominalId, tag: i64) bool {
+    return self.get(id).* match {
+        NomEnum(e) => {
+            for i in 0..e.variants.len {
+                if variant_tag(&e, i) == tag {
+                    return true
+                }
+            }
+            false
+        }
+        _ => false
+    }
+}
+
 // Whether every variant of the enum at `id` is payload-less - the shape that gets builtin
 // tag-compare `==`/`!=` (checker) and tag-compare lowering (driver). False for structs.
 pub fn enum_payloadless(self: &NominalRegistry, id: NominalId) bool {

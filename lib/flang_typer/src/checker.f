@@ -7461,19 +7461,63 @@ fn check_cast(self: &Checker, c: &CastExpr) Ty {
     if is_bindable_lit {
         // Best-effort: a numeric target binds the literal; a failure (casting a literal to a
         // pointer, say) is the cast's business, not a unification diagnostic.
-        let _o = self.engine.unify(v, target)
+        let _o = self.engine.unify(v, literal_cast_ty(self, target))
     }
     let from = self.engine.resolve(v)
     let to = self.engine.resolve(target)
     let open = self.engine.is_var(from) or self.engine.is_var(to) or from.is_error()
         or to.is_error()
-    if !open and !cast_valid(self, from, to) {
+    const valid = open or cast_valid(self, from, to)
+    if !valid {
         push_diag_e(self, c.span, E_INVALID_CAST, from_view("invalid cast between these types"))
+    }
+    if !open and valid {
+        report_unknown_tag(self, c, to)
     }
     if !open {
         report_ref_int_cast(self, c, from, to)
     }
     return target
+}
+
+// `13 as Month`: an integer literal that no variant of the target enum carries names no value of
+// it.
+fn report_unknown_tag(self: &Checker, c: &CastExpr, to: Ty) {
+    const text = c.operand.* match {
+        Lit(l) => l.value match {
+            Int(n) => Some(n.text)
+            _ => null
+        }
+        _ => null
+    }
+    const enum_id = ty_node(self, to) match {
+        NNominal(nn) => Some(nn.id)
+        _ => null
+    }
+    if text.is_none() or enum_id.is_none() {
+        return
+    }
+    const tag = parse_i64_text(text.unwrap())
+    if enum_has_tag(&self.nominals, enum_id.unwrap(), tag) {
+        return
+    }
+    push_diag_e(
+        self,
+        c.span,
+        E_INVALID_CAST,
+        $"no variant of this enum has the tag `{text.unwrap()}`",
+    )
+}
+
+// The type a literal operand of `as target` takes: the target itself, or for an enum its i32
+// discriminant, so `12 as Month` reads as `12i32 as Month` (and a payload enum target is refused by
+// cast_valid rather than left unchecked).
+fn literal_cast_ty(self: &Checker, target: Ty) Ty {
+    const is_enum = ty_node(self, self.engine.resolve(target)) match {
+        NNominal(nn) => is_enum_id(self, nn.id)
+        _ => false
+    }
+    return if is_enum { prim_of(PrimitiveKind.I32) } else { target }
 }
 
 // The two directions between a reference and an integer (spec §5.4). Reading an address out as an

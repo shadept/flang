@@ -208,6 +208,7 @@ type Ord = enum { Less = -1, Equal = 0, Greater = 1 }
 **Enum ↔ integer casts:**
 - `e as i32` extracts the tag. Valid for any enum.
 - `(n as MyEnum)` constructs a variant by tag value. **Only allowed for bare enums** — enums where every variant is payload-less. Allowing this on a payload-carrying enum would leave payload bytes uninitialized; the type checker rejects it with E2020.
+- An unsuffixed literal operand takes the tag type `i32`: `12 as Month` is `12i32 as Month`. An integer literal that no variant carries (`13 as Month`) is E2020; a runtime value is not checked.
 
 Useful for FFI where a C shim returns an error code that matches the FLang discriminant layout. If a niche optimization later shifts bare-enum discriminants (see §2.7), both sides of the FFI boundary must update together — keep the C constants and the FLang enum declaration in the same file or adjacent files.
 
@@ -339,7 +340,7 @@ let a = align_of(Point)
 - Underscore separators: `1_000_000`, `0xff_ff`.
 - Scientific notation: `1.5e10`, `3e-4`.
 - A suffixed literal **is** its suffix's type: `0u32` is a `u32` value, and unifying it against an incompatible expected type is an error.
-- Unsuffixed integers and floats are inferred from context. A bare literal as a cast operand takes the cast's target type (`0xFFFF_FFFF as u64` is a `u64` constant, not an `i32` converted). A literal that no context ever pins is an error (**E2001**).
+- Unsuffixed integers and floats are inferred from context. A bare literal as a cast operand takes the cast's target type (`0xFFFF_FFFF as u64` is a `u64` constant, not an `i32` converted), or `i32` when the target is an enum (§2.5). A literal that no context ever pins is an error (**E2001**).
 - **An unsuffixed numeric literal never defaults to a concrete type.** It carries a candidate set, not a type, and nothing settles it but the program: an annotation, a suffix, a cast target, or a parameter it is passed to. Where the candidate set holds more than one type and nothing chooses, that is **E2011**, not a silent pick - `sb.append(3)` is an error and `sb.append(3i32)` is how it is written. This is a deliberate and permanent rule, not a gap awaiting a default: a defaulted literal decides a type the program never states, and the signed/unsigned reading of the same bits is exactly what the program must say out loud. A char literal is the one case with a preferred type (`char` over `u8`), because `'a'` already names it.
 
 ### 2.12 Trailing Commas
