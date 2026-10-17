@@ -50,8 +50,8 @@ pub type UnionFind = struct(K) {
 // Creates an empty forest. Nothing allocates until the first `find`.
 //
 // - `allocator`: kept for the forest's whole life. Null is the global allocator.
-pub fn union_find(allocator: &Allocator? = null) UnionFind($K) {
-    const alloc = allocator.or_global()
+pub fn union_find(allocator: &Allocator = context.allocator) UnionFind($K) {
+    const alloc = allocator
     let nodes: UnmanagedDict(K, UnionFindNode(K))
     return .{ nodes = move nodes, undo = journal(alloc), allocator = alloc }
 }

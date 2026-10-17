@@ -10,7 +10,7 @@ import std.test
 // handle is not copyable: a second one is `retain`, and each gives its count back in `deinit`.
 pub type Rc = struct(T) {
     owned __inner: &RcInner(T)
-    __allocator: &Allocator?
+    __allocator: &Allocator
 }
 
 // Internal control block: ref count + value, allocated on the heap.
@@ -20,8 +20,8 @@ type RcInner = struct(T) {
 }
 
 // Create a new Rc wrapping the given value. Allocates an RcInner on the heap.
-pub fn rc(value: move $T, allocator: &Allocator? = null) Rc(T) {
-    const alloc = allocator.or_global()
+pub fn rc(value: move $T, allocator: &Allocator = context.allocator) Rc(T) {
+    const alloc = allocator
     const inner = alloc.new(RcInner(T))
     inner.ref_count = 1
     inner.value = move value
@@ -29,8 +29,8 @@ pub fn rc(value: move $T, allocator: &Allocator? = null) Rc(T) {
 }
 
 // Allocate an Rc with zero-initialized value for in-place fill via op_deref.
-pub fn rc_alloc(allocator: &Allocator? = null) Rc($T) {
-    const alloc = allocator.or_global()
+pub fn rc_alloc(allocator: &Allocator = context.allocator) Rc($T) {
+    const alloc = allocator
     const inner = alloc.new(RcInner(T))
     fill(slice_from_raw_parts(inner as &u8, size_of(RcInner(T))), 0u8)
     inner.ref_count = 1
@@ -50,7 +50,7 @@ pub fn deinit(self: move Rc($T)) {
     if self.__inner.ref_count == 0 {
         let val = move self.__inner.value
         release(val)
-        self.__allocator.or_global().free(self.__inner)
+        self.__allocator.free(self.__inner)
     }
 }
 
@@ -130,11 +130,11 @@ test "rc with struct value via op_deref" {
 }
 
 test "rc with custom allocator" {
-    let arena_state = arena_allocator(global())
+    let arena_state = arena_allocator(context.allocator)
     let arena = arena_state.allocator()
     defer arena_state.deinit()
 
-    let r = rc(42i32, Some(&arena))
+    let r = rc(42i32, &arena)
     defer r.deinit()
 
     assert_eq(r.*, 42i32, "value through arena allocator")
@@ -166,12 +166,12 @@ test "rc_alloc zero-initialized" {
 // Rc, but retain/deinit use atomic operations on ref_count.
 pub type Arc = struct(T) {
     owned __inner: &RcInner(T)
-    __allocator: &Allocator?
+    __allocator: &Allocator
 }
 
 // Create a new Arc wrapping the given value.
-pub fn arc(value: move $T, allocator: &Allocator? = null) Arc(T) {
-    const alloc = allocator.or_global()
+pub fn arc(value: move $T, allocator: &Allocator = context.allocator) Arc(T) {
+    const alloc = allocator
     const inner = alloc.new(RcInner(T))
     inner.ref_count = 1
     inner.value = move value
@@ -179,8 +179,8 @@ pub fn arc(value: move $T, allocator: &Allocator? = null) Arc(T) {
 }
 
 // Allocate an Arc with zero-initialized value for in-place fill via op_deref.
-pub fn arc_alloc(allocator: &Allocator? = null) Arc($T) {
-    const alloc = allocator.or_global()
+pub fn arc_alloc(allocator: &Allocator = context.allocator) Arc($T) {
+    const alloc = allocator
     const inner = alloc.new(RcInner(T))
     fill(slice_from_raw_parts(inner as &u8, size_of(RcInner(T))), 0u8)
     inner.ref_count = 1
@@ -200,7 +200,7 @@ pub fn deinit(self: move Arc($T)) {
     if old == 1 {
         let val = move self.__inner.value
         release(val)
-        self.__allocator.or_global().free(self.__inner)
+        self.__allocator.free(self.__inner)
     }
 }
 

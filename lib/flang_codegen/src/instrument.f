@@ -35,7 +35,7 @@ const PROF_NAMES = "__flang_prof_names"
 pub fn instrument_profile(
     m: &IrModule,
     all: bool = false,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) OwnedString {
     let names = string_builder(m.functions.len * 24, allocator)
     let count: usize = 0
@@ -85,7 +85,7 @@ fn is_stdlib_symbol(name: String) bool {
 // Enter at the top of the entry block, exit at the bottom of every block that returns. A block
 // ending in `Br`/`BrIf` stays inside the function; `Unreachable` never comes back, so neither needs
 // a probe.
-fn instrument_fn(f: &Function, id: usize, allocator: &Allocator?) {
+fn instrument_fn(f: &Function, id: usize, allocator: &Allocator) {
     if f.blocks.len == 0 {
         return
     }
@@ -105,7 +105,7 @@ fn instrument_fn(f: &Function, id: usize, allocator: &Allocator?) {
 }
 
 // A void call to `callee`, with the function id as sole argument when given.
-fn probe_call(callee: String, id: usize?, allocator: &Allocator?) Instr {
+fn probe_call(callee: String, id: usize?, allocator: &Allocator) Instr {
     let args: List(Operand) = list(1, allocator)
     id match {
         Some(v) => args.push(Operand.IntConst(v as i64))
@@ -121,7 +121,7 @@ fn probe_call(callee: String, id: usize?, allocator: &Allocator?) Instr {
     })
 }
 
-fn register_call(count: usize, names_len: usize, allocator: &Allocator?) Instr {
+fn register_call(count: usize, names_len: usize, allocator: &Allocator) Instr {
     let args: List(Operand) = list(3, allocator)
     args.push(Operand.IntConst(count as i64))
     args.push(Operand.GlobalRef(PROF_NAMES))
@@ -138,7 +138,7 @@ fn register_call(count: usize, names_len: usize, allocator: &Allocator?) Instr {
 
 // Extern prototypes for the three runtime entry points, resolved against stdlib/std/profile.c at
 // link time.
-fn add_runtime_foreigns(m: &IrModule, allocator: &Allocator?) {
+fn add_runtime_foreigns(m: &IrModule, allocator: &Allocator) {
     let enter_params: List(IrType) = list(1, allocator)
     enter_params.push(IrType.I32)
     m.add_foreign(ForeignDecl {

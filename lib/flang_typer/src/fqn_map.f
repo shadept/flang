@@ -33,8 +33,8 @@ pub type FqnMap = struct(V) {
 // Creates an empty map. Nothing allocates until the first `register`.
 //
 // - `allocator`: kept for the map's whole life. Null is the global allocator.
-pub fn fqn_map(allocator: &Allocator? = null) FqnMap($V) {
-    const alloc = allocator.or_global()
+pub fn fqn_map(allocator: &Allocator = context.allocator) FqnMap($V) {
+    const alloc = allocator
     let entries: UnmanagedDict(StrId, V)
     return .{ entries = move entries, names = string_pool(alloc), allocator = alloc }
 }

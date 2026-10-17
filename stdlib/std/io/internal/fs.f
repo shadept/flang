@@ -315,7 +315,7 @@ pub fn raw_rename(from: String, to: String) Result((), FsError) {
     })
 }
 
-pub fn raw_getcwd(allocator: &Allocator? = null) Result(OwnedString, FsError) {
+pub fn raw_getcwd(allocator: &Allocator = context.allocator) Result(OwnedString, FsError) {
     let buf = [0u8; 4096]
     let out_len: usize = 0
     let err: i32 = 0
@@ -323,7 +323,7 @@ pub fn raw_getcwd(allocator: &Allocator? = null) Result(OwnedString, FsError) {
     return Ok(from_view(from_c_string(buf.ptr, Some(out_len)), allocator))
 }
 
-pub fn raw_temp_dir(allocator: &Allocator? = null) Result(OwnedString, FsError) {
+pub fn raw_temp_dir(allocator: &Allocator = context.allocator) Result(OwnedString, FsError) {
     let buf = [0u8; 4096]
     let out_len: usize = 0
     let err: i32 = 0
@@ -332,7 +332,10 @@ pub fn raw_temp_dir(allocator: &Allocator? = null) Result(OwnedString, FsError) 
 }
 
 // Resolves symlinks and `..`, and requires the target to exist.
-pub fn raw_realpath(path: String, allocator: &Allocator? = null) Result(OwnedString, FsError) {
+pub fn raw_realpath(
+    path: String,
+    allocator: &Allocator = context.allocator,
+) Result(OwnedString, FsError) {
     // `buf.len` rather than FS_PATH_BUF_CAP, and an `if` rather than `?`: a lambda can reference
     // neither a module-level const nor a capture inside a match arm (docs/known-issues.md).
     // `allocator` is captured, so it is only named in a straight-line expression.

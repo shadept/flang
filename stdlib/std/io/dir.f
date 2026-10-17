@@ -193,7 +193,10 @@ pub fn deinit(self: move Doomed) {
 // The whole tree is collected before the first deletion: readdir behaviour while a directory is
 // being modified is implementation-defined. That costs one owned path per entry, which is the right
 // trade for a build directory and the wrong one for a filesystem root.
-pub fn remove_dir_all(path: String, allocator: &Allocator? = null) Result((), DirError) {
+pub fn remove_dir_all(
+    path: String,
+    allocator: &Allocator = context.allocator,
+) Result((), DirError) {
     let walk = walk_dir(path, allocator).map_err(to_dir_error)?
     defer walk.deinit()
 
@@ -240,13 +243,17 @@ pub fn remove_dir_all(path: String, allocator: &Allocator? = null) Result((), Di
 
 // Walks the tree rooted at this directory, pre-order, without following symlinks. See
 // std.io.fs.walk_dir.
-pub fn walk(self: &Dir, allocator: &Allocator? = null) Result(WalkIter, FsError) {
+pub fn walk(self: &Dir, allocator: &Allocator = context.allocator) Result(WalkIter, FsError) {
     return walk_dir(self.path, allocator)
 }
 
 // Matches `pattern` relative to this directory: `d.glob("**/*.f")` is `glob("<d>/**/*.f")`. See
 // std.io.fs.glob.
-pub fn glob(self: &Dir, pattern: String, allocator: &Allocator? = null) Result(GlobIter, FsError) {
+pub fn glob(
+    self: &Dir,
+    pattern: String,
+    allocator: &Allocator = context.allocator,
+) Result(GlobIter, FsError) {
     let joined = string_builder(self.path.len + pattern.len + 1, allocator)
     defer joined.deinit()
     joined.append(self.path)

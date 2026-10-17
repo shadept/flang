@@ -147,13 +147,16 @@ pub type SymbolBuilder = struct {
     displays: Dict(String, OwnedString)
     nominals: &NominalRegistry
     interner: &TypeInterner
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
 // Index every lowerable scheme by its declaration span and registry id up front; the per-module
 // walk then maps each decl to its symbol with one lookup. A scheme outside the lowerable subset is
 // left out entirely - membership in these tables IS the "is this callable?" gate.
-pub fn symbol_builder(result: &TypeCheckResult, allocator: &Allocator? = null) SymbolBuilder {
+pub fn symbol_builder(
+    result: &TypeCheckResult,
+    allocator: &Allocator = context.allocator,
+) SymbolBuilder {
     let by_fn_id: Dict(u32, OwnedString) = dict(allocator)
     let by_decl: Dict(NodeId, u32) = dict(allocator)
     let by_fn_sig: Dict(u32, FnSig) = dict(allocator)
@@ -708,7 +711,7 @@ fn pretty_symbol(
     name: String,
     params: &List(Ty),
     reg: &NominalRegistry,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) OwnedString {
     let sb = string_builder(fqn.len + name.len + 16, allocator)
     defer sb.deinit()
@@ -760,7 +763,7 @@ fn mangle_symbol(
     params: &List(Ty),
     ret: Ty,
     reg: &NominalRegistry,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) OwnedString {
     if is_foreign or name == "main" {
         return from_view(name, allocator)
@@ -790,7 +793,7 @@ fn mangle_spec_symbol(
     name: String,
     sig: &FnSig,
     reg: &NominalRegistry,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) OwnedString {
     let sb = string_builder(fqn.len + name.len + 24, allocator)
     defer sb.deinit()

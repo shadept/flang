@@ -54,18 +54,18 @@ pub type ValueError = enum {
 // =============================================================================
 
 // A string value holding a copy of `s`.
-pub fn value_str(s: String, allocator: &Allocator? = null) Value {
+pub fn value_str(s: String, allocator: &Allocator = context.allocator) Value {
     return Value.Str(from_view(s, allocator))
 }
 
 // An empty array.
-pub fn value_array(allocator: &Allocator? = null) Value {
+pub fn value_array(allocator: &Allocator = context.allocator) Value {
     let items: List(Value) = list(0, allocator)
     return Value.Array(move items)
 }
 
 // An empty map.
-pub fn value_map(allocator: &Allocator? = null) Value {
+pub fn value_map(allocator: &Allocator = context.allocator) Value {
     let d: OrderedDict(OwnedString, Value) = ordered_dict(allocator)
     return Value.Map(move d)
 }
@@ -255,7 +255,7 @@ pub fn serialize(self: &Value, enc: &Encoder) {
 
 // Reads one value, whole, from a self-describing decoder. On a decoder error the tree built so far
 // is returned and `dec.has_error()` is true.
-pub fn read_value(dec: &Decoder, allocator: &Allocator? = null) Value {
+pub fn read_value(dec: &Decoder, allocator: &Allocator = context.allocator) Value {
     return dec.peek_kind() match {
         Null => {
             dec.decode_null()
@@ -281,7 +281,7 @@ pub fn read_value(dec: &Decoder, allocator: &Allocator? = null) Value {
     }
 }
 
-fn read_array(dec: &Decoder, allocator: &Allocator?) Value {
+fn read_array(dec: &Decoder, allocator: &Allocator) Value {
     let items: List(Value) = list(0, allocator)
     dec.begin_seq()
     while !dec.has_error() {
@@ -295,7 +295,7 @@ fn read_array(dec: &Decoder, allocator: &Allocator?) Value {
     return Value.Array(move items)
 }
 
-fn read_map(dec: &Decoder, allocator: &Allocator?) Value {
+fn read_map(dec: &Decoder, allocator: &Allocator) Value {
     let d: OrderedDict(OwnedString, Value) = ordered_dict(allocator)
     let key = string_builder(32, allocator)
     defer key.deinit()
@@ -394,7 +394,7 @@ pub type ValueDecoder = struct {
     error: ValueError?
 }
 
-pub fn value_decoder(root: &Value, allocator: &Allocator? = null) ValueDecoder {
+pub fn value_decoder(root: &Value, allocator: &Allocator = context.allocator) ValueDecoder {
     return .{ root = root, root_done = false, stack = list(0, allocator), error = null }
 }
 
@@ -727,11 +727,11 @@ pub type ValueEncoder = struct {
     // `keys.len` when each open container was begun.
     key_base: List(usize)
     result: Value?
-    allocator: &Allocator?
+    allocator: &Allocator
     error: ValueError?
 }
 
-pub fn value_encoder(allocator: &Allocator? = null) ValueEncoder {
+pub fn value_encoder(allocator: &Allocator = context.allocator) ValueEncoder {
     return .{
         open = list(0, allocator),
         keys = list(0, allocator),

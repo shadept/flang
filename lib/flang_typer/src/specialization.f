@@ -48,7 +48,7 @@ pub fn deinit(self: move ClosureFact) {
     self.sig.deinit()
 }
 
-pub fn clone_fact(f: &ClosureFact, allocator: &Allocator? = null) ClosureFact {
+pub fn clone_fact(f: &ClosureFact, allocator: &Allocator = context.allocator) ClosureFact {
     let fields: List(Field) = list(f.fields.len, allocator)
     fields.push_all(f.fields.as_slice())
     return ClosureFact {
@@ -125,7 +125,7 @@ pub fn new_specialization(
     concrete_params: move List(Ty),
     concrete_return: Ty,
     overlay: move InferenceResults,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Specialization {
     return Specialization {
         id = 0 as SpecId,
@@ -174,10 +174,10 @@ pub type SpecializationRegistry = struct {
     // registers, replaces or reuses. The registry travels with the result and is adopted back by
     // the next demand, so the counter is monotone across a project's life.
     gen: u64
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
-pub fn specialization_registry(allocator: &Allocator? = null) SpecializationRegistry {
+pub fn specialization_registry(allocator: &Allocator = context.allocator) SpecializationRegistry {
     return .{
         by_key = dict(allocator),
         specs = dict(allocator),
@@ -199,7 +199,7 @@ pub fn key_for(
     function_id: u32,
     params: &List(Ty),
     ret: Ty,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) OwnedString {
     let sb = string_builder(64, allocator)
     defer sb.deinit()
@@ -408,7 +408,7 @@ pub fn reset(self: &SpecializationRegistry) {
 // original result's string buffers, so the copy lives only as long as its source's retirement.
 pub fn carried_copy(
     self: &SpecializationRegistry,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) SpecializationRegistry {
     // The dicts fill as locals and wrap at the end - growing a container through a local struct's
     // field is the two-field-hop hazard.
@@ -572,7 +572,7 @@ fn probe_spec(function_id: u32, name: String) Specialization {
     let ret = prim_of(PrimitiveKind.I32)
     const key = key_for(&it, function_id, &no_params, ret)
     // The probe's declaration outlives the specialization it is handed to, as a module's does.
-    const decl_ref = box(or_global(null), decl)
+    const decl_ref = box(context.allocator, decl)
     return new_specialization(
         function_id,
         key,

@@ -32,7 +32,7 @@ pub type Binder = struct {
     intro: String
 }
 
-pub fn module_binders(m: &Module, allocator: &Allocator? = null) List(Binder) {
+pub fn module_binders(m: &Module, allocator: &Allocator = context.allocator) List(Binder) {
     let out: List(Binder) = list(16, allocator)
     for &d in m.decls {
         d.* match {
@@ -57,7 +57,7 @@ pub type HintSite = struct {
     node: NodeId
 }
 
-pub fn hint_sites(m: &Module, allocator: &Allocator? = null) List(HintSite) {
+pub fn hint_sites(m: &Module, allocator: &Allocator = context.allocator) List(HintSite) {
     let binders = module_binders(m, allocator)
     let out: List(HintSite) = list(binders.len, allocator)
     for &b in binders {
@@ -80,7 +80,7 @@ pub fn hint_sites(m: &Module, allocator: &Allocator? = null) List(HintSite) {
 pub fn live_hint_sites(
     live_text: String,
     analyzed: &Module,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) List(HintSite) {
     let doc = parse_doc(live_text, allocator)
     let live = module_binders(&doc.module, allocator)

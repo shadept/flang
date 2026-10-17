@@ -104,10 +104,10 @@ pub type NominalRegistry = struct {
     // A ground instantiation of a definition with `assoc_params` -> the types they solve to there,
     // in `assoc_params` order. Filled by the checker, read by every field substitution.
     assoc_solved: Dict(Ty, List(Ty))
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
-pub fn nominal_registry(allocator: &Allocator? = null) NominalRegistry {
+pub fn nominal_registry(allocator: &Allocator = context.allocator) NominalRegistry {
     let defs: Dict(NominalId, NominalDef) = dict(allocator)
     let by_fqn: Dict(String, NominalId) = dict(allocator)
     let owned_fqns: List(OwnedString) = list(0, allocator)
@@ -141,7 +141,7 @@ pub fn instance_subst(
     assoc: &List(VarId),
     args: ChildSpan,
     it: &TypeInterner,
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Dict(VarId, Ty) {
     let subst: Dict(VarId, Ty) = dict(params.len + assoc.len, alloc)
     for i in 0..params.len {
@@ -239,7 +239,10 @@ pub fn register_at(
 // ids stay monotone across the copy. Field and variant lists are cloned; the `Ty` handles inside
 // them stay valid as long as the type table they index does. Used to hand a demand's registry to
 // the next one while the previous demand's snapshot keeps its own.
-pub fn carried_copy(self: &NominalRegistry, allocator: &Allocator? = null) NominalRegistry {
+pub fn carried_copy(
+    self: &NominalRegistry,
+    allocator: &Allocator = context.allocator,
+) NominalRegistry {
     let out = nominal_registry(allocator)
     // Through a reference: a mutating call on a field of a local value struct mutates a copy (see
     // docs/known-issues.md, mutation through a field chain).
@@ -247,7 +250,7 @@ pub fn carried_copy(self: &NominalRegistry, allocator: &Allocator? = null) Nomin
     return out
 }
 
-fn fill_carried(out: &NominalRegistry, src: &NominalRegistry, allocator: &Allocator?) {
+fn fill_carried(out: &NominalRegistry, src: &NominalRegistry, allocator: &Allocator) {
     for i in 0..(src.next_id as usize) {
         const id = i as NominalId
         const found = src.defs.get_ref(id)
@@ -262,7 +265,7 @@ fn fill_carried(out: &NominalRegistry, src: &NominalRegistry, allocator: &Alloca
     out.next_id = src.next_id
 }
 
-fn clone_def(def: &NominalDef, allocator: &Allocator?) NominalDef {
+fn clone_def(def: &NominalDef, allocator: &Allocator) NominalDef {
     return def.* match {
         NomStruct(s) => NominalDef.NomStruct(StructDef {
             fqn = s.fqn,
@@ -290,13 +293,13 @@ fn clone_def(def: &NominalDef, allocator: &Allocator?) NominalDef {
     }
 }
 
-fn clone_list(xs: &List($T), allocator: &Allocator?) List(T) where T: copyable {
+fn clone_list(xs: &List($T), allocator: &Allocator) List(T) where T: copyable {
     let out: List(T) = list(xs.len, allocator)
     out.push_all(xs.as_slice())
     return out
 }
 
-fn clone_variants(xs: &List(VariantDef), allocator: &Allocator?) List(VariantDef) {
+fn clone_variants(xs: &List(VariantDef), allocator: &Allocator) List(VariantDef) {
     let out: List(VariantDef) = list(xs.len, allocator)
     for &v in xs {
         out.push(VariantDef {
@@ -308,7 +311,7 @@ fn clone_variants(xs: &List(VariantDef), allocator: &Allocator?) List(VariantDef
     return out
 }
 
-fn clone_tags(tags: &Option(Dict(String, i64)), allocator: &Allocator?) Dict(String, i64)? {
+fn clone_tags(tags: &Option(Dict(String, i64)), allocator: &Allocator) Dict(String, i64)? {
     return tags.* match {
         Some(t) => {
             let out: Dict(String, i64) = dict(allocator)

@@ -17,7 +17,7 @@ pub type FoldRange = struct {
     end_line: usize
 }
 
-pub fn folding_ranges(text: String, allocator: &Allocator? = null) List(FoldRange) {
+pub fn folding_ranges(text: String, allocator: &Allocator = context.allocator) List(FoldRange) {
     let out: List(FoldRange) = list(0, allocator)
     let lx = lexer(text, allocator)
     let tokens = lx.tokenize()

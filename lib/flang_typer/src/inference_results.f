@@ -191,7 +191,7 @@ pub type InferenceResults = struct {
     cap_derefs: List(NodeId)
     cap_arg_derefs: List(NodeId)
     cap_adapts: List(NodeId)
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
 // How a UFCS receiver was adapted to its parameter.
@@ -217,7 +217,7 @@ pub type CapturedKeys = struct {
     adapts: List(NodeId)
 }
 
-pub fn captured_keys(allocator: &Allocator? = null) CapturedKeys {
+pub fn captured_keys(allocator: &Allocator = context.allocator) CapturedKeys {
     return .{
         spans = list(0, allocator),
         types = list(0, allocator),
@@ -247,7 +247,7 @@ pub fn deinit(self: move CapturedKeys) {
     self.adapts.deinit()
 }
 
-pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
+pub fn inference_results(allocator: &Allocator = context.allocator) InferenceResults {
     return .{
         node_types = dict(allocator),
         resolved_ops = dict(allocator),
@@ -534,7 +534,7 @@ pub fn with_spec(op: &ResolvedOperator, spec_id: SpecId) ResolvedOperator {
 }
 
 // An owning copy of one lambda record - handles and views shared, lists and the symbol duplicated.
-pub fn copy_lambda(info: &LambdaInfo, allocator: &Allocator? = null) LambdaInfo {
+pub fn copy_lambda(info: &LambdaInfo, allocator: &Allocator = context.allocator) LambdaInfo {
     let ps: List(Ty) = list(info.params.len, allocator)
     ps.push_all(info.params.as_slice())
     let caps: List(CaptureRec) = list(info.captures.len, allocator)
@@ -551,7 +551,7 @@ pub fn copy_lambda(info: &LambdaInfo, allocator: &Allocator? = null) LambdaInfo 
 
 // An owning copy of one closure dispatch record - handles shared, the params list and symbol
 // duplicated.
-pub fn copy_sig(sig: &ClosureSig, allocator: &Allocator? = null) ClosureSig {
+pub fn copy_sig(sig: &ClosureSig, allocator: &Allocator = context.allocator) ClosureSig {
     let ps: List(Ty) = list(sig.params.len, allocator)
     ps.push_all(sig.params.as_slice())
     return ClosureSig {
@@ -567,7 +567,10 @@ pub fn copy_sig(sig: &ClosureSig, allocator: &Allocator? = null) ClosureSig {
 // tables keep viewing the ORIGINAL set's string buffers - `synth_strings` is left empty rather than
 // copied into orphan buffers nothing views - so the copy lives only as long as its source's
 // storage. Capture state starts clean.
-pub fn deep_copy(self: &InferenceResults, allocator: &Allocator? = null) InferenceResults {
+pub fn deep_copy(
+    self: &InferenceResults,
+    allocator: &Allocator = context.allocator,
+) InferenceResults {
     // Every container fills as a local and wraps at the end - growing one through a local struct's
     // field is the two-field-hop hazard.
     let node_types: Dict(NodeId, Ty) = dict(self.node_types.len(), allocator)

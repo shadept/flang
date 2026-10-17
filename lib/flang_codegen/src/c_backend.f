@@ -146,8 +146,8 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = nul
     sb.append("\n")
 
     // The ledger in stdlib/std/test.c. Declared here rather than reached through a FLang foreign:
-    // only this runner calls them, and only when the tracking allocator was installed.
-    const tracked = m.install_tests.is_some()
+    // only this runner calls them, and only when the tests run under the tracking allocator.
+    const tracked = m.run_test.is_some()
     if tracked {
         sb.append("extern size_t __flang_test_epilogue(size_t*);\n")
         sb.append("extern void __flang_test_leak_sites(void);\n")
@@ -160,26 +160,15 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = nul
     sb.append("int main(int __flang_argc_, char** __flang_argv_) {\n")
     sb.append("    __flang_argc = __flang_argc_;\n")
     sb.append("    __flang_argv = __flang_argv_;\n")
-    // Before the tracking allocator is installed, so the first block it hands out already carries a
-    // stack.
+    // Before the first test, so the first block the tracking allocator hands out carries a stack.
     if tracked and leak_trace_on(opts) {
         sb.append("    __flang_test_set_leak_trace(1);\n")
     }
-    // Constant initializers first, then the tracking allocator: anything the initializers allocate
-    // belongs to the program, not to the first test, and must not be reported as its leak.
+    // Constant initializers first, under the root context: anything they allocate belongs to the
+    // program, not to the first test, and must not be reported as its leak.
     sb.append("    ")
     sb.append(CONST_INIT_SYM)
     sb.append("();\n")
-    m.install_tests match {
-        Some(sym) => {
-            sb.append("    ")
-            sb.append(sym.view)
-            sb.append("(")
-            emit_operand(Operand.GlobalRef(ROOT_CONTEXT_SYM), sb)
-            sb.append(");\n")
-        }
-        None => {}
-    }
     sb.append("    printf(\"found %d test(s)\\n\", __flang_test_total);\n")
     sb.append("    for (__flang_test_i = 0; __flang_test_i < __flang_test_total;")
     sb.append(" __flang_test_i++) {\n")
@@ -190,9 +179,21 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = nul
     sb.append("        fflush(stdout);\n")
     sb.append("        __flang_test_active = 1;\n")
     sb.append("        if (setjmp(__flang_test_jmp) == 0) {\n")
-    sb.append("            __flang_test_fns[__flang_test_i](")
-    emit_operand(Operand.GlobalRef(ROOT_CONTEXT_SYM), sb)
-    sb.append(");\n")
+    // `std.test.run_test` rebinds the test's context; without it the test runs under the root.
+    m.run_test match {
+        Some(sym) => {
+            sb.append("            ")
+            sb.append(sym.view)
+            sb.append("(")
+            emit_operand(Operand.GlobalRef(ROOT_CONTEXT_SYM), sb)
+            sb.append(", (void*)__flang_test_fns[__flang_test_i]);\n")
+        }
+        None => {
+            sb.append("            __flang_test_fns[__flang_test_i](")
+            emit_operand(Operand.GlobalRef(ROOT_CONTEXT_SYM), sb)
+            sb.append(");\n")
+        }
+    }
     sb.append("            __flang_test_active = 0;\n")
     sb.append("            printf(\"ok\\n\");\n")
     sb.append("            __flang_test_passed++;\n")
@@ -1696,7 +1697,7 @@ fn c_hex_nibble(n: u8) u8 {
 // responsible).
 fn discover_or_override(
     options: &BuildOptions,
-    allocator: &Allocator?,
+    allocator: &Allocator,
 ) Result(CompilerInfo, BuildError) {
     options.compiler_override match {
         Some(p) => {
@@ -1731,7 +1732,9 @@ fn guess_kind_from_name(name: String) CompilerKind {
 }
 
 // Pick the first toolchain that exists, in platform-preferred order.
-pub fn discover_compiler(allocator: &Allocator? = null) Result(CompilerInfo, BuildError) {
+pub fn discover_compiler(
+    allocator: &Allocator = context.allocator,
+) Result(CompilerInfo, BuildError) {
     #if platform.os == "windows" {
         // 1. MSVC via vswhere (sets INCLUDE/LIB/PATH so the spawn works
         //    outside a developer prompt).
@@ -1789,7 +1792,7 @@ pub fn discover_compiler(allocator: &Allocator? = null) Result(CompilerInfo, Bui
     return Err(BuildError.NoCompilerFound)
 }
 
-fn make_simple_info(kind: CompilerKind, name: String, allocator: &Allocator?) CompilerInfo {
+fn make_simple_info(kind: CompilerKind, name: String, allocator: &Allocator) CompilerInfo {
     let env_keys: List(OwnedString) = list(0, allocator)
     let env_vals: List(OwnedString) = list(0, allocator)
     return CompilerInfo {
@@ -1804,7 +1807,7 @@ fn make_simple_info(kind: CompilerKind, name: String, allocator: &Allocator?) Co
 
 // Spawn `prog --version`, redirect stdio to Null, wait. exit==0 means the binary is on PATH and
 // runnable.
-fn can_spawn(prog: String, allocator: &Allocator?) bool {
+fn can_spawn(prog: String, allocator: &Allocator) bool {
     let cmd = command(prog, allocator)
     defer cmd.deinit()
     cmd.arg("--version")
@@ -1834,7 +1837,7 @@ fn can_spawn(prog: String, allocator: &Allocator?) bool {
 // install (2017+). We use it to locate the active VS install dir, then walk the toolset layout to
 // find cl.exe + matching INCLUDE / LIB directories.
 
-fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
+fn discover_msvc(allocator: &Allocator) CompilerInfo? {
     // ProgramFiles(x86) is the conventional location; fall back to the hard-coded path when the env
     // var is missing (some CI shells don't forward it).
     let pf86_buf = string_builder(64, allocator)
@@ -2005,7 +2008,7 @@ fn discover_msvc(allocator: &Allocator?) CompilerInfo? {
 }
 
 // Spawn `vswhere -latest ... -property installationPath` and capture the first line of stdout.
-fn run_vswhere(vswhere_path: String, allocator: &Allocator?) OwnedString? {
+fn run_vswhere(vswhere_path: String, allocator: &Allocator) OwnedString? {
     let cmd = command(vswhere_path, allocator)
     defer cmd.deinit()
     cmd.arg("-latest")
@@ -2066,7 +2069,7 @@ fn dir_exists(p: String) bool {
 
 // Returns the lexicographically largest subdirectory name, which for MSVC toolset versions and
 // Windows SDK versions corresponds to the most recent install.
-fn newest_subdir(parent: String, allocator: &Allocator?) OwnedString? {
+fn newest_subdir(parent: String, allocator: &Allocator) OwnedString? {
     // read_dir's C shim wants a NUL-terminated path. Copy into a builder we control so callers can
     // pass plain views.
     let pbuf = string_builder(parent.len + 1, allocator)
@@ -2113,7 +2116,7 @@ fn newest_subdir(parent: String, allocator: &Allocator?) OwnedString? {
 
 // Best-effort creation of the directory `file_path` will be written into. Silent by design: the
 // caller's write reports the real, path-bearing error if this could not help.
-fn ensure_parent_dir(file_path: String, allocator: &Allocator?) {
+fn ensure_parent_dir(file_path: String, allocator: &Allocator) {
     let p = path(file_path, allocator)
     defer p.deinit()
     p.parent() match {
@@ -2126,7 +2129,7 @@ fn ensure_parent_dir(file_path: String, allocator: &Allocator?) {
     }
 }
 
-fn write_c_file(path: String, contents: String, allocator: &Allocator?) Result((), FileError) {
+fn write_c_file(path: String, contents: String, allocator: &Allocator) Result((), FileError) {
     // open() expects a NUL-terminated path; copy into a builder we control.
     let pbuf = string_builder(path.len + 1, allocator)
     defer pbuf.deinit()
@@ -2159,7 +2162,7 @@ fn remove_file_quiet(path: String) {
 // the output path it was handed. On Windows `/Fe:` appends `.exe` when the name has no extension,
 // so the reported path has to as well - a caller that runs what it just built (`flang test`) needs
 // a path that exists, not the one requested.
-fn linked_artifact_path(output_path: String, allocator: &Allocator?) OwnedString {
+fn linked_artifact_path(output_path: String, allocator: &Allocator) OwnedString {
     #if platform.os == "windows" {
         if !ends_with(output_path, ".exe") {
             return $"{output_path}.exe"
@@ -2169,7 +2172,7 @@ fn linked_artifact_path(output_path: String, allocator: &Allocator?) OwnedString
     return from_view(output_path, allocator)
 }
 
-fn objs_dir_for(output_path: String, allocator: &Allocator?) OwnedString {
+fn objs_dir_for(output_path: String, allocator: &Allocator) OwnedString {
     let p = path(output_path, allocator)
     defer p.deinit()
     let q = p.with_extension("objs")
@@ -2305,7 +2308,7 @@ fn build_compiler_argv(
 //
 // ponytail: space-separated, so a path with a space in it cannot be spelled here. Take a nested
 // array in the manifest if one ever needs to be.
-fn push_ldflag_words(argv: &List(OwnedString), flag: String, alloc: &Allocator?) {
+fn push_ldflag_words(argv: &List(OwnedString), flag: String, alloc: &Allocator) {
     const words = split(flag, ' ')
     defer words.deinit()
     for w in words {
@@ -2371,7 +2374,7 @@ fn run_compiler(
     info: &CompilerInfo,
     argv: &List(OwnedString),
     out: &StringBuilder,
-    allocator: &Allocator?,
+    allocator: &Allocator,
 ) Result(i32, BuildError) {
     let cmd = command(info.path.view, allocator)
     defer cmd.deinit()

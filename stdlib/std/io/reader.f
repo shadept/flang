@@ -112,7 +112,7 @@ pub fn read(r: &BufferedReader, dst: u8[]) usize {
 }
 
 // Read `r` to EOF into a fresh OwnedString. Bytes are taken as-is - no encoding checks.
-pub fn read_all(r: Reader, allocator: &Allocator? = null) OwnedString {
+pub fn read_all(r: Reader, allocator: &Allocator = context.allocator) OwnedString {
     let sb = string_builder(4096, allocator)
     let buf = [0u8; 4096]
     loop {

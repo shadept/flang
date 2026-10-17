@@ -32,7 +32,7 @@ pub type DocumentStore = struct {
     docs: Dict(OwnedString, Document)
 }
 
-pub fn document_store(allocator: &Allocator? = null) DocumentStore {
+pub fn document_store(allocator: &Allocator = context.allocator) DocumentStore {
     return .{ docs = dict(allocator) }
 }
 

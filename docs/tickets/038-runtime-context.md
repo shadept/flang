@@ -1,7 +1,8 @@
 ---
-status: accepted
+status: implemented
 type: language
 created: 2026-10-17
+implemented: 2026-10-18
 relates: [RFC-005, RFC-014, RFC-037]
 ---
 
@@ -189,7 +190,21 @@ Measured (step 6, win-x64, the same sources built once by the old-ABI seed and o
 compiler): the compiler's own runtime emitting its C is +1.6% (median of four, 1941 to 1972 ms);
 the full release self-build is unchanged at 11.3 s, where the C compile dominates.
 
-Open: the promote (step 6) and step 7 (allocator over the context), which needs the promoted seed.
+Step 6's promote is `seed/20261017`. Step 7 landed revised, 2026-10-18:
+
+- `std.allocator` declares two fields, both defaulting to the global allocator: `allocator`, the
+  default for everything, and `temp_allocator`, for memory nothing frees on its own, reclaimed all
+  at once by the scope that rebinds it (a request, a frame, a test).
+- `or_global`, `global()`, `set_global_allocator` and its slot are gone. An allocator parameter is
+  `allocator: &Allocator = context.allocator`, so the stdlib signatures did change, from
+  `&Allocator? = null`; a method defaulting to its receiver's allocator keeps the optional form.
+  A null `&Allocator` (zero-initialization only) resolves to the current context's allocator per
+  call.
+- A context field registers before any signature, so a default value may read one.
+- Each test runs through `std.test.run_test` under the tracking allocator and a temp arena reset
+  before each test; the compiler's `--stats` ledger is a rebind in `main`.
+- Until the next promote, `std.string_builder` keeps a `(usize, &Allocator?)` overload: the
+  seed's `$"..."` desugar passes `null` for an omitted allocator.
 
 ### Follow-ups, separate RFCs
 

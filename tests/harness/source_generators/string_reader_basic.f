@@ -3,56 +3,88 @@
 
 // `String` readers reach an OwnedString's view through op_deref.
 
-import std.string
 import std.allocator
 import std.option
+import std.string
 
 pub fn main() i32 {
     // Create an OwnedString wrapping a string literal (no heap allocation needed)
     const sv: String = "  hello world  "
-    const owned = OwnedString { view = sv, allocator = null }
+    const owned = OwnedString { view = sv, allocator = context.allocator }
 
     // find
     const idx: usize = owned.find("world") ?? 999
-    if idx != 8 { return 2 }
+    if idx != 8 {
+        return 2
+    }
 
     // find - not found
     const miss = owned.find("xyz")
-    if miss.is_some() { return 3 }
+    if miss.is_some() {
+        return 3
+    }
 
     // rfind
     const sv2: String = "abcabc"
-    const owned2 = OwnedString { view = sv2, allocator = null }
+    const owned2 = OwnedString { view = sv2, allocator = context.allocator }
     const ri: usize = owned2.rfind("abc") ?? 999
-    if ri != 3 { return 5 }
+    if ri != 3 {
+        return 5
+    }
 
     // contains
-    if !owned.contains("hello") { return 6 }
-    if owned.contains("xyz") { return 7 }
+    if !owned.contains("hello") {
+        return 6
+    }
+    if owned.contains("xyz") {
+        return 7
+    }
 
     // starts_with
-    if !owned.starts_with("  hello") { return 8 }
-    if owned.starts_with("hello") { return 9 }
+    if !owned.starts_with("  hello") {
+        return 8
+    }
+    if owned.starts_with("hello") {
+        return 9
+    }
 
     // ends_with
-    if !owned.ends_with("world  ") { return 10 }
-    if owned.ends_with("world") { return 11 }
+    if !owned.ends_with("world  ") {
+        return 10
+    }
+    if owned.ends_with("world") {
+        return 11
+    }
 
     // trim
     const trimmed = owned.trim()
-    if trimmed.len != 11 { return 12 }
-    if !trimmed.starts_with("hello") { return 13 }
-    if !trimmed.ends_with("world") { return 14 }
+    if trimmed.len != 11 {
+        return 12
+    }
+    if !trimmed.starts_with("hello") {
+        return 13
+    }
+    if !trimmed.ends_with("world") {
+        return 14
+    }
 
     // trim_start
     const ts = owned.trim_start()
-    if ts.len != 13 { return 15 }
-    if !ts.starts_with("hello") { return 16 }
+    if ts.len != 13 {
+        return 15
+    }
+    if !ts.starts_with("hello") {
+        return 16
+    }
 
     // trim_end
     const te = owned.trim_end()
-    if te.len != 13 { return 17 }
-    if !te.ends_with("world") { return 18 }
+    if te.len != 13 {
+        return 17
+    }
+    if !te.ends_with("world") {
+        return 18
+    }
 
     return 0
 }

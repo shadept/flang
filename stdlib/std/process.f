@@ -57,7 +57,7 @@ pub type Command = struct {
     __stdin: i32
     __stdout: i32
     __stderr: i32
-    __allocator: &Allocator?
+    __allocator: &Allocator
 }
 
 pub type Child = struct {
@@ -112,7 +112,7 @@ pub type ChildStdin = struct { owned __fd: i32 }
 
 // Create a new Command for `prog`. By default no env vars are passed to the child - call
 // `inherit_env()` if your child needs PATH and friends.
-pub fn command(prog: String, allocator: &Allocator? = null) Command {
+pub fn command(prog: String, allocator: &Allocator = context.allocator) Command {
     let argv: List(OwnedString) = list(4, allocator)
     argv.push(from_view(prog, allocator))
     let envs: List(OwnedString) = list(0, allocator)

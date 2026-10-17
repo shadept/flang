@@ -112,7 +112,10 @@ pub fn remove_file(path: String) Result((), FileError) {
 // Bulk read / write
 // =============================================================================
 
-pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, FileError) {
+pub fn read_all(
+    file: &File,
+    allocator: &Allocator = context.allocator,
+) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
     let sb = string_builder(PAGE_SIZE, allocator)
     defer sb.deinit()
@@ -133,7 +136,7 @@ pub fn read_all(file: &File, allocator: &Allocator? = null) Result(OwnedString, 
 
 pub fn read_all_inplace(file: &File, allocator: &Allocator) Result(OwnedString, FileError) {
     const PAGE_SIZE = 4096
-    let sb = string_builder(PAGE_SIZE, Some(allocator))
+    let sb = string_builder(PAGE_SIZE, allocator)
     defer sb.deinit()
     let buf = [0u8; 4096]
     loop {

@@ -276,10 +276,14 @@ pub type Cst = struct {
     tokens: List(Token)
     children: List(CstChildSlot)
     root: CstNodeId
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
-pub fn cst(tokens: move List(Token), source: String, allocator: &Allocator? = null) Cst {
+pub fn cst(
+    tokens: move List(Token),
+    source: String,
+    allocator: &Allocator = context.allocator,
+) Cst {
     return .{
         source = source,
         nodes = list(64, allocator),

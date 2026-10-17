@@ -112,23 +112,17 @@ pub fn unmanaged_dict(capacity: usize, allocator: &Allocator) UnmanagedDict($K, 
 
 // Construct an empty Dict. Storage is allocated lazily on the first `set` / `op_set_index`. `K` and
 // `V` are inferred from the call's expected type (e.g. `let d: Dict(String, i32) = dict()`).
-pub fn dict(allocator: &Allocator? = null) Dict($K, $V) {
+pub fn dict(allocator: &Allocator = context.allocator) Dict($K, $V) {
     let empty: UnmanagedDict(K, V)
-    return .{ __storage = move empty, allocator = allocator.or_global() }
-}
-
-// Creates a dict whose table starts at `capacity` slots and that allocates through `allocator` for
-// its whole life.
-pub fn dict(capacity: usize, allocator: &Allocator) Dict($K, $V) {
-    return dict(capacity, Some(allocator))
+    return .{ __storage = move empty, allocator = allocator }
 }
 
 // Construct a Dict whose table starts at `capacity` slots, rounded up as `unmanaged_dict` does.
 // `dict(0)` is the lazy empty form.
 //
 // - `allocator`: kept for the dict's whole life. Null is the global allocator.
-pub fn dict(capacity: usize, allocator: &Allocator? = null) Dict($K, $V) {
-    const alloc = allocator.or_global()
+pub fn dict(capacity: usize, allocator: &Allocator = context.allocator) Dict($K, $V) {
+    const alloc = allocator
     return .{ __storage = unmanaged_dict(capacity, alloc), allocator = alloc }
 }
 
@@ -821,7 +815,7 @@ pub fn deinit(self: move Dict($K, $V)) {
 // =============================================================================
 
 test "an UnmanagedDict takes its allocator at every allocating call" {
-    let counting = counting_allocator(global())
+    let counting = counting_allocator(context.allocator)
     const alloc = counting.allocator()
     let d: UnmanagedDict(u32, i32) = unmanaged_dict(0, &alloc)
     d.set(1u32, 10i32, &alloc)
@@ -861,13 +855,13 @@ test "add reports a new key and get_or_insert_with hands back the slot" {
 
 test "a DictRef grows the table it wraps" {
     let field: UnmanagedDict(u32, i32)
-    let h = field.managed(global())
+    let h = field.managed(context.allocator)
     h[1u32] = 10i32
     h.set(2u32, 20i32)
     assert_eq(field.len(), 2 as usize, "inserts landed in the field")
     assert_eq(h.get(2u32).unwrap(), 20i32, "reads through the handle")
     assert_true(h.add(3u32, 30i32), "add through the handle")
-    field.deinit(global())
+    field.deinit(context.allocator)
 }
 
 test "a zero-initialised Dict is a valid empty dict" {
@@ -930,7 +924,7 @@ test "delete-heavy churn never fills the table" {
 test "string keys are copied on insert and looked up by view" {
     // Block counts, not bytes: an OwnedString frees `len` of the `len + 1` it allocated, so a
     // counting allocator's `live_bytes` is inexact with string keys.
-    let counting = counting_allocator(global())
+    let counting = counting_allocator(context.allocator)
     const alloc = counting.allocator()
     let d: Dict(OwnedString, i32) = dict(0, &alloc)
     d.set("one", 1i32)

@@ -211,7 +211,7 @@ fn _powersort_impl(s: $T[], cmp: $F) where F: fn(T, T) Ord {
 // place by swaps, so every element keeps exactly one slot throughout.
 fn _powersort_owning(s: $T[], cmp: $F) where F: fn(T, T) Ord {
     const n = s.len
-    const alloc = global()
+    const alloc = context.allocator
     const bytes = alloc.alloc(n * size_of(usize), align_of(usize))
         .expect("powersort: index allocation failed")
     const order: usize[] = .{ ptr = bytes.ptr as &usize, len = n }
@@ -254,7 +254,7 @@ fn _powersort_staged(s: $T[], cmp: $F) where T: copyable, F: fn(T, T) Ord {
 
     // Read the default once and free through that same instance: an allocator installed while the
     // sort is running must not receive a block it never handed out.
-    const alloc = global()
+    const alloc = context.allocator
     const scratch_bytes = alloc.alloc(byte_len, align_of(T))
         .expect("powersort: scratch allocation failed")
     const scratch: T[] = .{ ptr = scratch_bytes.ptr as &T, len = n }
@@ -536,25 +536,24 @@ test "quicksort large" {
 }
 
 test "a sort of a few hundred words takes no heap; a larger one takes one block and frees it" {
-    let counting = counting_allocator(global())
+    let counting = counting_allocator(context.allocator)
     const mine = counting.allocator()
-    const prev = set_global_allocator(&mine)
 
     let small: [u64; 400] = [0; 400]
     for i in 0..400usize {
         small[i] = ((i * 7919) % 1000) as u64
     }
-    sort(small)
-    assert_eq(counting.allocs, 0 as usize, "scratch lives on the frame")
-
     let big: [u64; 1000] = [0; 1000]
     for i in 0..1000usize {
         big[i] = ((i * 7919) % 1000) as u64
     }
-    sort(big)
-    assert_eq(counting.allocs, 1 as usize, "one heap scratch past the frame budget")
-    assert_eq(counting.live_bytes, 0 as usize, "and it went back")
-    const _restored = set_global_allocator(prev)
+    context(allocator = &mine) {
+        sort(small)
+        assert_eq(counting.allocs, 0 as usize, "scratch lives on the frame")
+        sort(big)
+        assert_eq(counting.allocs, 1 as usize, "one heap scratch past the frame budget")
+        assert_eq(counting.live_bytes, 0 as usize, "and it went back")
+    }
 
     for i in 1..1000usize {
         assert_true(big[i - 1] <= big[i], "sorted")

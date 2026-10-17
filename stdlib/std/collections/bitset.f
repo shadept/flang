@@ -20,7 +20,7 @@ const BITS_PER_WORD: usize = 64
 
 // Construct an empty bitset. `initial_bits` reserves storage for that many bits (rounded up to the
 // next word boundary). Pass 0 to defer allocation to the first `add`.
-pub fn bitset(initial_bits: usize, allocator: &Allocator? = null) Bitset {
+pub fn bitset(initial_bits: usize, allocator: &Allocator = context.allocator) Bitset {
     const word_cap = (initial_bits + BITS_PER_WORD - 1) / BITS_PER_WORD
     return .{ words = list(word_cap, allocator) }
 }

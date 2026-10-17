@@ -64,7 +64,10 @@ fn read_one(r: Reader) u8? {
 // Read one framed payload: headers, blank line, then exactly Content-Length bytes of body. Unknown
 // headers (Content-Type) are skipped. Returns the raw body bytes; Eof only when the stream ends
 // cleanly before the first byte.
-pub fn read_frame(r: Reader, allocator: &Allocator? = null) Result(OwnedString, RpcError) {
+pub fn read_frame(
+    r: Reader,
+    allocator: &Allocator = context.allocator,
+) Result(OwnedString, RpcError) {
     let content_len: usize? = null
     let line = string_builder(64, allocator)
     defer line.deinit()
@@ -203,7 +206,10 @@ pub fn is_response(self: &RpcMessage) bool {
 }
 
 // Parse one message body. Requires a JSON object with "jsonrpc": "2.0".
-pub fn parse_message(payload: String, allocator: &Allocator? = null) Result(RpcMessage, RpcError) {
+pub fn parse_message(
+    payload: String,
+    allocator: &Allocator = context.allocator,
+) Result(RpcMessage, RpcError) {
     const parsed = parse_json(payload, json_options(), allocator)
     if parsed.is_err() {
         return Err(RpcError.BadJson)
@@ -226,7 +232,10 @@ pub fn parse_message(payload: String, allocator: &Allocator? = null) Result(RpcM
 }
 
 // Read one frame and parse it: the receive path of a message loop.
-pub fn read_message(r: Reader, allocator: &Allocator? = null) Result(RpcMessage, RpcError) {
+pub fn read_message(
+    r: Reader,
+    allocator: &Allocator = context.allocator,
+) Result(RpcMessage, RpcError) {
     const framed = read_frame(r, allocator)
     if framed.is_err() {
         return Err(framed.unwrap_err())

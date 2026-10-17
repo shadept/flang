@@ -38,7 +38,7 @@ pub fn deinit(self: move ModuleIndex) {
 
 // Build the index for one parsed module: the documentSymbol outline, flattened, members keeping
 // their container's name.
-pub fn module_index(m: &Module, allocator: &Allocator? = null) ModuleIndex {
+pub fn module_index(m: &Module, allocator: &Allocator = context.allocator) ModuleIndex {
     let tree = document_symbols(m, allocator)
     let symbols: List(IndexSymbol) = list(tree.len, allocator)
     for &s in tree {
@@ -48,7 +48,7 @@ pub fn module_index(m: &Module, allocator: &Allocator? = null) ModuleIndex {
     return .{ symbols = move symbols }
 }
 
-fn flatten(out: &List(IndexSymbol), s: &DocSymbol, container: String, alloc: &Allocator?) {
+fn flatten(out: &List(IndexSymbol), s: &DocSymbol, container: String, alloc: &Allocator) {
     out.push(.{
         name = from_view(s.name.view, alloc),
         container = from_view(container, alloc),

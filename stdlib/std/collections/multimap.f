@@ -50,15 +50,10 @@ pub type MultiMap = struct(K: Hash + Eq, V) {
 //
 // - `allocator`: kept for the map's whole life; the pool and the key table grow and free through
 //   it. Null is the global allocator.
-pub fn multimap(allocator: &Allocator? = null) MultiMap($K, $V) {
+pub fn multimap(allocator: &Allocator = context.allocator) MultiMap($K, $V) {
     let out: MultiMap(K, V)
-    out.allocator = allocator.or_global()
+    out.allocator = allocator
     return out
-}
-
-// Creates an empty multimap that allocates through `allocator` for its whole life.
-pub fn multimap(allocator: &Allocator) MultiMap($K, $V) {
-    return multimap(Some(allocator))
 }
 
 // Adds `value` under `key`, after any values already there. A key seen for the first time is
@@ -262,7 +257,7 @@ test "values come back per key in insertion order, interleaved adds notwithstand
 }
 
 test "values_ref writes through, remove_key unlinks, compact reclaims" {
-    let counting = counting_allocator(global())
+    let counting = counting_allocator(context.allocator)
     const alloc = counting.allocator()
     let m: MultiMap(u32, i32) = multimap(&alloc)
     for i in 0..10i32 {

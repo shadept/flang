@@ -18,7 +18,7 @@ pub type StringBuilder = struct {
     owned ptr: &u8
     len: usize
     cap: usize
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
 // Return the current contents as a String.
@@ -33,7 +33,10 @@ pub fn as_view(sb: &StringBuilder) String {
 const SB_DEFAULT_CAPACITY: usize = 16
 
 // Create a new empty StringBuilder with the given initial capacity.
-pub fn string_builder(capacity: usize = 0, allocator: &Allocator? = null) StringBuilder {
+pub fn string_builder(
+    capacity: usize = 0,
+    allocator: &Allocator = context.allocator,
+) StringBuilder {
     let sb: StringBuilder
     sb.allocator = allocator
     if (capacity > 0) {
@@ -42,23 +45,29 @@ pub fn string_builder(capacity: usize = 0, allocator: &Allocator? = null) String
     return sb
 }
 
+// The `$"..."` desugar of the seed promoted 2026-10-17 passes `null` for an omitted allocator; the
+// sources keep compiling under it until the next promote, which removes this overload.
+pub fn string_builder(capacity: usize, allocator: &Allocator?) StringBuilder {
+    return string_builder(capacity, allocator ?? context.allocator)
+}
+
 // Create a new empty StringBuilder with the given initial capacity.
 #deprecated("use string_builder(capacity)")
 pub fn string_builder_with_capacity(capacity: usize) StringBuilder {
-    return string_builder(capacity, null)
+    return string_builder(capacity)
 }
 
 // Create a new empty StringBuilder with default capacity.
 #deprecated("use string_builder(allocator=allocator)")
 pub fn string_builder_with_allocator(allocator: &Allocator) StringBuilder {
-    return string_builder(0, Some(allocator))
+    return string_builder(0, allocator)
 }
 
 // Create a new empty StringBuilder with the given initial capacity.
 #deprecated("use string_builder(capacity, allocator)")
 pub fn string_builder_with_capacity_and_allocator(
     capacity: usize,
-    allocator: &Allocator?,
+    allocator: &Allocator,
 ) StringBuilder {
     return string_builder(capacity, allocator)
 }
@@ -66,7 +75,7 @@ pub fn string_builder_with_capacity_and_allocator(
 // Frees the backing storage, consuming the builder.
 pub fn deinit(self: move StringBuilder) {
     if self.cap > 0 {
-        self.allocator.or_global().free(slice_from_raw_parts(self.ptr, self.cap))
+        self.allocator.free(slice_from_raw_parts(self.ptr, self.cap))
     }
 }
 
@@ -82,7 +91,7 @@ fn reserve(sb: &StringBuilder, additional: usize) {
         new_cap = required
     }
 
-    const resized = sb.allocator.or_global()
+    const resized = sb.allocator
         .realloc(slice_from_raw_parts(sb.ptr, sb.cap), align_of(u8), new_cap)
     if (resized.is_none()) {
         panic("StringBuilder.reserve: realloc failed")
@@ -158,7 +167,7 @@ pub fn to_string(sb: &StringBuilder, allocator: &Allocator) OwnedString {
     term.* = 0
     const result = OwnedString {
         view = .{ ptr = buf.ptr, len = sb.len },
-        allocator = Some(allocator),
+        allocator = allocator,
     }
     sb.ptr = 0usize as &u8
     sb.len = 0

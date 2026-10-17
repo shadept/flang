@@ -41,9 +41,9 @@ pub fn op_deref(self: &Set($T)) &UnmanagedSet(T) {
 // Creates an empty set. Nothing allocates until the first `add`.
 //
 // - `allocator`: kept for the set's whole life. Null is the global allocator.
-pub fn set(allocator: &Allocator? = null) Set($T) {
+pub fn set(allocator: &Allocator = context.allocator) Set($T) {
     let out: Set(T)
-    out.allocator = allocator.or_global()
+    out.allocator = allocator
     return out
 }
 
@@ -259,7 +259,7 @@ pub fn to_list(self: &Set($T), allocator: &Allocator? = null) List(T) where T: c
 // =============================================================================
 
 test "an UnmanagedSet takes its allocator at every allocating call" {
-    let counting = counting_allocator(global())
+    let counting = counting_allocator(context.allocator)
     const alloc = counting.allocator()
     let s: UnmanagedSet(i32)
     assert_true(s.add(1i32, &alloc), "a new value reports true")

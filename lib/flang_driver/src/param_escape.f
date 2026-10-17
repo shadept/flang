@@ -36,7 +36,7 @@ pub fn shadowed_params(
     decl: &FunctionDecl,
     result: &TypeCheckResult,
     overlay: &InferenceResults?,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) List(bool) {
     let out: List(bool) = list(decl.params.len, allocator)
     const body = decl.body
@@ -56,7 +56,7 @@ pub fn needs_shadow(
     body: &BlockExpr,
     result: &TypeCheckResult,
     overlay: &InferenceResults?,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) bool {
     // The names that alias the parameter's storage: the parameter, plus whatever a pattern bound
     // out of it. Scope is ignored; a name kept live past its arm costs an extra copy.

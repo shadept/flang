@@ -62,7 +62,7 @@ fn is_drive_letter(b: u8) bool {
 // Constructors
 // =============================================================================
 
-pub fn path(s: String, allocator: &Allocator? = null) Path {
+pub fn path(s: String, allocator: &Allocator = context.allocator) Path {
     let sb = string_builder(s.len + 1, allocator)
     sb.append(s)
     return .{ __sb = move sb }
@@ -88,7 +88,7 @@ pub fn deinit(self: move Path) {
     self.__sb.deinit()
 }
 
-pub fn clone(self: &Path, allocator: &Allocator? = null) Path {
+pub fn clone(self: &Path, allocator: &Allocator = context.allocator) Path {
     return path(self.as_view(), allocator)
 }
 
@@ -350,7 +350,7 @@ pub fn join(self: &Path, other: String) Path {
 // Returns the path with every native separator rewritten as `/`. On POSIX this is a plain copy -
 // `\` is a legal filename character there, not a separator, and rewriting it would corrupt the
 // name.
-pub fn to_slash(self: &Path, allocator: &Allocator? = null) OwnedString {
+pub fn to_slash(self: &Path, allocator: &Allocator = context.allocator) OwnedString {
     const v = self.as_view()
     #if platform.os == "windows" {
         let sb = string_builder(v.len, allocator)
@@ -369,7 +369,7 @@ pub fn to_slash(self: &Path, allocator: &Allocator? = null) OwnedString {
 
 // Builds a Path from a `/`-separated string, rewriting to the native separator. The inverse of
 // `to_slash`; a plain copy on POSIX.
-pub fn from_slash(s: String, allocator: &Allocator? = null) Path {
+pub fn from_slash(s: String, allocator: &Allocator = context.allocator) Path {
     #if platform.os == "windows" {
         let sb = string_builder(s.len + 1, allocator)
         let i: usize = 0
@@ -607,7 +607,7 @@ pub fn strip_prefix(self: &Path, base: String) String? {
 //     path("src/a/b.f").to_relative("src")        -> "a/b.f"
 //     path("src/a/b.f").to_relative("src/a/c")    -> "../b.f"
 //     path("src").to_relative("src")              -> "."
-pub fn to_relative(self: &Path, base: String, allocator: &Allocator? = null) Path? {
+pub fn to_relative(self: &Path, base: String, allocator: &Allocator = context.allocator) Path? {
     const target = self.as_view()
     if string_is_absolute(target) != string_is_absolute(base) {
         return null

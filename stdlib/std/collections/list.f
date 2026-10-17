@@ -135,8 +135,8 @@ pub fn list(capacity: usize, allocator: &Allocator) List($T) {
 // - `allocator`: kept for the list's whole life. Null is the global allocator.
 //
 // Panics when the allocation fails.
-pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
-    const alloc = allocator.or_global()
+pub fn list(capacity: usize, allocator: &Allocator = context.allocator) List($T) {
+    const alloc = allocator
     return .{ __storage = unmanaged_list(capacity, alloc), allocator = alloc }
 }
 
@@ -145,7 +145,8 @@ pub fn list(capacity: usize, allocator: &Allocator? = null) List($T) {
 // it.
 //
 // - `allocator`: kept for the new list's whole life. Null is the global allocator.
-pub fn list(source: &List($T), allocator: &Allocator? = null) List(T) where T: copyable {
+pub fn list(source: &List($T), allocator: &Allocator = context.allocator) List(T)
+where T: copyable {
     return list(source.as_slice(), allocator)
 }
 
@@ -153,8 +154,8 @@ pub fn list(source: &List($T), allocator: &Allocator? = null) List(T) where T: c
 // allocates nothing. Panics when the allocation fails.
 //
 // - `allocator`: kept for the list's whole life. Null is the global allocator.
-pub fn list(source: $T[], allocator: &Allocator? = null) List(T) where T: copyable {
-    const alloc = allocator.or_global()
+pub fn list(source: $T[], allocator: &Allocator = context.allocator) List(T) where T: copyable {
+    const alloc = allocator
     return .{ __storage = unmanaged_list(source, alloc), allocator = alloc }
 }
 
@@ -175,9 +176,9 @@ where T: copyable {
 // nothing. Panics when the allocation fails.
 //
 // - `allocator`: kept for the list's whole life. Null is the global allocator.
-pub fn filled_list(count: usize, value: $T, allocator: &Allocator? = null) List(T)
+pub fn filled_list(count: usize, value: $T, allocator: &Allocator = context.allocator) List(T)
 where T: copyable {
-    const alloc = allocator.or_global()
+    const alloc = allocator
     return .{ __storage = filled_unmanaged_list(count, value, alloc), allocator = alloc }
 }
 
@@ -572,7 +573,11 @@ pub fn fold_right(self: &UnmanagedList($T), init: move $A, f: $F) A where F: fn(
 // Concatenates the views with `sep` between them into a new owned string.
 //
 // - `allocator`: where the result is allocated. Null is the global allocator.
-pub fn join(self: &UnmanagedList(String), sep: String, allocator: &Allocator? = null) OwnedString {
+pub fn join(
+    self: &UnmanagedList(String),
+    sep: String,
+    allocator: &Allocator = context.allocator,
+) OwnedString {
     return self.as_slice().join(sep, allocator)
 }
 
@@ -974,7 +979,7 @@ test "search utilities: contains, index_of, first, last" {
 }
 
 test "a ListRef grows the field it wraps and owns nothing" {
-    let counting = counting_allocator(global())
+    let counting = counting_allocator(context.allocator)
     const alloc = counting.allocator()
     let field: UnmanagedList(i32)
     let h = field.managed(&alloc)
@@ -1030,7 +1035,7 @@ test "a zero-initialised List is a valid empty list" {
 }
 
 test "an UnmanagedList takes its allocator at every allocating call" {
-    let counting = counting_allocator(global())
+    let counting = counting_allocator(context.allocator)
     const alloc = counting.allocator()
     let xs: UnmanagedList(i32) = unmanaged_list(0, &alloc)
     xs.push(1, &alloc)

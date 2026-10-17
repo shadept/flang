@@ -40,20 +40,15 @@ pub type StringPool = struct {
 //
 // - `allocator`: kept for the pool's whole life; the buffer, the split table and the index grow and
 //   free through it. Null is the global allocator.
-pub fn string_pool(allocator: &Allocator? = null) StringPool {
+pub fn string_pool(allocator: &Allocator = context.allocator) StringPool {
     let out: StringPool
-    out.allocator = allocator.or_global()
+    out.allocator = allocator
     return out
-}
-
-// Creates an empty pool that allocates through `allocator` for its whole life.
-pub fn string_pool(allocator: &Allocator) StringPool {
-    return string_pool(Some(allocator))
 }
 
 // Creates an empty pool with room for `capacity_bytes` of string data before the buffer first
 // grows. Panics when the allocation fails.
-pub fn string_pool(capacity_bytes: usize, allocator: &Allocator? = null) StringPool {
+pub fn string_pool(capacity_bytes: usize, allocator: &Allocator = context.allocator) StringPool {
     let out: StringPool = string_pool(allocator)
     out.bytes.reserve(capacity_bytes, out.allocator)
     return out
@@ -229,7 +224,7 @@ test "equal strings intern to one id and read back; distinct strings get dense i
 }
 
 test "the index grows past the load factor and ids survive the rehash" {
-    let counting = counting_allocator(global())
+    let counting = counting_allocator(context.allocator)
     const alloc = counting.allocator()
     let p = string_pool(&alloc)
     let names: [u8; 4] = [0; 4]
@@ -260,7 +255,7 @@ test "the index grows past the load factor and ids survive the rehash" {
 }
 
 test "clear keeps the storage and restarts the ids" {
-    let counting = counting_allocator(global())
+    let counting = counting_allocator(context.allocator)
     const alloc = counting.allocator()
     let p = string_pool(&alloc)
     const _a = p.intern("one")

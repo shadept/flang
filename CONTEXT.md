@@ -103,7 +103,7 @@ _Avoid_: rope, buffer
 ### Stdlib conventions
 
 **Allocator pattern**:
-The vtable-based allocator convention used by every stdlib type that allocates: an `allocator: &Allocator?` field, `or_global()` to fall back to `global_allocator` when null, and never raw `malloc`/`free`.
+The vtable-based allocator convention used by every stdlib type that allocates: an `allocator: &Allocator` field, a constructor parameter defaulting to `context.allocator`, and never raw `malloc`/`free`. Memory nothing frees on its own goes to `context.temp_allocator`.
 _Avoid_: alloc strategy, custom allocator (the pattern itself is the term)
 
 ### Foreign function interface

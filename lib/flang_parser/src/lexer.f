@@ -50,7 +50,7 @@ pub type Lexer = struct {
     // of `tokenize()`. Stored as-passed (`null` = global allocator) and forwarded to the optional
     // allocator slots of lists and Tokens; only a leaf that actually allocates resolves it via
     // `or_global()`.
-    allocator: &Allocator?
+    allocator: &Allocator
     interp_stack: List(InterpFrame)
     // Set inline on `$"` (Dollar adjacent to quote) and by the parser before eating the prefix for
     // the `$(args)"..."` / `$ident"..."` forms; consumed by next_token() to decide whether the next
@@ -76,7 +76,7 @@ pub type Lexer = struct {
 // leaves resolve it per use.
 // `start` lexes from a byte offset into `source` (offsets stay absolute) - template expansion uses
 // it to parse an expression inside a string literal hole without re-slicing the text.
-pub fn lexer(source: String, allocator: &Allocator? = null, start: usize = 0) Lexer {
+pub fn lexer(source: String, allocator: &Allocator = context.allocator, start: usize = 0) Lexer {
     return .{
         source = source,
         position = start,
@@ -1001,7 +1001,7 @@ fn queue_token(self: &Lexer, tok: Token) {
     self.pending_token = tok
 }
 
-fn empty_token(allocator: &Allocator?) Token {
+fn empty_token(allocator: &Allocator) Token {
     return Token {
         kind = TokenKind.Eof,
         text = "",
@@ -1027,7 +1027,7 @@ fn empty_token(allocator: &Allocator?) Token {
 //
 // The returned `OwnedString` owns its buffer - caller must `.deinit()`. `allocator` backs that
 // buffer; pass `null` to default to the global allocator (or the test allocator under test).
-pub fn decode_string_literal(raw: String, allocator: &Allocator? = null) OwnedString? {
+pub fn decode_string_literal(raw: String, allocator: &Allocator = context.allocator) OwnedString? {
     if raw.len < 2 {
         return null
     }
@@ -1039,7 +1039,7 @@ pub fn decode_string_literal(raw: String, allocator: &Allocator? = null) OwnedSt
 
 // Same decode for text already stripped of its quotes - the form the AST stores
 // (`StringLiteral.text`). Escape vocabulary and failure conditions match `decode_string_literal`.
-pub fn decode_string_text(raw: String, allocator: &Allocator? = null) OwnedString? {
+pub fn decode_string_text(raw: String, allocator: &Allocator = context.allocator) OwnedString? {
     return decode_quoted_run(raw, 0, raw.len, allocator)
 }
 
@@ -1162,7 +1162,7 @@ pub fn decode_char_literal(raw: String) u32? {
 //
 // Returns `null` on a malformed `\uXXXX` escape; otherwise the caller-owned decoded buffer.
 // `allocator` backs that buffer; pass `null` to default to the global allocator.
-pub fn decode_interp_segment(raw: String, allocator: &Allocator? = null) OwnedString? {
+pub fn decode_interp_segment(raw: String, allocator: &Allocator = context.allocator) OwnedString? {
     let sb = string_builder(raw.len, allocator)
     defer sb.deinit()
     let i = 0usize
@@ -1193,7 +1193,7 @@ pub fn decode_interp_segment(raw: String, allocator: &Allocator? = null) OwnedSt
     return Some(sb.to_string())
 }
 
-fn decode_quoted_run(raw: String, lo: usize, hi: usize, allocator: &Allocator?) OwnedString? {
+fn decode_quoted_run(raw: String, lo: usize, hi: usize, allocator: &Allocator) OwnedString? {
     let sb = string_builder(hi - lo, allocator)
     defer sb.deinit()
     let i = lo

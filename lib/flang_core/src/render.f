@@ -52,7 +52,7 @@ pub fn render_diagnostic(
     idx: &LineIndex,
     d: &Diagnostic,
     style: &RenderStyle,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) OwnedString {
     let sb = string_builder(256, allocator)
     write_header(&sb, d, style)

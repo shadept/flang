@@ -871,7 +871,8 @@ pub fn extend(self: &UnmanagedList($T), it: move Iterator(Item = T), allocator: 
 }
 
 // Collect into a fresh List.
-pub fn to_list(it: move $I, allocator: &Allocator? = null) List(I.Item) where I: Iterator {
+pub fn to_list(it: move $I, allocator: &Allocator = context.allocator) List(I.Item)
+where I: Iterator {
     let out: List(I.Item) = list(0, allocator)
     for item in it {
         out.push(item)
@@ -880,7 +881,8 @@ pub fn to_list(it: move $I, allocator: &Allocator? = null) List(I.Item) where I:
 }
 
 // Collect into a fresh Set (duplicates collapse; requires a hashable element type).
-pub fn to_set(it: move $I, allocator: &Allocator? = null) Set(I.Item) where I: Iterator {
+pub fn to_set(it: move $I, allocator: &Allocator = context.allocator) Set(I.Item)
+where I: Iterator {
     let out: Set(I.Item) = set(allocator)
     for item in it {
         out.add(item)
@@ -890,7 +892,7 @@ pub fn to_set(it: move $I, allocator: &Allocator? = null) Set(I.Item) where I: I
 
 // Collect into a fresh Dict keyed by `key(item)`. A later item with the same key overwrites the
 // earlier one.
-pub fn to_dict(it: move $I, key: $F, allocator: &Allocator? = null) Dict(K, I.Item)
+pub fn to_dict(it: move $I, key: $F, allocator: &Allocator = context.allocator) Dict(K, I.Item)
 where I: Iterator, F: fn(I.Item) $K {
     let out: Dict(K, I.Item) = dict(allocator)
     for item in it {

@@ -55,7 +55,11 @@ pub type AnalyzedUnit = struct {
 // Analyse source text: lex → parse → project → type-check. Consumes
 // `source` (the unit owns it). `path` labels the module for FQN construction and diagnostics; it
 // need not name a real file.
-pub fn analyze(source: move OwnedString, path: String, allocator: &Allocator? = null) AnalyzedUnit {
+pub fn analyze(
+    source: move OwnedString,
+    path: String,
+    allocator: &Allocator = context.allocator,
+) AnalyzedUnit {
     let diagnostics: List(Diagnostic) = list(0, allocator)
     const src = source.view
 
@@ -130,7 +134,7 @@ pub fn analyze(source: move OwnedString, path: String, allocator: &Allocator? = 
 pub fn filter_allowed(
     diags: &List(Diagnostic),
     module: &Module,
-    alloc: &Allocator? = null,
+    alloc: &Allocator = context.allocator,
 ) List(Diagnostic) {
     let kept: List(Diagnostic) = list(diags.len, alloc)
     for d in diags.drain() {
@@ -148,7 +152,7 @@ pub fn filter_allowed(
 pub fn filter_allowed_project(
     diags: &List(Diagnostic),
     modules: &List(Module),
-    alloc: &Allocator? = null,
+    alloc: &Allocator = context.allocator,
 ) List(Diagnostic) {
     let kept: List(Diagnostic) = list(diags.len, alloc)
     for d in diags.drain() {
@@ -322,7 +326,7 @@ pub fn analyze_project(
     ctx: &ResolveCtx,
     entries: &List(OwnedString),
     overrides: &Dict(String, String)? = null,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) AnalyzedProject {
     let parse_diags: List(Diagnostic) = list(0, allocator)
     let sources: List(OwnedString) = list(0, allocator)
@@ -429,7 +433,7 @@ fn check_project(
     edge_from: &List(usize),
     edge_to: &List(OwnedString),
     recollect: &List(bool)?,
-    allocator: &Allocator?,
+    allocator: &Allocator,
 ) {
     // Expansion appends one source per generated chunk. Those buffers are retired, since a result
     // from a previous check holds string views into them; the matching `file_paths` entries are
@@ -560,7 +564,7 @@ fn demand_mask(
     project_origin: &List(bool),
     globals: &List(OwnedString),
     edges: &List(ImportEdge),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) List(bool) {
     let mask = filled_list(fqns.len, false, alloc)
     let work: List(usize) = list(fqns.len, alloc)
@@ -645,7 +649,7 @@ pub fn reanalyze(
     ctx: &ResolveCtx,
     dirty: &Set(String),
     overrides: &Dict(String, String)? = null,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) {
     const reparse_all = self.parse_diags.len > 0
     if reparse_all {
@@ -717,7 +721,7 @@ fn collect_edges(
     modules: &List(Module),
     edge_from: &List(usize),
     edge_to: &List(OwnedString),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) {
     for i in 0..modules.len {
         for &d in modules[i].decls {
@@ -742,7 +746,7 @@ fn collect_edges(
 pub fn analyze_source_set(
     srcs: move List(OwnedString),
     fqns: &List(String),
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) AnalyzedProject {
     let parse_diags: List(Diagnostic) = list(0, allocator)
     let owned_fqns: List(OwnedString) = list(fqns.len, allocator)
@@ -843,7 +847,7 @@ fn parse_to_module(
     file_id: i32,
     target: &ComptimeCtx,
     diags: &List(Diagnostic),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Module {
     let lx = lexer(src, alloc)
     let tokens = lx.tokenize()
@@ -868,7 +872,7 @@ fn enqueue_imports(
     edge_from: &List(usize),
     edge_to: &List(OwnedString),
     diags: &List(Diagnostic),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) {
     for &d in m.decls {
         d.* match {
@@ -896,7 +900,7 @@ fn seed_globals(
     queue: &List(OwnedString),
     seen: &Set(OwnedString),
     diags: &List(Diagnostic),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) {
     for &g in ctx.global_imports {
         let segs = split(g.view, '.')
@@ -916,7 +920,7 @@ fn seed_prelude(
     ctx: &ResolveCtx,
     queue: &List(OwnedString),
     seen: &Set(OwnedString),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) {
     let segs: List(String) = list(2, alloc)
     segs.push("core")
@@ -943,7 +947,7 @@ fn seed_stdlib(
     ctx: &ResolveCtx,
     queue: &List(OwnedString),
     seen: &Set(OwnedString),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) {
     if ctx.stdlib_root.view.len == 0 {
         return
@@ -964,7 +968,7 @@ fn seed_stdlib(
 
 // Whether the project or a dependency provides its own module for this stdlib file's dotted name -
 // resolution would never pick the stdlib copy, so the loader must not either.
-fn shadowed_by_project(ctx: &ResolveCtx, stdlib_file: String, alloc: &Allocator?) bool {
+fn shadowed_by_project(ctx: &ResolveCtx, stdlib_file: String, alloc: &Allocator) bool {
     const rel = module_rel(stdlib_file, ctx.stdlib_root.view)
     if rel.is_none() {
         return false
@@ -1020,7 +1024,7 @@ fn index_edges(
     file_paths: &List(OwnedString),
     edge_from: &List(usize),
     edge_to: &List(OwnedString),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) List(ImportEdge) {
     let index_of: Dict(OwnedString, usize) = dict(alloc)
     defer index_of.deinit()
@@ -1068,7 +1072,7 @@ fn mark_seen(seen: &Set(OwnedString), path: String) bool {
     return true
 }
 
-fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl, alloc: &Allocator?) {
+fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl, alloc: &Allocator) {
     let dotted = dot_join(id.path, alloc)
     const msg = $"unresolved import `{dotted.view}`"
     dotted.deinit()
@@ -1287,7 +1291,7 @@ test "the demand mask is the project's import closure plus prelude and globals" 
     edges.push(ImportEdge { from = 1, to = 2 })
     edges.push(ImportEdge { from = 3, to = 1 })
 
-    let mask = demand_mask(&fqns, &origin, &globals, &edges, null)
+    let mask = demand_mask(&fqns, &origin, &globals, &edges, context.allocator)
     defer mask.deinit()
     assert_true(mask[0], "the project file is a root")
     assert_true(mask[1], "its import is demanded")

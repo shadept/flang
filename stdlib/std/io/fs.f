@@ -80,7 +80,7 @@ pub fn rename(from: String, to: String) Result((), FsError) {
 // filesystem.
 
 // The current working directory of the process.
-pub fn cwd(allocator: &Allocator? = null) Result(Path, FsError) {
+pub fn cwd(allocator: &Allocator = context.allocator) Result(Path, FsError) {
     const s = raw_getcwd(allocator)?
     defer s.deinit()
     return Ok(path(s.view, allocator))
@@ -88,7 +88,7 @@ pub fn cwd(allocator: &Allocator? = null) Result(Path, FsError) {
 
 // The directory for temporary files: $TMPDIR (falling back to /tmp) on POSIX, GetTempPath on
 // Windows. Never has a trailing separator, so callers can always join with one.
-pub fn temp_dir(allocator: &Allocator? = null) Result(Path, FsError) {
+pub fn temp_dir(allocator: &Allocator = context.allocator) Result(Path, FsError) {
     const s = raw_temp_dir(allocator)?
     defer s.deinit()
     return Ok(path(s.view, allocator))
@@ -97,7 +97,7 @@ pub fn temp_dir(allocator: &Allocator? = null) Result(Path, FsError) {
 // An absolute, lexically-normalized form of `p`, joined against cwd() when relative. Does NOT
 // resolve symlinks and does not require the path to exist - use `canonicalize` when you need
 // either.
-pub fn to_absolute(p: &Path, allocator: &Allocator? = null) Result(Path, FsError) {
+pub fn to_absolute(p: &Path, allocator: &Allocator = context.allocator) Result(Path, FsError) {
     if p.is_absolute() {
         return Ok(p.normalize())
     }
@@ -111,7 +111,7 @@ pub fn to_absolute(p: &Path, allocator: &Allocator? = null) Result(Path, FsError
 
 // Resolves symlinks and `..` against the real filesystem. The target must exist; NotFound if it
 // does not.
-pub fn canonicalize(p: &Path, allocator: &Allocator? = null) Result(Path, FsError) {
+pub fn canonicalize(p: &Path, allocator: &Allocator = context.allocator) Result(Path, FsError) {
     const s = raw_realpath(p.as_view(), allocator)?
     defer s.deinit()
     return Ok(path(s.view, allocator))
@@ -157,7 +157,7 @@ pub type WalkIter = struct {
     done: bool
 }
 
-pub fn walk_dir(root: String, allocator: &Allocator? = null) Result(WalkIter, FsError) {
+pub fn walk_dir(root: String, allocator: &Allocator = context.allocator) Result(WalkIter, FsError) {
     const root_iter = raw_dir_open(root)?
 
     let sb = string_builder(root.len + 64, allocator)
@@ -278,7 +278,7 @@ pub type GlobIter = struct {
     done: bool
 }
 
-pub fn glob(pattern: String, allocator: &Allocator? = null) Result(GlobIter, FsError) {
+pub fn glob(pattern: String, allocator: &Allocator = context.allocator) Result(GlobIter, FsError) {
     const prefix_end = find_glob_prefix_end(pattern)
 
     // Choose walk root. If there's no literal prefix at all, walk ".".

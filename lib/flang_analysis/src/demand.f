@@ -77,9 +77,9 @@ pub fn demand_order(
     count: usize,
     fqns: &List(String),
     edges: &List(ImportEdge),
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) List(usize) {
-    const alloc = allocator.or_global()
+    const alloc = allocator
     let t = Tarjan {
         adj = build_adjacency(count, fqns, edges, alloc),
         index = filled_unmanaged_list(count, UNVISITED, alloc),

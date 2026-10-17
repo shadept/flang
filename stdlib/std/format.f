@@ -429,7 +429,7 @@ test "append integers" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     0i32.format(w, "")
@@ -468,7 +468,7 @@ test "append bool and string" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     true.format(w, "")
@@ -493,7 +493,7 @@ test "append all int sizes" {
     let buf = [0u8; 512]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     "u8: ".format(w, "")
@@ -554,7 +554,7 @@ test "append format hex" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     255u8.format(w, "x")
@@ -585,7 +585,7 @@ test "append format octal binary" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     255u8.format(w, "o")
@@ -616,7 +616,7 @@ test "append signed hex" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     format(-1i32, w, "x")
@@ -635,7 +635,7 @@ test "append signed hex all sizes" {
     let buf = [0u8; 512]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     format(-1i8, w, "x")
@@ -674,7 +674,7 @@ test "append unsigned hex all sizes" {
     let buf = [0u8; 512]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     255u8.format(w, "x")
@@ -709,7 +709,7 @@ test "append floats" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     3.14f64.format(w, "")
@@ -740,7 +740,7 @@ test "append floats with precision" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     3.14f64.format(w, ".2")
@@ -764,7 +764,7 @@ test "append floats scientific" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     1.5f64.format(w, "e")
@@ -792,7 +792,7 @@ test "append floats exact hex" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     1.5f64.format(w, "a")
@@ -824,7 +824,7 @@ test "append floats with width" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     3.14f64.format(w, "8.2")
@@ -844,7 +844,7 @@ test "append binary octal all sizes" {
     let buf = [0u8; 512]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     255u8.format(w, "b")
@@ -883,7 +883,7 @@ test "int width right align" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     42usize.format(w, "8")
@@ -911,7 +911,7 @@ test "int width left align" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     42usize.format(w, "<8")
@@ -927,7 +927,7 @@ test "int width center align" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     42usize.format(w, "^8")
@@ -947,7 +947,7 @@ test "int zero pad" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     42usize.format(w, "08")
@@ -971,7 +971,7 @@ test "int custom fill" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     42usize.format(w, "-<8")
@@ -991,7 +991,7 @@ test "int width with base" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     255u8.format(w, ">8x")
@@ -1011,7 +1011,7 @@ test "float alignment" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     3.14f64.format(w, "<10.2")
@@ -1035,7 +1035,7 @@ test "append text with a spec" {
     let buf = [0u8; 256]
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
-    let sb = string_builder(allocator = Some(&alloc))
+    let sb = string_builder(allocator = &alloc)
     const w = sb.writer()
 
     "hi".format(w, ">6")

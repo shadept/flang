@@ -54,8 +54,8 @@ pub fn unmanaged_deque(capacity: usize, allocator: &Allocator) UnmanagedDeque($T
 // push. Panics when the allocation fails.
 //
 // - `allocator`: kept for the deque's whole life. Null is the global allocator.
-pub fn deque(capacity: usize, allocator: &Allocator? = null) Deque($T) {
-    const alloc = allocator.or_global()
+pub fn deque(capacity: usize, allocator: &Allocator = context.allocator) Deque($T) {
+    const alloc = allocator
     return .{ __storage = unmanaged_deque(capacity, alloc), allocator = alloc }
 }
 
@@ -246,7 +246,7 @@ pub fn deinit(self: move Deque($T)) {
 // =============================================================================
 
 test "an UnmanagedDeque takes its allocator at every allocating call" {
-    let counting = counting_allocator(global())
+    let counting = counting_allocator(context.allocator)
     const alloc = counting.allocator()
     let dq: UnmanagedDeque(i32) = unmanaged_deque(0, &alloc)
     dq.push_back(2i32, &alloc)

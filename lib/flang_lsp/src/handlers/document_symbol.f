@@ -37,7 +37,7 @@ pub fn deinit(self: move DocSymbol) {
     self.name.deinit()
 }
 
-pub fn document_symbols(m: &Module, allocator: &Allocator? = null) List(DocSymbol) {
+pub fn document_symbols(m: &Module, allocator: &Allocator = context.allocator) List(DocSymbol) {
     let out: List(DocSymbol) = list(0, allocator)
     for &d in m.decls {
         d.* match {
@@ -63,7 +63,7 @@ pub fn document_symbols(m: &Module, allocator: &Allocator? = null) List(DocSymbo
     return out
 }
 
-fn leaf(name: String, kind: SymbolKind, span: SourceSpan, alloc: &Allocator?) DocSymbol {
+fn leaf(name: String, kind: SymbolKind, span: SourceSpan, alloc: &Allocator) DocSymbol {
     return .{
         name = from_view(name, alloc),
         kind = kind,
@@ -72,7 +72,7 @@ fn leaf(name: String, kind: SymbolKind, span: SourceSpan, alloc: &Allocator?) Do
     }
 }
 
-fn type_symbol(t: &TypeDecl, alloc: &Allocator?) DocSymbol {
+fn type_symbol(t: &TypeDecl, alloc: &Allocator) DocSymbol {
     t.body match {
         AnonStruct(st) => {
             let children: List(DocSymbol) = list(st.fields.len, alloc)

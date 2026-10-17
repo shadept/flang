@@ -90,7 +90,10 @@ pub fn format(self: ManifestError, w: Writer, spec: String) {
 // Parse a flang.toml manifest. Missing `[project]` fields fall back to defaults (`kind = exe`,
 // `source = "src/**/*.f"`, `output = "build"`); callers that require a field validate it
 // themselves. Unknown sections and keys are ignored.
-pub fn parse_project(text: String, allocator: &Allocator? = null) Result(Project, ManifestError) {
+pub fn parse_project(
+    text: String,
+    allocator: &Allocator = context.allocator,
+) Result(Project, ManifestError) {
     const parsed = parse_toml(text, allocator)
     if parsed.is_err() {
         return Err(ManifestError.Syntax(parsed.unwrap_err()))
@@ -136,7 +139,7 @@ pub fn current_platform(self: &Project) &PlatformConfig {
 // `x.generated.f` files are `--emit-generated` debug output, never input: template expansion is in
 // memory (RFC-021). They are skipped so a stale emission next to its origin cannot become a second
 // module.
-pub fn glob_sources(pattern: String, allocator: &Allocator? = null) List(OwnedString) {
+pub fn glob_sources(pattern: String, allocator: &Allocator = context.allocator) List(OwnedString) {
     let out: List(OwnedString) = list(0, allocator)
     let r = glob(pattern, allocator)
     if r.is_err() {
@@ -155,7 +158,7 @@ pub fn glob_sources(pattern: String, allocator: &Allocator? = null) List(OwnedSt
 
 // Construction / teardown helpers
 
-fn new_project(alloc: &Allocator?) Project {
+fn new_project(alloc: &Allocator) Project {
     return Project {
         name = from_view(""),
         version = from_view(""),
@@ -171,7 +174,7 @@ fn new_project(alloc: &Allocator?) Project {
     }
 }
 
-fn new_platform(alloc: &Allocator?) PlatformConfig {
+fn new_platform(alloc: &Allocator) PlatformConfig {
     return PlatformConfig {
         headers = list(0, alloc),
         libs = list(0, alloc),
@@ -192,7 +195,7 @@ fn deinit_platform(self: move PlatformConfig) {
 // Copies the manifest's fields out of the document, keeping the first key found with the wrong
 // type.
 type ManifestReader = struct {
-    allocator: &Allocator?
+    allocator: &Allocator
     wrong: String?
 }
 
@@ -349,7 +352,7 @@ fn replace_strings(
 }
 
 // A string, number or bool as the text it reads as; null for anything else.
-fn scalar_text(v: &Value, allocator: &Allocator?) OwnedString? {
+fn scalar_text(v: &Value, allocator: &Allocator) OwnedString? {
     let sb = string_builder(16, allocator)
     defer sb.deinit()
     v.* match {

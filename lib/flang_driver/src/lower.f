@@ -102,7 +102,7 @@ type LowerCtx = struct {
     // declarations.
     overlay: &InferenceResults?
     syms: &SymbolTable
-    allocator: &Allocator?
+    allocator: &Allocator
     loops: List(LoopFrame)
     // Destination of the current function's aggregate return value (the caller-provided sret
     // buffer) and the byte count to copy into it. Null while lowering a function with a scalar or
@@ -340,8 +340,8 @@ type Env = struct {
 }
 
 // Creates an empty environment. Null is the global allocator.
-fn new_env(allocator: &Allocator?) Env {
-    const alloc = allocator.or_global()
+fn new_env(allocator: &Allocator) Env {
+    const alloc = allocator
     return Env {
         names = unmanaged_list(8, alloc),
         bindings = unmanaged_list(8, alloc),
@@ -414,7 +414,7 @@ fn ir_size(ty: IrType) u64 {
 pub fn lower_module(
     ast_module: &Module,
     result: &TypeCheckResult,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) IrModule {
     let m = module(allocator)
     let sb = symbol_builder(result, allocator)
@@ -493,7 +493,7 @@ pub fn lower_program(
     demanded: &List(bool)? = null,
     tests: &List(bool)? = null,
     name_filter: String? = null,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) IrModule {
     let m = module(allocator)
     let sb = symbol_builder(result, allocator)
@@ -603,7 +603,7 @@ pub fn lower_program(
     }
     wire_const_inits(&m, &ctx)
     if ctx.testing {
-        name_install_tests(&m, &ctx)
+        name_run_test(&m, &ctx)
     }
     let no_displays = m.set_displays(syms.take_displays())
     no_displays.deinit()
@@ -623,7 +623,7 @@ pub fn lower_program(
 // the call graph, of `blocked` within a body - and it is what makes the milestone property
 // ("everything emitted is correct; the rest is absent") hold for calls to generic functions, whose
 // bodies stay unlowerable until monomorphization.
-fn drop_callers_of_refused(m: &IrModule, ctx: &LowerCtx, alloc: &Allocator?) {
+fn drop_callers_of_refused(m: &IrModule, ctx: &LowerCtx, alloc: &Allocator) {
     let defined: Dict(String, bool) = dict(alloc)
     for i in 0..m.functions.len { defined.set(m.functions[i].name, true) }
     for i in 0..m.foreigns.len { defined.set(m.foreigns[i].name, true) }
@@ -928,11 +928,11 @@ fn lower_test_block(m: &IrModule, ctx: &LowerCtx, td: &TestDecl, fqn: String) {
     m.add_test(from_view(td.label, ctx.allocator), from_view(sym, ctx.allocator))
 }
 
-// Find `std.test.install_test_allocator` among the functions that actually lowered and record its
-// symbol for the runner. Absent when std.test is not in the module set (a project with test blocks
-// but no assertions), which costs the run its leak tracking and nothing else.
-fn name_install_tests(m: &IrModule, ctx: &LowerCtx) {
-    const overloads = ctx.result.functions.by_name.get_ref("install_test_allocator")
+// Find `std.test.run_test` among the functions that actually lowered and record its symbol for the
+// runner. Absent when std.test is not in the module set (a project with test blocks but no
+// assertions), which costs the run its leak tracking and its temp arena and nothing else.
+fn name_run_test(m: &IrModule, ctx: &LowerCtx) {
+    const overloads = ctx.result.functions.by_name.get_ref("run_test")
     if overloads.is_none() {
         return
     }
@@ -950,7 +950,7 @@ fn name_install_tests(m: &IrModule, ctx: &LowerCtx) {
         if !defines_function(m, sym.unwrap()) {
             continue
         }
-        m.set_install_tests(from_view(sym.unwrap(), ctx.allocator))
+        m.set_run_test(from_view(sym.unwrap(), ctx.allocator))
         return
     }
 }
@@ -1528,7 +1528,7 @@ fn write_le(buf: &List(u8), at: usize, v: i64, n: usize) {
 // `prefix` + the escaped FQN. The prefix keeps const globals and their init functions out of the
 // function-symbol namespace (a const `m.NAME` would otherwise collide with a nullary `fn NAME` in
 // module `m`).
-fn const_symbol(prefix: String, fqn: String, allocator: &Allocator?) OwnedString {
+fn const_symbol(prefix: String, fqn: String, allocator: &Allocator) OwnedString {
     let sb = string_builder(prefix.len + fqn.len + 8, allocator)
     defer sb.deinit()
     sb.append(prefix)
@@ -1725,7 +1725,7 @@ fn foreign_ir_of(m: &IrModule, ctx: &LowerCtx, ty: &Ty) IrType {
 // A body-less declaration as an external symbol. Null when a parameter or the return type is
 // outside the subset - the backend can't spell it, and nothing can call it. The variadic tail is
 // dropped from `param_types` and flagged, matching C's `(fixed..., ...)` shape.
-fn foreign_decl_of(decl: &FunctionDecl, allocator: &Allocator?) ForeignDecl? {
+fn foreign_decl_of(decl: &FunctionDecl, allocator: &Allocator) ForeignDecl? {
     let ret: IrType? = null
     if decl.return_type.is_some() {
         let rt = decl.return_type.unwrap()
@@ -6476,7 +6476,7 @@ fn resolve_struct(
     ctx: &LowerCtx,
     ty: &Ty,
     reg: &NominalRegistry,
-    allocator: &Allocator?,
+    allocator: &Allocator,
 ) StructTarget? {
     let nr = tn(ctx, peel_ref(ctx, ty.*)) match {
         NNominal(n) => n

@@ -31,12 +31,16 @@ pub fn func_ref(name: String) Operand { return Operand.FuncRef(name) }
 
 pub type FunctionBuilder = struct {
     func: Function
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
 // Start a new function. `return_ty = null` is void return. Add params via `.param(ty)` before
 // calling `.entry()`.
-pub fn function(name: String, return_ty: IrType?, allocator: &Allocator? = null) FunctionBuilder {
+pub fn function(
+    name: String,
+    return_ty: IrType?,
+    allocator: &Allocator = context.allocator,
+) FunctionBuilder {
     let params: List(BlockParam) = list(0, allocator)
     let blocks: List(Block) = list(0, allocator)
     let labels: List(OwnedString) = list(0, allocator)

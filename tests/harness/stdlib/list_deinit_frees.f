@@ -17,12 +17,12 @@ import std.io.print
 import std.string
 
 fn main() i32 {
-    let c = counting_allocator(global())
+    let c = counting_allocator(context.allocator)
     let a = c.allocator()
 
-    let xs: List(OwnedString) = list(2, Some(&a))
-    xs.push(from_view("hello", Some(&a)))
-    xs.push(from_view("world", Some(&a)))
+    let xs: List(OwnedString) = list(2, &a)
+    xs.push(from_view("hello", &a))
+    xs.push(from_view("world", &a))
     xs.deinit()
     print("deallocs=")
     println(c.deallocs)

@@ -8,46 +8,15 @@ import std.option
 // For the colocated test blocks' assertions only - no shipped code here depends on std.test.
 import std.test
 
-// The allocator an omitted `&Allocator?` argument resolves to. `set_global_allocator` is the only
-// writer; `global()` and `or_global` are the readers. Null means "nobody has installed one", which
-// is also the state the global's zeroed storage is in before any initializer runs. That matters:
-// constant initializers allocate, they run in module registration order, and one ordered ahead of
-// this module would otherwise read an uninitialized pointer out of the slot.
-type GlobalSlot = struct {
-    current: &Allocator?
-}
+// The allocator code allocates through when it names none (RFC-038): every allocator parameter
+// defaults to it, and a null `&Allocator` resolves to it at the allocation functions. A process
+// starts on the global (malloc) allocator; a scope picks another by rebinding it.
+pub context allocator: &Allocator = &global_allocator
 
-const global_slot = GlobalSlot { current = null }
-
-// Install `a` as the process-wide default and return the allocator it replaced, so a caller can
-// scope the change:
-//
-//     const prev = set_global_allocator(&mine)
-//     defer { let _ = set_global_allocator(prev) }
-//
-// There is no way to unset: the default is always some allocator, and restoring means holding the
-// instance this returned.
-//
-// ponytail: one process-wide slot, no synchronization. FLang has no threads yet; when it does this
-// wants to become thread-local, with the process-wide value as the initial value of each thread's.
-pub fn set_global_allocator(a: &Allocator) &Allocator {
-    // A `const` binding cannot be assigned through, but a reference to one addresses the global's
-    // storage directly, and that storage is writable. Same mechanism the tracking allocators use to
-    // keep their state.
-    let slot = &global_slot
-    const prev = slot.current.unwrap_or(&global_allocator)
-    slot.current = Some(a)
-    return prev
-}
-
-// The allocator currently installed as the default.
-pub fn global() &Allocator {
-    return global_slot.current.unwrap_or(&global_allocator)
-}
-
-pub fn or_global(alloc: &Allocator?) &Allocator {
-    return alloc.unwrap_or(global())
-}
+// The allocator for memory nothing frees on its own: it is reclaimed all at once when the scope
+// that rebinds this field resets it - a request in a server, a frame in a game, a test. Under the
+// default, the global allocator, such memory is never reclaimed.
+pub context temp_allocator: &Allocator = &global_allocator
 
 // =============================================================================
 // Allocator - interface for memory management
@@ -80,10 +49,10 @@ pub type Allocator = struct {
     vtable: &AllocatorVTable
 }
 
-// Maps a null `&Allocator` to the global allocator (spec §4.1), so a zero-initialised holder of one
-// allocates and frees through the global.
+// Maps a null `&Allocator` to the current context's allocator (spec §4.1), so a zero-initialised
+// holder of one allocates and frees through whichever is current at each call.
 fn resolved(allocator: &Allocator) &Allocator {
-    return if allocator == 0usize as &Allocator { global() } else { allocator }
+    return if allocator == 0usize as &Allocator { context.allocator } else { allocator }
 }
 
 // Allocate `size` bytes with given `alignment`.
@@ -177,7 +146,7 @@ const global_allocator_vtable = AllocatorVTable {
 const global_allocator_state = GlobalAllocatorState { _unused = 0 }
 
 // The malloc/free allocator every process starts out defaulting to. Private on purpose: code that
-// wants "the default" asks `global()`, which honours whatever is installed, so a decorator wrapping
+// wants "the default" reads `context.allocator`, which honours a rebind, so a decorator wrapping
 // the default (a leak tracker, a counting allocator) is not bypassed by a direct reference here.
 const global_allocator = Allocator {
     impl = &global_allocator_state as &u8,
@@ -293,24 +262,22 @@ pub fn reset_counts(state: &CountingAllocator) {
     state.deallocs = 0
 }
 
-test "an installed global allocator is what or_global resolves to" {
-    let c = counting_allocator(global())
+test "a null allocator resolves to the current context's" {
+    let c = counting_allocator(context.allocator)
     let a = c.allocator()
-
-    const prev = set_global_allocator(&a)
-    const mine: &Allocator? = null
-    const resolved = mine.or_global()
-    const _block = resolved.alloc(64, 8).unwrap()
-    assert_eq(c.allocs, 1 as usize, "an omitted allocator reached the installed one")
-    resolved.dealloc(_block, 8)
-
-    const restored = set_global_allocator(prev)
-    assert_true(restored.impl == (&a).impl, "the swap returns what it replaced")
-    assert_true(global().impl == prev.impl, "and the previous one is back")
+    const none = 0usize as &Allocator
+    context(allocator = &a) {
+        const block = none.alloc(64, 8).unwrap()
+        assert_eq(c.allocs, 1 as usize, "the rebound allocator served it")
+        none.dealloc(block, 8)
+    }
+    const outside = none.alloc(8, 8).unwrap()
+    none.dealloc(outside, 8)
+    assert_eq(c.allocs, 1 as usize, "outside the rebind the default serves it")
 }
 
 test "a counting decorator tracks live bytes back to zero" {
-    let c = counting_allocator(global())
+    let c = counting_allocator(context.allocator)
     let a = c.allocator()
 
     const one = a.alloc(100, 8).unwrap()
@@ -332,7 +299,7 @@ test "a counting decorator tracks live bytes back to zero" {
 test "a decorator sees an arena's pages through its backing" {
     // An arena frees its pages through its BACKING allocator, so that is where a decorator has to
     // sit to see the arena's footprint go to zero.
-    let c = counting_allocator(global())
+    let c = counting_allocator(context.allocator)
     let backing = c.allocator()
     let arena = arena_allocator(&backing, 4096)
     let a = arena.allocator()

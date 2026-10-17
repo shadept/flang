@@ -28,7 +28,7 @@ pub fn deinit(self: move Scheme) {
 }
 
 // An independent copy: the quantified set is rebuilt, the body handle shared.
-pub fn clone(self: &Scheme, allocator: &Allocator? = null) Scheme {
+pub fn clone(self: &Scheme, allocator: &Allocator = context.allocator) Scheme {
     let q: Set(VarId) = set(allocator)
     for v in self.quantified {
         q.add(v)
@@ -38,7 +38,7 @@ pub fn clone(self: &Scheme, allocator: &Allocator? = null) Scheme {
 
 // Construct a monomorphic scheme around `body`. `allocator` is used only for the empty `quantified`
 // set's lazy backing storage.
-pub fn mono(body: Ty, allocator: &Allocator? = null) Scheme {
+pub fn mono(body: Ty, allocator: &Allocator = context.allocator) Scheme {
     let q: Set(VarId) = set(allocator)
     return .{ quantified = move q, body = body }
 }

@@ -44,7 +44,7 @@ pub type Parser = struct {
     position: usize
     // Backs every CST node's child list. Stored as-passed (`null` = global allocator) and forwarded
     // to the optional allocator slots of lists and Tokens; leaves that allocate resolve it per use.
-    allocator: &Allocator?
+    allocator: &Allocator
     // Accumulated parse-time diagnostics. The parser never throws - it records an error here,
     // recovers, and keeps going. Callers may read after `parse_module()`.
     diagnostics: List(Diagnostic)
@@ -63,7 +63,11 @@ pub type Parser = struct {
 // reference the original tokens, so `tokens` must outlive the produced tree. `allocator` backs
 // every CST child list and the diagnostics list; pass `null` to default to the global allocator
 // (resolved per use at the allocation leaves).
-pub fn parser(tokens: move List(Token), source: String, allocator: &Allocator? = null) Parser {
+pub fn parser(
+    tokens: move List(Token),
+    source: String,
+    allocator: &Allocator = context.allocator,
+) Parser {
     return .{
         tree = cst(tokens, source, allocator),
         scratch = list(64, allocator),

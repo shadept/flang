@@ -80,12 +80,12 @@ pub fn parse_template_body(
     alloc: &Allocator,
     diags: &List(Diagnostic),
 ) List(TemplateNode) {
-    let lx = lexer(body, Some(alloc))
+    let lx = lexer(body, alloc)
     const tokens = lx.tokenize()
     // The parser takes the token list; this one keeps a copy of its own for the template scan.
-    let own_tokens: List(Token) = list(tokens.len, Some(alloc))
+    let own_tokens: List(Token) = list(tokens.len, alloc)
     own_tokens.push_all(tokens.as_slice())
-    let p = parser(tokens, body, Some(alloc))
+    let p = parser(tokens, body, alloc)
     p.set_file_id(file_id)
     let tp: TemplateParser = .{
         body = body,
@@ -97,7 +97,7 @@ pub fn parse_template_body(
         diags = diags,
         cursor = 0,
     }
-    let out: List(TemplateNode) = list(0, Some(alloc))
+    let out: List(TemplateNode) = list(0, alloc)
     const stop = tp.parse_nodes(0, &out)
     if stop < tp.tokens.len and tp.tokens[stop].kind == TokenKind.CloseBrace {
         tp.error_at(stop, "E1002", $"unbalanced closing brace in template body")
@@ -234,7 +234,7 @@ fn parse_for(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
     self.parser.seek(i + 4)
     const cst = self.parser.tree.node_at(self.parser.parse_condition_expression())
     const iterable = project_expression(cst, self.file_id, self.alloc)
-    let body: List(TemplateNode) = list(0, Some(self.alloc))
+    let body: List(TemplateNode) = list(0, self.alloc)
     const after = self.parse_braced_body(self.parser.token_index(), &body)
     out.push(
         TemplateNode.Loop(
@@ -250,9 +250,9 @@ fn parse_if(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
     self.parser.seek(i + 2)
     const cst = self.parser.tree.node_at(self.parser.parse_condition_expression())
     const cond = project_expression(cst, self.file_id, self.alloc)
-    let body: List(TemplateNode) = list(0, Some(self.alloc))
+    let body: List(TemplateNode) = list(0, self.alloc)
     let after = self.parse_braced_body(self.parser.token_index(), &body)
-    let else_body: List(TemplateNode) = list(0, Some(self.alloc))
+    let else_body: List(TemplateNode) = list(0, self.alloc)
     if self.kind_at(after) == TokenKind.Hash and self.is_elif(after + 1) {
         // Parse the `#elif` exactly like `#if`; it nests as the sole else node.
         self.cursor = self.tokens[after].offset
@@ -299,12 +299,12 @@ fn parse_string_holes(self: &TemplateParser, tok: Token, out: &List(TemplateNode
         if hole > local {
             out.push(TemplateNode.Verbatim(text[local..hole]))
         }
-        let lx = lexer(self.body, Some(self.alloc), tok.offset + hole + 2)
+        let lx = lexer(self.body, self.alloc, tok.offset + hole + 2)
         const toks = lx.tokenize()
         // The parser takes the list; the bounds check below reads a copy of its own.
-        let scan: List(Token) = list(toks.len, Some(self.alloc))
+        let scan: List(Token) = list(toks.len, self.alloc)
         scan.push_all(toks.as_slice())
-        let p = parser(toks, self.body, Some(self.alloc))
+        let p = parser(toks, self.body, self.alloc)
         p.set_file_id(self.file_id)
         const cst = p.tree.node_at(p.parse_expression())
         const e = project_expression(cst, self.file_id, self.alloc)
@@ -351,7 +351,7 @@ fn expand_node(env: &CtEnv, node: &TemplateNode, sb: &StringBuilder) Result((), 
         Interp(it) => {
             const v = ct_eval(env, &it.expr)?
             if it.in_string {
-                let tmp = string_builder(16, Some(env.alloc))
+                let tmp = string_builder(16, env.alloc)
                 ct_stringify(&v, &tmp)
                 append_string_escaped(sb, tmp.as_view())
             } else {
@@ -423,10 +423,10 @@ fn test_no_lookup(ctx: &u8, name: String) &TypeDecl? {
 }
 
 fn expand_for_test(body: String, env: &CtEnv, alloc: &Allocator) OwnedString {
-    let diags: List(Diagnostic) = list(0, Some(alloc))
+    let diags: List(Diagnostic) = list(0, alloc)
     const nodes = parse_template_body(body, 0, 0, alloc, &diags)
     assert_true(diags.len == 0, "template parse error")
-    let sb = string_builder(64, Some(alloc))
+    let sb = string_builder(64, alloc)
     expand_template(env, &nodes, &sb) match {
         Ok(_) => {}
         Err(e) => assert_true(false, e.code)
@@ -435,10 +435,10 @@ fn expand_for_test(body: String, env: &CtEnv, alloc: &Allocator) OwnedString {
 }
 
 test "template: #for over a bound list with #(x) and \"#(x)\"" {
-    let backing = arena_allocator(or_global(null))
+    let backing = arena_allocator(context.allocator)
     let a = backing.allocator()
     let env = test_env(&a)
-    let names: List(CtValue) = list(3, Some(&a))
+    let names: List(CtValue) = list(3, &a)
     names.push(CtValue.S("x"))
     names.push(CtValue.S("y"))
     names.push(CtValue.S("z"))
@@ -457,7 +457,7 @@ test "template: #for over a bound list with #(x) and \"#(x)\"" {
 }
 
 test "template: #if / #elif / #else on the closed context and bindings" {
-    let backing = arena_allocator(or_global(null))
+    let backing = arena_allocator(context.allocator)
     let a = backing.allocator()
     let env = test_env(&a)
     env.bindings["n"] = CtValue.I(2)
@@ -471,7 +471,7 @@ test "template: #if / #elif / #else on the closed context and bindings" {
 }
 
 test "template: string-literal hole escapes its value" {
-    let backing = arena_allocator(or_global(null))
+    let backing = arena_allocator(context.allocator)
     let a = backing.allocator()
     let env = test_env(&a)
     env.bindings["q"] = CtValue.S("say \"hi\"")

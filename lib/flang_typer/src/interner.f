@@ -164,7 +164,7 @@ pub type TypeInterner = struct {
     // ponytail: measurement scaffolding for the RFC-024 key rework; drop once the numbers land.
     n_calls: usize
     n_hits: usize
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
 // Default capacity of the per-node arrays, from measured checks: a stdlib-bound check of a trivial
@@ -176,14 +176,14 @@ const SEED_CAPACITY: usize = 32768
 // The fixed leaves `type_interner` seeds: void, never, <error>, 14 prims.
 const SEED_LEN: usize = 17
 
-pub fn type_interner(allocator: &Allocator? = null) TypeInterner {
+pub fn type_interner(allocator: &Allocator = context.allocator) TypeInterner {
     return type_interner(allocator, SEED_CAPACITY)
 }
 
 // `capacity` sizes the per-node arrays. The one-argument form uses a default that fits a real
 // check; pass 0 for a table that only stands in for one (an empty result, an engine that has handed
 // its table away).
-pub fn type_interner(allocator: &Allocator?, capacity: usize) TypeInterner {
+pub fn type_interner(allocator: &Allocator, capacity: usize) TypeInterner {
     let self = TypeInterner {
         nodes = list(capacity, allocator),
         children = list(capacity, allocator),
@@ -452,7 +452,7 @@ pub fn nominal_of(self: &TypeInterner, id: NominalId, args: &List(Ty)) Ty {
 
 // `ty` with every variable in `subst` replaced by its mapping, re-interned. Variables not in the
 // map stay; a type citing none is returned as is.
-pub fn substitute(self: &TypeInterner, ty: Ty, subst: &Dict(VarId, Ty), alloc: &Allocator?) Ty {
+pub fn substitute(self: &TypeInterner, ty: Ty, subst: &Dict(VarId, Ty), alloc: &Allocator) Ty {
     return self.node(ty) match {
         NVar(v) => subst.get(v.id) match {
             Some(rep) => rep
@@ -472,7 +472,7 @@ fn substitute_span(
     self: &TypeInterner,
     span: ChildSpan,
     subst: &Dict(VarId, Ty),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) List(Ty) {
     let out: List(Ty) = list(span.len, alloc)
     for i in 0..span.len {
@@ -485,7 +485,7 @@ fn substitute_func(
     self: &TypeInterner,
     f: &NFuncNode,
     subst: &Dict(VarId, Ty),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Ty {
     let ps = substitute_span(self, f.params, subst, alloc)
     defer ps.deinit()
@@ -496,7 +496,7 @@ fn substitute_tuple(
     self: &TypeInterner,
     span: ChildSpan,
     subst: &Dict(VarId, Ty),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Ty {
     let es = substitute_span(self, span, subst, alloc)
     defer es.deinit()
@@ -507,7 +507,7 @@ fn substitute_record(
     self: &TypeInterner,
     rec: &NRecordNode,
     subst: &Dict(VarId, Ty),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Ty {
     let fs: List(Field) = list(rec.tys.len, alloc)
     defer fs.deinit()
@@ -526,7 +526,7 @@ fn substitute_nominal(
     self: &TypeInterner,
     nn: &NNominalNode,
     subst: &Dict(VarId, Ty),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Ty {
     let as_ = substitute_span(self, nn.args, subst, alloc)
     defer as_.deinit()
@@ -738,9 +738,9 @@ test "format renders through the node graph" {
 }
 
 test "a duplicate allocates nothing lasting; teardown returns the storage" {
-    let c = counting_allocator(global())
+    let c = counting_allocator(context.allocator)
     let a = c.allocator()
-    let it = type_interner(Some(&a))
+    let it = type_interner(&a)
 
     let fields: List(Field) = list(1)
     fields.push(Field {

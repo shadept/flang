@@ -52,9 +52,9 @@ pub fn report(
     ctx: &ReportCtx,
     it: &TypeInterner,
     out: &List(Diagnostic),
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) {
-    let alloc = allocator.or_global()
+    let alloc = allocator
     outcome.* match {
         Unified(_) => {}
         UniMismatch(m) => report_mismatch(&m, ctx, it, out, alloc)
@@ -93,7 +93,7 @@ fn report_occurs(
     out: &List(Diagnostic),
     alloc: &Allocator,
 ) {
-    let sb = string_builder(64, Some(alloc))
+    let sb = string_builder(64, alloc)
     sb.append("recursive type: variable ?")
     sb.append(o.var_id)
     sb.append(" occurs inside ")
@@ -110,7 +110,7 @@ fn report_occurs(
 }
 
 fn report_arity(a: &ArityDetails, ctx: &ReportCtx, out: &List(Diagnostic), alloc: &Allocator) {
-    let sb = string_builder(64, Some(alloc))
+    let sb = string_builder(64, alloc)
     sb.append(arity_label(a.what))
     sb.append(" mismatch: expected ")
     sb.append(a.expected)
@@ -137,7 +137,7 @@ fn report_prim_constraint(
     out: &List(Diagnostic),
     alloc: &Allocator,
 ) {
-    let sb = string_builder(64, Some(alloc))
+    let sb = string_builder(64, alloc)
     sb.append("type mismatch: expected one of ")
     let written = 0usize
     for i in 0..14u32 {
@@ -174,7 +174,7 @@ fn format_mismatch(
     it: &TypeInterner,
     alloc: &Allocator,
 ) OwnedString {
-    let sb = string_builder(64, Some(alloc))
+    let sb = string_builder(64, alloc)
     sb.append("type mismatch: expected `")
     format_with_names(it, m.expected, &sb, ctx.nominals)
     sb.append("`, got `")

@@ -72,10 +72,10 @@ pub type TemplateState = struct {
     syntax: Dict(OwnedString, DeclRef)
     chunk_modules: List(Module)
     emitted: List(EmittedFile)
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
-pub fn template_state(allocator: &Allocator? = null) TemplateState {
+pub fn template_state(allocator: &Allocator = context.allocator) TemplateState {
     return .{
         defs = dict(allocator),
         syntax = dict(allocator),
@@ -92,7 +92,7 @@ pub type TemplateOutput = struct {
     emitted: List(EmittedFile)
 }
 
-pub fn empty_template_output(allocator: &Allocator? = null) TemplateOutput {
+pub fn empty_template_output(allocator: &Allocator = context.allocator) TemplateOutput {
     return .{ chunk_modules = list(0, allocator), emitted = list(0, allocator) }
 }
 
@@ -316,7 +316,7 @@ fn expand_one(
     }
 
     // Everything produced while expanding this one invocation lives here.
-    let arena = arena_allocator(chk.allocator.or_global())
+    let arena = arena_allocator(chk.allocator)
     defer arena.deinit()
     let a = arena.allocator()
 
@@ -337,7 +337,7 @@ fn expand_one(
     for p in 0..def.params.len {
         const param = def.params[p]
         if param.variadic {
-            let rest: List(CtValue) = list(inv.args.len - p, Some(&a))
+            let rest: List(CtValue) = list(inv.args.len - p, &a)
             for i in p..inv.args.len {
                 bind_arg(chk, &env, &param, &inv.args[i], inv.name, &a) match {
                     Ok(v) => rest.push(v)
@@ -354,7 +354,7 @@ fn expand_one(
     }
 
     // Parse the body and expand.
-    let parse_diags: List(Diagnostic) = list(0, Some(&a))
+    let parse_diags: List(Diagnostic) = list(0, &a)
     const nodes = parse_template_body(def.body, def.base, def.file_id, &a, &parse_diags)
     if parse_diags.len > 0 {
         for d in parse_diags.drain() {
@@ -465,8 +465,8 @@ fn bind_arg(
                 const named: TypeExpr = TypeExpr.Named(NamedType {
                     span = id.span,
                     name = id.name,
-                    generic_args = frozen(list(0, Some(a))),
-                    assoc_args = frozen(list(0, Some(a))),
+                    generic_args = frozen(list(0, a)),
+                    assoc_args = frozen(list(0, a)),
                 })
                 Ok(CtValue.TypeInfo(type_info_of(env, box(a, named))))
             }
@@ -549,7 +549,7 @@ fn parse_chunk(chk: &Checker, text: String, file_id: i32) Module {
     return module
 }
 
-fn emitted_for(state: &TemplateState, allocator: &Allocator?, origin_path: String) &EmittedFile {
+fn emitted_for(state: &TemplateState, allocator: &Allocator, origin_path: String) &EmittedFile {
     for i in 0..state.emitted.len {
         if state.emitted[i].origin_path == origin_path {
             return &state.emitted[i]

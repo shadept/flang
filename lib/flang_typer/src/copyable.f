@@ -32,7 +32,7 @@ pub fn is_copyable_ty(
     it: &TypeInterner,
     reg: &NominalRegistry,
     ty: Ty,
-    alloc: &Allocator?,
+    alloc: &Allocator,
     rigid: &Dict(VarId, bool)? = null,
 ) bool {
     return it.node(ty) match {
@@ -54,7 +54,7 @@ fn copyable_span(
     it: &TypeInterner,
     reg: &NominalRegistry,
     span: ChildSpan,
-    alloc: &Allocator?,
+    alloc: &Allocator,
     rigid: &Dict(VarId, bool)?,
 ) bool {
     for i in 0..span.len {
@@ -70,7 +70,7 @@ fn copyable_nominal(
     reg: &NominalRegistry,
     ty: Ty,
     nn: &NNominalNode,
-    alloc: &Allocator?,
+    alloc: &Allocator,
     rigid: &Dict(VarId, bool)?,
 ) bool {
     return reg.get(nn.id).* match {
@@ -85,7 +85,7 @@ fn copyable_struct(
     ty: Ty,
     sd: &StructDef,
     nn: &NNominalNode,
-    alloc: &Allocator?,
+    alloc: &Allocator,
     rigid: &Dict(VarId, bool)?,
 ) bool {
     for i in 0..sd.fields.len {
@@ -110,7 +110,7 @@ fn copyable_enum(
     ty: Ty,
     ed: &EnumDef,
     nn: &NNominalNode,
-    alloc: &Allocator?,
+    alloc: &Allocator,
     rigid: &Dict(VarId, bool)?,
 ) bool {
     let subst = reg.instance_subst(ty, &ed.type_params, &ed.assoc_params, nn.args, it, alloc)

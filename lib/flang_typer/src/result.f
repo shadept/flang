@@ -111,7 +111,7 @@ pub fn no_phases() CheckPhases {
 // as a bug, not silently fall back to a fresh var. An empty result - every table empty, registries
 // fresh. Handed back when a source failed to parse and was never type-checked. The interner is a
 // zero-capacity stand-in: nothing resolves through an empty result.
-pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
+pub fn empty_result(allocator: &Allocator = context.allocator) TypeCheckResult {
     return .{
         node_types = dict(allocator),
         interner = type_interner(allocator, 0),

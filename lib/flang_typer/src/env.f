@@ -50,9 +50,9 @@ pub type TypeEnv = struct {
     floor: usize
 }
 
-pub fn type_env(allocator: &Allocator? = null) TypeEnv {
+pub fn type_env(allocator: &Allocator = context.allocator) TypeEnv {
     let out: TypeEnv
-    out.allocator = allocator.or_global()
+    out.allocator = allocator
     let initial: Scope
     out.scopes.push(initial, out.allocator)
     return out

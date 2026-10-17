@@ -457,7 +457,7 @@ pub type Checker = struct {
     slot_new_specs: List(SpecId)
     site_log_on: bool
 
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
 // One module's cached diagnostics from the carried tiers. `bodies` covers the slot's capture window
@@ -723,7 +723,7 @@ type PendingFnName = struct {
     module: String?
 }
 
-pub fn checker(allocator: &Allocator? = null) Checker {
+pub fn checker(allocator: &Allocator = context.allocator) Checker {
     return .{
         engine = engine(allocator),
         env = type_env(allocator),
@@ -1730,7 +1730,7 @@ fn collect_edges(
     paths: &List(String),
     imps: &List(String),
     reexps: &List(String),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) {
     for &d in m.decls {
         d.* match {
@@ -1763,7 +1763,7 @@ fn compute_visible(
     imports: &List(List(String)),
     reexports: &List(List(String)),
     out: &Set(String),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) {
     out.add(paths[idx])
     let work: List(String) = list(0, alloc)
@@ -1790,7 +1790,7 @@ fn compute_visible(
     work.deinit()
 }
 
-pub fn dot_join(segs: String[], alloc: &Allocator?) OwnedString {
+pub fn dot_join(segs: String[], alloc: &Allocator) OwnedString {
     let sb = string_builder(0, alloc)
     defer sb.deinit()
     for i in 0..segs.len {
@@ -2473,7 +2473,6 @@ fn collect_one_signature(self: &Checker, decl: &Decl) {
     decl.* match {
         Function(fd) => register_function_sig(self, &fd)
         Const(cd) => register_constant(self, &cd)
-        Context(cd) => register_context_field(self, &cd)
         _ => {}
     }
 }
@@ -2522,6 +2521,16 @@ fn register_constant(self: &Checker, cd: &ConstDecl) {
         return
     }
     self.constants.register(fqn, ty)
+}
+
+fn register_context_fields(self: &Checker, module: &Module, module_path: String) {
+    self.current_module = Some(module_path)
+    for &decl in module.decls {
+        decl.* match {
+            Context(cd) => register_context_field(self, &cd)
+            _ => {}
+        }
+    }
 }
 
 // A `context` declaration registers its declared type (RFC-038). The type has to be copyable: the
@@ -6097,7 +6106,7 @@ fn parse_decimal(s: String) usize? {
 // whatever `to_string` returns - resolved, not assumed. The block is stored in `results.desugars`
 // keyed by the interpolation node; lowering replays it instead of the original node.
 //
-//   $"a{x}b"       => { let __interp_sb_N = string_builder(0, null)
+//   $"a{x}b"       => { let __interp_sb_N = string_builder(0)
 //                       defer __interp_sb_N.deinit()
 //                       __interp_sb_N.append("a")
 //                       __interp_sb_N.append(x)
@@ -6145,7 +6154,7 @@ fn check_interp_owned(self: &Checker, interp: &InterpolatedStringExpr, given: Ex
 
     let empty_args: List(CallArgument) = list(0, self.allocator)
     const done = synth_method_call(self, name, "to_string", empty_args)
-    let block = box(or_global(self.allocator), BlockExpr {
+    let block = box(self.allocator, BlockExpr {
         span = synth_span(self),
         stmts = frozen(stmts),
         trailing = Some(synth_box(self, done)),
@@ -6177,7 +6186,7 @@ fn check_interp_into(self: &Checker, interp: &InterpolatedStringExpr, target: &E
 
     let stmts: List(Stmt) = list(interp.parts.len, self.allocator)
     push_append_stmts(self, &stmts, tname, interp)
-    let block = box(or_global(self.allocator), BlockExpr {
+    let block = box(self.allocator, BlockExpr {
         span = synth_span(self),
         stmts = frozen(stmts),
         trailing = null,
@@ -6270,19 +6279,13 @@ fn builder_ctor_args(self: &Checker, given: Expr[]) List(CallArgument) {
         const first = &given[0]
         const first_is_addr = first.* match { AddressOf(_) => true, _ => false }
         if given.len == 1 and first_is_addr {
-            alloc_arg = Some(wrap_some(self, first))
+            alloc_arg = Some(first)
         } else {
             cap = Some(first)
         }
     }
     if given.len >= 2 {
-        const second = &given[1]
-        const second_is_addr = second.* match { AddressOf(_) => true, _ => false }
-        if second_is_addr {
-            alloc_arg = Some(wrap_some(self, second))
-        } else {
-            alloc_arg = Some(second)
-        }
+        alloc_arg = Some(&given[1])
     }
 
     let out: List(CallArgument) = list(2, self.allocator)
@@ -6291,19 +6294,12 @@ fn builder_ctor_args(self: &Checker, given: Expr[]) List(CallArgument) {
         None => synth_box(self, synth_int_lit(self, "0"))
     }
     out.push(CallArgument.Positional(cap_e))
-    const alloc_e = alloc_arg match {
-        Some(e) => e
-        None => synth_box(self, synth_null(self))
+    // No allocator given leaves the parameter's default: the context's.
+    alloc_arg match {
+        Some(e) => out.push(CallArgument.Positional(e))
+        None => {}
     }
-    out.push(CallArgument.Positional(alloc_e))
     return out
-}
-
-// `Some(e)` around an argument the caller keeps, as a node of its own.
-fn wrap_some(self: &Checker, e: &Expr) &Expr {
-    let args: List(CallArgument) = list(1, self.allocator)
-    args.push(CallArgument.Positional(e))
-    return synth_box(self, synth_free_call(self, "Some", args))
 }
 
 // ── desugar synthesis helpers ────────────────────────────────────────
@@ -6333,7 +6329,7 @@ fn synth_span(self: &Checker) SourceSpan {
 // Synthesized nodes live as long as the check result - allocated on the global allocator and
 // deliberately leaked with it.
 fn synth_box(self: &Checker, e: move Expr) &Expr {
-    return box(or_global(self.allocator), e)
+    return box(self.allocator, e)
 }
 
 fn synth_ident(self: &Checker, name: String) Expr {
@@ -12671,7 +12667,7 @@ fn own_run(
     lent: move List(NodeId),
     captured: move List(NodeId),
     returns: bool,
-    slots: move List(NodeId) = list(0, null),
+    slots: move List(NodeId) = list(0),
 ) {
     // `slots` is moved into the pass below; its span is the body's, for the exit check.
     let p = OwnPass {
@@ -14779,6 +14775,14 @@ pub fn check_all(
     const signatures_start = monotonic_ns()
     const fns_before = self.functions.next_id
     self.engine.set_nominal_registry(&self.nominals)
+    // Context fields first, every module every demand: a signature's default value may read one
+    // declared further down or in a module checked later. A field re-registers at the id it held.
+    for i in seq {
+        self.ctx_fields.evict_module(paths[i])
+    }
+    for i in seq {
+        register_context_fields(self, &modules[i], paths[i])
+    }
     for i in seq {
         const skip = bodies_carry and !needs_collect(recollect, i)
             and sig_cache_ok(self, paths[i], self.engine.var_counter)
@@ -14791,7 +14795,6 @@ pub fn check_all(
         if recollect.is_some() {
             self.functions.retire_module(paths[i])
             self.constants.evict_module(paths[i])
-            self.ctx_fields.evict_module(paths[i])
         }
         run_signature_pass(self, &modules[i], paths[i], sources)
     }
@@ -16029,7 +16032,7 @@ fn snapshot_types(
     map: &FqnMap($V),
     retiring: &Set(String),
     ty_of: $F,
-    allocator: &Allocator?,
+    allocator: &Allocator,
 ) Dict(StrId, Ty) where F: fn(V) Ty {
     let out: Dict(StrId, Ty) = dict(allocator)
     for entry in map.entries {
@@ -16535,9 +16538,9 @@ fn redemand_errors(b_first: String, b_again: String, a_src: String) RedemandErro
     ps.push("a")
 
     let chk = checker()
-    let gen_srcs: List(OwnedString) = list(0, null)
-    let gen_fps: List(OwnedString) = list(0, null)
-    let gens = template_state(null)
+    let gen_srcs: List(OwnedString) = list(0)
+    let gen_fps: List(OwnedString) = list(0)
+    let gens = template_state()
     let res1 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
     const first = count_error_diags(&chk.diagnostics)
 
@@ -16550,7 +16553,7 @@ fn redemand_errors(b_first: String, b_again: String, a_src: String) RedemandErro
     let recollect: List(bool) = list(2)
     recollect.push(true)
     recollect.push(false)
-    let gens2 = template_state(null)
+    let gens2 = template_state()
     let res2 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens2, null, Some(&recollect))
     const second = count_error_diags(&chk.diagnostics)
 
@@ -16735,7 +16738,7 @@ test "a changed default value invalidates the carried slots" {
     fps.push(from_view("a"))
 
     let chk = checker()
-    let gens = template_state(null)
+    let gens = template_state()
     let res1 = check_all(&chk, &mods, &ps, &srcs, &fps, &gens)
     assert_eq(count_error_diags(&chk.diagnostics), 0 as usize, "the defaulted call type-checks")
     assert_true(!chk.defaults_changed, "a first demand flags nothing")
@@ -16752,7 +16755,7 @@ test "a changed default value invalidates the carried slots" {
     let recollect: List(bool) = list(2)
     recollect.push(true)
     recollect.push(false)
-    let gens2 = template_state(null)
+    let gens2 = template_state()
     let res2 = check_all(&chk, &mods, &ps, &srcs, &fps, &gens2, null, Some(&recollect))
     assert_eq(count_error_diags(&chk.diagnostics), 0 as usize, "the new value type-checks")
     assert_true(chk.defaults_changed, "the text comparison flags the changed default")
@@ -16832,9 +16835,9 @@ test "a carried specialization keeps its id across a clean re-demand" {
     ps.push("a")
 
     let chk = checker()
-    let gen_srcs: List(OwnedString) = list(0, null)
-    let gen_fps: List(OwnedString) = list(0, null)
-    let gens = template_state(null)
+    let gen_srcs: List(OwnedString) = list(0)
+    let gen_fps: List(OwnedString) = list(0)
+    let gens = template_state()
     let res1 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
     assert_eq(res1.specializations.len(), 1 as usize, "the call forces one specialization")
     const next1 = res1.specializations.next_id
@@ -16847,7 +16850,7 @@ test "a carried specialization keeps its id across a clean re-demand" {
     let recollect: List(bool) = list(2)
     recollect.push(true)
     recollect.push(false)
-    let gens2 = template_state(null)
+    let gens2 = template_state()
     let res2 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens2, null, Some(&recollect))
     assert_eq(count_error_diags(&chk.diagnostics), 0 as usize, "the re-demand stays clean")
     assert_eq(res2.specializations.len(), 1 as usize, "still exactly one specialization")
@@ -16874,9 +16877,9 @@ test "a removed call site sweeps its specialization" {
     ps.push("a")
 
     let chk = checker()
-    let gen_srcs: List(OwnedString) = list(0, null)
-    let gen_fps: List(OwnedString) = list(0, null)
-    let gens = template_state(null)
+    let gen_srcs: List(OwnedString) = list(0)
+    let gen_fps: List(OwnedString) = list(0)
+    let gens = template_state()
     let res1 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
     assert_eq(res1.specializations.len(), 1 as usize, "the call forces one specialization")
 
@@ -16888,7 +16891,7 @@ test "a removed call site sweeps its specialization" {
     let recollect: List(bool) = list(2)
     recollect.push(false)
     recollect.push(true)
-    let gens2 = template_state(null)
+    let gens2 = template_state()
     let res2 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens2, null, Some(&recollect))
     assert_eq(count_error_diags(&chk.diagnostics), 0 as usize, "the edited caller type-checks")
     assert_eq(
@@ -16916,9 +16919,9 @@ fn count_check_errors(srcs: String[], paths: String[]) usize {
     ps.push_all(paths)
 
     let chk = checker()
-    let gen_srcs: List(OwnedString) = list(0, null)
-    let gen_fps: List(OwnedString) = list(0, null)
-    let gens = template_state(null)
+    let gen_srcs: List(OwnedString) = list(0)
+    let gen_fps: List(OwnedString) = list(0)
+    let gens = template_state()
     let _res = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
     let errors = count_error_diags(&chk.diagnostics)
 
@@ -17338,12 +17341,12 @@ fn check_result_of(srcs: String[], paths: String[]) TypeCheckResult {
     let ps = list(paths.len)
     ps.push_all(paths)
     let chk = checker()
-    let gen_srcs: List(OwnedString) = list(0, null)
-    let gen_fps: List(OwnedString) = list(paths.len, null)
+    let gen_srcs: List(OwnedString) = list(0)
+    let gen_fps: List(OwnedString) = list(paths.len)
     for i in 0..paths.len {
         gen_fps.push(from_view(paths[i]))
     }
-    let gens = template_state(null)
+    let gens = template_state()
     return check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
 }
 

@@ -83,7 +83,7 @@ pub type LayoutCache = struct {
     entries: List(Layout)
 }
 
-pub fn layout_cache(allocator: &Allocator? = null) LayoutCache {
+pub fn layout_cache(allocator: &Allocator = context.allocator) LayoutCache {
     return .{ entries = list(0, allocator) }
 }
 
@@ -126,7 +126,7 @@ pub fn layout_of(
     ty: Ty,
     reg: &NominalRegistry,
     cache: &LayoutCache? = null,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Layout {
     return layout_rec(it, ty, reg, cache, allocator)
 }
@@ -139,7 +139,7 @@ pub fn struct_layout(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache? = null,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) StructLayout {
     return struct_layout_impl(it, def, args, reg, cache, allocator)
 }
@@ -151,7 +151,7 @@ pub fn enum_layout(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache? = null,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) EnumLayout {
     return enum_layout_impl(it, def, args, reg, cache, allocator)
 }
@@ -237,7 +237,7 @@ fn layout_rec(
     ty: Ty,
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Layout {
     let hit = cache_get(cache, ty)
     if hit.is_some() {
@@ -287,7 +287,7 @@ fn array_layout(
     a: &NArrayNode,
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Layout {
     let el = layout_rec(it, a.elem, reg, cache, alloc)
     return lay(el.size * a.length, el.align)
@@ -302,7 +302,7 @@ fn fields_layout(
     repr: Repr,
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) StructLayout {
     let n = tys.len
     let fls: List(Layout) = list(n, alloc)
@@ -337,7 +337,7 @@ fn fields_layout(
 // of its own alignment, this packs each field at its natural offset with zero internal padding -
 // the minimal-size layout. Alignments are powers of two, so a halving scan from `max_align` down to
 // 1 buckets them without a sort.
-fn field_order(fls: &List(Layout), repr: Repr, max_align: usize, alloc: &Allocator?) List(usize) {
+fn field_order(fls: &List(Layout), repr: Repr, max_align: usize, alloc: &Allocator) List(usize) {
     let n = fls.len
     let order: List(usize) = list(n, alloc)
     let is_c = repr match { C => true, Auto => false }
@@ -368,7 +368,7 @@ pub fn tuple_layout(
     elems: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache? = null,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) StructLayout {
     return fields_layout(it, elems, Repr.Auto, reg, cache, allocator)
 }
@@ -380,7 +380,7 @@ fn span_size(
     span: ChildSpan,
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Layout {
     let tys: List(Ty) = list(span.len, alloc)
     for i in 0..span.len { tys.push(it.child_at(span, i)) }
@@ -394,7 +394,7 @@ fn aggregate_size(
     elems: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Layout {
     let sl = fields_layout(it, elems, Repr.Auto, reg, cache, alloc)
     let r = lay(sl.size, sl.align)
@@ -407,7 +407,7 @@ fn nominal_layout(
     nn: &NNominalNode,
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Layout {
     let args: List(Ty) = list(nn.args.len, alloc)
     defer args.deinit()
@@ -444,7 +444,7 @@ fn struct_size(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Layout {
     let sl = struct_layout_impl(it, def, args, reg, cache, alloc)
     let r = lay(sl.size, sl.align)
@@ -458,7 +458,7 @@ fn enum_size(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Layout {
     let el = enum_layout_impl(it, def, args, reg, cache, alloc)
     return lay(el.size, el.align)
@@ -472,7 +472,7 @@ fn struct_layout_impl(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) StructLayout {
     let tys: List(Ty) = list(def.fields.len, alloc)
     for i in 0..def.fields.len {
@@ -507,7 +507,7 @@ pub fn variant_payload_offsets(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache? = null,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) List(usize) {
     let el = enum_layout(it, def, args, reg, cache, allocator)
     let v = &def.variants[vnum]
@@ -539,7 +539,7 @@ fn enum_layout_impl(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) EnumLayout {
     if is_option_niche(it, def, args) {
         return .{ size = 8, align = 8, tag_size = 0, payload_offset = 0, is_niche = true }

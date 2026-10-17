@@ -479,7 +479,7 @@ pub fn render_ty(
     result: &TypeCheckResult,
     ty: Ty,
     vars: &Dict(VarId, String)? = null,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) OwnedString {
     let sb = string_builder(32, allocator)
     let reg: &NominalRegistry? = Some(&result.nominals)
@@ -543,7 +543,7 @@ pub fn same_target(a: &ResolvedTarget, b: &ResolvedTarget) bool {
 pub fn reference_spans(
     result: &TypeCheckResult,
     target: &ResolvedTarget,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) List(SourceSpan) {
     let out: List(SourceSpan) = list(8, allocator)
     for e in result.resolved_targets.iter() {

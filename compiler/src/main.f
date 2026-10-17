@@ -116,9 +116,9 @@ pub fn deinit(self: move BuildOpts) {
 
 // The compiler's own allocation ledger, wrapped around the global allocator under `--stats`. It
 // sits at file scope because every readout is reached through a different call path and the
-// decorator has to outlive all of them. Without `--stats` nothing is installed and the global
-// allocator is called directly.
-const alloc_counter = counting_allocator(global())
+// decorator has to outlive all of them. `main` rebinds `context.allocator` to it under `--stats`;
+// otherwise the global allocator is called directly.
+const alloc_counter = counting_allocator(context.allocator)
 const counted_global = allocator(&alloc_counter)
 
 pub fn main() i32 {
@@ -127,11 +127,18 @@ pub fn main() i32 {
     const argv = args.as_slice()
 
     let cli = parse_cli(argv)
-    // Everything after this point allocates through the ledger; argv above is the only exception.
-    if cli.stats {
-        let _prev = set_global_allocator(&counted_global)
+    // Everything the command does allocates through the ledger; argv and the parsed command line
+    // are the only exceptions.
+    const code = if cli.stats {
+        context(allocator = &counted_global) { dispatch(argv, &cli) }
+    } else {
+        dispatch(argv, &cli)
     }
+    cli.args.deinit()
+    return code
+}
 
+fn dispatch(argv: String[], cli: &Cli) i32 {
     if cli.show_help {
         print_help()
         return 0
@@ -144,19 +151,16 @@ pub fn main() i32 {
         print_help()
         return 1
     }
-
-    const code = cli.subcommand match {
-        "build" => run_build(argv, &cli)
-        "test" => run_test(argv, &cli)
-        "check" => run_check(argv, &cli)
-        "fmt" => run_fmt(&cli)
-        "lsp" => run_lsp(argv, &cli)
-        "cst" => spawn_tool("cst_explorer", &cli)
-        "tokens" => spawn_tool("dump_tokens", &cli)
+    return cli.subcommand match {
+        "build" => run_build(argv, cli)
+        "test" => run_test(argv, cli)
+        "check" => run_check(argv, cli)
+        "fmt" => run_fmt(cli)
+        "lsp" => run_lsp(argv, cli)
+        "cst" => spawn_tool("cst_explorer", cli)
+        "tokens" => spawn_tool("dump_tokens", cli)
         else => unknown_subcommand(cli.subcommand)
     }
-    cli.args.deinit()
-    return code
 }
 
 // CLI parsing

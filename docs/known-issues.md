@@ -156,9 +156,13 @@ application check are in. Not yet:
 
 The language mechanism, the calling convention and the root context are in. Not yet:
 
-- **The stdlib does not use it.** RFC-038 step 7 (`pub context allocator`, `or_global` over it,
-  `set_global_allocator` removed, each test under a test-allocator context) waits on a promote:
-  the stdlib may only use what the committed seed supports.
+- **A zero-initialized container can mix allocators.** A null `&Allocator` (which only
+  zero-initialization makes) resolves to the current context's allocator on each call, so a
+  `let xs: List(T)` grown under one rebind and freed under another reaches two allocators. FLang
+  has no null pointer to spell; the zero-init rule produces one. RFC-040 (field default values,
+  rejecting an uninitialized value of a type with no default) is the fix.
+- **A transitional `string_builder(usize, &Allocator?)` overload** exists for the seed's `$"..."`
+  desugar, which passes `null` for an omitted allocator. Remove it with the next promote.
 - **A `#foreign` function is no `fn` value.** It takes no context, so lowering refuses the value
   (`a #foreign function used as a value`) instead of emitting a FLang-convention thunk. No in-tree
   code passes one.

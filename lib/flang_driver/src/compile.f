@@ -29,7 +29,7 @@ import flang_driver.lower
 pub fn build_unit(
     unit: &AnalyzedUnit,
     output_path: String,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Result(BuildResult, BuildError) {
     let m = lower_module(&unit.module, &unit.result, allocator)
     let opts = build_options(output_path, allocator)
@@ -81,7 +81,7 @@ pub fn build_program(
     emit_only: bool = false,
     tests: &List(bool)? = null,
     name_filter: String? = null,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Result(BuildResult, BuildError) {
     const lower_start = monotonic_ns()
     let m = lower_program(
@@ -263,7 +263,7 @@ fn print_refusal_chain(m: &IrModule, sym: String) {
 // output would duplicate every symbol in it.
 fn companion_c_files(
     source_paths: &List(OwnedString),
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) List(OwnedString) {
     let found: List(OwnedString) = list(0, allocator)
     for i in 0..source_paths.len {

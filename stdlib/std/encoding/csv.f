@@ -310,7 +310,7 @@ pub fn csv_decoder_init(
     self: &CsvDecoder,
     r: Reader,
     options: CsvOptions = csv_options(),
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) {
     self.reader = r
     self.options = options
@@ -757,7 +757,7 @@ pub fn encode_bytes(self: &CsvEncoder, v: u8[]) usize {
 
 fn write_enc_value(self: &CsvEncoder, v: String) {
     if self.header_written == false {
-        let owned = from_view(v, null)
+        let owned = from_view(v)
         self.first_row_values.push(owned)
     } else {
         self.write_csv_field(v)
@@ -802,7 +802,7 @@ pub fn end_map(self: &CsvEncoder) usize {
 
 pub fn key(self: &CsvEncoder, name: String) usize {
     if self.header_written == false {
-        let owned = from_view(name, null)
+        let owned = from_view(name)
         self.current_keys.push(owned)
     }
     return 0
@@ -867,7 +867,7 @@ pub fn csv_reader_init(
     self: &CsvReader,
     r: Reader,
     options: CsvOptions = csv_options(),
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) {
     self.options = options
     self.buffer = string_builder(4096, allocator)
@@ -1114,7 +1114,7 @@ pub type CsvTable = struct {
 pub fn csv_table(
     r: Reader,
     options: CsvOptions = csv_options(),
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Result(CsvTable, CsvError) {
     let reader: CsvReader
     csv_reader_init(&reader, r, options, allocator)

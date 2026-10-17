@@ -56,7 +56,7 @@ pub type Workspace = struct {
     projects: List(OpenProject)
 }
 
-pub fn workspace(stdlib_path: String, allocator: &Allocator? = null) Workspace {
+pub fn workspace(stdlib_path: String, allocator: &Allocator = context.allocator) Workspace {
     return .{
         stdlib_path = canonical_root(stdlib_path, allocator),
         projects = list(0, allocator),
@@ -67,7 +67,7 @@ pub fn workspace(stdlib_path: String, allocator: &Allocator? = null) Workspace {
 // dedup during analysis is by path string, and a stdlib project (stdlib/std has a manifest) reaches
 // the same files through editor URIs - a root spelled any other way would load every module twice
 // and drown the project in duplicate-declaration errors.
-fn canonical_root(p: String, alloc: &Allocator?) OwnedString {
+fn canonical_root(p: String, alloc: &Allocator) OwnedString {
     if p.len == 0 {
         return from_view("", alloc)
     }
@@ -112,7 +112,7 @@ pub fn parent_dir(path: String) String {
 
 // The directory of the nearest `flang.toml` at or above `path`'s directory, or null when no
 // ancestor holds one.
-pub fn project_dir_for(path: String, allocator: &Allocator? = null) OwnedString? {
+pub fn project_dir_for(path: String, allocator: &Allocator = context.allocator) OwnedString? {
     let dir = parent_dir(path)
     while dir.len > 0 {
         const manifest = $"{dir}/flang.toml"
@@ -160,7 +160,7 @@ fn path_under(path: String, dir: String) bool {
 
 // Every open buffer with a file path, keyed for `analyze_project`'s override lookup. Views into the
 // store's own storage - valid for the duration of one analysis call.
-fn overrides_from(docs: &DocumentStore, allocator: &Allocator?) Dict(String, String) {
+fn overrides_from(docs: &DocumentStore, allocator: &Allocator) Dict(String, String) {
     let ov: Dict(String, String) = dict(allocator)
     for e in docs.docs.iter() {
         const p = e.value.path.view
@@ -177,7 +177,7 @@ pub fn open_project(
     self: &Workspace,
     dir: String,
     docs: &DocumentStore,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) ProjectId? {
     const loaded = self.load_project(dir, docs, allocator)
     if loaded.is_none() {
@@ -194,7 +194,7 @@ pub fn reanalyze_project(
     idx: ProjectId,
     dirty: &Set(String),
     docs: &DocumentStore,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) {
     let p = &self.projects[idx]
     let ov = overrides_from(docs, allocator)
@@ -209,7 +209,7 @@ pub fn reopen_project(
     self: &Workspace,
     idx: ProjectId,
     docs: &DocumentStore,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) bool {
     let dir = from_view(self.projects[idx].dir.view, allocator)
     const fresh = self.load_project(dir.view, docs, allocator)
@@ -225,7 +225,7 @@ fn load_project(
     self: &Workspace,
     dir: String,
     docs: &DocumentStore,
-    allocator: &Allocator?,
+    allocator: &Allocator,
 ) OpenProject? {
     const manifest = $"{dir}/flang.toml"
     const text = read_text(manifest.view)
@@ -280,7 +280,10 @@ fn load_project(
 
 // One ModuleIndex per module, parallel to `unit.modules`. Only project-origin modules are indexed;
 // every other slot (stdlib, dependencies, generated chunks past the real files) stays empty.
-pub fn build_indexes(unit: &AnalyzedProject, allocator: &Allocator? = null) List(ModuleIndex) {
+pub fn build_indexes(
+    unit: &AnalyzedProject,
+    allocator: &Allocator = context.allocator,
+) List(ModuleIndex) {
     let out: List(ModuleIndex) = list(unit.modules.len, allocator)
     for fid in 0..unit.modules.len {
         if fid < unit.project_origin.len and unit.project_origin[fid] {

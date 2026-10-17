@@ -45,8 +45,8 @@ pub fn unmanaged_stack(capacity: usize, allocator: &Allocator) UnmanagedStack($T
 // `push`. Panics when the allocation fails.
 //
 // - `allocator`: kept for the stack's whole life. Null is the global allocator.
-pub fn stack(capacity: usize, allocator: &Allocator? = null) Stack($T) {
-    const alloc = allocator.or_global()
+pub fn stack(capacity: usize, allocator: &Allocator = context.allocator) Stack($T) {
+    const alloc = allocator
     return .{ __storage = unmanaged_stack(capacity, alloc), allocator = alloc }
 }
 
@@ -140,7 +140,7 @@ pub fn deinit(self: move Stack($T)) {
 // =============================================================================
 
 test "an UnmanagedStack takes its allocator at every allocating call" {
-    let counting = counting_allocator(global())
+    let counting = counting_allocator(context.allocator)
     const alloc = counting.allocator()
     let s: UnmanagedStack(i32) = unmanaged_stack(0, &alloc)
     s.push(1i32, &alloc)

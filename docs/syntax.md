@@ -58,7 +58,7 @@ Escape sequences: `\n` `\t` `\r` `\\` `\"` `\0`
 Prefix a string with `$` to embed expressions. Three forms:
 
 ```
-$"hello {name}"              // OwnedString via fresh StringBuilder (global allocator)
+$"hello {name}"              // OwnedString via fresh StringBuilder (context.allocator)
 $(64)"hi {who}"              // fresh builder with initial capacity
 $(&alloc)"k={k}"             // fresh builder with custom allocator
 $(cap, &alloc)"x={x}"        // both capacity and allocator positional
@@ -374,7 +374,7 @@ pub type Token = struct { ... }
 
 Short items collapse: a total function with a self-evident signature is entitled to a single summary line, and that is the common case. Write the sections a reader would otherwise have to read the body to learn.
 
-**Do not** narrate the implementation's history (why an earlier approach was replaced — that is the commit message's job), restate the signature, or repeat conventions that hold everywhere in the tree (a null `&Allocator?` meaning the global allocator is only worth a line where the choice has a consequence, as it does when the result outlives the call).
+**Do not** narrate the implementation's history (why an earlier approach was replaced — that is the commit message's job), restate the signature, or repeat conventions that hold everywhere in the tree (an allocator parameter defaulting to `context.allocator` is only worth a line where the choice has a consequence, as it does when the result outlives the call).
 
 A blank line between the comment block and the declaration breaks the attachment — that comment becomes a free-floating note. Trailing comments after the same-line declaration are not doc comments.
 

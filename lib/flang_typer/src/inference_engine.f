@@ -157,10 +157,10 @@ pub type Engine = struct {
     // instantiation (RFC-029). One unifies with itself and with an unbound variable, nothing else;
     // the value is whether a `where T: copyable` bound lets it copy.
     rigid: Dict(VarId, bool)
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
-pub fn engine(allocator: &Allocator? = null) Engine {
+pub fn engine(allocator: &Allocator = context.allocator) Engine {
     let uf: UnionFind(VarId) = union_find(allocator)
     let bindings: Dict(VarId, Ty) = dict(allocator)
     let prim_constraints: Dict(VarId, PrimSet) = dict(allocator)

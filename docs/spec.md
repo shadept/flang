@@ -488,7 +488,7 @@ pub type AllocatorVTable = struct {
 **Rules:**
 
 1. Types that allocate have an `allocator: &Allocator` field.
-2. **A null `&Allocator` is the global allocator.** `alloc`, `realloc` and `dealloc` resolve it at the leaf, so a zero-initialised container (`let xs: List(i32)`, a struct nobody constructed) allocates and frees through the global with no constructor. An optional `&Allocator?` parameter still spells "none given" and resolves the same way (`or_global()`).
+2. **The default allocator is the context's** (§4.4). `std.allocator` declares two context fields, both defaulting to the global (malloc) allocator: `allocator`, the default for everything, and `temp_allocator`, for memory nothing frees on its own, reclaimed all at once by the scope that rebinds it (a request, a frame, a test). An allocator parameter defaults to the current one: `allocator: &Allocator = context.allocator`, evaluated at the call. A null `&Allocator`, which only zero-initialization produces, resolves at the leaf (`alloc`, `realloc`, `dealloc`) to the current context's allocator, so a zero-initialised container (`let xs: List(i32)`) works with no constructor; grown and freed under different contexts it reaches different allocators, which is the programmer's to avoid. A method that defaults to its receiver's own allocator keeps `allocator: &Allocator? = null` (`allocator ?? self.allocator`): a default value cannot name another parameter.
 3. All allocation/realloc/free go through the allocator — never raw `malloc`/`free`.
 3a. **Every entry point carries the alignment**, next to the `memory` it finishes describing and ahead of any new size, and `realloc`/`dealloc` must be given the one the matching `alloc` was: an allocator cannot recover it from a pointer, a block that moves has to land on it, and a platform whose over-aligned blocks need their own release path has to know which kind it holds. The typed helpers (`free(&T)`, `free(T[])`) derive `align_of(T)`; raw byte-slice callers pass it explicitly.
 3b. **`MAX_ALIGN` (16) is the global allocator's ceiling, not the interface's.** It is what `malloc`/`realloc`/`free` guarantee. An allocator built on them declines a request above it — returning null, never memory that does not meet it — and satisfying one means `aligned_alloc`/`_aligned_malloc` with a matching release path. The bump allocators (arena, fixed buffer) align their own cursor and have no such limit.
@@ -1180,7 +1180,7 @@ the buffer and every operation on it; the ones that allocate take the allocator 
 `UnmanagedList` with an allocator and allocates through that (`xs.push(v)`), reaching the storage
 through `op_deref` so `xs.len`, `xs.pop()` and the rest read the same on either. The storage field
 is `__storage`: readable, as every field is, and by convention not touched. A null `&Allocator` is
-the global allocator (§4.1), so a zero-initialised `List` is a valid empty list. `Dict`,
+the current context's allocator (§4.1), so a zero-initialised `List` is a valid empty list. `Dict`,
 `OrderedDict`, `Set`, `Stack` and `Deque` follow the same split (`UnmanagedDict`,
 `UnmanagedOrderedDict`, `UnmanagedSet`, `UnmanagedStack`, `UnmanagedDeque`); the set and stack flavours wrap the dict and list of the matching flavour, so
 an unmanaged composite stores no allocator at any depth. Where such a composite knows its

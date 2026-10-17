@@ -47,7 +47,7 @@ pub fn deinit(self: move FunctionScheme) {
 }
 
 // An independent copy, owning its own quantified set.
-pub fn clone(self: &FunctionScheme, allocator: &Allocator? = null) FunctionScheme {
+pub fn clone(self: &FunctionScheme, allocator: &Allocator = context.allocator) FunctionScheme {
     return FunctionScheme {
         name = self.name,
         signature = self.signature.clone(allocator),
@@ -89,10 +89,10 @@ pub type FunctionRegistry = struct {
     // the variable stream is position-stable across demands, so handle equality is scheme equality;
     // a spurious inequality from an upstream stream shift only over-invalidates.
     changed: bool
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
-pub fn function_registry(allocator: &Allocator? = null) FunctionRegistry {
+pub fn function_registry(allocator: &Allocator = context.allocator) FunctionRegistry {
     let by_name: Dict(String, List(FunctionScheme)) = dict(allocator)
     return .{ by_name = move by_name, next_id = 0u32, changed = false, allocator = allocator }
 }
@@ -239,13 +239,16 @@ pub fn purge_retired(self: &FunctionRegistry) List(u32) {
 // the next demand while the snapshot keeps the original. Each scheme is cloned, so the two
 // registries own their quantified sets apart; names, modules and deprecations are views into
 // buffers that outlive both.
-pub fn carried_copy(self: &FunctionRegistry, allocator: &Allocator? = null) FunctionRegistry {
+pub fn carried_copy(
+    self: &FunctionRegistry,
+    allocator: &Allocator = context.allocator,
+) FunctionRegistry {
     let out = function_registry(allocator)
     fill_fn_carried(&out, self, allocator)
     return out
 }
 
-fn fill_fn_carried(out: &FunctionRegistry, src: &FunctionRegistry, allocator: &Allocator?) {
+fn fill_fn_carried(out: &FunctionRegistry, src: &FunctionRegistry, allocator: &Allocator) {
     for entry in src.by_name {
         let cl: List(FunctionScheme) = list(entry.value.len, allocator)
         for &f in entry.value {

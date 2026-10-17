@@ -1,5 +1,5 @@
-// Testing utilities for FLang: the assertions a `test {}` block calls, and the tracking allocator
-// the generated test runner installs for the duration of a run.
+// Testing utilities for FLang: the assertions a `test {}` block calls, and the context the
+// generated test runner runs each test under.
 
 import std.allocator
 import std.collections.list
@@ -14,8 +14,8 @@ import std.mem
 // layout knowledge is: returning a `u8[]?` needs the FLang side, walking a list of live blocks does
 // not.
 //
-// The runner installs this as the global allocator once, before the first test, so every
-// `or_global()` in the code under test resolves to it without the test having to pass anything.
+// Each test runs with this as `context.allocator` (`run_test`), so every allocation the code under
+// test makes without naming an allocator is tracked.
 
 // The `void` returns are spelled out: a declaration with no return type followed by a `fn`
 // declaration parses that `fn` as a function-type return (docs/known-issues.md).
@@ -69,13 +69,22 @@ const test_allocator = Allocator {
     vtable = &test_allocator_vtable,
 }
 
-// Called once by the generated test runner, after the constant initializers and before the first
-// test. Not `pub`: lowering resolves it by name for the runner it emits, and there is no reason to
-// call it by hand - a program that installs the tracking allocator outside a test run has no runner
-// to report what it finds.
+// Every test's `context.temp_allocator`: reset before each test, so what one test left behind is
+// reclaimed, and never reported.
+const test_temp = arena_allocator(context.allocator)
+const test_temp_allocator = allocator(&test_temp)
+
+// Runs one test under its context: the tracking allocator and a fresh temp arena. The generated
+// runner calls it for each test, inside the test's recovery point; a test that panics skips nothing
+// here, since the arena is reset on the way in. Not `pub`: lowering resolves it by name for the
+// runner it emits.
 #intrinsic
-fn install_test_allocator() {
-    const _prev = set_global_allocator(&test_allocator)
+fn run_test(body: fn()) {
+    let temp = &test_temp
+    temp.reset()
+    context(allocator = &test_allocator, temp_allocator = &test_temp_allocator) {
+        body()
+    }
 }
 
 // Assert that a condition is true, panic with message if false
@@ -172,3 +181,12 @@ pub fn assert_set_eq(a: &List($T), b: &List(T), msg: String) {
 }
 
 // NOTE: assert_ok and assert_err are in std/result.f to avoid circular imports
+
+test "a test runs under the tracking allocator, with its own temp arena" {
+    assert_true(context.allocator.impl == (&test_allocator).impl, "allocations are tracked")
+    const served = context.temp_allocator.alloc(256, 8) match {
+        Some(block) => block.len
+        None => 0usize
+    }
+    assert_true(served == 256usize, "the arena serves temp allocations, never freed")
+}

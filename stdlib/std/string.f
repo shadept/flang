@@ -437,16 +437,12 @@ pub fn next(self: &Lines) String? {
 // reaches it through `op_deref`.
 pub type OwnedString = struct {
     owned view: String
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
 // Every read of an `OwnedString` is a read of the `String` it holds.
 pub fn op_deref(self: &OwnedString) &String {
     return &self.view
-}
-
-pub fn from_view(s: String, allocator: &Allocator) OwnedString {
-    return from_view(s, Some(allocator))
 }
 
 // An owned copy of a string view, one allocation of `s.len + 1` for the terminator.
@@ -456,8 +452,8 @@ pub fn from_view(s: String, allocator: &Allocator) OwnedString {
 //   memory to the same place. Null selects the global allocator.
 //
 // Returns an OwnedString the caller must `deinit()`. Panics if the allocation fails.
-pub fn from_view(s: String, allocator: &Allocator? = null) OwnedString {
-    const buf = allocator.or_global().alloc(s.len + 1, align_of(u8))
+pub fn from_view(s: String, allocator: &Allocator = context.allocator) OwnedString {
+    const buf = allocator.alloc(s.len + 1, align_of(u8))
         .expect("OwnedString.from_view: allocation failed")
     if s.len > 0 {
         copy_to(slice_from_raw_parts(s.ptr, s.len), slice_from_raw_parts(buf.ptr, s.len))
@@ -473,7 +469,7 @@ pub fn deinit(self: move OwnedString) {
     if self.view.ptr == (0usize as &u8) {
         return
     }
-    self.allocator.or_global().free(slice_from_raw_parts(self.view.ptr, self.view.len))
+    self.allocator.free(slice_from_raw_parts(self.view.ptr, self.view.len))
 }
 
 // The element form: containers release their elements with an allocator in hand. The string frees
@@ -483,7 +479,7 @@ pub fn deinit(self: move OwnedString, allocator: &Allocator) {
 }
 
 // An independent copy on `allocator`, or on the global allocator when null.
-pub fn clone(self: &OwnedString, allocator: &Allocator? = null) OwnedString {
+pub fn clone(self: &OwnedString, allocator: &Allocator = context.allocator) OwnedString {
     return from_view(self.view, allocator)
 }
 
@@ -572,7 +568,7 @@ pub fn partition(s: String, delimiter: u8) (String, String) {
 // Concatenates the views in `parts` with `sep` between them into a new owned string.
 //
 // - `allocator`: where the result is allocated. Null is the global allocator.
-pub fn join(parts: String[], sep: String, allocator: &Allocator? = null) OwnedString {
+pub fn join(parts: String[], sep: String, allocator: &Allocator = context.allocator) OwnedString {
     let sb = string_builder(0, allocator)
     for i in 0..parts.len {
         if i > 0 {

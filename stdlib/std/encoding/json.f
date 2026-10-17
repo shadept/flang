@@ -82,7 +82,7 @@ pub fn json_options(keys: KeyCase) JsonOptions {
 pub fn parse_json(
     r: Reader,
     options: JsonOptions = json_options(),
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Result(Value, JsonError) {
     let dec = json_decoder(r, options, allocator)
     defer dec.deinit()
@@ -107,7 +107,7 @@ pub fn parse_json(
 pub fn parse_json(
     input: String,
     options: JsonOptions = json_options(),
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Result(Value, JsonError) {
     let mr = mem_reader(input)
     return parse_json(mr.reader(), options, allocator)
@@ -129,7 +129,10 @@ pub fn to_json(
 }
 
 // A tree as compact JSON text.
-pub fn to_json(value: &Value, allocator: &Allocator? = null) Result(OwnedString, JsonError) {
+pub fn to_json(
+    value: &Value,
+    allocator: &Allocator = context.allocator,
+) Result(OwnedString, JsonError) {
     let sb = string_builder(64, allocator)
     defer sb.deinit()
     to_json(value, sb.writer())?
@@ -488,7 +491,7 @@ pub type JsonDecoder = struct {
     buf_end: usize
     peeked: u8?
     pos: usize
-    allocator: &Allocator?
+    allocator: &Allocator
     options: JsonOptions
     error: JsonError?
     // Comma state per nesting level: 0 = expect first, 1 = expect comma
@@ -509,7 +512,7 @@ pub type JsonDecoder = struct {
 pub fn json_decoder(
     r: Reader,
     options: JsonOptions = json_options(),
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) JsonDecoder {
     return .{
         reader = r,

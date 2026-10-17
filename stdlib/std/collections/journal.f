@@ -38,15 +38,10 @@ pub type Journal = struct(T) {
 //
 // - `allocator`: kept for the journal's whole life; both buffers grow and free through it. Null is
 //   the global allocator.
-pub fn journal(allocator: &Allocator? = null) Journal($T) {
+pub fn journal(allocator: &Allocator = context.allocator) Journal($T) {
     let out: Journal(T)
-    out.allocator = allocator.or_global()
+    out.allocator = allocator
     return out
-}
-
-// Creates an empty journal that allocates through `allocator` for its whole life.
-pub fn journal(allocator: &Allocator) Journal($T) {
-    return journal(Some(allocator))
 }
 
 // Opens a checkpoint: every `record` until the matching `commit` or `rollback` belongs to it.
@@ -180,7 +175,7 @@ test "an inner commit folds into the outer checkpoint, which an outer rollback s
 }
 
 test "a journal reaches its high-water mark and then stops allocating" {
-    let counting = counting_allocator(global())
+    let counting = counting_allocator(context.allocator)
     const alloc = counting.allocator()
     let j: Journal(i32) = journal(&alloc)
     for round in 0..50i32 {

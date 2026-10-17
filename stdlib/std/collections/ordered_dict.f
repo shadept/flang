@@ -54,14 +54,9 @@ pub fn op_deref(self: &OrderedDict($K, $V)) &UnmanagedOrderedDict(K, V) {
 // Creates an empty ordered dict. Nothing allocates until the first insert.
 //
 // - `allocator`: kept for the dict's whole life. Null is the global allocator.
-pub fn ordered_dict(allocator: &Allocator? = null) OrderedDict($K, $V) {
+pub fn ordered_dict(allocator: &Allocator = context.allocator) OrderedDict($K, $V) {
     let empty: UnmanagedOrderedDict(K, V)
-    return .{ __storage = move empty, allocator = allocator.or_global() }
-}
-
-// Creates an empty ordered dict that allocates through `allocator` for its whole life.
-pub fn ordered_dict(allocator: &Allocator) OrderedDict($K, $V) {
-    return ordered_dict(Some(allocator))
+    return .{ __storage = move empty, allocator = allocator }
 }
 
 // =============================================================================
@@ -379,7 +374,7 @@ test "removal keeps the remaining order and the index finds every key" {
 }
 
 test "string keys are copied on insert, looked up by view and freed" {
-    let counting = counting_allocator(global())
+    let counting = counting_allocator(context.allocator)
     const alloc = counting.allocator()
     let d: OrderedDict(OwnedString, i32) = ordered_dict(&alloc)
     d.set("b", 1i32)

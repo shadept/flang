@@ -90,7 +90,7 @@ pub type BuildOptions = struct {
     // Allocator used for everything the backend allocates on behalf of
     // the call (temp strings, argv lists, the result struct, …). Null
     // means the global allocator, resolved at each allocating leaf.
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
 // Creates the default options for an executable at `output_path`: a debug build with every list
@@ -99,7 +99,7 @@ pub type BuildOptions = struct {
 // - `output_path`: borrowed; the caller keeps it alive through `compile()`.
 // - `allocator`: used for everything the backend allocates on the call's behalf. Null is the
 //   global allocator.
-pub fn build_options(output_path: String, allocator: &Allocator? = null) BuildOptions {
+pub fn build_options(output_path: String, allocator: &Allocator = context.allocator) BuildOptions {
     // A zero-initialised unmanaged list is the empty list; nothing allocates until the first add,
     // and each field gets its own.
     let c_files: UnmanagedList(String)
@@ -131,7 +131,7 @@ pub fn build_options(output_path: String, allocator: &Allocator? = null) BuildOp
 
 // Returns the allocator the option lists grow and free through: the caller's, else the global one.
 fn list_allocator(self: &BuildOptions) &Allocator {
-    return self.allocator.or_global()
+    return self.allocator
 }
 
 pub fn deinit(self: move BuildOptions) {
@@ -296,7 +296,7 @@ pub type CompilerInfo = struct {
     path: OwnedString
     extra_env_keys: List(OwnedString)
     extra_env_vals: List(OwnedString)
-    allocator: &Allocator?
+    allocator: &Allocator
 }
 
 pub fn deinit(self: move CompilerInfo) {

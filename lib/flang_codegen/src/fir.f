@@ -483,17 +483,17 @@ pub type IrModule = struct {
     // The `test {}` blocks this module lowered, in run order. Empty for an ordinary build, and also
     // for a test build whose filters selected nothing.
     tests: List(TestCase)
-    // Symbol of `std.test.install_test_allocator`, when the module set had it and it lowered. The
-    // runner calls it once, after the constant initializers and before the first test. Null when
-    // std.test is not in the module set, in which case the run has no leak tracking.
-    install_tests: OwnedString?
+    // Symbol of `std.test.run_test`, when the module set had it and it lowered. The runner calls
+    // each test through it, under the test's context. Null when std.test is not in the module set,
+    // in which case the runner calls each test directly and the run has no leak tracking.
+    run_test: OwnedString?
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 // Constructors
 // ─────────────────────────────────────────────────────────────────────────
 
-pub fn module(allocator: &Allocator? = null) IrModule {
+pub fn module(allocator: &Allocator = context.allocator) IrModule {
     let globals: List(Global) = list(0, allocator)
     let foreigns: List(ForeignDecl) = list(0, allocator)
     let functions: List(Function) = list(0, allocator)
@@ -512,7 +512,7 @@ pub fn module(allocator: &Allocator? = null) IrModule {
         displays = move displays,
         testing = false,
         tests = move tests,
-        install_tests = null,
+        run_test = null,
     }
 }
 
@@ -527,7 +527,7 @@ pub fn deinit(self: move IrModule) {
         t.symbol.deinit()
     }
     self.tests.deinit()
-    self.install_tests match {
+    self.run_test match {
         Some(s) => s.deinit()
         None => {}
     }
@@ -574,8 +574,8 @@ pub fn retain_defined_tests(self: &IrModule, dropped: &Set(String)) {
 }
 
 // Scoped mutability: named once by lowering, when the symbol is known to have been emitted.
-pub fn set_install_tests(self: &IrModule, symbol: move OwnedString) {
-    self.install_tests = Some(move symbol)
+pub fn set_run_test(self: &IrModule, symbol: move OwnedString) {
+    self.run_test = Some(move symbol)
 }
 
 pub fn deinit(self: move Function) {
@@ -725,7 +725,7 @@ pub fn remap_operand(op: Operand, subst: &Dict(u32, Operand)) Operand {
 pub fn clone_operand_list(
     args: &List(Operand),
     subst: &Dict(u32, Operand),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) List(Operand) {
     let out: List(Operand) = list(args.len, alloc)
     for i in 0..args.len {
@@ -734,7 +734,7 @@ pub fn clone_operand_list(
     return out
 }
 
-pub fn clone_ir_type_list(tys: &List(IrType), alloc: &Allocator?) List(IrType) {
+pub fn clone_ir_type_list(tys: &List(IrType), alloc: &Allocator) List(IrType) {
     let out: List(IrType) = list(tys.len, alloc)
     out.push_all(tys.as_slice())
     return out
@@ -743,7 +743,7 @@ pub fn clone_ir_type_list(tys: &List(IrType), alloc: &Allocator?) List(IrType) {
 pub fn clone_block_target(
     t: &BlockTarget,
     subst: &Dict(u32, Operand),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) BlockTarget {
     return BlockTarget {
         label = t.label,
@@ -751,7 +751,7 @@ pub fn clone_block_target(
     }
 }
 
-pub fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator?) Instr {
+pub fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator) Instr {
     return inst.* match {
         Binary(b) => Instr.Binary(BinaryInstr {
             result = b.result,
@@ -834,7 +834,7 @@ pub fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator
 pub fn rewrite_terminator(
     t: &Terminator,
     subst: &Dict(u32, Operand),
-    alloc: &Allocator?,
+    alloc: &Allocator,
 ) Terminator {
     return t.* match {
         Br(target) => Terminator.Br(clone_block_target(&target, subst, alloc))

@@ -42,7 +42,7 @@ pub type Coercion = struct {
 }
 
 // Build a side-effect-free coercion. Most widening rules use this.
-#inline pub fn simple(result_ty: Ty, allocator: &Allocator? = null) Coercion {
+#inline pub fn simple(result_ty: Ty, allocator: &Allocator = context.allocator) Coercion {
     let empty = list(0, allocator)
     return .{ result_ty = result_ty, cost = 1u32, side_unifications = move empty }
 }
@@ -94,7 +94,7 @@ pub fn try_integer_widening(
     it: &TypeInterner,
     from: Ty,
     to: Ty,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Coercion? {
     let pf = prim_kind_of(it, from) match { Some(p) => p, None => return null }
     let pt = prim_kind_of(it, to) match { Some(p) => p, None => return null }
@@ -138,7 +138,7 @@ pub fn try_char_to_u8(
     it: &TypeInterner,
     from: Ty,
     to: Ty,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Coercion? {
     let pf = prim_kind_of(it, from) match { Some(p) => p, None => return null }
     let pt = prim_kind_of(it, to) match { Some(p) => p, None => return null }
@@ -156,7 +156,7 @@ pub fn try_float_widening(
     it: &TypeInterner,
     from: Ty,
     to: Ty,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Coercion? {
     let pf = prim_kind_of(it, from) match { Some(p) => p, None => return null }
     let pt = prim_kind_of(it, to) match { Some(p) => p, None => return null }
@@ -193,7 +193,7 @@ pub fn try_type_to_typeinfo(
     from: Ty,
     to: Ty,
     reg: &NominalRegistry,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Coercion? {
     let fn_n = nominal_node_of(it, from) match { Some(n) => n, None => return null }
     let tn = nominal_node_of(it, to) match { Some(n) => n, None => return null }
@@ -216,7 +216,7 @@ pub fn try_string_to_byte_slice(
     from: Ty,
     to: Ty,
     reg: &NominalRegistry,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Coercion? {
     let fn_n = nominal_node_of(it, from) match { Some(n) => n, None => return null }
     let tn = nominal_node_of(it, to) match { Some(n) => n, None => return null }
@@ -248,7 +248,7 @@ pub fn try_byte_slice_to_string(
     from: Ty,
     to: Ty,
     reg: &NominalRegistry,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Coercion? {
     let c = try_string_to_byte_slice(it, to, from, reg, allocator)
     return c match {
@@ -273,7 +273,7 @@ pub fn try_array_decay(
     from: Ty,
     to: Ty,
     reg: &NominalRegistry,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Coercion? {
     // Identify the array element of `from`, if any (with or without a surrounding reference).
     let elem = array_element_of(it, from)
@@ -301,7 +301,7 @@ fn decay_to(
     to: Ty,
     elem: Ty,
     reg: &NominalRegistry,
-    allocator: &Allocator?,
+    allocator: &Allocator,
 ) Coercion? {
     return it.node(to) match {
         NNominal(n) => decay_to_slice(it, to, &n, elem, reg, allocator)
@@ -316,7 +316,7 @@ fn decay_to_slice(
     n: &NNominalNode,
     elem: Ty,
     reg: &NominalRegistry,
-    allocator: &Allocator?,
+    allocator: &Allocator,
 ) Coercion? {
     let slice_id = lookup_well_known(reg, FQN_SLICE)
     if slice_id.is_none() {
@@ -333,7 +333,7 @@ fn decay_to_slice(
     return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
 }
 
-fn decay_to_ref(to: Ty, target_inner: Ty, elem: Ty, allocator: &Allocator?) Coercion? {
+fn decay_to_ref(to: Ty, target_inner: Ty, elem: Ty, allocator: &Allocator) Coercion? {
     let side = list(1, allocator)
     side.push(Constraint { a = elem, b = target_inner })
     return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
@@ -347,7 +347,7 @@ pub fn try_nominal_to_type(
     from: Ty,
     to: Ty,
     reg: &NominalRegistry,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) Coercion? {
     let tn = nominal_node_of(it, to) match { Some(n) => n, None => return null }
     let type_id = lookup_well_known(reg, FQN_TYPE)

@@ -83,7 +83,7 @@ pub fn unused_functions(
     project_origin: &List(bool),
     lib_kind: bool,
     tests_checked: bool,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) List(Diagnostic) {
     // Project module FQN -> its index (= its file id).
     let index_of: Dict(String, usize) = dict(allocator)
@@ -298,7 +298,7 @@ fn root_at(fns: &List(FnNode), start: usize, reached: &Dict(u32, bool), work: &L
 
 // Every identifier inside a `#if` directive's branches in `source` onto `out`, nested directives
 // included.
-fn directive_names(source: String, out: &Set(String), allocator: &Allocator?) {
+fn directive_names(source: String, out: &Set(String), allocator: &Allocator) {
     let lx = lexer(source, allocator)
     let tokens = lx.tokenize()
     defer tokens.deinit()
@@ -538,7 +538,7 @@ pub fn unused_imports(
     sources: &List(OwnedString),
     project_origin: &List(bool),
     tests_checked: bool,
-    allocator: &Allocator? = null,
+    allocator: &Allocator = context.allocator,
 ) List(Diagnostic) {
     // Module FQN -> index, all modules - uses land anywhere in the tree.
     let index_of: Dict(String, usize) = dict(allocator)
@@ -829,7 +829,7 @@ fn check_import(
     used: &Set(String),
     reexports: &List(List(usize)),
     missed: &List(ImportSite),
-    allocator: &Allocator?,
+    allocator: &Allocator,
 ) {
     if id.is_pub {
         return
@@ -1000,7 +1000,7 @@ fn add_ty_modules(result: &TypeCheckResult, t: Ty, used: &Set(String), memo: &Di
     }
 }
 
-fn dotted_name(segs: String[], allocator: &Allocator?) OwnedString {
+fn dotted_name(segs: String[], allocator: &Allocator) OwnedString {
     let sb = string_builder(0, allocator)
     defer sb.deinit()
     for i in 0..segs.len {

@@ -76,7 +76,10 @@ pub fn format(self: TomlError, w: Writer, spec: String) {
 // =============================================================================
 
 // Parse a TOML document into a map.
-pub fn parse_toml(input: String, allocator: &Allocator? = null) Result(Value, TomlError) {
+pub fn parse_toml(
+    input: String,
+    allocator: &Allocator = context.allocator,
+) Result(Value, TomlError) {
     let p = parser(input, allocator)
     defer p.deinit()
     let root = value_map(allocator)
@@ -98,7 +101,7 @@ const IMPLICIT: u8 = 16
 type Parser = struct {
     src: String
     pos: usize
-    allocator: &Allocator?
+    allocator: &Allocator
     error: TomlError?
     // The path of the table or value being read, one segment per key or array index (path_key).
     path: StringBuilder
@@ -106,7 +109,7 @@ type Parser = struct {
     origins: Dict(OwnedString, u8)
 }
 
-fn parser(src: String, allocator: &Allocator?) Parser {
+fn parser(src: String, allocator: &Allocator) Parser {
     return .{
         src = src,
         pos = 0,
@@ -1048,7 +1051,10 @@ pub fn to_toml(value: &Value, w: Writer) Result((), TomlError) {
 }
 
 // A map as TOML text.
-pub fn to_toml(value: &Value, allocator: &Allocator? = null) Result(OwnedString, TomlError) {
+pub fn to_toml(
+    value: &Value,
+    allocator: &Allocator = context.allocator,
+) Result(OwnedString, TomlError) {
     let sb = string_builder(64, allocator)
     defer sb.deinit()
     to_toml(value, sb.writer())?

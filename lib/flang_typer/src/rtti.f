@@ -56,7 +56,7 @@ pub fn ct_type_info_of_ty(
     it: &TypeInterner,
     reg: &NominalRegistry,
     t: Ty,
-    alloc: &Allocator?,
+    alloc: &Allocator,
     rigid: &Dict(VarId, bool)? = null,
 ) CtTypeInfo {
     return CtTypeInfo {
