@@ -8,7 +8,6 @@
 import std.allocator
 import std.collections.dict
 import std.collections.list
-import std.option
 import std.string
 
 import flang_core.span

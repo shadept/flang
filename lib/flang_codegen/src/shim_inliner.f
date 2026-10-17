@@ -20,7 +20,6 @@ import std.collections.bitset
 import std.collections.dict
 import std.collections.list
 import std.collections.set
-import std.option
 import std.string
 import std.test
 

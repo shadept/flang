@@ -5,7 +5,6 @@
 // Unix epoch, 1970-01-01T00:00:00Z, ignoring leap seconds as POSIX time does. Read the clock with
 // `now()` (std.time.clock); see it on a calendar with `i.to_datetime(tz)` (std.time.zone).
 
-import std.format
 import std.io.writer
 import std.result
 import std.string

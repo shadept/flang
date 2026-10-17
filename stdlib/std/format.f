@@ -26,8 +26,6 @@ import std.allocator
 import std.conv
 import std.encoding.utf8
 import std.io.writer
-import std.mem
-import std.option
 import std.result
 import std.string
 import std.string_builder
@@ -117,10 +115,6 @@ type FormatSpec = struct {
 
 fn is_align_char(c: u8) bool {
     return c == '<' or c == '>' or c == '^'
-}
-
-fn is_base_char(c: u8) bool {
-    return c == 'x' or c == 'X' or c == 'b' or c == 'o'
 }
 
 // Parse format spec: [fill][align][0][width][type] Examples: "8", ">8", "<8x", "^10", "-<8", "08x",

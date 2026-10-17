@@ -9,7 +9,6 @@ import std.io.file
 import std.option
 import std.result
 import std.string
-import std.string_builder
 import std.terminal
 
 import flang_core.diagnostic
@@ -100,15 +99,6 @@ pub fn render_project_diagnostics(
         defer text.deinit()
         write_err(text.view)
     }
-}
-
-// One diagnostic, for callers holding a single source.
-pub fn print_diagnostic(path: String, source: String, d: &Diagnostic, style: &RenderStyle) {
-    let idx = line_index(source)
-    defer idx.deinit()
-    const text = render_diagnostic(path, source, &idx, d, style)
-    defer text.deinit()
-    write_err(text.view)
 }
 
 // Diagnostics go to stderr, build progress to stdout, so either can be redirected alone.

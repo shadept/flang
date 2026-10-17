@@ -14,9 +14,7 @@
 // Any other `%x` is written as is. Names are English. std.time.internal.parse reads the same codes
 // back.
 
-import std.format
 import std.io.writer
-import std.option
 import std.result
 import std.time.calendar
 import std.time.date

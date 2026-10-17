@@ -19,7 +19,6 @@
 
 import std.format
 import std.io.writer
-import std.option
 import std.result
 import std.string
 import std.string_builder

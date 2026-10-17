@@ -9,11 +9,8 @@
 // character past the line's end maps to the line's end (before its terminator). LSP clients
 // routinely send both.
 
-import std.allocator
 import std.collections.list
 import std.encoding.utf8
-import std.option
-import std.string
 import std.test
 
 // Re-exported: a consumer that wants LSP positions wants the index they are measured against.

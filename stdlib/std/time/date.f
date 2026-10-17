@@ -5,7 +5,6 @@
 // in every time zone. It stores its epoch day (std.time.calendar), 4 bytes, ordered and compared as
 // an integer.
 
-import std.format
 import std.io.writer
 import std.result
 import std.string

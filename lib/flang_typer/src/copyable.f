@@ -23,7 +23,6 @@
 import std.allocator
 import std.collections.dict
 import std.collections.list
-import std.option
 
 import flang_typer.interner
 import flang_typer.nominal_registry

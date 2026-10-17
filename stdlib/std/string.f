@@ -5,9 +5,6 @@ import core.string // explicit import for clarity
 import std.allocator
 import std.collections.list
 import std.encoding.utf8
-import std.format
-import std.io.writer
-import std.mem
 import std.option
 import std.string_builder
 import std.string_reader

@@ -1,4 +1,3 @@
-import std.string
 import std.test
 
 pub fn decode_char(bytes: u8[]) (char, usize) {

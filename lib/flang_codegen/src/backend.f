@@ -16,7 +16,6 @@
 
 import std.allocator
 import std.collections.list
-import std.option
 import std.string
 
 // ─────────────────────────────────────────────────────────────────────────

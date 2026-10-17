@@ -8,12 +8,8 @@
 // On success the program prints the demo banner, three precomputed sums (so we know FIR control
 // flow lowers correctly), and exits 0.
 
-import std.allocator
 import std.collections.list
-import std.io.file
 import std.io.print
-import std.option
-import std.path
 import std.process
 import std.result
 import std.string

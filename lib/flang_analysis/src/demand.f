@@ -26,7 +26,6 @@
 import std.allocator
 import std.collections.list
 import std.option
-import std.string
 import std.test
 
 // One `dependent -> dependency` edge, by module index. Edges naming a module outside the set (an

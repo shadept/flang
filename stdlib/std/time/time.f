@@ -4,7 +4,6 @@
 // A `Time` is ticks since midnight, 0 up to one day exclusive, at 100 ns resolution. Arithmetic
 // wraps around midnight, as a clock does.
 
-import std.format
 import std.io.writer
 import std.result
 import std.string

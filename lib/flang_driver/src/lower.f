@@ -3778,21 +3778,6 @@ fn well_known_ty(ctx: &LowerCtx, fqn: String) Ty? {
     return Some(ctx.it.nominal_of(id.unwrap(), &no_args))
 }
 
-fn slice_ty_of(ctx: &LowerCtx, elem: Ty) Ty? {
-    let id = ctx.result.nominals.by_fqn.get(FQN_SLICE)
-    if id.is_none() {
-        return null
-    }
-    let args: List(Ty) = list(1, ctx.allocator)
-    defer args.deinit()
-    args.push(elem)
-    return Some(ctx.it.nominal_of(id.unwrap(), &args))
-}
-
-fn mk_ref_ty(ctx: &LowerCtx, inner: Ty) Ty {
-    return ctx.it.ref_of(inner)
-}
-
 // The constant for a `core.rtti.size_of`/`align_of`/`type_info` specialization call: the
 // instantiated `Type(T)` parameter names a concrete T whose layout and descriptor are known here.
 // Null for every other callee - the call emits normally.
@@ -4865,15 +4850,6 @@ fn niche_optional(ctx: &LowerCtx, ty: &Ty) bool {
     }
     let et = t.unwrap()
     return en_layout(ctx, &et.def, &et.args).is_niche
-}
-
-fn payload_offset(ctx: &LowerCtx, ty: &Ty) usize {
-    let t = resolve_enum(ctx, ty, &ctx.result.nominals)
-    if t.is_none() {
-        return 4 as usize
-    }
-    let et = t.unwrap()
-    return en_layout(ctx, &et.def, &et.args).payload_offset
 }
 
 // Enum variant construction (M7)
@@ -6312,28 +6288,6 @@ fn agg_type_of(ctx: &LowerCtx, ty: &Ty) AggType? {
         size = lay.size,
         align = lay.align,
     })
-}
-
-// The struct's members as the backend should write them. Pure - registering them on the module is
-// `register_agg`'s job - so validation can call it.
-fn agg_fields_of(ctx: &LowerCtx, ty: &Ty) List(AggField)? {
-    let sd = tn(ctx, ty.*) match {
-        NNominal(n) => ctx.result.nominals.get(n.id).* match {
-            NomStruct(d) => move d
-            _ => return null
-        }
-        _ => return null
-    }
-    let fields: List(AggField) = list(sd.fields.len, ctx.allocator)
-    for i in 0..sd.fields.len {
-        const f = agg_field_of(ctx, &sd.fields[i].ty)
-        if f.is_none() {
-            fields.deinit()
-            return null
-        }
-        fields.push(f.unwrap())
-    }
-    return Some(move fields)
 }
 
 // One struct member. An array keeps its element type and length; a nested aggregate is referenced

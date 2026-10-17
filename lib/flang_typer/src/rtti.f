@@ -4,7 +4,6 @@
 
 import std.allocator
 import std.collections.dict
-import std.option
 import std.string
 
 import flang_parser.comptime

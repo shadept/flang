@@ -18,7 +18,6 @@ import std.allocator
 import std.collections.list
 import std.io.fs
 import std.io.internal.fs
-import std.io.print
 import std.io.types
 import std.option
 import std.path

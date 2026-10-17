@@ -4,7 +4,6 @@
 import std.allocator
 import std.collections.list
 import std.mem
-import std.string_builder
 
 // =============================================================================
 // TestAllocator - tracking allocator for leak detection in tests

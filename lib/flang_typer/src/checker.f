@@ -11798,21 +11798,9 @@ fn mk_tuple(self: &Checker, elems: move List(Ty)) Ty {
     return t
 }
 
-// Record type from a scratch field list - the list is freed here.
-fn mk_record(self: &Checker, fields: move List(Field)) Ty {
-    const t = self.engine.interner.record_of(&fields)
-    fields.deinit()
-    return t
-}
-
 // The shape behind a handle - checker-side shorthand.
 fn ty_node(self: &Checker, t: Ty) TyNode {
     return self.engine.interner.node(t)
-}
-
-// The engine's type table - checker-side shorthand.
-fn tyi(self: &Checker) &TypeInterner {
-    return &self.engine.interner
 }
 
 // Zonk a lambda record's types once inference settled; a still-open parameter or return type means
@@ -12454,16 +12442,6 @@ fn own_list_has(xs: &List(NodeId), decl: NodeId) bool {
 }
 
 // ── the moved set ────────────────────────────────────────────────────
-
-// Whether the whole binding is moved.
-fn own_is_moved(p: &OwnPass, decl: NodeId) bool {
-    for &m in p.moved {
-        if m.decl == decl and m.path.len == 0 {
-            return true
-        }
-    }
-    return false
-}
 
 // Whether any part of the binding is moved, whole or a field.
 fn own_has_moves(p: &OwnPass, decl: NodeId) bool {

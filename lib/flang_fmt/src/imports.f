@@ -173,10 +173,6 @@ fn is_blank(line: String) bool {
     return true
 }
 
-fn starts_with(s: String, prefix: String) bool {
-    return s.len >= prefix.len and s[0..prefix.len] == prefix
-}
-
 // `source` cut at every `eol`, the terminator removed. A source ending in `eol` yields a final
 // empty line, so joining with `eol` between lines recovers the text exactly.
 fn split_lines(source: String, eol: String) List(String) {

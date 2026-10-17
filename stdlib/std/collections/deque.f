@@ -8,7 +8,6 @@
 // children.
 
 import std.allocator
-import std.mem
 import std.option
 import std.test
 

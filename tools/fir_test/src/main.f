@@ -2,11 +2,8 @@
 // Acts as a regression check against the canonical text format in `docs/fir.md` until
 // colocated-test running is wired up.
 
-import std.allocator
 import std.collections.list
 import std.io.print
-import std.option
-import std.string
 import std.string_builder
 
 import flang_codegen.builder

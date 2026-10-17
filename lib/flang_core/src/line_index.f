@@ -10,7 +10,6 @@
 
 import std.allocator
 import std.collections.list
-import std.encoding.utf8
 import std.string
 import std.test
 

@@ -10,7 +10,6 @@
 // differences are integer operations. Duration arithmetic is wall-clock arithmetic: 24 hours after
 // 01:00 is 01:00 the next day, whatever a zone did in between.
 
-import std.format
 import std.io.writer
 import std.result
 import std.string

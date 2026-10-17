@@ -16,7 +16,6 @@
 //     powersort       -- stable, O(n log n); near-optimal merge policy on natural runs.
 
 import std.allocator
-import std.mem
 import std.option
 import std.test
 
@@ -648,17 +647,4 @@ test "sort with custom cmp" {
     sort(s, sort_test_desc_i32)
     assert_eq(s[0], 5i32, "descending first")
     assert_eq(s[4], 1i32, "descending last")
-}
-
-type SortTestOwned = struct {
-    key: i32
-    owned tag: i32
-}
-
-fn sort_test_owned(key: i32, tag: i32) SortTestOwned {
-    return .{ key = key, tag = tag }
-}
-
-fn op_cmp(a: SortTestOwned, b: SortTestOwned) Ord {
-    return op_cmp(a.key, b.key)
 }

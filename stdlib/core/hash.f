@@ -6,8 +6,6 @@
 // (std.string) hash their content. Hashes are deterministic and unseeded: the same value hashes the
 // same in every run, so a table keyed on untrusted input can be driven into collisions.
 
-import core.rtti
-
 // A type with a `hash`: an overload of its own, or the byte hash for a copyable one. What `Dict`,
 // `Set` and `MultiMap` require of a key, beside `Eq`.
 //

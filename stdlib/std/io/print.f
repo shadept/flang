@@ -7,7 +7,6 @@
 import std.format
 import std.io.file
 import std.io.writer
-import std.option
 import std.string
 
 // Writes `value`'s text to stdout. One print is one write: the text collects in a stack buffer and

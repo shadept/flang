@@ -11,7 +11,6 @@ import core.bits
 
 import std.allocator
 import std.collections.list
-import std.option
 
 pub type Bitset = struct {
     words: List(u64)

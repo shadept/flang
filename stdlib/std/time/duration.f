@@ -12,7 +12,6 @@
 // Both print and parse as ISO 8601 durations: a Duration as `PT26H3M4.5S` (hours are its largest
 // unit), a Period as `P1Y2M3D`.
 
-import std.format
 import std.io.writer
 import std.result
 import std.string

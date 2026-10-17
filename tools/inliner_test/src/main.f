@@ -17,12 +17,8 @@
 // After the inliner runs, every non-`main` body should contain only arithmetic + ret - no `call
 // @inner` / `call @outer` left.
 
-import std.allocator
 import std.collections.list
-import std.io.file
 import std.io.print
-import std.option
-import std.path
 import std.process
 import std.result
 import std.string

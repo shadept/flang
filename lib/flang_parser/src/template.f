@@ -12,7 +12,6 @@
 import std.allocator
 import std.collections.dict
 import std.collections.list
-import std.option
 import std.result
 import std.string
 import std.string_builder
