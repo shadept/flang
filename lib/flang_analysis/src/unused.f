@@ -942,6 +942,7 @@ fn target_module(
         RtStructField(nid, _) => nominal_home(result, nid)
         RtEnumVariant(nid, _) => nominal_home(result, nid)
         RtConst(fqn) => const_module(fqn)
+        RtContextField(fqn) => const_module(fqn)
         _ => null
     }
 }
@@ -953,7 +954,8 @@ fn nominal_home(result: &TypeCheckResult, nid: NominalId) String? {
     }
 }
 
-// `module.name` -> `module`. A constant's RtConst target carries its FQN.
+// `module.name` -> `module`. A constant's RtConst target carries its FQN, as a context field's
+// RtContextField does.
 fn const_module(fqn: String) String? {
     return rfind(fqn, '.') match {
         Some(dot) => Some(fqn[0..dot])

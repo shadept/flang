@@ -439,6 +439,20 @@ argument is an escape. Working on FIR is what makes the classification total: tw
 forms cover every construct the language has, since desugars, operators, UFCS receivers and template
 expansions all arrive as loads, stores, geps and calls.
 
+## Runtime Context (RFC-038)
+
+Language rules are spec §4.4; this is how the pipeline carries them.
+
+**Registration and checking.** The signature pass registers each `ContextDecl` in `Checker.ctx_fields` (an `FqnMap(CtxField)`: type, `pub`, name, span), evicted, snapshotted and compared across demands exactly like `constants`, so a changed field set invalidates carried body slots. The constants phase checks each default against its type and refuses anything but a constant initializer (`is_const_init`, E2148), mirroring what lowering's `const_bytes` encodes. `context` types as the `core.runtime.Context` nominal; `ctx.f` on a `Context` receiver resolves through `resolve_context_field` (own module's fields, then `pub` fields of visible modules; none E2150, two E2152) and records `RtContextField(fqn)` on the node, as each rebind `f = v` argument does. No body's check reads the assembled struct, so the LSP has no cross-module invalidation from it.
+
+**Assembly.** At the end of `check_all`, `assemble_context` sorts every registered field by module FQN then source offset and installs them as the fields of `core.runtime.Context`'s definition, so ordinary layout queries size the context; `TypeCheckResult.context_fields` lists their FQNs in that order. Field names may repeat across modules, so lowering finds a field by FQN index, never by name, and `struct_field_lookup` ignores `Context`'s fields.
+
+**Calling conventions.** `fir.CallConv` is `C` (`#foreign`, the generated entry points, constant initializers) or `Flang`. A `Flang` function's first FIR parameter is the `const Context *` it runs under; lowering adds it in `lower_function_body` (closures and specializations included, ahead of a closure's environment pointer) and `lower_test_block`, and passes `LowerCtx.cur_ctx` first in `emit_call` and in every `CallIndirect` (`cc = Flang`), since every `fn` value is a FLang function. A `#foreign` function used as a value is refused rather than given a context it does not take. The C backend has no special case: the context is an ordinary `void*` parameter.
+
+**Root and entry.** `lower_root_context` encodes every field's default at its offset into one relocated global, `ROOT_CONTEXT_SYM`, pushed after every other global so the plain globals its relocations name precede it. FIR `main` takes no parameter and runs with `cur_ctx = GlobalRef(root)`, as the `__finit_*` constant initializers do; the test runner passes the root to `install_test_allocator` and to each test function.
+
+**Rebinding.** `lower_context_bind` copies the base (the current context, or the positional argument) into a frame slot, stores each named field at its offset, and lowers the body with `cur_ctx` pointing at the slot; afterwards `cur_ctx` is the outer operand again. Exits need no code. A `defer` records the `cur_ctx` of its registration site (`DeferCode.cx`, `IterRelease.cx`) and runs under it wherever it fires. A by-value field handed to a `&T` receiver is copied first (`in_current_context`), so the current context is never written.
+
 ## Optimization Passes
 
 Entry point: `IrOptimizer.Run(module)`. The compiler does not manage passes or cascade loops directly — `IrOptimizer` owns the full lifecycle and iterates internally until the module is stable. Adding, removing, or reordering passes is transparent to `Compiler.cs`.

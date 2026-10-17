@@ -206,6 +206,22 @@ type StreamPos = struct {
     l: u32
 }
 
+// One runtime context field (RFC-038), keyed by FQN in `Checker.ctx_fields`. `name` and `span` view
+// the declaring module's source; `span.start` orders fields within a module.
+type CtxField = struct {
+    ty: Ty
+    is_pub: bool
+    name: String
+    span: SourceSpan
+}
+
+// A context field resolved from a use: its FQN, a view valid until the next registration, and the
+// field.
+type CtxHit = struct {
+    fqn: String
+    field: CtxField
+}
+
 pub type Checker = struct {
     engine: Engine
     env: TypeEnv
@@ -214,6 +230,10 @@ pub type Checker = struct {
     // with import-visibility lookup.
     aliases: FqnMap(TypeExpr)
     constants: FqnMap(Ty)
+    // Runtime context fields (RFC-038), registered by the signature pass and carried like the
+    // constants. Lookup is `resolve_context_field`'s: the FqnMap's first-match rule would hide an
+    // ambiguity.
+    ctx_fields: FqnMap(CtxField)
     functions: FunctionRegistry
     specs: SpecializationRegistry
     results: InferenceResults
@@ -710,6 +730,7 @@ pub fn checker(allocator: &Allocator? = null) Checker {
         nominals = nominal_registry(allocator),
         aliases = fqn_map(allocator),
         constants = fqn_map(allocator),
+        ctx_fields = fqn_map(allocator),
         functions = function_registry(allocator),
         specs = specialization_registry(allocator),
         results = inference_results(allocator),
@@ -818,6 +839,7 @@ pub fn begin_demand(self: &Checker) {
     let noms = replace(&self.nominals, nominal_registry(self.allocator))
     let aliases = replace(&self.aliases, fqn_map(self.allocator))
     let consts = replace(&self.constants, fqn_map(self.allocator))
+    let ctx_fields = replace(&self.ctx_fields, fqn_map(self.allocator))
     let fns = replace(&self.functions, function_registry(self.allocator))
     let tmpls = replace(&self.templates, dict(self.allocator))
     let bounds = replace(&self.fn_bounds, dict(self.allocator))
@@ -845,6 +867,7 @@ pub fn begin_demand(self: &Checker) {
     install(&next.nominals, noms)
     install(&next.aliases, aliases)
     install(&next.constants, consts)
+    install(&next.ctx_fields, ctx_fields)
     install(&next.functions, fns)
     install(&next.templates, tmpls)
     install(&next.fn_bounds, bounds)
@@ -963,6 +986,7 @@ pub fn deinit(self: move Checker) {
     self.nominals.deinit()
     self.aliases.deinit()
     self.constants.deinit()
+    self.ctx_fields.deinit()
     self.functions.deinit()
     self.specs.deinit()
     self.results.deinit()
@@ -2449,6 +2473,7 @@ fn collect_one_signature(self: &Checker, decl: &Decl) {
     decl.* match {
         Function(fd) => register_function_sig(self, &fd)
         Const(cd) => register_constant(self, &cd)
+        Context(cd) => register_context_field(self, &cd)
         _ => {}
     }
 }
@@ -2497,6 +2522,41 @@ fn register_constant(self: &Checker, cd: &ConstDecl) {
         return
     }
     self.constants.register(fqn, ty)
+}
+
+// A `context` declaration registers its declared type (RFC-038). The type has to be copyable: the
+// language copies a context on every `let c = context`, capture and rebind.
+fn register_context_field(self: &Checker, cd: &ContextDecl) {
+    const ty = resolve_type_expr(self, cd.type_annotation)
+    let fqn = $"{self.current_module.unwrap()}.{cd.name}"
+    if self.ctx_fields.contains(fqn.view) {
+        push_diag_e(
+            self,
+            cd.name_span,
+            E_DUP_TYPE_DECL,
+            $"context field `{cd.name}` is already declared",
+        )
+        fqn.deinit()
+        return
+    }
+    if ty != TY_ERROR and !ty_copyable(self, ty) {
+        let sb = string_builder(64, self.allocator)
+        defer sb.deinit()
+        sb.append($"context field `{cd.name}` must have a copyable type")
+        append_copy_blame(self, ty, &sb)
+        push_diag_e(
+            self,
+            type_expr_span(cd.type_annotation),
+            E_CONTEXT_NOT_COPYABLE,
+            sb.to_string(),
+        )
+    }
+    self.ctx_fields.register(fqn, CtxField {
+        ty = ty,
+        is_pub = cd.is_pub,
+        name = cd.name,
+        span = cd.span,
+    })
 }
 
 fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
@@ -2659,8 +2719,79 @@ pub fn check_module_constants(self: &Checker, module: &Module, module_path: Stri
     for &decl in module.decls {
         decl.* match {
             Const(cd) => check_constant_init(self, &cd)
+            Context(cd) => check_context_default(self, &cd)
             _ => {}
         }
+    }
+}
+
+// A context field's default fills the static root context, so it has to be a constant initializer
+// (RFC-038).
+fn check_context_default(self: &Checker, cd: &ContextDecl) {
+    let fqn = $"{self.current_module.unwrap()}.{cd.name}"
+    defer fqn.deinit()
+    const v = check_expr(self, cd.value)
+    const field = self.ctx_fields.get_fqn(fqn.view)
+    if field.is_none() {
+        return
+    }
+    unify_expected(self, v, field.unwrap().ty, E_TYPE_MISMATCH, expr_span(cd.value))
+    if !is_const_init(self, cd.value) {
+        push_diag_e(
+            self,
+            expr_span(cd.value),
+            E_CONTEXT_DEFAULT,
+            $"the default of context field `{cd.name}` must be a constant initializer: a literal, a function or variant name, the address of a module constant, or a struct literal of those",
+        )
+    }
+}
+
+// Whether `e` is a constant initializer: what lowering encodes into a static's bytes. A literal, a
+// negated literal, a function name, a payload-less variant, the address of a module constant, a
+// pointer cast of an address, or a struct literal whose every field is one.
+fn is_const_init(self: &Checker, e: &Expr) bool {
+    return e.* match {
+        Lit(_) => true
+        Unary(u) => u.op match {
+            Neg => u.operand.* match { Lit(_) => true, _ => false }
+            _ => false
+        }
+        Identifier(id) => self.results.resolved_targets.get(self.node_of(id.span)) match {
+            Some(t) => t match {
+                RtFunction(_) => true
+                RtEnumVariant(_, _) => true
+                _ => false
+            }
+            None => false
+        }
+        MemberAccess(ma) => self.results.resolved_targets.get(self.node_of(ma.span)) match {
+            Some(t) => t match { RtEnumVariant(_, _) => true, _ => false }
+            None => false
+        }
+        AddressOf(a) => a.operand.* match {
+            Identifier(id) => self.results.resolved_targets.get(self.node_of(id.span)) match {
+                Some(t) => t match { RtConst(_) => true, _ => false }
+                None => false
+            }
+            _ => false
+        }
+        Cast(c) => c.operand.* match {
+            AddressOf(_) => is_const_init(self, c.operand)
+            _ => false
+        }
+        StructLit(sl) => {
+            for &fi in sl.fields {
+                const ok = fi.value match {
+                    Some(v) => is_const_init(self, v)
+                    None => false
+                }
+                if !ok {
+                    return false
+                }
+            }
+            true
+        }
+        _ => false
     }
 }
 
@@ -2843,6 +2974,7 @@ fn expr_returns(self: &Checker, e: &Expr) bool {
         Block(b) => block_returns(self, &b)
         If(ife) => if_returns(self, &ife)
         Match(m) => match_returns(self, &m)
+        ContextBind(cb) => block_returns(self, cb.body)
         _ => false
     }
 }
@@ -5735,7 +5867,168 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
         InterpolatedString(is) => check_interpolation(self, &is)
         ArrayLit(al) => check_array_literal(self, &al)
         Lambda(lam) => check_lambda(self, &lam)
+        Context(c) => check_context_expr(self, &c)
+        ContextBind(cb) => check_context_bind(self, &cb)
         _ => self.engine.fresh_var()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Runtime context (RFC-038)
+// ─────────────────────────────────────────────────────────────────────
+
+// The compiler-provided `Context` type, or null when `core.runtime` is not in the source set.
+fn context_ty(self: &Checker) Ty? {
+    return self.nominals.by_fqn.get(FQN_CONTEXT) match {
+        Some(id) => Some(mk_nominal(self, id, list(0, self.allocator)))
+        None => null
+    }
+}
+
+// Whether `t` is `Context` or a reference to one.
+fn is_context_ty(self: &Checker, t: Ty) bool {
+    const id = self.nominals.by_fqn.get(FQN_CONTEXT)
+    if id.is_none() {
+        return false
+    }
+    return ty_node(self, peel_refs(self, self.engine.zonk(t))) match {
+        NNominal(nn) => nn.id == id.unwrap()
+        _ => false
+    }
+}
+
+// Bare `context`: a copy of the current context.
+fn check_context_expr(self: &Checker, c: &ContextExpr) Ty {
+    return context_ty(self) match {
+        Some(t) => t
+        None => {
+            push_diag_e(
+                self,
+                c.span,
+                E_UNKNOWN_IDENT,
+                from_view("`context` needs `core.runtime`, which declares `Context`"),
+            )
+            TY_ERROR
+        }
+    }
+}
+
+// The context field `name` names from the current module: one of its own, private or not, or a
+// `pub` one of a module it sees. Reports E2150 when there is none and E2152 when two are visible.
+fn resolve_context_field(self: &Checker, name: String, span: SourceSpan) CtxHit? {
+    let vis = current_visibility(self)
+    defer vis.deinit()
+    const here = self.current_module.unwrap_or("")
+    let hit: CtxHit? = null
+    for entry in self.ctx_fields.entries {
+        const fqn = self.ctx_fields.name(entry.key)
+        const dot = last_dot(fqn)
+        if short_name_of(fqn, dot) != name {
+            continue
+        }
+        const module = module_of(fqn, dot)
+        const visible = module == here or (entry.value.is_pub and vis.allows(module))
+        if !visible {
+            continue
+        }
+        if hit.is_some() {
+            push_diag_e(
+                self,
+                span,
+                E_CONTEXT_AMBIGUOUS,
+                $"context field `{name}` is ambiguous: `{hit.unwrap().fqn}` and `{fqn}` are both visible",
+            )
+            return null
+        }
+        hit = Some(CtxHit { fqn = fqn, field = entry.value })
+    }
+    if hit.is_none() {
+        push_diag_e(self, span, E_CONTEXT_UNKNOWN, $"no context field `{name}` is visible here")
+    }
+    return hit
+}
+
+// Record the field a use resolved to, as a result-owned FQN lowering and the LSP read.
+fn record_context_target(self: &Checker, span: SourceSpan, fqn: String) {
+    const stable = self.results.add_synth_string(from_view(fqn, self.allocator))
+    self.results.record_target(self.node_of(span), ResolvedTarget.RtContextField(stable))
+}
+
+// `ctx.f` on a `Context` value: the field's declared type.
+fn context_member(self: &Checker, ma: &MemberAccessExpr) Ty {
+    return resolve_context_field(self, ma.member, ma.span) match {
+        Some(h) => {
+            record_context_target(self, ma.span, h.fqn)
+            h.field.ty
+        }
+        None => TY_ERROR
+    }
+}
+
+// `context(base?, f = v, ...) { body }`: the base is a `Context`, each named field a visible one
+// typed by its declaration, and the construct's value is the body's.
+fn check_context_bind(self: &Checker, cb: &ContextBindExpr) Ty {
+    const cty = context_ty(self)
+    let named: List(String) = list(cb.args.len, self.allocator)
+    defer named.deinit()
+    for i in 0..cb.args.len {
+        cb.args[i] match {
+            Positional(e) => {
+                const bt = check_expr(self, e)
+                if i > 0 {
+                    push_diag_e(
+                        self,
+                        expr_span(e),
+                        E_CONTEXT_BASE,
+                        from_view("a rebind's base context comes first, and only once"),
+                    )
+                } else if cty.is_some() {
+                    unify_expected(self, bt, cty.unwrap(), E_TYPE_MISMATCH, expr_span(e))
+                }
+            }
+            Named(n) => check_context_override(self, &n, &named)
+        }
+    }
+    return check_block(self, cb.body)
+}
+
+fn check_context_override(self: &Checker, n: &NamedCallArgument, named: &List(String)) {
+    if contains_view(named, n.name) {
+        push_diag_e(
+            self,
+            n.span,
+            E_CONTEXT_TWICE,
+            $"context field `{n.name}` is named twice in one rebind",
+        )
+    }
+    named.push(n.name)
+    const hit = resolve_context_field(self, n.name, n.span)
+    if hit.is_none() {
+        const _v = check_expr(self, n.value)
+        return
+    }
+    const h = hit.unwrap()
+    record_context_target(self, n.span, h.fqn)
+    const vt = check_expr(self, n.value, Some(h.field.ty))
+    unify_expected(self, vt, h.field.ty, E_TYPE_MISMATCH, expr_span(n.value))
+}
+
+// Whether `e` is storage inside the current context: `context` itself, or a field reached from it
+// without crossing a reference.
+fn in_current_context(self: &Checker, e: &Expr) bool {
+    return e.* match {
+        Context(_) => true
+        MemberAccess(ma) => !receiver_is_ref(self, ma.receiver)
+            and in_current_context(self, ma.receiver)
+        Index(ix) => !receiver_is_ref(self, ix.receiver) and in_current_context(self, ix.receiver)
+        _ => false
+    }
+}
+
+fn receiver_is_ref(self: &Checker, e: &Expr) bool {
+    return self.results.get_type(self.node_of(expr_span(e))) match {
+        Some(t) => ty_node(self, self.engine.zonk(t)) match { NRef(_) => true, _ => false }
+        None => false
     }
 }
 
@@ -6607,6 +6900,15 @@ fn check_assignment(self: &Checker, a: &AssignmentExpr) Ty {
     let lhs = check_expr(self, a.lhs)
     let rhs = check_expr(self, a.rhs, Some(lhs))
     unify_expected(self, rhs, lhs, E_TYPE_MISMATCH, a.span)
+    if in_current_context(self, a.lhs) {
+        push_diag_e(
+            self,
+            a.span,
+            E_CONTEXT_PLACE,
+            from_view("the current context is never mutated - rebind it: `context(f = v) { ... }`"),
+        )
+        return TY_VOID
+    }
     // Scoped mutability (spec 8): a struct's fields are writable only in the module that declares
     // it - the defining module owns the type's invariants. Reads stay unrestricted, and tuples are
     // exempt (no defining module).
@@ -6836,6 +7138,15 @@ fn is_move_operand(e: &Expr) bool {
 
 fn check_address_of(self: &Checker, a: &AddressOfExpr) Ty {
     let inner = check_expr(self, a.operand)
+    if in_current_context(self, a.operand) {
+        push_diag_e(
+            self,
+            a.span,
+            E_CONTEXT_PLACE,
+            from_view("the current context has no address - copy it first (`let c = context`)"),
+        )
+        return self.engine.mk_ref(inner)
+    }
     // A reference to a value with no storage would outlive it (E2040).
     if !is_place_expr(a.operand) {
         push_diag_e(
@@ -9981,6 +10292,9 @@ fn field_call(
     callee_id: NodeId,
 ) Ty? {
     let fty = struct_field_lookup(self, recv_ty, name)
+    if is_context_ty(self, recv_ty) {
+        fty = context_field_silent(self, name, span)
+    }
     if fty.is_none() {
         return null
     }
@@ -10013,6 +10327,21 @@ fn field_call(
         report_unify(self, &o, E_TYPE_MISMATCH, span)
     }
     return Some(f.ret)
+}
+
+// The type of the context field `name` as a call's callee, or null - quietly, so the call falls
+// back to UFCS - when no single visible field has the name.
+fn context_field_silent(self: &Checker, name: String, span: SourceSpan) Ty? {
+    const before = self.diagnostics.len
+    const hit = resolve_context_field(self, name, span)
+    drop_diags_from(self, before)
+    return hit match {
+        Some(h) => {
+            record_context_target(self, span, h.fqn)
+            Some(h.field.ty)
+        }
+        None => null
+    }
 }
 
 // The closure-call signature for a value of synthesized-closure type, or null when the type is not
@@ -11266,6 +11595,18 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
         return anon_var
     }
     let ty = resolve_type_expr(self, lit.type_expr.unwrap())
+    if is_context_ty(self, ty) {
+        push_diag_e(
+            self,
+            lit.span,
+            E_CONTEXT_BASE,
+            from_view("a `Context` is made by `context`, not by a struct literal"),
+        )
+        for &fc in lit.fields {
+            let _vc = check_field_value(self, fc)
+        }
+        return TY_ERROR
+    }
     let is_structish = ty_node(self, ty) match {
         NNominal(nn) => !is_enum_id(self, nn.id)
         NVar(_) => true
@@ -11390,6 +11731,9 @@ fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
     }
 
     let recv = check_expr(self, ma.receiver)
+    if is_context_ty(self, recv) {
+        return context_member(self, ma)
+    }
     let fty = struct_field_lookup(self, recv, ma.member)
     if fty.is_some() {
         return fty.unwrap()
@@ -11765,6 +12109,11 @@ fn struct_field_lookup(self: &Checker, recv: Ty, name: String) Ty? {
         return null
     }
     let sd = sd_opt.unwrap()
+    // `Context`'s fields are its layout (`assemble_context`); a use resolves through the context
+    // registry instead.
+    if sd.fqn == FQN_CONTEXT {
+        return null
+    }
     for i in 0..sd.fields.len {
         if sd.fields[i].name == name {
             if sd.type_params.len == 0 or sd.type_params.len != nr.args.len {
@@ -12910,6 +13259,15 @@ fn own_expr(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) {
         Block(b) => own_block(self, p, &b, slot)
         If(ife) => own_if(self, p, &ife, slot)
         Match(m) => own_match(self, p, &m, slot)
+        ContextBind(cb) => {
+            for &a in cb.args {
+                a.* match {
+                    Positional(e) => own_expr(self, p, e, own_read())
+                    Named(n) => own_expr(self, p, n.value, own_read())
+                }
+            }
+            own_block(self, p, cb.body, slot)
+        }
         _ => {}
     }
 }
@@ -14345,7 +14703,8 @@ pub fn check_all(
     // re-registered.
     let old_aliases = snapshot_aliases(self, &retiring)
     let old_defs = snapshot_nominal_defs(self, &retiring)
-    let old_consts = snapshot_constants(self, &retiring)
+    let old_consts = snapshot_types(&self.constants, &retiring, fn(t) { t }, self.allocator)
+    let old_ctx = snapshot_types(&self.ctx_fields, &retiring, fn(f) { f.ty }, self.allocator)
     for i in seq {
         if needs_collect(recollect, i) {
             self.aliases.evict_module(paths[i])
@@ -14432,6 +14791,7 @@ pub fn check_all(
         if recollect.is_some() {
             self.functions.retire_module(paths[i])
             self.constants.evict_module(paths[i])
+            self.ctx_fields.evict_module(paths[i])
         }
         run_signature_pass(self, &modules[i], paths[i], sources)
     }
@@ -14452,8 +14812,11 @@ pub fn check_all(
     // re-typed, or a default value whose source text changed. Any of them and the carried body
     // slots are stale - resolution against the registries can now answer differently.
     const sigs_changed = self.functions.changed or self.functions.next_id != fns_before
-        or removed_fns or constants_differ(self, &old_consts, &retiring) or self.defaults_changed
+        or removed_fns or self.defaults_changed
+        or types_differ(&self.constants, &old_consts, &retiring, fn(t) { t })
+        or types_differ(&self.ctx_fields, &old_ctx, &retiring, fn(f) { f.ty })
     old_consts.deinit()
+    old_ctx.deinit()
     // A carried specialization of a re-parsed module's template holds a stale declaration AST, and
     // the body may have changed without the scheme changing - a demand for it re-instantiates in
     // place instead of replaying.
@@ -14558,6 +14921,8 @@ pub fn check_all(
     harvest_body_caches(self, &zonked)
     harvest_spec_caches(self)
 
+    let out_context_fields = assemble_context(self)
+
     // Move the registries and result tables into the snapshot, then replace each moved-from field
     // with a fresh empty container so the caller's later `checker.deinit()` doesn't double-free
     // them.
@@ -14624,6 +14989,7 @@ pub fn check_all(
         closures = move out_closures,
         spans = move out_spans,
         file_paths = move out_paths,
+        context_fields = move out_context_fields,
         phases = CheckPhases {
             visibility_ns = visibility_ns,
             collect_ns = collect_ns,
@@ -15656,42 +16022,105 @@ fn harvest_spec_caches(self: &Checker) {
 // skipped pass cannot have changed anything.
 // ─────────────────────────────────────────────────────────────────────
 
-// The retiring modules' constant types, name id -> handle. An unannotated constant's handle is its
-// variable, which the aligned stream re-mints at the same id, so handle equality holds exactly when
-// the constant re-registers the same.
-fn snapshot_constants(self: &Checker, retiring: &Set(String)) Dict(StrId, Ty) {
-    let out: Dict(StrId, Ty) = dict(self.allocator)
-    for entry in self.constants.entries {
-        const fqn = self.constants.name(entry.key)
-        const dot = last_dot(fqn)
-        if !retiring.contains(module_of(fqn, dot)) {
-            continue
+// The retiring modules' entries of `map` (the constants, the context fields), name id -> the type
+// `ty_of` reads off each. An unannotated constant's type is its variable, which the aligned stream
+// re-mints at the same id, so handle equality holds exactly when the entry re-registers the same.
+fn snapshot_types(
+    map: &FqnMap($V),
+    retiring: &Set(String),
+    ty_of: $F,
+    allocator: &Allocator?,
+) Dict(StrId, Ty) where F: fn(V) Ty {
+    let out: Dict(StrId, Ty) = dict(allocator)
+    for entry in map.entries {
+        const fqn = map.name(entry.key)
+        if retiring.contains(module_of(fqn, last_dot(fqn))) {
+            out.set(entry.key, ty_of(entry.value))
         }
-        out.set(entry.key, entry.value)
     }
     return out
 }
 
-// Whether the retiring modules' constants changed across the signature phase: one added, removed,
-// or re-registered at a different type.
-fn constants_differ(self: &Checker, old: &Dict(StrId, Ty), retiring: &Set(String)) bool {
+// Whether the retiring modules' entries of `map` changed across the signature phase: one added,
+// removed, or re-registered at a different type.
+fn types_differ(map: &FqnMap($V), old: &Dict(StrId, Ty), retiring: &Set(String), ty_of: $F) bool
+where F: fn(V) Ty {
     let count: usize = 0
-    for entry in self.constants.entries {
-        const fqn = self.constants.name(entry.key)
-        const dot = last_dot(fqn)
-        if !retiring.contains(module_of(fqn, dot)) {
+    for entry in map.entries {
+        const fqn = map.name(entry.key)
+        if !retiring.contains(module_of(fqn, last_dot(fqn))) {
             continue
         }
         count = count + 1
         const prev = old.get(entry.key)
-        if prev.is_none() {
-            return true
-        }
-        if prev.unwrap() != entry.value {
+        if prev.is_none() or prev.unwrap() != ty_of(entry.value) {
             return true
         }
     }
     return count != old.len()
+}
+
+type CtxRow = struct {
+    fqn: String
+    module: String
+    field: CtxField
+}
+
+fn cmp_ctx_row(a: CtxRow, b: CtxRow) Ord {
+    if a.module != b.module {
+        return op_cmp(a.module, b.module)
+    }
+    return op_cmp(a.field.span.start, b.field.span.start)
+}
+
+// Lay out the program's runtime context (RFC-038): every registered field, by module FQN then
+// declaration order, becomes a field of `core.runtime.Context`'s definition, whose layout is then
+// the context's. Returns the fields' FQNs in that order. Checking never reads these fields -
+// `context.f` resolves through `ctx_fields` - so no module's check depends on the assembly.
+fn assemble_context(self: &Checker) List(OwnedString) {
+    let rows: List(CtxRow) = list(0, self.allocator)
+    defer rows.deinit()
+    for entry in self.ctx_fields.entries {
+        const fqn = self.ctx_fields.name(entry.key)
+        rows.push(CtxRow { fqn = fqn, module = module_of(fqn, last_dot(fqn)), field = entry.value })
+    }
+    rows.sort(cmp_ctx_row)
+    let fqns: List(OwnedString) = list(rows.len, self.allocator)
+    let fields: List(Field) = list(rows.len, self.allocator)
+    for &r in rows {
+        fqns.push(from_view(r.fqn, self.allocator))
+        fields.push(Field {
+            name = r.field.name,
+            ty = r.field.ty,
+            decl_span = r.field.span,
+            owned = false,
+        })
+    }
+    const id = self.nominals.by_fqn.get(FQN_CONTEXT)
+    if id.is_none() {
+        fields.deinit()
+        return fqns
+    }
+    const def = self.nominals.get(id.unwrap()).* match {
+        NomStruct(sd) => Some(StructDef {
+            fqn = sd.fqn,
+            module = sd.module,
+            is_pub = sd.is_pub,
+            type_params = list(0, self.allocator),
+            assoc_params = list(0, self.allocator),
+            fields = move fields,
+            decl_span = sd.decl_span,
+            deprecation = sd.deprecation,
+            is_simd = false,
+            is_foreign = false,
+        })
+        NomEnum(_) => null
+    }
+    def match {
+        Some(d) => self.nominals.replace_body(id.unwrap(), NominalDef.NomStruct(move d))
+        None => {}
+    }
+    return fqns
 }
 
 // Whether any module-level constant's variable is still open once the initializers are checked. A

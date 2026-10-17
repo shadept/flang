@@ -71,6 +71,9 @@ pub type TypeCheckResult = struct {
     // Source path per file id: `file_paths[span.file_id]`. Owned copies, so the snapshot describes
     // its own spans on its own. Empty when the checker ran without paths.
     file_paths: List(OwnedString)
+    // The runtime context's fields by FQN, in layout order (RFC-038): field `i` of
+    // `core.runtime.Context`'s definition is `context_fields[i]`.
+    context_fields: List(OwnedString)
     // Wall time of each `check_all` phase, for `--timings`.
     phases: CheckPhases
 }
@@ -129,6 +132,7 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
         closures = dict(allocator),
         spans = dict(allocator),
         file_paths = list(0, allocator),
+        context_fields = list(0, allocator),
         phases = no_phases(),
     }
 }
@@ -155,6 +159,7 @@ pub fn deinit(self: move TypeCheckResult) {
     self.closures.deinit()
     self.spans.deinit()
     self.file_paths.deinit()
+    self.context_fields.deinit()
 }
 
 // Free the tables a retired snapshot's readers no longer need, keeping the struct valid for a later

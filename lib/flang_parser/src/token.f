@@ -62,6 +62,7 @@ pub type TokenKind = enum {
     Or
     Move
     Contract
+    Context
 
     // ─────────────────────────────────────────────────────────────────────
     // Operators
@@ -180,6 +181,7 @@ pub fn is_keyword(kind: TokenKind) bool {
         TokenKind.Or => true
         TokenKind.Move => true
         TokenKind.Contract => true
+        TokenKind.Context => true
         TokenKind.True => true
         TokenKind.False => true
         TokenKind.Null => true

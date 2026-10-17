@@ -313,6 +313,16 @@ fn walk_expr(out: &List(Binder), e: &Expr, owner: SourceSpan) {
             push_params(out, l.params, owner)
             walk_block(out, l.body, owner)
         }
+        Context(_) => {}
+        ContextBind(cb) => {
+            for &a in cb.args {
+                a.* match {
+                    Positional(p) => walk_expr(out, p, owner)
+                    Named(n) => walk_expr(out, n.value, owner)
+                }
+            }
+            walk_block(out, cb.body, owner)
+        }
         Error(_) => {}
     }
 }

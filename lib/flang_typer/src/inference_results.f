@@ -46,6 +46,9 @@ pub type ResolvedTarget = enum {
     // `synth_strings`, so it outlives the checker. Recorded on every const READ node and on the
     // ConstDecl node itself (lowering's pre-pass reads the decl's own entry to name its global).
     RtConst(String)
+    // Runtime context field (RFC-038), by FQN, interned like `RtConst`. Recorded on every `ctx.f`
+    // read and on every rebind's `f = v` argument.
+    RtContextField(String)
 }
 
 // Resolved operator dispatch. `function_id` indexes the function registry. `negate_result` and

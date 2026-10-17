@@ -23,6 +23,7 @@ import flang_typer.nominal_registry
 import flang_typer.reporter
 import flang_typer.result
 import flang_typer.type
+import flang_typer.well_known
 
 // The file id of `path` inside `unit`, by exact path comparison (both sides use the resolver's path
 // convention).
@@ -333,7 +334,22 @@ pub fn target_decl_span(result: &TypeCheckResult, target: &ResolvedTarget) Sourc
             None => null
         }
         RtConst(fqn) => const_decl_span(result, fqn)
+        RtContextField(fqn) => context_field_span(result, fqn)
     }
+}
+
+// A context field's declaration: the `Context` definition's field at the FQN's layout index.
+fn context_field_span(result: &TypeCheckResult, fqn: String) SourceSpan? {
+    const id = result.nominals.by_fqn.get(FQN_CONTEXT)
+    if id.is_none() {
+        return null
+    }
+    for i in 0..result.context_fields.len {
+        if result.context_fields[i].view == fqn {
+            return field_span(result, id.unwrap(), i as u32)
+        }
+    }
+    return null
 }
 
 // Where the cursor's word points, given the target covering it. `Enum.Variant` records ONE variant
@@ -517,6 +533,7 @@ pub fn same_target(a: &ResolvedTarget, b: &ResolvedTarget) bool {
         }
         RtSpecialized(x) => b.* match { RtSpecialized(y) => x == y, _ => false }
         RtConst(x) => b.* match { RtConst(y) => x == y, _ => false }
+        RtContextField(x) => b.* match { RtContextField(y) => x == y, _ => false }
     }
 }
 

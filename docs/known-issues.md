@@ -149,6 +149,57 @@ application check are in. Not yet:
 
 ---
 
+### RFC-038 Runtime Context: What the First Cut Leaves Out
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (Runtime context section), `lib/flang_driver/src/lower.f`
+
+The language mechanism, the calling convention and the root context are in. Not yet:
+
+- **The stdlib does not use it.** RFC-038 step 7 (`pub context allocator`, `or_global` over it,
+  `set_global_allocator` removed, each test under a test-allocator context) waits on a promote:
+  the stdlib may only use what the committed seed supports.
+- **A `#foreign` function is no `fn` value.** It takes no context, so lowering refuses the value
+  (`a #foreign function used as a value`) instead of emitting a FLang-convention thunk. No in-tree
+  code passes one.
+- **A zero-initialized `Context` is accepted.** `let c: Context` with no initializer is the
+  all-zero context, every reference field null. Only `context` should make one; the struct
+  literal form is refused (E2153), the uninitialized `let` and an anonymous `.{ }` literal are
+  not.
+- **A rebind copies the whole context.** `Context` is one flat struct of every field in the
+  program, `pub` or not, so a rebind's `memcpy` and its frame slot (one per rebind site) scale with
+  the total field count: a library declaring many fields taxes every rebind anywhere. Kept flat
+  while programs declare a handful. Upgrade path: per-module blocks (`Context` as a table of
+  pointers, one per declaring module), so a rebind copies the table plus the one changed block,
+  at one extra load per read.
+- **`lower_module`'s root defaults.** The single-module lowering entry the unit tests use names
+  fields with an empty module prefix, so a field declared there keeps a zero default. Builds go
+  through `lower_program` and are unaffected.
+
+---
+
+### A Read-Only Parameter Sees Aliased Writes Made During the Call
+
+**Status:** Open (deferred)
+**Affected:** `lib/flang_driver/src/param_escape.f`, `lib/flang_typer/src/checker.f`
+
+A by-value aggregate parameter the body only reads keeps the caller's pointer (spec §3.2), so a
+write to the caller's storage through another path during the call shows through:
+
+```flang
+fn f(p: Pt, q: &Pt) i32 {
+    set(q)              // q.x = 99
+    return p.x          // 99, not the 1 the caller passed
+}
+f(a, &a)
+```
+
+§3.6 makes aliased mutation with no owned state the programmer's responsibility. Planned: a
+warning at a call that passes a place by value and shares the same place (or one containing it) in
+another argument.
+
+---
+
 ### FNV-1a Hashes Leave Small Tables Using Only the Low Bits of Each Byte
 
 **Status:** Open - needs investigation

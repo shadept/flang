@@ -3040,6 +3040,13 @@ Report the issue with sample code that reproduces the error.
 | **E2144** | Type Checking     | A bound naming a later type parameter        |
 | **E2145** | Parsing           | `where` on a type declaration                |
 | **E2146** | Type Checking     | A call through an unbounded type parameter   |
+| **E2147** | Type Checking     | A context field of a non-copyable type       |
+| **E2148** | Type Checking     | A context default that is not constant       |
+| **E2149** | Type Checking     | The current context used as a place          |
+| **E2150** | Name Resolution   | No visible context field of that name        |
+| **E2151** | Type Checking     | A rebind naming one field twice              |
+| **E2152** | Name Resolution   | An ambiguous context field                   |
+| **E2153** | Type Checking     | A misplaced rebind base, or a `Context` literal |
 
 ### E2115: Unsupported Pattern Form
 
@@ -3740,6 +3747,169 @@ fn apply(x: i32, f: $F) i32 {
 #### Solution
 
 Bound the parameter by its shape: `fn apply(x: i32, f: $F) i32 where F: fn(i32) i32`.
+
+---
+
+### E2147: A Context Field of a Non-Copyable Type
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A `context` field's type must be copyable (RFC-038). The language copies a context on
+`let c = context`, on every rebind and for every `defer`, and a field that owned a resource would
+gain a second owner each time.
+
+#### Example
+
+```flang
+context items: List(i32) = no_items     // error[E2147]: a `List` owns its buffer
+```
+
+#### Solution
+
+Put shared or owned state in by reference, owned by the scope that rebinds:
+`context items: &List(i32) = &empty_items`.
+
+---
+
+### E2148: A Context Default That Is Not Constant
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A `context` field's default fills the static root context, which exists before any code runs. It
+must be a constant initializer: a literal, a negated number literal, a function name, a
+payload-less variant, the address of a module constant, a pointer cast of such an address, or a
+struct literal of those.
+
+#### Example
+
+```flang
+context level: i32 = start()            // error[E2148]: a call runs code
+```
+
+#### Solution
+
+Default to a constant and rebind to the computed value where it is known:
+`context(level = start()) { run() }`.
+
+---
+
+### E2149: The Current Context Used as a Place
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+The current context is never mutated in place and has no address. Taking `&context` or the
+address of one of its fields, or assigning into one, is refused.
+
+#### Example
+
+```flang
+const p = &context                      // error[E2149]
+context.level = 3                       // error[E2149]
+```
+
+#### Solution
+
+Copy it (`let c = context`) to hold it, or rebind it for a scope: `context(level = 3) { ... }`.
+
+---
+
+### E2150: No Visible Context Field of That Name
+
+**Category**: Name Resolution
+**Severity**: Error
+
+#### Description
+
+`context.f`, or a rebind's `f = v`, names no field visible from the module: neither one of its
+own nor a `pub` one of a module it imports.
+
+#### Example
+
+```flang
+import lib                              // declares `context secret: i32` without `pub`
+const s = context.secret                // error[E2150]
+```
+
+#### Solution
+
+Import the declaring module, or make the field `pub` there.
+
+---
+
+### E2151: A Rebind Naming One Field Twice
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+Each field takes at most one new value per rebind.
+
+#### Example
+
+```flang
+context(level = 1, level = 2) { run() } // error[E2151]
+```
+
+#### Solution
+
+Name the field once, or nest a second rebind.
+
+---
+
+### E2152: An Ambiguous Context Field
+
+**Category**: Name Resolution
+**Severity**: Error
+
+#### Description
+
+Two context fields of the same name are visible from the module - two imported modules each
+declare a `pub` one, or one of the module's own shares a name with an imported one.
+
+#### Example
+
+```flang
+import a                                // pub context level: i32
+import b                                // pub context level: i32
+const l = context.level                 // error[E2152]
+```
+
+#### Solution
+
+Rename one of the declarations, or stop importing one module where both are visible.
+
+---
+
+### E2153: A Misplaced Rebind Base, or a `Context` Literal
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A rebind's positional argument is its base context: it comes first, and at most one is given. A
+`Context` value is made by `context`, never by a struct literal.
+
+#### Example
+
+```flang
+context(level = 1, saved) { run() }     // error[E2153]: the base comes first
+const c = Context {}                    // error[E2153]
+```
+
+#### Solution
+
+Write `context(saved, level = 1) { run() }`; copy the current context with `let c = context`.
 
 ---
 

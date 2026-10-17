@@ -157,6 +157,8 @@ fn Channel(T).deinit(self)          void
 
 ### 3.5 Context
 
+> Superseded by [RFC-038](038-runtime-context.md): the runtime context is a language feature, `context` fields assembled by the compiler and passed to every FLang function, not this library `Context` chain. `spawn` captures it per RFC-038 §Semantics 4.
+
 ```flang
 pub type Context = struct {
     parent: &Context?,

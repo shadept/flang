@@ -81,9 +81,9 @@ fn is_module_child(kind: NodeKind) bool {
     return kind == NodeKind.ImportDecl or kind == NodeKind.FunctionDecl
         or kind == NodeKind.StructDecl or kind == NodeKind.EnumDecl
         or kind == NodeKind.TypeAliasDecl or kind == NodeKind.VariableDecl
-        or kind == NodeKind.TestDecl or kind == NodeKind.GeneratorDef
-        or kind == NodeKind.GeneratorInvocation or kind == NodeKind.IfDirectiveStmt
-        or kind == NodeKind.Error
+        or kind == NodeKind.ContextDecl or kind == NodeKind.TestDecl
+        or kind == NodeKind.GeneratorDef or kind == NodeKind.GeneratorInvocation
+        or kind == NodeKind.IfDirectiveStmt or kind == NodeKind.Error
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -186,6 +186,7 @@ fn project_decl(self: &Projector, cst: CstNode) Decl {
         EnumDecl => Decl.Type(self.project_enum_decl(cst))
         TypeAliasDecl => Decl.Type(self.project_type_alias(cst))
         VariableDecl => Decl.Const(self.project_const_decl(cst))
+        ContextDecl => Decl.Context(self.project_context_decl(cst))
         TestDecl => Decl.Test(self.project_test_decl(cst))
         GeneratorDef => Decl.GenDef(self.project_generator_def(cst))
         GeneratorInvocation => Decl.GenInvoke(self.project_generator_invocation(cst))
@@ -785,6 +786,42 @@ fn project_const_decl(self: &Projector, cst: CstNode) ConstDecl {
     }
 }
 
+fn project_context_decl(self: &Projector, cst: CstNode) ContextDecl {
+    let name = ""
+    let name_span = self.span_from(cst)
+    let type_annotation = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
+    let value = Expr.Error(ErrorExpr { span = self.span_from(cst) })
+    let saw_equals = false
+    for i in 0..cst.child_count() {
+        cst.child(i) match {
+            TokenChild(tok) => {
+                if tok.kind == TokenKind.Identifier and name.len == 0 {
+                    name = tok.text
+                    name_span = self.span_from_token(tok)
+                }
+                if tok.kind == TokenKind.Equals {
+                    saw_equals = true
+                }
+            }
+            NodeChild(child) => {
+                if saw_equals {
+                    install(&value, self.project_expr(child))
+                } else if is_type_kind(child.kind) {
+                    install(&type_annotation, self.project_type_expr(child))
+                }
+            }
+        }
+    }
+    return ContextDecl {
+        span = self.span_from(cst),
+        is_pub = has_token(cst, TokenKind.Pub),
+        name = name,
+        name_span = name_span,
+        type_annotation = self.boxed(type_annotation),
+        value = self.boxed(value),
+    }
+}
+
 fn project_test_decl(self: &Projector, cst: CstNode) TestDecl {
     let label: String = ""
     let body: BlockExpr = .{
@@ -1321,6 +1358,8 @@ fn is_expr_kind(kind: NodeKind) bool {
         NodeKind.WhileExpr => true
         NodeKind.MatchExpr => true
         NodeKind.LambdaExpr => true
+        NodeKind.ContextExpr => true
+        NodeKind.ContextBindExpr => true
         NodeKind.InterpolatedStringExpr => true
         NodeKind.IdentifierExpr => true
         NodeKind.IntegerLiteralExpr => true
@@ -1385,6 +1424,8 @@ fn project_expr(self: &Projector, cst: CstNode) Expr {
         IfExpr => Expr.If(self.project_if_expr(cst))
         MatchExpr => Expr.Match(self.project_match_expr(cst))
         LambdaExpr => Expr.Lambda(self.project_lambda_expr(cst))
+        ContextExpr => Expr.Context(ContextExpr { span = self.span_from(cst) })
+        ContextBindExpr => self.project_context_bind(cst)
         InterpolatedStringExpr => Expr.InterpolatedString(self.project_interp_string(cst))
         else => Expr.Error(ErrorExpr { span = self.span_from(cst) })
     }
@@ -1796,6 +1837,39 @@ fn project_call(self: &Projector, cst: CstNode) Expr {
         span = self.span_from(cst),
         callee = box(self.alloc, callee),
         args = frozen(args),
+    })
+}
+
+// `context(args) { body }`: the argument nodes in order, then the body block.
+fn project_context_bind(self: &Projector, cst: CstNode) Expr {
+    let args: List(CallArgument) = list(cst.node_child_count(), Some(self.alloc))
+    let body: BlockExpr = .{
+        span = self.span_from(cst),
+        stmts = frozen(list(0, Some(self.alloc))),
+        trailing = null,
+    }
+    for i in 0..cst.child_count() {
+        cst.child(i) match {
+            NodeChild(child) => {
+                if child.kind == NodeKind.NamedArgumentExpr {
+                    args.push(CallArgument.Named(self.project_named_argument(child)))
+                } else if child.kind == NodeKind.BlockExpr {
+                    self.project_block_node(child) match {
+                        Some(b) => install(&body, b)
+                        None => {}
+                    }
+                } else if is_expr_kind(child.kind) {
+                    const e = self.project_expr(child)
+                    args.push(CallArgument.Positional(box(self.alloc, e)))
+                }
+            }
+            TokenChild(_) => {}
+        }
+    }
+    return Expr.ContextBind(ContextBindExpr {
+        span = self.span_from(cst),
+        args = frozen(args),
+        body = self.boxed(body),
     })
 }
 

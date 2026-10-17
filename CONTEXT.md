@@ -68,6 +68,24 @@ _Avoid_: payloadless enum, simple enum (see Flagged ambiguities for **naked enum
 The C-style subset of bare enums where at least one variant uses `= value`. All variants must be payload-less (E2047) and tags auto-increment from previous explicit values.
 _Avoid_: integer enum, C enum
 
+### Runtime context
+
+**Runtime context**:
+The `Context` value every FLang function runs under (RFC-038), assembled by the compiler from the program's `context` field declarations and passed to every FLang function as a hidden first parameter. Read with `context.f`, copied with `context`, never mutated.
+_Avoid_: environment, ambient state, thread-local, context (alone, where **Compilation** could be meant)
+
+**Context field**:
+One `[pub] context name: T = default` declaration: a field of the runtime context, visible like any declaration.
+_Avoid_: context variable, context key
+
+**Rebind**:
+`context(base?, f = v) { body }`: the body runs under a copy of the base with the named fields replaced. Dynamic scope: callees see it, the change ends with the body.
+_Avoid_: with-block, override, set (nothing is set)
+
+**Root context**:
+The static context holding every field's default. `main`, the constant initializers and each test block run under it.
+_Avoid_: global context, default context
+
 ### Strings and ownership
 
 **String**:
@@ -163,4 +181,5 @@ _Avoid_: unit test (when ambiguous), assertion block
 ## Flagged ambiguities
 
 - **"Bare enum" vs "naked enum"** — both appear in the docs and source. Resolution: a **Bare enum** is *any* payload-less enum (the property the type system predicates on for casts and `==`). A **Naked enum** is the C-style *subset* where at least one variant uses an explicit `= value` tag. Every naked enum is bare, but auto-tagged enums like `enum Color { Red, Green, Blue }` are bare without being naked. Use **bare enum** when discussing semantics (cast eligibility, `==` lowering); use **naked enum** when discussing the explicit-tag form (E2047, FFI integer codes).
+- **"Context"** — the compiler's per-invocation **Compilation** object and the language's **Runtime context** are unrelated. Resolution: say **Compilation** for the former and **runtime context** (or `Context`, the type) for the latter; bare "context" in compiler prose is ambiguous.
 - **"Codegen"** — used informally for both "source generators" (the `TemplateExpander` phase) and "C code generation" (`HmCCodeGenerator`). Resolution: prefer **Source generators** for the pre-typecheck expansion phase and **HmCCodeGenerator** for C99 emission. Don't use "codegen" without qualification.

@@ -79,6 +79,11 @@ pub fn param(self: &FunctionBuilder, ty: IrType) Operand {
     return Operand.Local(id)
 }
 
+// Set the function's calling convention; a new builder's is `C`.
+pub fn set_cc(self: &FunctionBuilder, cc: CallConv) {
+    self.func.set_cc(cc)
+}
+
 // Create the entry block. The function's parameters (declared via `.param()`) are already in scope.
 pub fn entry(self: &FunctionBuilder) BlockBuilder {
     let none: List(IrType) = list(0, self.allocator)
@@ -504,13 +509,15 @@ pub fn call_void(self: &BlockBuilder, callee: String, args: move List(Operand)) 
 }
 
 // Indirect call through a fn-pointer value. The inline signature is the C cast the backend spells;
-// aggregate params/returns already travel as `ptr` operands, mirroring direct calls.
+// aggregate params/returns already travel as `ptr` operands, mirroring direct calls. `cc` says
+// whether the callee takes a context (RFC-038); the caller has already put it in `args`.
 pub fn call_indirect(
     self: &BlockBuilder,
     fn_ptr: Operand,
     param_types: move List(IrType),
     return_ty: IrType,
     args: move List(Operand),
+    cc: CallConv,
 ) Operand {
     const id = self.fb.fresh()
     let block = &self.fb.func.blocks[self.block_idx]
@@ -524,7 +531,7 @@ pub fn call_indirect(
         param_types = move param_types,
         args = move args,
         variadic_arg_types = move var_types,
-        cc = CallConv.C,
+        cc = cc,
     }))
     return Operand.Local(id)
 }
@@ -534,6 +541,7 @@ pub fn call_indirect_void(
     fn_ptr: Operand,
     param_types: move List(IrType),
     args: move List(Operand),
+    cc: CallConv,
 ) {
     let block = &self.fb.func.blocks[self.block_idx]
     let var_types: List(IrType) = list(0, self.fb.allocator)
@@ -546,7 +554,7 @@ pub fn call_indirect_void(
         param_types = move param_types,
         args = move args,
         variadic_arg_types = move var_types,
-        cc = CallConv.C,
+        cc = cc,
     }))
 }
 

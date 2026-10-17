@@ -53,6 +53,8 @@ pub type NodeKind = enum {
     GeneratorInvocation
     // `#foreign`, `#inline`, `#deprecated`, etc. on a declaration.
     Directive
+    // `[pub] context name: T = default` - a runtime context field (RFC-038).
+    ContextDecl
 
     // ─────────────────────────────────────────────────────────────────────
     // Statements
@@ -135,6 +137,10 @@ pub type NodeKind = enum {
     InterpolatedStringExpr
     // `name = value` inside a call's argument list.
     NamedArgumentExpr
+    // Bare `context` - a copy of the current runtime context (RFC-038).
+    ContextExpr
+    // `context(base?, name = value, ...) { body }` - run `body` under a new context.
+    ContextBindExpr
     // Bare identifier reference.
     IdentifierExpr
 

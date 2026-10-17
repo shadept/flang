@@ -43,6 +43,7 @@ pub fn document_symbols(m: &Module, allocator: &Allocator? = null) List(DocSymbo
         d.* match {
             Function(f) => out.push(leaf(f.name, SymbolKind.Function, f.span, allocator))
             Const(c) => out.push(leaf(c.name, SymbolKind.Constant, c.span, allocator))
+            Context(c) => out.push(leaf(c.name, SymbolKind.Field, c.span, allocator))
             Type(t) => out.push(type_symbol(&t, allocator))
             Test(t) => {
                 // Quoted for display, mirroring the declaration: `label` is the literal's value,

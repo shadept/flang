@@ -13,6 +13,8 @@
 //   f(p)                  the whole value to a by-value parameter, which runs this same analysis
 //   p match { ... }       every arm; a pattern binding out of `p` aliases `p` and joins the set
 //   return p              copies out through the caller's sret buffer
+//   p.n + 1, n as i64     a scalar operand of `as`, an arithmetic, comparison or unary operator,
+//                         a range bound or `??`: the operator reads its value
 //
 // Anything else that mentions the parameter copies. The matches over `Expr`, `Stmt` and `Pattern`
 // are total, so a new variant is a build error here.
@@ -24,6 +26,7 @@ import std.option
 import flang_core.span
 import flang_parser.ast
 import flang_typer.inference_results
+import flang_typer.interner
 import flang_typer.node_id
 import flang_typer.result
 
@@ -171,14 +174,55 @@ fn expr_escapes(e: &Expr, al: &List(String), r: &TypeCheckResult, ov: &Inference
         Dereference(_) => mentions(e, al)
         NullPropagation(_) => mentions(e, al)
         Index(_) => mentions(e, al)
-        Cast(_) => mentions(e, al)
-        Binary(_) => mentions(e, al)
-        Unary(_) => mentions(e, al)
-        Range(_) => mentions(e, al)
-        Coalesce(_) => mentions(e, al)
         Try(_) => mentions(e, al)
+
+        // Operators.
+        Cast(c) => operand_escapes(c.operand, al, r, ov)
+        Binary(b) => operand_escapes(b.lhs, al, r, ov) or operand_escapes(b.rhs, al, r, ov)
+        Unary(u) => operand_escapes(u.operand, al, r, ov)
+        Range(g) => bound_escapes(g.start, al, r, ov) or bound_escapes(g.end, al, r, ov)
+        Coalesce(c) => operand_escapes(c.lhs, al, r, ov) or operand_escapes(c.rhs, al, r, ov)
         Lambda(_) => mentions(e, al)
+        // A rebind stores its arguments into the new context, which every callee in the body reads.
+        Context(_) => false
+        ContextBind(cb) => mentions_args(cb.args, al) or block_escapes(cb.body, al, r, ov)
         Error(_) => false
+    }
+}
+
+// An operator reads a scalar operand by value, so naming the parameter there takes no address and
+// only what the operand itself does can escape (`&p.x as usize` still does). An aggregate operand
+// crosses to an operator function by pointer, and a mention of the parameter in one copies.
+fn operand_escapes(e: &Expr, al: &List(String), r: &TypeCheckResult, ov: &InferenceResults?) bool {
+    if is_scalar(e, r, ov) {
+        return expr_escapes(e, al, r, ov)
+    }
+    return mentions(e, al)
+}
+
+fn bound_escapes(e: &Expr?, al: &List(String), r: &TypeCheckResult, ov: &InferenceResults?) bool {
+    return e match {
+        Some(x) => operand_escapes(x, al, r, ov)
+        None => false
+    }
+}
+
+// Whether the checker typed `e` as a value held in a register: a primitive, a reference or a
+// function. A node it did not type is not.
+fn is_scalar(e: &Expr, r: &TypeCheckResult, ov: &InferenceResults?) bool {
+    const id = node_id_of(expr_span(e))
+    const own = ov match {
+        Some(o) => o.get_type(id)
+        None => null
+    }
+    return (own ?? r.get_type(id)) match {
+        Some(ty) => r.interner.node(ty) match {
+            NPrim(_) => true
+            NRef(_) => true
+            NFunc(_) => true
+            _ => false
+        }
+        None => false
     }
 }
 
@@ -386,8 +430,23 @@ fn mentions(e: &Expr, al: &List(String)) bool {
             hit
         }
         Lambda(l) => mentions_block(l.body, al)
+        Context(_) => false
+        ContextBind(cb) => mentions_args(cb.args, al) or mentions_block(cb.body, al)
         Error(_) => false
     }
+}
+
+fn mentions_args(args: CallArgument[], al: &List(String)) bool {
+    for &a in args {
+        const e = a.* match {
+            Positional(p) => p
+            Named(n) => n.value
+        }
+        if mentions(e, al) {
+            return true
+        }
+    }
+    return false
 }
 
 fn mentions_block(b: &BlockExpr, al: &List(String)) bool {

@@ -368,7 +368,7 @@ Every named binding has a memory location. `let x = expr` performs a shallow byt
 - Caller passes address of each argument (implicit reference).
 - Callee reads through pointer (no copy for read-only access).
 - The compiler inserts a shadow copy (alloca + memcpy) when the body **writes** to a parameter or lets its **address escape**. All accesses then use the shadow.
-- Escape means: passed as an argument to any call, stored somewhere outliving the expression, or returned as an address. Reading a field, indexing, matching, and returning the value by copy are not escapes.
+- Escape means: passed as an argument to any call, stored somewhere outliving the expression, or returned as an address. Reading a field, indexing, matching, operating on a scalar read out of the parameter (`p.n + 1`, `n as i64`, `-n`), and returning the value by copy are not escapes.
 - The caller's value is never mutated by the callee.
 - A non-copyable parameter is never shadowed (§3.2 parameter modes): without `move` it cannot be written, and with `move` the caller no longer holds the value.
 
@@ -532,6 +532,49 @@ Zero initialization covers the whole allocation, not just the named fields: aggr
 **Arc atomics**: `Arc.retain()` uses `atomic_fetch_add`, `Arc.deinit()` uses `atomic_fetch_sub`. Backed by C11 `<stdatomic.h>` via `std.atomic`.
 
 **Conventions**: Internal fields use `__` prefix (`__inner`, `__allocator`). No `Weak` references yet — `RcInner` stays opaque for future addition.
+
+### 4.4 Runtime Context
+
+Every FLang function runs under one current **context** (RFC-038): a value of the compiler-provided type `Context` (declared in `core.runtime`, so the prelude makes it visible everywhere), whose fields are the program's `context` declarations. Code reads it, copies it and rebinds it for a scope; it never mutates it.
+
+```
+pub context logger: &Logger = &stderr_logger
+context span_depth: u32 = 0             // module-private
+
+fn handle(req: &Request) {
+    context.logger.info("start")
+    let saved = context                 // a copy, type `Context`
+    context(logger = &req.log) { run(req) }
+}
+```
+
+**Declaration.** `[pub] context <name>: <Type> = <default>`, top level only. The type and the default are both required; there is no zero-init.
+
+- The type is copyable (E2147): a context is copied by `let c = context`, by a rebind, and by `defer`. Shared or owned state goes in by reference (`&T`), owned by the scope that rebinds.
+- The default is a constant initializer (E2148): a literal, a negated number literal, a function name, a payload-less variant, the address of a module constant, a pointer cast of such an address, or a struct literal of those. The root context is a static, so it exists before any constant initializer runs.
+- Visibility is `pub` or module-private and covers both reading and rebinding. Two declarations of one name in one module are E2005.
+
+**Use.**
+
+- `context.<name>` reads a field. The name resolves among the fields visible from the module: its own, private or not, and the `pub` fields of the modules it sees (§6). None is E2150; two visible fields of one name are ambiguous (E2152).
+- `context` alone is a copy of the current context, of type `Context`. `ctx.<name>` reads a saved copy the same way, through a reference too (`c: &Context`).
+- The current context has no address (`&context`, `&context.f`: E2149) and is never assigned into (`context.f = v`: E2149). A by-value field passed to a `&T` receiver (`context.deadline.check()`) lends a copy. A `Context` is made only by `context`; a struct literal of it is E2153.
+
+**Rebinding.** `context(args) { body }` runs `body` under a new context. It is a block construct like `for` and `match`, not a call: `return`, `?`, `break`, `continue` and `defer` in the body act as in any block, and the construct is an expression whose value is the body's.
+
+- The arguments follow the call rule: an optional positional `Context` is the base (the current context when omitted), then named fields override it. The base comes first and only once (E2153); a field is named at most once (E2151); a named field is a visible one (E2150), typed by its declaration.
+- The arguments evaluate under the outer context, left to right. The change lasts exactly as long as the body; there is no form without one.
+- One token after `context` decides the form: `(` a rebind, `.` a field read, anything else a copy.
+
+**Semantics.**
+
+1. **Dynamic scope.** A callee runs under its caller's context at the time of the call.
+2. **Closures do not capture the context.** A closure runs under whoever calls it. To run under the creator's context, capture a copy and rebind to it inside the body: `const saved = context; fn() { context(saved) { work() } }`.
+3. **`defer` keeps its own context**: the deferred expression runs under the context current where it was written, wherever the scope is left from.
+4. **Generics are unaffected.** The context is not part of an instantiation.
+5. **Entry.** `main`, the constant initializers and every `test {}` block run under the root context: every field at its default.
+
+**ABI.** Every FLang function, closure body and test block takes the address of the current context (`const Context *`) as its first parameter, and every call to one passes it; `#foreign` functions take none. A `fn` value is a FLang function, so a call through one passes the context too, and a `#foreign` function is no `fn` value (lowering refuses it). A rebind builds the new context in the caller's frame and passes its address within the body; leaving the body needs no code. The layout of `Context` holds every field of the program, ordered by module FQN then declaration order.
 
 ---
 
@@ -1098,7 +1141,7 @@ Complex constructs (`for`, `if` expressions, `defer`, `match`) are desugared to 
 pub fn main() i32
 ```
 
-Returns exit code. `0` indicates success. An entry point is required for an executable project (`kind = "exe"`) but not for a library (`kind = "lib"`), which is consumed by source and never linked. Every `flang.toml` must declare `[project].kind` as `"exe"` or `"lib"`.
+Returns exit code. `0` indicates success. `main` runs under the root context (§4.4). An entry point is required for an executable project (`kind = "exe"`) but not for a library (`kind = "lib"`), which is consumed by source and never linked. Every `flang.toml` must declare `[project].kind` as `"exe"` or `"lib"`.
 
 ### 9.2 Testing
 

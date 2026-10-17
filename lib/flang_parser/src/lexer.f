@@ -757,6 +757,7 @@ fn keyword_or_identifier(word: String) TokenKind {
         "struct" => TokenKind.Struct
         "enum" => TokenKind.Enum
         "contract" => TokenKind.Contract
+        "context" => TokenKind.Context
         "match" => TokenKind.Match
         "as" => TokenKind.As
         "test" => TokenKind.Test

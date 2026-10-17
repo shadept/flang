@@ -175,6 +175,10 @@ type LowerCtx = struct {
     // `core.rtti.TypeInfo` descriptors minted so far, keyed by type (`static_typeinfo`): one global
     // per type for the whole program, so `&TypeInfo` identity is type identity.
     rtti_syms: Dict(Ty, String)
+    // The current context's address (RFC-038): the function's context parameter, a rebind's slot
+    // inside its body, or the root global under `main` and the constant initializers. Every FLang
+    // call passes it first.
+    cur_ctx: Operand
 }
 
 // One lowered module-level constant: its global's symbol, its init function's symbol, and its
@@ -276,15 +280,24 @@ type LoopFrame = struct {
 }
 
 type DeferItem = enum {
-    Code(&Expr)
+    Code(DeferCode)
     Release(IterRelease)
 }
 
-// A `for` loop's call of its iterator's `deinit`: the loop owns the state `iter` returned.
+// A `defer`'s expression and the context current where it was written, which it runs under wherever
+// it fires (RFC-038).
+type DeferCode = struct {
+    expr: &Expr
+    cx: Operand
+}
+
+// A `for` loop's call of its iterator's `deinit`: the loop owns the state `iter` returned. `cx` is
+// the context current at the loop.
 type IterRelease = struct {
     sym: String
     sig: &FnSig
     state: Operand
+    cx: Operand
 }
 
 // Lexical environment: a stack of bindings, innermost last. A block marks the stack on entry and
@@ -442,11 +455,15 @@ pub fn lower_module(
         testing = false,
         next_test = 0,
         rtti_syms = dict(allocator),
+        cur_ctx = Operand.GlobalRef(ROOT_CONTEXT_SYM),
     }
     lower_consts(&m, &ctx, ast_module)
+    let no_fqns: OwnedString[]
+    const root = lower_root_context(&m, &ctx, slice_from_raw_parts(ast_module, 1), no_fqns)
     lower_into(&m, &ctx, ast_module, "")
     lower_specializations(&m, &ctx)
     lower_pending_lambdas(&m, &ctx)
+    ctx.globals.push(root)
     flush_globals(&m, &ctx)
     wire_const_inits(&m, &ctx)
     ctx.globals.deinit()
@@ -522,6 +539,7 @@ pub fn lower_program(
         testing = tests.is_some(),
         next_test = 0,
         rtti_syms = dict(allocator),
+        cur_ctx = Operand.GlobalRef(ROOT_CONTEXT_SYM),
     }
     // A module outside the demand set (RFC-022 §6) was never body-checked: it has no node types to
     // lower, and nothing demanded can reach its functions or constants - identifier, operator and
@@ -533,6 +551,8 @@ pub fn lower_program(
             lower_consts(&m, &ctx, &modules[i])
         }
     }
+    // After the consts: a default may be the address of one.
+    const root = lower_root_context(&m, &ctx, modules.as_slice(), fqns.as_slice())
     for i in 0..modules.len {
         if module_demanded(demanded, i) {
             lower_into(&m, &ctx, &modules[i], fqns[i].view)
@@ -565,6 +585,7 @@ pub fn lower_program(
     }
     lower_specializations(&m, &ctx, Some(&skip_specs))
     lower_pending_lambdas(&m, &ctx)
+    ctx.globals.push(root)
     flush_globals(&m, &ctx)
     // ponytail: the symbol table leaks - the IrModule's names borrow its strings (see
     // lower_module).
@@ -693,25 +714,25 @@ fn instr_dead_global(
     defined: &Dict(String, bool),
 ) String? {
     return ins.* match {
-        Binary(x) => two_dead(&x.lhs, &x.rhs, init_of, defined)
-        Unary(x) => one_dead(&x.operand, init_of, defined)
-        Compare(x) => two_dead(&x.lhs, &x.rhs, init_of, defined)
-        Convert(x) => one_dead(&x.operand, init_of, defined)
+        Binary(x) => two_dead(x.lhs, x.rhs, init_of, defined)
+        Unary(x) => one_dead(x.operand, init_of, defined)
+        Compare(x) => two_dead(x.lhs, x.rhs, init_of, defined)
+        Convert(x) => one_dead(x.operand, init_of, defined)
         StackSlot(_) => null
-        Load(x) => one_dead(&x.ptr, init_of, defined)
-        Store(x) => two_dead(&x.value, &x.ptr, init_of, defined)
-        Gep(x) => two_dead(&x.ptr, &x.offset, init_of, defined)
+        Load(x) => one_dead(x.ptr, init_of, defined)
+        Store(x) => two_dead(x.value, x.ptr, init_of, defined)
+        Gep(x) => two_dead(x.ptr, x.offset, init_of, defined)
         Memcpy(x) => {
-            let d = two_dead(&x.dst, &x.src, init_of, defined)
+            let d = two_dead(x.dst, x.src, init_of, defined)
             if d.is_some() {
                 return d
             }
-            one_dead(&x.size, init_of, defined)
+            one_dead(x.size, init_of, defined)
         }
-        Memset(x) => two_dead(&x.dst, &x.size, init_of, defined)
+        Memset(x) => two_dead(x.dst, x.size, init_of, defined)
         Call(x) => list_dead(&x.args, init_of, defined)
         CallIndirect(x) => {
-            let d = one_dead(&x.fn_ptr, init_of, defined)
+            let d = one_dead(x.fn_ptr, init_of, defined)
             if d.is_some() {
                 return d
             }
@@ -728,7 +749,7 @@ fn term_dead_global(
     return t.* match {
         Br(bt) => list_dead(&bt.args, init_of, defined)
         BrIf(bi) => {
-            let d = one_dead(&bi.cond, init_of, defined)
+            let d = one_dead(bi.cond, init_of, defined)
             if d.is_some() {
                 return d
             }
@@ -739,15 +760,15 @@ fn term_dead_global(
             list_dead(&bi.else_target.args, init_of, defined)
         }
         Ret(v) => v match {
-            Some(op) => one_dead(&op, init_of, defined)
+            Some(op) => one_dead(op, init_of, defined)
             None => null
         }
         Unreachable => null
     }
 }
 
-fn one_dead(op: &Operand, init_of: &Dict(String, String), defined: &Dict(String, bool)) String? {
-    op.* match {
+fn one_dead(op: Operand, init_of: &Dict(String, String), defined: &Dict(String, bool)) String? {
+    op match {
         GlobalRef(g) => {
             let ini = init_of.get(g)
             ini match {
@@ -765,8 +786,8 @@ fn one_dead(op: &Operand, init_of: &Dict(String, String), defined: &Dict(String,
 }
 
 fn two_dead(
-    a: &Operand,
-    b: &Operand,
+    a: Operand,
+    b: Operand,
     init_of: &Dict(String, String),
     defined: &Dict(String, bool),
 ) String? {
@@ -783,7 +804,7 @@ fn list_dead(
     defined: &Dict(String, bool),
 ) String? {
     for i in 0..ops.len {
-        let d = one_dead(&ops[i], init_of, defined)
+        let d = one_dead(ops[i], init_of, defined)
         if d.is_some() {
             return d
         }
@@ -870,6 +891,8 @@ fn lower_test_block(m: &IrModule, ctx: &LowerCtx, td: &TestDecl, fqn: String) {
     let sym = park_sym(ctx, $"__ftest_{index}__")
 
     let fb = function(sym, null, ctx.allocator)
+    fb.set_cc(CallConv.Flang)
+    ctx.cur_ctx = fb.param(IrType.Ptr)
     let env = new_env(ctx.allocator)
     let cur = fb.entry()
     ctx.blocked = false
@@ -987,6 +1010,107 @@ fn lower_consts(m: &IrModule, ctx: &LowerCtx, ast_module: &Module) {
     }
 }
 
+// The root context (RFC-038): one static holding every field's default at its `Context` offset. A
+// default is a constant initializer (E2148), so its bytes and relocations are known here. `fqns[i]`
+// is `modules[i]`'s FQN; a module past the end of `fqns` has the empty one.
+//
+// The global is the caller's to push, after every other: the plain globals its relocations name
+// have to precede it.
+fn lower_root_context(
+    m: &IrModule,
+    ctx: &LowerCtx,
+    modules: Module[],
+    fqns: OwnedString[],
+) Global {
+    let target = context_target(ctx)
+    if target.is_none() {
+        return root_global(ctx, filled_list(1, 0u8, ctx.allocator), list(0, ctx.allocator), 1)
+    }
+    let st = target.unwrap()
+    // A C object has at least one byte.
+    const size = if st.layout.size == 0 { 1usize } else { st.layout.size }
+    let blob: List(u8) = filled_list(size, 0u8, ctx.allocator)
+    let rel: List(Reloc) = list(0, ctx.allocator)
+    for i in 0..modules.len {
+        const fqn = if i < fqns.len { fqns[i].view } else { "" }
+        for &d in modules[i].decls {
+            d.* match {
+                Context(cd) => root_default(m, ctx, &st, &cd, fqn, &blob, &rel)
+                _ => {}
+            }
+        }
+    }
+    return root_global(ctx, blob, rel, st.layout.align)
+}
+
+fn root_global(ctx: &LowerCtx, blob: move List(u8), rel: move List(Reloc), align: usize) Global {
+    const bytes = blob.as_slice()
+    const rs = rel.as_slice()
+    ctx.const_blobs.push(blob)
+    ctx.const_relocs.push(rel)
+    return Global {
+        name = ROOT_CONTEXT_SYM,
+        size = bytes.len as u64,
+        align = align as u64,
+        init_bytes = Some(bytes),
+        relocs = Some(rs),
+    }
+}
+
+// One field's default, encoded at its offset in the root context.
+fn root_default(
+    m: &IrModule,
+    ctx: &LowerCtx,
+    st: &StructTarget,
+    cd: &ContextDecl,
+    module: String,
+    blob: &List(u8),
+    rel: &List(Reloc),
+) {
+    const fqn = if module.len == 0 { from_view(cd.name, ctx.allocator) } else {
+        $"{module}.{cd.name}"
+    }
+    defer fqn.deinit()
+    const idx = context_index(ctx, fqn.view)
+    if idx.is_none() {
+        return
+    }
+    const i = idx.unwrap()
+    const fty = field_ty(tyit(ctx), &st.def, i, &st.args, &ctx.result.nominals)
+    if !const_bytes(ctx, &fty, cd.value, blob, rel, st.layout.offsets[i]) {
+        m.skip_notes.push($"{fqn.view}: context default not encodable")
+    }
+}
+
+// The `Context` struct (RFC-038), or null when `core.runtime` is not in the program.
+fn context_target(ctx: &LowerCtx) StructTarget? {
+    return well_known_ty(ctx, FQN_CONTEXT) match {
+        Some(t) => resolve_struct(ctx, &t, &ctx.result.nominals, ctx.allocator)
+        None => null
+    }
+}
+
+// The layout index of the context field `fqn`: its position in the assembled `Context`.
+fn context_index(ctx: &LowerCtx, fqn: String) usize? {
+    for i in 0..ctx.result.context_fields.len {
+        if ctx.result.context_fields[i].view == fqn {
+            return Some(i)
+        }
+    }
+    return null
+}
+
+// The context field the node at `span` resolved to, by FQN.
+fn context_field_at(ctx: &LowerCtx, span: SourceSpan) String? {
+    return ctx_target(ctx, node_id_of(span)) match {
+        Some(t) => t match {
+            RtContextField(f) => Some(f)
+            _ => null
+        }
+        None => null
+    }
+}
+
 // The shape behind a handle - lowering-side shorthand.
 fn tn(ctx: &LowerCtx, t: Ty) TyNode {
     return ctx.it.node(t)
@@ -1095,6 +1219,7 @@ fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
     let fb = function(isym, null, ctx.allocator)
     let env = new_env(ctx.allocator)
     let cur = fb.entry()
+    ctx.cur_ctx = Operand.GlobalRef(ROOT_CONTEXT_SYM)
     ctx.blocked = false
     ctx.blocked_note = null
     ctx.blocked_subject = null
@@ -1345,7 +1470,8 @@ fn const_fn_ref(ctx: &LowerCtx, ty: &Ty, id: &IdentifierExpr, rel: &List(Reloc),
         return false
     }
     let sym = tgt.unwrap() match {
-        RtFunction(f) => ctx.syms.lookup_symbol(f)
+        // A `#foreign` function takes no context, so it is no fn value (RFC-038).
+        RtFunction(f) => if ctx.syms.is_foreign(f) { null } else { ctx.syms.lookup_symbol(f) }
         _ => null
     }
     if sym.is_none() {
@@ -1809,6 +1935,14 @@ fn lower_function_body(
     }
 
     let fb = function(sym, return_ir, ctx.allocator)
+    // Every FLang function takes the caller's context first (RFC-038). `main` takes none: the C
+    // entry point calls it, and it runs under the root.
+    if sym == "main" {
+        ctx.cur_ctx = Operand.GlobalRef(ROOT_CONTEXT_SYM)
+    } else {
+        fb.set_cc(CallConv.Flang)
+        ctx.cur_ctx = fb.param(IrType.Ptr)
+    }
     let env = new_env(ctx.allocator)
     // A closure op_call takes its environment struct's address as a leading parameter, before the
     // lambda's own parameters (and before the sret slot, mirroring the call-site layout in
@@ -2040,8 +2174,11 @@ fn emit_defers_down_to(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, target: usi
     while i > target {
         i = i - 1
         ctx.defers[i] match {
-            Code(e) => {
-                let _v = lower_expr(ctx, bb, env, e)
+            Code(c) => {
+                const outer = ctx.cur_ctx
+                ctx.cur_ctx = c.cx
+                let _v = lower_expr(ctx, bb, env, c.expr)
+                ctx.cur_ctx = outer
             }
             Release(r) => emit_release(ctx, bb, r)
         }
@@ -2052,7 +2189,10 @@ fn emit_defers_down_to(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, target: usi
 fn emit_release(ctx: &LowerCtx, bb: &BlockBuilder, r: IterRelease) {
     let args: List(Operand) = list(1, ctx.allocator)
     args.push(r.state)
+    const outer = ctx.cur_ctx
+    ctx.cur_ctx = r.cx
     let _v = emit_call(ctx, bb, r.sym, r.sig, args)
+    ctx.cur_ctx = outer
 }
 
 // A block in expression position: its value, or the placeholder when it yields nothing.
@@ -2072,8 +2212,16 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
             return true
         }
         Let(l) => lower_let(ctx, bb, env, &l)
-        Expression(e) => {
-            let _u = lower_expr(ctx, bb, env, e.expr)
+        // A rebind in statement position reports its body's termination, as a block would.
+        Expression(e) => e.expr.* match {
+            ContextBind(cb) => {
+                if lower_context_bind(ctx, bb, env, &cb).terminated {
+                    return true
+                }
+            }
+            _ => {
+                let _u = lower_expr(ctx, bb, env, e.expr)
+            }
         }
         While(w) => lower_while(ctx, bb, env, &w)
         Loop(l) => lower_loop(ctx, bb, env, &l)
@@ -2084,7 +2232,7 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
         // `defer expr` - registered on the schedule; it fires at the enclosing scope's exit and at
         // every escaping jump that passes through it (`return`, `break`, `continue`, `?`). The
         // schedule holds the arena's `&Expr` directly, so registering a defer copies nothing.
-        Defer(d) => ctx.defers.push(DeferItem.Code(d.expr))
+        Defer(d) => ctx.defers.push(DeferItem.Code(DeferCode { expr = d.expr, cx = ctx.cur_ctx }))
 
         // Not lowered yet - named rather than caught by a wildcard, so adding a `Stmt` variant is a
         // compile error here instead of a silent skip.
@@ -2302,6 +2450,9 @@ fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand
         // headers still handle their own range directly (see `lower_for_range`).
         Range(rg) => lower_range_value(ctx, bb, env, &rg)
         Lambda(lam) => lower_lambda(ctx, bb, env, &lam)
+        // A `Context` value is its address, like any aggregate: the binding or callee copies.
+        Context(_) => ctx.cur_ctx
+        ContextBind(cb) => lower_context_bind_value(ctx, bb, env, &cb)
         // A parse or projection failure. Already diagnosed upstream; refusing the function keeps a
         // recovered AST from reaching the backend. Not part of the milestone scaffold - this one
         // stays.
@@ -2309,6 +2460,106 @@ fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand
             ctx.blocked = true
             Operand.IntConst(0)
         }
+    }
+}
+
+// `context(base?, f = v, ...) { body }` (RFC-038): a copy of the base with the named fields
+// replaced, in a slot of this frame whose address is the current context for the body. The
+// arguments evaluate under the outer context. Leaving the body needs no code - the outer context's
+// pointer is still live - so `return`, `?` and `break` out of it are correct as they are.
+fn lower_context_bind(
+    ctx: &LowerCtx,
+    bb: &BlockBuilder,
+    env: &Env,
+    cb: &ContextBindExpr,
+) BlockResult {
+    const target = context_target(ctx)
+    if target.is_none() {
+        let _u = unlowerable_why(ctx, "context rebind without core.runtime")
+        return BlockResult { terminated = false, value = null }
+    }
+    const st = target.unwrap()
+    let base = ctx.cur_ctx
+    for &a in cb.args {
+        a.* match {
+            Positional(e) => base = lower_expr(ctx, bb, env, e)
+            Named(_) => {}
+        }
+    }
+    const slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
+    bb.memcpy(slot, base, Operand.IntConst(st.layout.size as i64))
+    for &a in cb.args {
+        a.* match {
+            Positional(_) => {}
+            Named(n) => store_context_field(ctx, bb, env, &st, slot, &n)
+        }
+    }
+    const outer = ctx.cur_ctx
+    ctx.cur_ctx = slot
+    const r = lower_block(ctx, bb, env, cb.body)
+    ctx.cur_ctx = outer
+    return r
+}
+
+// A rebind in expression position: its body's value. Code after a body that always leaves is
+// unreachable, and goes to a block of its own so the body's terminator stands.
+fn lower_context_bind_value(
+    ctx: &LowerCtx,
+    bb: &BlockBuilder,
+    env: &Env,
+    cb: &ContextBindExpr,
+) Operand {
+    const r = lower_context_bind(ctx, bb, env, cb)
+    if r.terminated {
+        const after = bb.fb.block(bb.fb.fresh_label("ctx_after"))
+        bb.move_to(&after)
+        return Operand.IntConst(0)
+    }
+    return unwrap_or(r.value, Operand.IntConst(0))
+}
+
+// One `f = v` of a rebind, stored at `f`'s offset in the new context.
+fn store_context_field(
+    ctx: &LowerCtx,
+    bb: &BlockBuilder,
+    env: &Env,
+    st: &StructTarget,
+    slot: Operand,
+    n: &NamedCallArgument,
+) {
+    const idx = context_field_at(ctx, n.span) match {
+        Some(f) => context_index(ctx, f)
+        None => null
+    }
+    if idx.is_none() {
+        let _u = unlowerable_about(ctx, "context field unresolved", n.name)
+        return
+    }
+    const i = idx.unwrap()
+    const fty = field_ty(tyit(ctx), &st.def, i, &st.args, &ctx.result.nominals)
+    const v = lower_adapted(ctx, bb, env, n.value, &fty)
+    const at = bb.gep(slot, Operand.IntConst(st.layout.offsets[i] as i64))
+    if is_by_ref(ctx, &fty) {
+        bb.memcpy(at, v, Operand.IntConst(lay_of(ctx, fty).size as i64))
+        return
+    }
+    bb.store(ir_of(ctx, fty), v, at)
+}
+
+// Whether `e` names storage inside the current context: `context` itself, or a field reached from
+// it without crossing a reference. The current context is never written (RFC-038), so a borrow of
+// such storage borrows a copy.
+fn in_current_context(ctx: &LowerCtx, e: &Expr) bool {
+    return e.* match {
+        Context(_) => true
+        MemberAccess(ma) => {
+            const through_ref = tn(ctx, node_ty(ctx, expr_span(ma.receiver))) match {
+                NRef(_) => true
+                _ => false
+            }
+            !through_ref and in_current_context(ctx, ma.receiver)
+        }
+        _ => false
     }
 }
 
@@ -2647,7 +2898,12 @@ fn push_iter_release(ctx: &LowerCtx, f: &ForStmt, state: Operand, recv: Operand,
     }
     const s = sig.unwrap()
     const owned = if s.params.len > 0 and s.params[0] == state_ty.* { state } else { recv }
-    ctx.defers.push(DeferItem.Release(IterRelease { sym = sym.unwrap(), sig = s, state = owned }))
+    ctx.defers.push(DeferItem.Release(IterRelease {
+        sym = sym.unwrap(),
+        sig = s,
+        state = owned,
+        cx = ctx.cur_ctx,
+    }))
 }
 
 fn lower_for_range(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt, rng: &RangeExpr) {
@@ -3284,6 +3540,18 @@ fn receiver_by_ref(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, wa
         NRef(i) => i
         _ => return unlowerable_why(ctx, "by-reference receiver on a value parameter")
     }
+    if in_current_context(ctx, recv) {
+        const v = lower_expr(ctx, bb, env, recv)
+        if is_by_ref(ctx, &inner) {
+            const lay = lay_of(ctx, inner)
+            const copy = bb.stack_slot(lay.size as u64, lay.align as u64)
+            bb.memcpy(copy, v, Operand.IntConst(lay.size as i64))
+            return copy
+        }
+        const spill = alloc_slot(bb, ir_of(ctx, inner))
+        bb.store(ir_of(ctx, inner), v, spill)
+        return spill
+    }
     if is_by_ref(ctx, &inner) {
         return lower_expr(ctx, bb, env, recv)
     }
@@ -3837,19 +4105,24 @@ fn emit_call(
     if foreign {
         return emit_foreign_call(ctx, bb, sym, sig, args)
     }
+    // The current context goes first (RFC-038).
+    let full: List(Operand) = list(args.len + 2, ctx.allocator)
+    full.push(ctx.cur_ctx)
+    full.push_all(args.as_slice())
+    args.deinit()
     if is_by_ref(ctx, &sig.ret) {
         let lay = lay_of(ctx, sig.ret)
         let tmp = bb.stack_slot(lay.size as u64, lay.align as u64)
-        args.push(tmp)
-        bb.call_void(sym, args)
+        full.push(tmp)
+        bb.call_void(sym, full)
         return tmp
     }
     let returns_value = !(sig.ret == TY_VOID or sig.ret == TY_NEVER)
     if !returns_value {
-        bb.call_void(sym, args)
+        bb.call_void(sym, full)
         return Operand.IntConst(0)
     }
-    return bb.call(sym, ir_of(ctx, sig.ret), args)
+    return bb.call(sym, ir_of(ctx, sig.ret), full)
 }
 
 // A call across a C boundary. Aggregates travel BY VALUE here, not by address as they do between
@@ -3947,18 +4220,21 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
     let f = ft.unwrap()
     let fn_ptr = lower_expr(ctx, bb, env, call.callee)
     let n_fparams = f.params.len
-    let ptys: List(IrType) = list(n_fparams + 1, ctx.allocator)
+    // A fn value is a FLang function: the current context goes first (RFC-038).
+    let ptys: List(IrType) = list(n_fparams + 2, ctx.allocator)
+    ptys.push(IrType.Ptr)
     for i in 0..n_fparams {
         ptys.push(ir_of(ctx, tyit(ctx).child_at(f.params, i)))
     }
-    let args: List(Operand) = list(call.args.len + 1, ctx.allocator)
+    let args: List(Operand) = list(call.args.len + 2, ctx.allocator)
+    args.push(ctx.cur_ctx)
     for i in 0..call.args.len {
         call.args[i] match {
             Positional(e) => args.push(lower_expr(ctx, bb, env, e))
             Named(_) => {}
         }
     }
-    if args.len != n_fparams {
+    if args.len != n_fparams + 1 {
         args.deinit()
         ptys.deinit()
         return unlowerable(ctx)
@@ -3974,15 +4250,15 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
         let tmp = bb.stack_slot(lay.size as u64, lay.align as u64)
         args.push(tmp)
         ptys.push(IrType.Ptr)
-        bb.call_indirect_void(fn_ptr, ptys, args)
+        bb.call_indirect_void(fn_ptr, ptys, args, CallConv.Flang)
         return tmp
     }
     let returns_value = !(f.ret == TY_VOID or f.ret == TY_NEVER)
     if !returns_value {
-        bb.call_indirect_void(fn_ptr, ptys, args)
+        bb.call_indirect_void(fn_ptr, ptys, args, CallConv.Flang)
         return Operand.IntConst(0)
     }
-    return bb.call_indirect(fn_ptr, ptys, ir_of(ctx, f.ret), args)
+    return bb.call_indirect(fn_ptr, ptys, ir_of(ctx, f.ret), args, CallConv.Flang)
 }
 
 // Structs and member access (M4, minimal)
@@ -5652,7 +5928,14 @@ fn member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
         return null
     }
     let st = target.unwrap()
-    let di = field_index(&st.def, ma.member)
+    // A context field (RFC-038) is found by FQN: two modules may each declare one of a name.
+    let di = context_field_at(ctx, ma.span) match {
+        Some(f) => context_index(ctx, f) match {
+            Some(i) => i as i64
+            None => -1
+        }
+        None => field_index(&st.def, ma.member)
+    }
     if di < 0 {
         return null
     }
@@ -6647,6 +6930,15 @@ fn lower_identifier(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, id: &Identifie
         if tgt.is_some() {
             tgt.unwrap() match {
                 RtFunction(f) => {
+                    // A `#foreign` function takes no context, so a call through the value would
+                    // hand it one it does not expect (RFC-038).
+                    if ctx.syms.is_foreign(f) {
+                        return unlowerable_about(
+                            ctx,
+                            "a #foreign function used as a value",
+                            id.name,
+                        )
+                    }
                     let s = ctx.syms.lookup_symbol(f)
                     if s.is_some() {
                         return Operand.FuncRef(s.unwrap())
@@ -6986,7 +7278,7 @@ fn mul_op(bb: &BlockBuilder, ir: IrType, fl: bool, lhs: Operand, rhs: Operand) O
 }
 
 fn div_op(bb: &BlockBuilder, ir: IrType, fl: bool, sg: bool, lhs: Operand, rhs: Operand) Operand {
-    if is_const_zero(&rhs) {
+    if is_const_zero(rhs) {
         return Operand.IntConst(0)
     }
     if fl {
@@ -6999,7 +7291,7 @@ fn div_op(bb: &BlockBuilder, ir: IrType, fl: bool, sg: bool, lhs: Operand, rhs: 
 }
 
 fn mod_op(bb: &BlockBuilder, ir: IrType, sg: bool, lhs: Operand, rhs: Operand) Operand {
-    if is_const_zero(&rhs) {
+    if is_const_zero(rhs) {
         return Operand.IntConst(0)
     }
     if sg {
@@ -7010,8 +7302,8 @@ fn mod_op(bb: &BlockBuilder, ir: IrType, sg: bool, lhs: Operand, rhs: Operand) O
 
 // A literal zero divisor is a constant expression C refuses to compile; placeholder lowering
 // produces them, so dividing by one lowers to a placeholder value too.
-fn is_const_zero(op: &Operand) bool {
-    return op.* match {
+fn is_const_zero(op: Operand) bool {
+    return op match {
         IntConst(n) => n == 0
         _ => false
     }
@@ -7615,7 +7907,7 @@ test "lowers a direct call to the callee's mangled symbol" {
         first_callee(&m.functions[mi]) == "callee__i32__r_i32",
         "call names the callee's signature symbol",
     )
-    assert_eq(first_call_argc(&m.functions[mi]), 1 as usize, "one argument passed")
+    assert_eq(first_call_argc(&m.functions[mi]), 2 as usize, "the context and one argument")
 }
 
 test "a UFCS call passes the receiver as the first argument" {
@@ -7632,7 +7924,11 @@ test "a UFCS call passes the receiver as the first argument" {
         first_callee(&m.functions[mi]) == "twice__i32__r_i32",
         "UFCS resolves to the free function",
     )
-    assert_eq(first_call_argc(&m.functions[mi]), 1 as usize, "the receiver is the only argument")
+    assert_eq(
+        first_call_argc(&m.functions[mi]),
+        2 as usize,
+        "the context, then the receiver as the only argument",
+    )
 }
 
 test "a call site names the resolved overload's symbol, not the other one" {
@@ -7687,7 +7983,7 @@ test "lowers a function over parameters into an add and a return" {
     assert_eq(m.functions.len, 1 as usize, "one function lowered")
     let f = &m.functions[0]
     assert_true(f.name == "add__i32__i32__r_i32", "definition carries its signature symbol")
-    assert_eq(f.params.len, 2 as usize, "two parameters")
+    assert_eq(f.params.len, 3 as usize, "the context and two parameters")
     assert_eq(f.blocks.len, 1 as usize, "single straight-line block")
 
     let is_ret = f.blocks[0].terminator match { Ret(_) => true, _ => false }
@@ -8550,7 +8846,7 @@ test "a ref-form index operator is called, and its result is the address to load
     let m = lower_module(&unit.module, &unit.result)
     let f = &m.functions[find_fn_starting(&m, "f__ref")]
     assert_eq(call_count(f), 1 as usize, "the operator is called once")
-    assert_eq(first_call_argc(f), 2 as usize, "receiver and index")
+    assert_eq(first_call_argc(f), 3 as usize, "context, receiver and index")
     assert_true(is_load_result(f, returned_local(f)), "the value is loaded, not the pointer itself")
 }
 
@@ -8683,7 +8979,7 @@ test "an aggregate parameter arrives by pointer, and a read-only body copies not
     let ci = find_fn_starting(&m, "get_0x__")
     assert_true(ci < m.functions.len, "the by-value struct signature is lowerable now")
     let callee = &m.functions[ci]
-    assert_eq(callee.params.len, 1 as usize, "one pointer parameter carries the struct")
+    assert_eq(callee.params.len, 2 as usize, "the context, then one pointer carrying the struct")
     assert_eq(
         memcpy_count(callee),
         0 as usize,
@@ -8709,7 +9005,7 @@ test "an aggregate return travels through a trailing sret parameter" {
     let ci = find_fn_starting(&m, "make__i32")
     assert_true(ci < m.functions.len, "the aggregate-returning signature is lowerable now")
     let callee = &m.functions[ci]
-    assert_eq(callee.params.len, 2 as usize, "the declared param plus the sret pointer")
+    assert_eq(callee.params.len, 3 as usize, "the context, the declared param, the sret pointer")
     assert_true(
         callee.return_ty.is_none(),
         "FIR return slot is empty - the buffer carries the value",
@@ -8803,6 +9099,32 @@ test "returning an aggregate parameter copies out, not in (RFC-026)" {
     let f = &m.functions[find_fn_starting(&m, "f__")]
     // One copy, into the caller's sret buffer. Reading the parameter's bytes is not an escape.
     assert_eq(memcpy_count(f), 1 as usize, "the sret copy, and no prologue spill")
+}
+
+test "operators over scalars read out of an aggregate parameter copy nothing (RFC-026)" {
+    let unit = analyze(
+        from_view(
+            "type Pt = struct { x: i32, y: i32 }\ntype Op = enum { Local(u32), Int(i64) }\nfn f(op: Op) i64 { return op match { Local(id) => id as i64 + 1, Int(n) => -n } }\nfn g(p: Pt) bool { return p.x + 1 > -p.y }",
+        ),
+        "test.f",
+    )
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "f__")]
+    assert_eq(memcpy_count(f), 0 as usize, "a cast, arithmetic and negation of payload bindings")
+    let g = &m.functions[find_fn_starting(&m, "g__")]
+    assert_eq(memcpy_count(g), 0 as usize, "arithmetic and a comparison over fields")
+}
+
+test "an address inside an operator's operand still copies (RFC-026)" {
+    let unit = analyze(
+        from_view(
+            "type Pt = struct { x: i32, y: i32 }\n#allow(W2004)\nfn f(p: Pt) usize { return &p.x as usize }",
+        ),
+        "test.f",
+    )
+    let m = lower_module(&unit.module, &unit.result)
+    let f = &m.functions[find_fn_starting(&m, "f__")]
+    assert_eq(memcpy_count(f), 1 as usize, "the cast reads an address into the parameter")
 }
 
 test "a non-copyable `move` parameter is never shadowed: it owns the caller's storage (RFC-033)" {
@@ -8922,7 +9244,7 @@ test "a scalar module const encodes into its global, with no init function" {
         find_fn(&m, "__finit_test__f__K") >= m.functions.len,
         "a known value needs no init function",
     )
-    assert_eq(m.globals.len, 1 as usize, "one global backs the const")
+    assert_eq(m.globals.len, 2 as usize, "one global backs the const, beside the root context")
     let bytes = m.globals[0].init_bytes.unwrap()
     assert_eq(bytes.len, 4 as usize, "sized to the i32 layout")
     assert_eq(bytes[0], 7 as u8, "little-endian 7")
@@ -8998,7 +9320,11 @@ test "a const whose initializer cannot lower has no global, and its readers refu
         find_fn(&m, "__finit_test__f__B2") >= m.functions.len,
         "no init function for the unlowerable const",
     )
-    assert_eq(m.globals.len, 0 as usize, "and no global to read zeros out of")
+    assert_eq(
+        m.globals.len,
+        1 as usize,
+        "and no global to read zeros out of: the root context only",
+    )
     assert_true(was_skipped(&m, "main"), "reading an unavailable const refuses the reader")
 }
 
@@ -9151,7 +9477,7 @@ test "an enum parameter passes by value and its payload binds in a match" {
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "a by-value enum signature is lowerable now")
     let f = &m.functions[fi]
-    assert_eq(f.params.len, 1 as usize, "one pointer parameter carries the enum")
+    assert_eq(f.params.len, 2 as usize, "the context, then one pointer carrying the enum")
     assert_true(block_count_starting(f, "m_arm") == 2 as usize, "both arms lowered")
 }
 
@@ -9545,7 +9871,7 @@ test "a string literal builds a {ptr,len} view over a data-segment global" {
     let m = lower_module(&unit.module, &unit.result)
     let fi = find_fn(&m, "f__r_core__string__String")
     assert_true(fi < m.functions.len, "a function returning a string literal lowers")
-    assert_eq(m.globals.len, 1 as usize, "one global holds the bytes")
+    assert_eq(m.globals.len, 2 as usize, "one global holds the bytes, beside the root context")
     assert_true(m.globals[0].size == 3u64, "two content bytes plus the null terminator")
     let bytes = m.globals[0].init_bytes.unwrap()
     assert_true(bytes[0] == 'h', "the decoded content is in the data segment")
@@ -9563,7 +9889,11 @@ test "identical string literals share one global; distinct ones do not" {
         "core.string",
     )
     let m = lower_module(&unit.module, &unit.result)
-    assert_eq(m.globals.len, 2 as usize, "hi interns once across functions; yo gets its own global")
+    assert_eq(
+        m.globals.len,
+        3 as usize,
+        "hi interns once across functions; yo gets its own global; then the root context",
+    )
 }
 
 test "string escapes decode before reaching the data segment" {
@@ -9574,7 +9904,7 @@ test "string escapes decode before reaching the data segment" {
         "core.string",
     )
     let m = lower_module(&unit.module, &unit.result)
-    assert_eq(m.globals.len, 1 as usize, "one global")
+    assert_eq(m.globals.len, 2 as usize, "one global, beside the root context")
     assert_true(m.globals[0].size == 4u64, "three decoded bytes plus the terminator")
     let bytes = m.globals[0].init_bytes.unwrap()
     assert_true(bytes[1] == 10, "the escape became the raw newline byte")
@@ -9778,7 +10108,7 @@ test "an interpolated string lowers through its recorded desugar" {
         "all desugared calls emit, deinit included",
     )
     // "v=", "!", the hole's empty format spec, and to_string's own "done" intern like any literal.
-    assert_eq(m.globals.len, 4 as usize, "segment literals land in the data segment")
+    assert_eq(m.globals.len, 5 as usize, "segment literals land in the data segment, then the root")
 }
 
 // M10: generic specialization.

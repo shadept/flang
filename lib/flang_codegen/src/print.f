@@ -58,7 +58,7 @@ fn print_global(g: &Global, sb: &StringBuilder) {
                 sb.append(rs[i].offset)
                 sb.append(" = ")
                 let rv = rs[i].value
-                print_operand(&rv, sb)
+                print_operand(rv, sb)
             }
         }
         None => {}
@@ -188,9 +188,9 @@ fn print_binary(b: &BinaryInstr, sb: &StringBuilder) {
     sb.append(" = ")
     sb.append(b.op.name())
     sb.append(" ")
-    print_operand(&b.lhs, sb)
+    print_operand(b.lhs, sb)
     sb.append(", ")
-    print_operand(&b.rhs, sb)
+    print_operand(b.rhs, sb)
 }
 
 fn print_unary(u: &UnaryInstr, sb: &StringBuilder) {
@@ -198,7 +198,7 @@ fn print_unary(u: &UnaryInstr, sb: &StringBuilder) {
     sb.append(" = ")
     sb.append(u.op.name())
     sb.append(" ")
-    print_operand(&u.operand, sb)
+    print_operand(u.operand, sb)
 }
 
 fn print_compare(c: &CompareInstr, sb: &StringBuilder) {
@@ -206,9 +206,9 @@ fn print_compare(c: &CompareInstr, sb: &StringBuilder) {
     sb.append(" = ")
     sb.append(c.op.name())
     sb.append(" ")
-    print_operand(&c.lhs, sb)
+    print_operand(c.lhs, sb)
     sb.append(", ")
-    print_operand(&c.rhs, sb)
+    print_operand(c.rhs, sb)
 }
 
 fn print_convert(c: &ConvertInstr, sb: &StringBuilder) {
@@ -218,7 +218,7 @@ fn print_convert(c: &ConvertInstr, sb: &StringBuilder) {
     sb.append(".")
     sb.append(c.result_ty.name())
     sb.append(" ")
-    print_operand(&c.operand, sb)
+    print_operand(c.operand, sb)
 }
 
 fn print_stack_slot(s: &StackSlotInstr, sb: &StringBuilder) {
@@ -234,7 +234,7 @@ fn print_load(l: &LoadInstr, sb: &StringBuilder) {
     sb.append(" = load.")
     sb.append(l.ty.name())
     sb.append(" ")
-    print_operand(&l.ptr, sb)
+    print_operand(l.ptr, sb)
     if l.align != 0 and l.align != l.ty.byte_align() as u64 {
         sb.append(" align ")
         sb.append(l.align)
@@ -245,9 +245,9 @@ fn print_store(s: &StoreInstr, sb: &StringBuilder) {
     sb.append("store.")
     sb.append(s.ty.name())
     sb.append(" ")
-    print_operand(&s.value, sb)
+    print_operand(s.value, sb)
     sb.append(", ")
-    print_operand(&s.ptr, sb)
+    print_operand(s.ptr, sb)
     if s.align != 0 and s.align != s.ty.byte_align() as u64 {
         sb.append(" align ")
         sb.append(s.align)
@@ -257,27 +257,27 @@ fn print_store(s: &StoreInstr, sb: &StringBuilder) {
 fn print_gep(g: &GepInstr, sb: &StringBuilder) {
     print_value_def(g.result, IrType.Ptr, sb)
     sb.append(" = gep ")
-    print_operand(&g.ptr, sb)
+    print_operand(g.ptr, sb)
     sb.append(", ")
-    print_operand(&g.offset, sb)
+    print_operand(g.offset, sb)
 }
 
 fn print_memcpy(m: &MemcpyInstr, sb: &StringBuilder) {
     sb.append("memcpy ")
-    print_operand(&m.dst, sb)
+    print_operand(m.dst, sb)
     sb.append(", ")
-    print_operand(&m.src, sb)
+    print_operand(m.src, sb)
     sb.append(", ")
-    print_operand(&m.size, sb)
+    print_operand(m.size, sb)
 }
 
 fn print_memset(m: &MemsetInstr, sb: &StringBuilder) {
     sb.append("memset ")
-    print_operand(&m.dst, sb)
+    print_operand(m.dst, sb)
     sb.append(", ")
-    print_operand(&m.byte, sb)
+    print_operand(m.byte, sb)
     sb.append(", ")
-    print_operand(&m.size, sb)
+    print_operand(m.size, sb)
 }
 
 fn print_call(c: &CallInstr, sb: &StringBuilder) {
@@ -329,7 +329,7 @@ fn print_call_indirect(c: &CallIndirectInstr, sb: &StringBuilder) {
         }
         None => {}
     }
-    print_operand(&c.fn_ptr, sb)
+    print_operand(c.fn_ptr, sb)
     sb.append("(")
     print_call_args(&c.args, &c.variadic_arg_types, sb)
     sb.append(")")
@@ -341,7 +341,7 @@ fn print_call_args(args: &List(Operand), variadic_types: &List(IrType), sb: &Str
         if i > 0 {
             sb.append(", ")
         }
-        print_operand(&args[i], sb)
+        print_operand(args[i], sb)
     }
     if variadic_types.len > 0 {
         if fixed_count > 0 {
@@ -352,7 +352,7 @@ fn print_call_args(args: &List(Operand), variadic_types: &List(IrType), sb: &Str
             sb.append(", ")
             sb.append(variadic_types[i].name())
             sb.append(" ")
-            print_operand(&args[fixed_count + i], sb)
+            print_operand(args[fixed_count + i], sb)
         }
     }
 }
@@ -369,7 +369,7 @@ fn print_terminator(t: &Terminator, sb: &StringBuilder) {
         }
         BrIf(b) => {
             sb.append("br_if ")
-            print_operand(&b.cond, sb)
+            print_operand(b.cond, sb)
             sb.append(", ")
             print_block_target(&b.then_target, sb)
             sb.append(", ")
@@ -380,7 +380,7 @@ fn print_terminator(t: &Terminator, sb: &StringBuilder) {
             v match {
                 Some(op) => {
                     sb.append(" ")
-                    print_operand(&op, sb)
+                    print_operand(op, sb)
                 }
                 None => {}
             }
@@ -397,7 +397,7 @@ fn print_block_target(t: &BlockTarget, sb: &StringBuilder) {
             if i > 0 {
                 sb.append(", ")
             }
-            print_operand(&t.args[i], sb)
+            print_operand(t.args[i], sb)
         }
         sb.append(")")
     }
@@ -414,8 +414,8 @@ fn print_value_def(id: u32, ty: IrType, sb: &StringBuilder) {
     sb.append(ty.name())
 }
 
-fn print_operand(op: &Operand, sb: &StringBuilder) {
-    op.* match {
+fn print_operand(op: Operand, sb: &StringBuilder) {
+    op match {
         Local(id) => {
             sb.append("%v")
             sb.append(id)

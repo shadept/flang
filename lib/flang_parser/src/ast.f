@@ -88,6 +88,7 @@ pub type Decl = enum {
     Function(FunctionDecl)
     Type(TypeDecl)
     Const(ConstDecl)
+    Context(ContextDecl)
     Test(TestDecl)
     GenDef(GenDef)
     GenInvoke(GenInvoke)
@@ -212,6 +213,18 @@ pub type ConstDecl = struct {
     is_pub: bool
     name: String
     type_annotation: &TypeExpr?
+    value: &Expr
+}
+
+// `[pub] context name: T = default` - one field of the program's runtime context (RFC-038). The
+// parser requires both the type and the default; a missing one projects as an `Error` node.
+pub type ContextDecl = struct {
+    span: SourceSpan
+    is_pub: bool
+    name: String
+    // The name token's own span; equals `span` when error recovery produced no name.
+    name_span: SourceSpan
+    type_annotation: &TypeExpr
     value: &Expr
 }
 
@@ -410,6 +423,11 @@ pub type Expr = enum {
 
     // Anonymous function
     Lambda(LambdaExpr)
+
+    // Runtime context (RFC-038): bare `context`, and `context(args) { body }`. A field read is a
+    // `MemberAccess` on a `Context` receiver.
+    Context(ContextExpr)
+    ContextBind(ContextBindExpr)
 
     // Recovery
     Error(ErrorExpr)
@@ -743,6 +761,20 @@ pub type LambdaExpr = struct {
     body: &BlockExpr
 }
 
+// Bare `context`: a copy of the current context, of type `Context`.
+pub type ContextExpr = struct {
+    span: SourceSpan
+}
+
+// `context(base?, name = value, ...) { body }` - `body` runs under a new context: a copy of `base`
+// (the current context when absent) with the named fields replaced. `args` keeps the call grammar;
+// the checker enforces at most one positional, first.
+pub type ContextBindExpr = struct {
+    span: SourceSpan
+    args: CallArgument[]
+    body: &BlockExpr
+}
+
 // Recovery placeholder. The parser produced unrecognised tokens where an expression was expected;
 // the span lets downstream phases skip without losing surrounding structure.
 pub type ErrorExpr = struct {
@@ -811,6 +843,8 @@ pub fn expr_span(e: &Expr) SourceSpan {
         If(x) => x.span
         Match(x) => x.span
         Lambda(x) => x.span
+        Context(x) => x.span
+        ContextBind(x) => x.span
         Error(x) => x.span
     }
 }

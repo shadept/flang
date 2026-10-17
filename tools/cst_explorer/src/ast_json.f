@@ -123,6 +123,7 @@ fn emit_decl(sb: &StringBuilder, decl: &Decl) {
         Function(fn_decl) => emit_function_decl(sb, &fn_decl)
         Type(td) => emit_type_decl(sb, &td)
         Const(c) => emit_const_decl(sb, &c)
+        Context(c) => emit_context_decl(sb, &c)
         Test(t) => emit_test_decl(sb, &t)
         GenDef(g) => emit_gen_def(sb, &g)
         GenInvoke(g) => emit_gen_invoke(sb, &g)
@@ -247,6 +248,18 @@ fn emit_const_decl(sb: &StringBuilder, c: &ConstDecl) {
         Some(t) => emit_type_expr(sb, t)
         None => sb.append("null")
     }
+    sb.append(",\"value\":")
+    emit_expr(sb, c.value)
+    sb.append("}")
+}
+
+fn emit_context_decl(sb: &StringBuilder, c: &ContextDecl) {
+    sb.append("{\"kind\":\"Context\",")
+    emit_span(sb, c.span)
+    emit_kv_bool(sb, "is_pub", c.is_pub)
+    emit_kv_string(sb, "name", c.name)
+    sb.append(",\"type\":")
+    emit_type_expr(sb, c.type_annotation)
     sb.append(",\"value\":")
     emit_expr(sb, c.value)
     sb.append("}")
@@ -585,6 +598,19 @@ fn emit_expr(sb: &StringBuilder, e: &Expr) {
         If(ie) => emit_if_expr(sb, &ie)
         Match(m) => emit_match_expr(sb, &m)
         Lambda(l) => emit_lambda_expr(sb, &l)
+        Context(c) => {
+            sb.append("{\"kind\":\"Context\",")
+            emit_span(sb, c.span)
+            sb.append("}")
+        }
+        ContextBind(cb) => {
+            sb.append("{\"kind\":\"ContextBind\",")
+            emit_span(sb, cb.span)
+            emit_call_args(sb, cb.args)
+            sb.append(",\"body\":")
+            emit_block_expr(sb, cb.body)
+            sb.append("}")
+        }
         Error(e) => {
             sb.append("{\"kind\":\"Error\",")
             emit_span(sb, e.span)
@@ -755,12 +781,18 @@ fn emit_call_expr(sb: &StringBuilder, c: &CallExpr) {
     emit_span(sb, c.span)
     sb.append(",\"callee\":")
     emit_expr(sb, c.callee)
+    emit_call_args(sb, c.args)
+    sb.append("}")
+}
+
+// `,"args":[...]`, shared by calls and context rebinds.
+fn emit_call_args(sb: &StringBuilder, args: CallArgument[]) {
     sb.append(",\"args\":[")
-    for i in 0..c.args.len {
+    for i in 0..args.len {
         if i > 0 {
             sb.append(",")
         }
-        c.args[i] match {
+        args[i] match {
             // No `Positional` wrapper: it would have no span of its own. Named args wrap, since
             // they carry a name.
             Positional(e) => emit_expr(sb, e)
@@ -774,7 +806,7 @@ fn emit_call_expr(sb: &StringBuilder, c: &CallExpr) {
             }
         }
     }
-    sb.append("]}")
+    sb.append("]")
 }
 
 fn emit_block_expr(sb: &StringBuilder, b: &BlockExpr) {

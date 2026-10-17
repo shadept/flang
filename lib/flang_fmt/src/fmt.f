@@ -1180,6 +1180,7 @@ fn is_comma_list(kind: NodeKind) bool {
         or kind == NodeKind.TupleType or kind == NodeKind.TuplePattern
         or kind == NodeKind.ArrayLiteralExpr or kind == NodeKind.StructConstructionExpr
         or kind == NodeKind.AnonymousStructExpr or kind == NodeKind.TypeParamList
+        or kind == NodeKind.ContextBindExpr
 }
 
 fn list_closer(kind: NodeKind) TokenKind {
@@ -1751,7 +1752,7 @@ fn ends_expression(kind: TokenKind) bool {
     return kind == TokenKind.Identifier or kind == TokenKind.Integer or kind == TokenKind.Float
         or kind == TokenKind.StringLiteral or kind == TokenKind.CharLiteral
         or kind == TokenKind.ByteLiteral or kind == TokenKind.True or kind == TokenKind.False
-        or kind == TokenKind.Null or kind == TokenKind.Underscore
+        or kind == TokenKind.Null or kind == TokenKind.Underscore or kind == TokenKind.Context
         or kind == TokenKind.CloseParenthesis or kind == TokenKind.CloseBracket
         or kind == TokenKind.CloseBrace or kind == TokenKind.InterpStringEnd
         or kind == TokenKind.Question

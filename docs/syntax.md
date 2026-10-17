@@ -23,6 +23,7 @@ listed here, it does not exist in FLang.
 | Closures capture by reference | Every captured name is a reference to the enclosing binding (RFC-033); no capture-list syntax | `move` closures, capture lists |
 | No `elif`/`else if` | Chain `else if` (two keywords) | `elif` |
 | Associated types | `I.Item`, `Iterator(Item = i32)` | `I::Item`, `<I as Iterator>::Item`, `Iterator<Item = i32>` |
+| Scoped runtime state | `context(allocator = &a) { ... }` rebinds a declared field for a block | thread-locals, `with` blocks, global setters |
 
 ## Types
 
@@ -82,6 +83,20 @@ const X = 42             // immutable
 ```
 
 `const` at file scope = module-level constant. `let` inside functions only.
+
+## Runtime Context
+
+```
+pub context allocator: &Allocator = &global_allocator   // file scope; type and default required
+context depth: u32 = 0                                  // module-private
+
+context.depth                                // read a field
+let saved = context                          // copy, type `Context`
+context(depth = context.depth + 1) { run() } // rebind for the body; an expression
+context(saved, depth = 0) { run() }          // positional base first, then named fields
+```
+
+`context` is a keyword. After it, `(` opens a rebind, `.` reads a field, anything else is a copy. The rebind body is a block: `return`, `?`, `break` and `defer` act as in any block. See spec §4.4.
 
 ## Functions
 

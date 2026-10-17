@@ -168,6 +168,21 @@ pub const E_WHERE_ON_TYPE: String = "E2145"
 // A generic body calls a value whose type is a type parameter with no callable bound.
 pub const E_UNBOUNDED_CALL: String = "E2146"
 
+// Runtime context (RFC-038). A context field's type is not copyable: the language copies a context.
+pub const E_CONTEXT_NOT_COPYABLE: String = "E2147"
+// A context field's default is not a constant initializer: the root context is a static.
+pub const E_CONTEXT_DEFAULT: String = "E2148"
+// The current context taken as a place: `&context`, `&context.f`, or an assignment into it.
+pub const E_CONTEXT_PLACE: String = "E2149"
+// `context.f` or a rebind's `f = v` naming no context field visible from the module.
+pub const E_CONTEXT_UNKNOWN: String = "E2150"
+// One rebind naming the same field twice.
+pub const E_CONTEXT_TWICE: String = "E2151"
+// Two context fields of one name visible from the module.
+pub const E_CONTEXT_AMBIGUOUS: String = "E2152"
+// A rebind's base context not first or not alone, or a `Context` built by a struct literal.
+pub const E_CONTEXT_BASE: String = "E2153"
+
 // A `&move T` parameter outside `core`: the one mode that takes a value out of storage its caller
 // keeps is the core library's alone (RFC-033).
 pub const E_SLOT_OUTSIDE_CORE: String = "E2136"

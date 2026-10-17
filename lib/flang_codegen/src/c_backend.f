@@ -113,7 +113,7 @@ pub fn translate(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = null) 
 // optimizer to mangle on exactly the failure path they are meant to count.
 fn emit_test_runner(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = null) {
     sb.append("\n/* flang test runner */\n")
-    sb.append("typedef void (*__flang_test_fn)(void);\n")
+    sb.append("typedef void (*__flang_test_fn)(void*);\n")
 
     // Both tables carry a trailing null the count leaves out. It costs a pointer and spares the
     // zero-test case: an empty initializer list is not a C array, and a run whose filters matched
@@ -174,7 +174,9 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = nul
         Some(sym) => {
             sb.append("    ")
             sb.append(sym.view)
-            sb.append("();\n")
+            sb.append("(")
+            emit_operand(Operand.GlobalRef(ROOT_CONTEXT_SYM), sb)
+            sb.append(");\n")
         }
         None => {}
     }
@@ -188,7 +190,9 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = nul
     sb.append("        fflush(stdout);\n")
     sb.append("        __flang_test_active = 1;\n")
     sb.append("        if (setjmp(__flang_test_jmp) == 0) {\n")
-    sb.append("            __flang_test_fns[__flang_test_i]();\n")
+    sb.append("            __flang_test_fns[__flang_test_i](")
+    emit_operand(Operand.GlobalRef(ROOT_CONTEXT_SYM), sb)
+    sb.append(");\n")
     sb.append("            __flang_test_active = 0;\n")
     sb.append("            printf(\"ok\\n\");\n")
     sb.append("            __flang_test_passed++;\n")
@@ -724,7 +728,7 @@ fn emit_relocated_def(g: &Global, sb: &StringBuilder) {
             sb.append(", ")
         }
         let rv = rs[i].value
-        emit_operand(&rv, sb)
+        emit_operand(rv, sb)
         field = field + 1
         at = off + 8
     }
@@ -943,8 +947,8 @@ fn c_unsigned_type_name(ty: IrType) String {
 // Operands
 // ─────────────────────────────────────────────────────────────────────────
 
-fn emit_operand(op: &Operand, sb: &StringBuilder) {
-    op.* match {
+fn emit_operand(op: Operand, sb: &StringBuilder) {
+    op match {
         Local(id) => {
             sb.append("v")
             sb.append(id)
@@ -996,7 +1000,7 @@ fn emit_float_const(v: f64, sb: &StringBuilder) {
 
 // Cast an operand to a given C type. Used pervasively so that integer literals consumed in
 // different slots get correctly typed.
-fn emit_operand_as(op: &Operand, ty: IrType, sb: &StringBuilder) {
+fn emit_operand_as(op: Operand, ty: IrType, sb: &StringBuilder) {
     // C casts only to scalar types: `(struct S)x` is a constraint violation (MSVC rejects it
     // outright). An aggregate operand already has the destination type - FIR stores are typed - so
     // it goes through unconverted.
@@ -1015,7 +1019,7 @@ fn emit_operand_as(op: &Operand, ty: IrType, sb: &StringBuilder) {
     sb.append(")")
 }
 
-fn emit_operand_as_unsigned(op: &Operand, ty: IrType, sb: &StringBuilder) {
+fn emit_operand_as_unsigned(op: Operand, ty: IrType, sb: &StringBuilder) {
     sb.append("((")
     sb.append(c_unsigned_type_name(ty))
     sb.append(")")
@@ -1101,63 +1105,63 @@ fn emit_binary(b: &BinaryInstr, sb: &StringBuilder) {
     emit_result_decl(b.result, b.ty, sb)
     // The signed/unsigned mapping table from docs/fir.md is encoded here.
     b.op match {
-        IAdd => emit_wrap_binop(&b.lhs, &b.rhs, b.ty, "+", sb)
-        ISub => emit_wrap_binop(&b.lhs, &b.rhs, b.ty, "-", sb)
-        IMul => emit_wrap_binop(&b.lhs, &b.rhs, b.ty, "*", sb)
+        IAdd => emit_wrap_binop(b.lhs, b.rhs, b.ty, "+", sb)
+        ISub => emit_wrap_binop(b.lhs, b.rhs, b.ty, "-", sb)
+        IMul => emit_wrap_binop(b.lhs, b.rhs, b.ty, "*", sb)
         SDiv => {
-            emit_operand(&b.lhs, sb)
+            emit_operand(b.lhs, sb)
             sb.append(" / ")
-            emit_operand(&b.rhs, sb)
+            emit_operand(b.rhs, sb)
         }
-        UDiv => emit_uns_binop(&b.lhs, &b.rhs, b.ty, "/", sb)
+        UDiv => emit_uns_binop(b.lhs, b.rhs, b.ty, "/", sb)
         SRem => {
-            emit_operand(&b.lhs, sb)
+            emit_operand(b.lhs, sb)
             sb.append(" % ")
-            emit_operand(&b.rhs, sb)
+            emit_operand(b.rhs, sb)
         }
-        URem => emit_uns_binop(&b.lhs, &b.rhs, b.ty, "%", sb)
+        URem => emit_uns_binop(b.lhs, b.rhs, b.ty, "%", sb)
         IAnd => {
-            emit_operand(&b.lhs, sb)
+            emit_operand(b.lhs, sb)
             sb.append(" & ")
-            emit_operand(&b.rhs, sb)
+            emit_operand(b.rhs, sb)
         }
         IOr => {
-            emit_operand(&b.lhs, sb)
+            emit_operand(b.lhs, sb)
             sb.append(" | ")
-            emit_operand(&b.rhs, sb)
+            emit_operand(b.rhs, sb)
         }
         IXor => {
-            emit_operand(&b.lhs, sb)
+            emit_operand(b.lhs, sb)
             sb.append(" ^ ")
-            emit_operand(&b.rhs, sb)
+            emit_operand(b.rhs, sb)
         }
-        IShl => emit_shift(&b.lhs, &b.rhs, b.ty, "<<", true, sb)
-        UShr => emit_shift(&b.lhs, &b.rhs, b.ty, ">>", true, sb)
-        SShr => emit_shift(&b.lhs, &b.rhs, b.ty, ">>", false, sb)
+        IShl => emit_shift(b.lhs, b.rhs, b.ty, "<<", true, sb)
+        UShr => emit_shift(b.lhs, b.rhs, b.ty, ">>", true, sb)
+        SShr => emit_shift(b.lhs, b.rhs, b.ty, ">>", false, sb)
         FAdd => {
-            emit_operand(&b.lhs, sb)
+            emit_operand(b.lhs, sb)
             sb.append(" + ")
-            emit_operand(&b.rhs, sb)
+            emit_operand(b.rhs, sb)
         }
         FSub => {
-            emit_operand(&b.lhs, sb)
+            emit_operand(b.lhs, sb)
             sb.append(" - ")
-            emit_operand(&b.rhs, sb)
+            emit_operand(b.rhs, sb)
         }
         FMul => {
-            emit_operand(&b.lhs, sb)
+            emit_operand(b.lhs, sb)
             sb.append(" * ")
-            emit_operand(&b.rhs, sb)
+            emit_operand(b.rhs, sb)
         }
-        FDiv => emit_fdiv(&b.lhs, &b.rhs, sb)
+        FDiv => emit_fdiv(b.lhs, b.rhs, sb)
     }
     sb.append(";\n")
 }
 
 // `a / b`. A division by a constant zero is a constraint violation MSVC refuses (C2124), so it is
 // written as its IEEE 754 result: `a` times an infinity of the zero's sign.
-fn emit_fdiv(a: &Operand, b: &Operand, sb: &StringBuilder) {
-    const divisor = b.* match {
+fn emit_fdiv(a: Operand, b: Operand, sb: &StringBuilder) {
+    const divisor = b match {
         FloatConst(v) => Some(v)
         else => null
     }
@@ -1171,7 +1175,7 @@ fn emit_fdiv(a: &Operand, b: &Operand, sb: &StringBuilder) {
     sb.append(if negative_zero { " * (-INFINITY)" } else { " * INFINITY" })
 }
 
-fn emit_wrap_binop(a: &Operand, b: &Operand, ty: IrType, op: String, sb: &StringBuilder) {
+fn emit_wrap_binop(a: Operand, b: Operand, ty: IrType, op: String, sb: &StringBuilder) {
     // (signed)((unsigned)a OP (unsigned)b) - two's-complement wrap.
     sb.append("(")
     emit_c_type(ty, sb)
@@ -1184,7 +1188,7 @@ fn emit_wrap_binop(a: &Operand, b: &Operand, ty: IrType, op: String, sb: &String
     sb.append(")")
 }
 
-fn emit_uns_binop(a: &Operand, b: &Operand, ty: IrType, op: String, sb: &StringBuilder) {
+fn emit_uns_binop(a: Operand, b: Operand, ty: IrType, op: String, sb: &StringBuilder) {
     // (signed)((unsigned)a OP (unsigned)b)
     sb.append("(")
     emit_c_type(ty, sb)
@@ -1198,8 +1202,8 @@ fn emit_uns_binop(a: &Operand, b: &Operand, ty: IrType, op: String, sb: &StringB
 }
 
 fn emit_shift(
-    a: &Operand,
-    b: &Operand,
+    a: Operand,
+    b: Operand,
     ty: IrType,
     op: String,
     unsigned_lhs: bool,
@@ -1227,12 +1231,12 @@ fn emit_unary(u: &UnaryInstr, sb: &StringBuilder) {
             sb.append("(")
             emit_c_type(u.ty, sb)
             sb.append(")(0u - ")
-            emit_operand_as_unsigned(&u.operand, u.ty, sb)
+            emit_operand_as_unsigned(u.operand, u.ty, sb)
             sb.append(")")
         }
         FNeg => {
             sb.append("-")
-            emit_operand(&u.operand, sb)
+            emit_operand(u.operand, sb)
         }
     }
     sb.append(";\n")
@@ -1242,27 +1246,27 @@ fn emit_compare(c: &CompareInstr, sb: &StringBuilder) {
     emit_result_decl(c.result, IrType.I8, sb)
     sb.append("(int8_t)(")
     c.op match {
-        IcmpEq => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, "==", sb)
-        IcmpNe => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, "!=", sb)
-        IcmpSlt => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, "<", sb)
-        IcmpSle => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, "<=", sb)
-        IcmpSgt => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, ">", sb)
-        IcmpSge => emit_cmp_signed(&c.lhs, &c.rhs, c.operand_ty, ">=", sb)
-        IcmpUlt => emit_cmp_unsigned(&c.lhs, &c.rhs, c.operand_ty, "<", sb)
-        IcmpUle => emit_cmp_unsigned(&c.lhs, &c.rhs, c.operand_ty, "<=", sb)
-        IcmpUgt => emit_cmp_unsigned(&c.lhs, &c.rhs, c.operand_ty, ">", sb)
-        IcmpUge => emit_cmp_unsigned(&c.lhs, &c.rhs, c.operand_ty, ">=", sb)
-        FcmpEq => emit_cmp_float(&c.lhs, &c.rhs, "==", sb)
-        FcmpNe => emit_cmp_float(&c.lhs, &c.rhs, "!=", sb)
-        FcmpLt => emit_cmp_float(&c.lhs, &c.rhs, "<", sb)
-        FcmpLe => emit_cmp_float(&c.lhs, &c.rhs, "<=", sb)
-        FcmpGt => emit_cmp_float(&c.lhs, &c.rhs, ">", sb)
-        FcmpGe => emit_cmp_float(&c.lhs, &c.rhs, ">=", sb)
+        IcmpEq => emit_cmp_signed(c.lhs, c.rhs, c.operand_ty, "==", sb)
+        IcmpNe => emit_cmp_signed(c.lhs, c.rhs, c.operand_ty, "!=", sb)
+        IcmpSlt => emit_cmp_signed(c.lhs, c.rhs, c.operand_ty, "<", sb)
+        IcmpSle => emit_cmp_signed(c.lhs, c.rhs, c.operand_ty, "<=", sb)
+        IcmpSgt => emit_cmp_signed(c.lhs, c.rhs, c.operand_ty, ">", sb)
+        IcmpSge => emit_cmp_signed(c.lhs, c.rhs, c.operand_ty, ">=", sb)
+        IcmpUlt => emit_cmp_unsigned(c.lhs, c.rhs, c.operand_ty, "<", sb)
+        IcmpUle => emit_cmp_unsigned(c.lhs, c.rhs, c.operand_ty, "<=", sb)
+        IcmpUgt => emit_cmp_unsigned(c.lhs, c.rhs, c.operand_ty, ">", sb)
+        IcmpUge => emit_cmp_unsigned(c.lhs, c.rhs, c.operand_ty, ">=", sb)
+        FcmpEq => emit_cmp_float(c.lhs, c.rhs, "==", sb)
+        FcmpNe => emit_cmp_float(c.lhs, c.rhs, "!=", sb)
+        FcmpLt => emit_cmp_float(c.lhs, c.rhs, "<", sb)
+        FcmpLe => emit_cmp_float(c.lhs, c.rhs, "<=", sb)
+        FcmpGt => emit_cmp_float(c.lhs, c.rhs, ">", sb)
+        FcmpGe => emit_cmp_float(c.lhs, c.rhs, ">=", sb)
     }
     sb.append(");\n")
 }
 
-fn emit_cmp_signed(a: &Operand, b: &Operand, ty: IrType, op: String, sb: &StringBuilder) {
+fn emit_cmp_signed(a: Operand, b: Operand, ty: IrType, op: String, sb: &StringBuilder) {
     emit_operand_as(a, ty, sb)
     sb.append(" ")
     sb.append(op)
@@ -1270,7 +1274,7 @@ fn emit_cmp_signed(a: &Operand, b: &Operand, ty: IrType, op: String, sb: &String
     emit_operand_as(b, ty, sb)
 }
 
-fn emit_cmp_unsigned(a: &Operand, b: &Operand, ty: IrType, op: String, sb: &StringBuilder) {
+fn emit_cmp_unsigned(a: Operand, b: Operand, ty: IrType, op: String, sb: &StringBuilder) {
     emit_operand_as_unsigned(a, ty, sb)
     sb.append(" ")
     sb.append(op)
@@ -1278,7 +1282,7 @@ fn emit_cmp_unsigned(a: &Operand, b: &Operand, ty: IrType, op: String, sb: &Stri
     emit_operand_as_unsigned(b, ty, sb)
 }
 
-fn emit_cmp_float(a: &Operand, b: &Operand, op: String, sb: &StringBuilder) {
+fn emit_cmp_float(a: Operand, b: Operand, op: String, sb: &StringBuilder) {
     emit_operand(a, sb)
     sb.append(" ")
     sb.append(op)
@@ -1293,25 +1297,25 @@ fn emit_convert(c: &ConvertInstr, sb: &StringBuilder) {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
             sb.append(")")
-            emit_operand(&c.operand, sb)
+            emit_operand(c.operand, sb)
         }
         ZExt => {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
             sb.append(")")
-            emit_operand_as_unsigned(&c.operand, c.source_ty, sb)
+            emit_operand_as_unsigned(c.operand, c.source_ty, sb)
         }
         SExt => {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
             sb.append(")")
-            emit_operand_as(&c.operand, c.source_ty, sb)
+            emit_operand_as(c.operand, c.source_ty, sb)
         }
         FpToSi => {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
             sb.append(")")
-            emit_operand(&c.operand, sb)
+            emit_operand(c.operand, sb)
         }
         FpToUi => {
             sb.append("(")
@@ -1319,27 +1323,27 @@ fn emit_convert(c: &ConvertInstr, sb: &StringBuilder) {
             sb.append(")(")
             sb.append(c_unsigned_type_name(c.result_ty))
             sb.append(")")
-            emit_operand(&c.operand, sb)
+            emit_operand(c.operand, sb)
         }
         SiToFp => {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
             sb.append(")")
-            emit_operand_as(&c.operand, c.source_ty, sb)
+            emit_operand_as(c.operand, c.source_ty, sb)
         }
         UiToFp => {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
             sb.append(")")
-            emit_operand_as_unsigned(&c.operand, c.source_ty, sb)
+            emit_operand_as_unsigned(c.operand, c.source_ty, sb)
         }
         FpExt => {
             sb.append("(double)")
-            emit_operand(&c.operand, sb)
+            emit_operand(c.operand, sb)
         }
         FpTrunc => {
             sb.append("(float)")
-            emit_operand(&c.operand, sb)
+            emit_operand(c.operand, sb)
         }
         Bitcast => {
             // Same-size reinterpret via memcpy to dodge strict-aliasing UB.
@@ -1349,7 +1353,7 @@ fn emit_convert(c: &ConvertInstr, sb: &StringBuilder) {
             sb.append(", &(")
             emit_c_type(c.source_ty, sb)
             sb.append("){")
-            emit_operand(&c.operand, sb)
+            emit_operand(c.operand, sb)
             sb.append("}, sizeof(v")
             sb.append(c.result)
             sb.append("))")
@@ -1358,11 +1362,11 @@ fn emit_convert(c: &ConvertInstr, sb: &StringBuilder) {
             sb.append("(")
             emit_c_type(c.result_ty, sb)
             sb.append(")(uintptr_t)")
-            emit_operand(&c.operand, sb)
+            emit_operand(c.operand, sb)
         }
         IntToPtr => {
             sb.append("(void*)(uintptr_t)")
-            emit_operand(&c.operand, sb)
+            emit_operand(c.operand, sb)
         }
     }
     sb.append(";\n")
@@ -1396,7 +1400,7 @@ fn emit_load(l: &LoadInstr, sb: &StringBuilder) {
     sb.append("; memcpy(&v")
     sb.append(l.result)
     sb.append(", ")
-    emit_operand(&l.ptr, sb)
+    emit_operand(l.ptr, sb)
     sb.append(", sizeof(")
     emit_c_type(l.ty, sb)
     sb.append("));\n")
@@ -1406,9 +1410,9 @@ fn emit_store(s: &StoreInstr, sb: &StringBuilder) {
     sb.append("{ ")
     emit_c_type(s.ty, sb)
     sb.append(" __sv = ")
-    emit_operand_as(&s.value, s.ty, sb)
+    emit_operand_as(s.value, s.ty, sb)
     sb.append("; memcpy(")
-    emit_operand(&s.ptr, sb)
+    emit_operand(s.ptr, sb)
     sb.append(", &__sv, sizeof(")
     emit_c_type(s.ty, sb)
     sb.append(")); }\n")
@@ -1418,9 +1422,9 @@ fn emit_gep(g: &GepInstr, sb: &StringBuilder) {
     sb.append("void* v")
     sb.append(g.result)
     sb.append(" = (void*)((char*)")
-    emit_operand(&g.ptr, sb)
+    emit_operand(g.ptr, sb)
     sb.append(" + (intptr_t)")
-    emit_operand_as(&g.offset, IrType.I64, sb)
+    emit_operand_as(g.offset, IrType.I64, sb)
     sb.append(");\n")
 }
 
@@ -1437,21 +1441,21 @@ fn emit_memcpy(m: &MemcpyInstr, sb: &StringBuilder) {
         return
     }
     sb.append("memcpy(")
-    emit_operand(&m.dst, sb)
+    emit_operand(m.dst, sb)
     sb.append(", ")
-    emit_operand(&m.src, sb)
+    emit_operand(m.src, sb)
     sb.append(", (size_t)")
-    emit_operand_as_unsigned(&m.size, IrType.I64, sb)
+    emit_operand_as_unsigned(m.size, IrType.I64, sb)
     sb.append(");\n")
 }
 
 fn emit_memset(m: &MemsetInstr, sb: &StringBuilder) {
     sb.append("memset(")
-    emit_operand(&m.dst, sb)
+    emit_operand(m.dst, sb)
     sb.append(", (int)")
-    emit_operand(&m.byte, sb)
+    emit_operand(m.byte, sb)
     sb.append(", (size_t)")
-    emit_operand_as_unsigned(&m.size, IrType.I64, sb)
+    emit_operand_as_unsigned(m.size, IrType.I64, sb)
     sb.append(");\n")
 }
 
@@ -1476,7 +1480,7 @@ fn emit_call(c: &CallInstr, sigs: &SigIndex, sb: &StringBuilder) {
         if i > 0 {
             sb.append(", ")
         }
-        emit_typed_arg(&c.args[i], param_ty_of(sigs, c.callee, i), sb)
+        emit_typed_arg(c.args[i], param_ty_of(sigs, c.callee, i), sb)
     }
     sb.append(");\n")
 }
@@ -1485,8 +1489,8 @@ fn emit_call(c: &CallInstr, sigs: &SigIndex, sb: &StringBuilder) {
 // is `int` (or wider), and letting it narrow implicitly into an `int8_t`/`int16_t` slot is a
 // constant-conversion error under -Werror when the value only fits the unsigned reading (u8 255).
 // Non-constant operands already carry their exact C type and pass through unconverted.
-fn emit_typed_arg(op: &Operand, param_ty: IrType?, sb: &StringBuilder) {
-    const is_int_const = op.* match {
+fn emit_typed_arg(op: Operand, param_ty: IrType?, sb: &StringBuilder) {
+    const is_int_const = op match {
         IntConst(_) => true
         _ => false
     }
@@ -1534,14 +1538,14 @@ fn emit_call_indirect(c: &CallIndirectInstr, sb: &StringBuilder) {
         }
     }
     sb.append("))")
-    emit_operand(&c.fn_ptr, sb)
+    emit_operand(c.fn_ptr, sb)
     sb.append(")(")
     for i in 0..c.args.len {
         if i > 0 {
             sb.append(", ")
         }
         const pt: IrType? = if i < c.param_types.len { Some(c.param_types[i]) } else { null }
-        emit_typed_arg(&c.args[i], pt, sb)
+        emit_typed_arg(c.args[i], pt, sb)
     }
     sb.append(");\n")
 }
@@ -1571,7 +1575,7 @@ fn emit_br(t: &BlockTarget, f: &Function, sb: &StringBuilder) {
 
 fn emit_br_if(b: &BrIfTerm, f: &Function, sb: &StringBuilder) {
     sb.append("    if (")
-    emit_operand(&b.cond, sb)
+    emit_operand(b.cond, sb)
     sb.append(") {\n")
     emit_branch_arg_moves(&b.then_target, f, "        ", sb)
     sb.append("        goto ")
@@ -1603,7 +1607,7 @@ fn emit_branch_arg_moves(t: &BlockTarget, f: &Function, indent: String, sb: &Str
         sb.append(" __mv")
         sb.append(i as u64)
         sb.append(" = ")
-        emit_operand_as(&t.args[i], tgt.params[i].ty, sb)
+        emit_operand_as(t.args[i], tgt.params[i].ty, sb)
         sb.append(";\n")
     }
     for i in 0..t.args.len {
@@ -1625,7 +1629,7 @@ fn emit_ret(v: Operand?, f: &Function, sb: &StringBuilder) {
             sb.append(" ")
             // Same narrowing rule as call arguments: a constant return is spelled with the
             // function's return type.
-            emit_typed_arg(&op, f.return_ty, sb)
+            emit_typed_arg(op, f.return_ty, sb)
         }
         None => {
             // FIR void return in the user's main maps to `return 0;` because the C entry point has

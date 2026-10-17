@@ -67,9 +67,13 @@ pub type IrType = enum {
     Agg(AggType)
 }
 
-// Calling convention attached to functions, foreign decls, and indirect call signatures.
+// Calling convention attached to functions, foreign decls, and indirect call signatures. `Flang` is
+// every FLang function and fn value (RFC-038): its first parameter is the `const Context*` the
+// caller runs under, which lowering passes explicitly. `C` is a `#foreign` symbol, and the
+// generated entry points, which take no context.
 pub type CallConv = enum {
     C
+    Flang
 }
 
 // Bytes of storage occupied by a value of this type. `Ptr` assumes a 64-bit target.
@@ -118,6 +122,7 @@ pub fn op_eq(a: IrType, b: IrType) bool {
 pub fn name(cc: CallConv) String {
     return cc match {
         C => "C"
+        Flang => "flang"
     }
 }
 
@@ -429,6 +434,10 @@ pub type ForeignDecl = struct {
 // calls it, so there is nothing to communicate.
 pub const CONST_INIT_SYM: String = "__flang_const_init"
 
+// The static root context (RFC-038): every context field at its default. `main`, the constant
+// initializers and the test runner run under it.
+pub const ROOT_CONTEXT_SYM: String = "__flang_root_context"
+
 // One `test {}` block that lowered, in the order the runner should run them. `label` is the block's
 // name as written; `symbol` is the nullary void function it lowered to.
 pub type TestCase = struct {
@@ -656,6 +665,10 @@ pub fn replace_terminator(self: &Block, t: move Terminator) Terminator {
 // Append a function parameter.
 pub fn add_param(self: &Function, p: BlockParam) {
     self.params.push(p)
+}
+
+pub fn set_cc(self: &Function, cc: CallConv) {
+    self.cc = cc
 }
 
 // Append a block and return its index.

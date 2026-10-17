@@ -1,5 +1,5 @@
 ---
-status: draft
+status: accepted
 type: language
 created: 2026-10-17
 relates: [RFC-005, RFC-014, RFC-037]
@@ -166,6 +166,30 @@ Each step lands with harness tests. Steps 1-5 use only seed-supported features; 
 
 The calling-convention split is part of this RFC, not a separate ADR. The RFC is implemented
 when steps 1-8 land; the follow-ups below do not block it.
+
+### Implementation status
+
+Steps 1-5 and 8 landed 2026-10-17, with these refinements over the plan above:
+
+- **Layout is assembled by the checker**, at the end of `check_all` (`assemble_context`), as the
+  fields of `core.runtime.Context`'s definition, with their FQNs in
+  `TypeCheckResult.context_fields`. Ordinary layout queries then size the context; lowering
+  reads offsets by FQN index. Checking still never reads the assembled fields.
+- **`main` takes no context parameter**: the C entry point calls it, and it runs under the root
+  global directly, as the constant initializers do. Test blocks take the parameter; the runner
+  passes the root.
+- **A `#foreign` function used as a `fn` value is refused** at lowering rather than wrapped in a
+  thunk.
+- **Errors**: E2147 not copyable, E2148 default not constant, E2149 the current context as a
+  place (`&context`, `&context.f`, assignment), E2150 unknown field, E2151 a field named twice,
+  E2152 ambiguous field, E2153 a misplaced base or a `Context` struct literal. A duplicate
+  declaration is E2005, as for module constants.
+
+Measured (step 6, win-x64, the same sources built once by the old-ABI seed and once by the new
+compiler): the compiler's own runtime emitting its C is +1.6% (median of four, 1941 to 1972 ms);
+the full release self-build is unchanged at 11.3 s, where the C compile dominates.
+
+Open: the promote (step 6) and step 7 (allocator over the context), which needs the promoted seed.
 
 ### Follow-ups, separate RFCs
 
