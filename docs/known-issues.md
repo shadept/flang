@@ -14,15 +14,14 @@ When you discover a bug or limitation:
 
 ---
 
-### W1003 Misses Uses in an Inactive `#if` Branch and By-Name Lowering Hooks
+### W1003/W1004 Miss Uses in an Inactive `#if` Branch and By-Name Lowering Hooks - RESOLVED
 
-**Status:** open. **Affected:** `lib/flang_analysis/src/unused.f`.
-
-An inactive `#if` branch is never checked, so its calls record no edges: `std.path`'s
-`is_drive_letter` and `std.terminal`'s `enable_vt` (both called only under
-`#if platform.os == "windows"`) warn on every other host. `std.test`'s `install_test_allocator`
-warns too: lowering looks it up by name for the test runner, which no edge records. Fix: root a
-function named in an inactive branch (name-level, conservative), and mark by-name hooks as roots.
+**Was:** an inactive `#if` branch is never checked, so a function or import used only there (the
+Windows-only paths in `std.path`, `std.terminal`, `c_backend.f`) warned on every other host, and
+`std.test`'s `install_test_allocator`, which lowering finds by name, warned too. `unused.f` now roots
+every function named inside a `#if` branch and keeps the imports that define one
+(`directive_names`, a token scan), and roots `#intrinsic` functions; `install_test_allocator` is
+`#intrinsic`. The tree reports no W1003/W1004.
 
 ---
 

@@ -11,6 +11,9 @@
 //   - `main`, always
 //   - every `pub fn` when the project is a library (they are its API)
 //   - a use outside any function body - a constant initializer, a default value at module scope
+//   - a name inside a `#if` directive's branches: the checker skips the inactive one, so its calls
+//     record no edges. Name-level and taken from both branches (`directive_names`)
+//   - every `#intrinsic` function: the compiler reaches it by name, not through a call
 //
 // An executable's `pub fn` is NOT a root: every function must be reachable from `main`.
 //
@@ -39,6 +42,8 @@ import std.test
 import flang_core.diagnostic
 import flang_core.span
 import flang_parser.ast
+import flang_parser.lexer
+import flang_parser.token
 import flang_typer.error_codes
 import flang_typer.function_registry
 import flang_typer.inference_results
@@ -65,15 +70,16 @@ type FnNode = struct {
 }
 
 // The W1003 diagnostics for one checked project, sorted by (file, start). `fqns[i]` is module `i`'s
-// FQN - the name the registry's schemes carry - and `project_origin[i]` marks the project's own
-// files. `lib_kind` selects the library root rule. `tests_checked` says whether the demand that
-// produced `result` checked `test {}` bodies: when it did (the LSP), test use is in the recorded
-// edges and needs no allowance; when it did not (a build), every non-`pub` function of a
-// test-bearing module is rooted conservatively.
+// FQN - the name the registry's schemes carry - `sources[i]` its text, and `project_origin[i]`
+// marks the project's own files. `lib_kind` selects the library root rule. `tests_checked` says
+// whether the demand that produced `result` checked `test {}` bodies: when it did (the LSP), test
+// use is in the recorded edges and needs no allowance; when it did not (a build), every non-`pub`
+// function of a test-bearing module is rooted conservatively.
 pub fn unused_functions(
     result: &TypeCheckResult,
     modules: &List(Module),
     fqns: &List(String),
+    sources: &List(OwnedString),
     project_origin: &List(bool),
     lib_kind: bool,
     tests_checked: bool,
@@ -90,6 +96,13 @@ pub fn unused_functions(
 
     let has_tests = filled_list(modules.len, false, allocator)
     defer has_tests.deinit()
+    let directive: Set(String) = set(allocator)
+    defer directive.deinit()
+    for i in 0..sources.len {
+        if is_project(project_origin, i) {
+            directive_names(sources[i].view, &directive, allocator)
+        }
+    }
     for i in 0..modules.len {
         for &d in modules[i].decls {
             d.* match {
@@ -145,7 +158,7 @@ pub fn unused_functions(
             nodes.set(f.id, node)
             let row = &per_file[idx]
             row.push(node)
-            if is_root(&node, lib_kind, tests_checked, &has_tests) {
+            if is_root(&node, lib_kind, tests_checked, &has_tests, &directive) {
                 mark(&reached, &work, f.id)
             }
         }
@@ -153,6 +166,7 @@ pub fn unused_functions(
     for &row in per_file {
         row.sort(cmp_start)
     }
+    root_intrinsics(modules, project_origin, &per_file, &reached, &work)
 
     // Edges. A target outside the project is dropped; a site outside any project function roots its
     // target.
@@ -215,8 +229,14 @@ pub fn unused_functions(
     return out
 }
 
-fn is_root(n: &FnNode, lib_kind: bool, tests_checked: bool, has_tests: &List(bool)) bool {
-    if n.name == "main" {
+fn is_root(
+    n: &FnNode,
+    lib_kind: bool,
+    tests_checked: bool,
+    has_tests: &List(bool),
+    directive: &Set(String),
+) bool {
+    if n.name == "main" or directive.contains(n.name) {
         return true
     }
     if lib_kind and n.is_pub {
@@ -228,6 +248,102 @@ fn is_root(n: &FnNode, lib_kind: bool, tests_checked: bool, has_tests: &List(boo
         return true
     }
     return false
+}
+
+// Marks every project function declared `#intrinsic` reached.
+fn root_intrinsics(
+    modules: &List(Module),
+    project_origin: &List(bool),
+    per_file: &List(List(FnNode)),
+    reached: &Dict(u32, bool),
+    work: &List(u32),
+) {
+    for i in 0..modules.len {
+        if !is_project(project_origin, i) {
+            continue
+        }
+        for &d in modules[i].decls {
+            d.* match {
+                Function(fd) => {
+                    if is_intrinsic(fd.directives) {
+                        root_at(&per_file[i], fd.span.start, reached, work)
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+fn is_intrinsic(directives: DeclAttribute[]) bool {
+    for &a in directives {
+        const hit = a.* match {
+            Intrinsic => true
+            _ => false
+        }
+        if hit {
+            return true
+        }
+    }
+    return false
+}
+
+fn root_at(fns: &List(FnNode), start: usize, reached: &Dict(u32, bool), work: &List(u32)) {
+    for &n in fns {
+        if n.start == start {
+            mark(reached, work, n.id)
+        }
+    }
+}
+
+// Every identifier inside a `#if` directive's branches in `source` onto `out`, nested directives
+// included.
+fn directive_names(source: String, out: &Set(String), allocator: &Allocator?) {
+    let lx = lexer(source, allocator)
+    let tokens = lx.tokenize()
+    defer tokens.deinit()
+    let i: usize = 0
+    while i + 1 < tokens.len {
+        const opens = tokens[i].kind == TokenKind.Hash and tokens[i + 1].kind == TokenKind.If
+        if !opens {
+            i = i + 1
+            continue
+        }
+        i = branch_names(&tokens, i + 2, out)
+        while i + 1 < tokens.len and tokens[i].kind == TokenKind.Else
+            and tokens[i + 1].kind == TokenKind.OpenBrace {
+            i = branch_names(&tokens, i + 1, out)
+        }
+    }
+}
+
+// The identifiers of the first brace block at or after `from` onto `out`. Returns the index past
+// its closing brace.
+fn branch_names(tokens: &List(Token), from: usize, out: &Set(String)) usize {
+    let i = from
+    while i < tokens.len and tokens[i].kind != TokenKind.OpenBrace {
+        i = i + 1
+    }
+    let depth: usize = 0
+    while i < tokens.len {
+        tokens[i].kind match {
+            OpenBrace => {
+                depth = depth + 1
+            }
+            CloseBrace => {
+                depth = depth - 1
+                if depth == 0 {
+                    return i + 1
+                }
+            }
+            Identifier => {
+                const _new = out.add(tokens[i].text)
+            }
+            else => {}
+        }
+        i = i + 1
+    }
+    return i
 }
 
 fn mark(reached: &Dict(u32, bool), work: &List(u32), id: u32) {
@@ -419,6 +535,7 @@ pub fn unused_imports(
     result: &TypeCheckResult,
     modules: &List(Module),
     fqns: &List(String),
+    sources: &List(OwnedString),
     project_origin: &List(bool),
     tests_checked: bool,
     allocator: &Allocator? = null,
@@ -447,6 +564,27 @@ pub fn unused_imports(
     defer used.deinit()
     for _i in 0..modules.len {
         used.push(set(allocator))
+    }
+
+    // A name inside a `#if` branch the checker skipped resolves nowhere: every module defining a
+    // function of that name counts as used by the file.
+    for i in 0..sources.len {
+        if i >= modules.len or !is_project(project_origin, i) {
+            continue
+        }
+        let names: Set(String) = set(allocator)
+        defer names.deinit()
+        directive_names(sources[i].view, &names, allocator)
+        let u = &used[i]
+        for name in names {
+            const overloads = result.functions.by_name.get_ref(name)
+            if overloads.is_none() {
+                continue
+            }
+            for &f in overloads.unwrap() {
+                add_opt(u, f.module)
+            }
+        }
     }
 
     for e in result.resolved_targets {
@@ -1123,4 +1261,40 @@ fn main() i32 {
     let w = diag_messages(&unit, "W1004")
     defer w.deinit()
     assert_eq(w.len, 0 as usize, "unchecked test bodies may be the only use")
+}
+
+test "a function called only in an inactive #if branch is not unused" {
+    let unit = exe_unit(
+        "fn helper() i32 { return 1 }\nfn main() i32 {\n    #if platform.os == \"plan9\" {\n        return helper()\n    }\n    return 0\n}\n",
+    )
+    defer unit.deinit()
+    let w = diag_messages(&unit, "W1003")
+    defer w.deinit()
+    assert_eq(w.len, 0 as usize, "the skipped branch still names it")
+}
+
+test "an #intrinsic function is a root" {
+    let unit = exe_unit("#intrinsic\nfn hook() i32 { return 1 }\nfn main() i32 { return 0 }\n")
+    defer unit.deinit()
+    let w = diag_messages(&unit, "W1003")
+    defer w.deinit()
+    assert_eq(w.len, 0 as usize, "the compiler reaches it by name")
+}
+
+test "an import used only in an inactive #if branch does not warn W1004" {
+    let unit = analyzed_fixture(
+        "import p.leaf
+
+fn main() i32 {
+    #if platform.os == \"plan9\" {
+        return leaf()
+    }
+    return 0
+}
+",
+    )
+    defer unit.deinit()
+    let w = diag_messages(&unit, "W1004")
+    defer w.deinit()
+    assert_eq(w.len, 0 as usize, "the skipped branch still uses it")
 }

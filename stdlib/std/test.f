@@ -74,6 +74,7 @@ const test_allocator = Allocator {
 // test. Not `pub`: lowering resolves it by name for the runner it emits, and there is no reason to
 // call it by hand - a program that installs the tracking allocator outside a test run has no runner
 // to report what it finds.
+#intrinsic
 fn install_test_allocator() {
     const _prev = set_global_allocator(&test_allocator)
 }
