@@ -809,6 +809,17 @@ pub fn encode_null(self: &ValueEncoder) usize {
     return self.emit(Value.Null)
 }
 
+// Under a pending key the entry is left out; anywhere else a Null.
+pub fn encode_none(self: &ValueEncoder) usize {
+    const keyed = self.open.len > 0 and self.keys.len > self.key_base.last().unwrap()
+    if keyed {
+        const k = self.keys.pop().unwrap()
+        k.deinit()
+        return 0
+    }
+    return self.emit(Value.Null)
+}
+
 pub fn encode_bool(self: &ValueEncoder, v: bool) usize {
     return self.emit(Value.Bool(v))
 }

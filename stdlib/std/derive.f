@@ -83,7 +83,7 @@ pub import std.io.writer
                     } #elif field.type_info.name == "String" {
                         enc.encode_str(self.#(field.name))
                     } #elif field.type_info.name == "OwnedString" {
-                        enc.encode_str(self.#(field.name).as_view())
+                        enc.encode_str(self.#(field.name).view)
                     } #elif field.type_info.name == "Date" {
                         enc.encode_date(self.#(field.name))
                     } #elif field.type_info.name == "Time" {
@@ -103,7 +103,7 @@ pub import std.io.writer
                 dec.begin_map()
                 let result: #(T.name)
                 let _key_buf = string_builder(32)
-                for _i in 0..1024 {
+                loop {
                     _key_buf.clear()
                     if dec.next_key(&_key_buf) == false { break }
                     let _key = _key_buf.as_view()
@@ -152,11 +152,11 @@ pub import std.io.writer
                             } #elif field.type_info.name == "OffsetDateTime" {
                                 result.#(field.name) = dec.decode_offset_datetime()
                             } #else {
-                                result.#(field.name) = #(field.type_info.name).deserialize(dec)
+                                result.#(field.name) = deserialize(dec)
                             }
                         } else
                     }
-                    { dec.skip_value() }
+                    { const _skipped = dec.skip_value() }
                 }
                 dec.end_map()
                 _key_buf.deinit()

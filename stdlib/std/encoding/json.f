@@ -8,7 +8,8 @@
 // Numbers without a fraction or exponent that fit an i64 read as ints, every other number as a
 // float. JSON has no dates: the encoder writes them as ISO 8601 / RFC 3339 strings, and the decoder
 // reads strings back as dates and times where `JsonOptions.dates` says so. Object keys keep their
-// order.
+// order, and `JsonOptions.keys` respells them both ways. An absent value (`encode_none`) leaves its
+// object entry out and is null anywhere else.
 
 import std.allocator
 import std.collections.list
@@ -55,15 +56,22 @@ const MAX_DEPTH: usize = 64
 pub type JsonOptions = struct {
     // Which strings the decoder reports as dates and times.
     dates: DateParsing
+    // How object keys are spelled on the wire: the encoder respells the keys it writes, the decoder
+    // the keys it reads.
+    keys: KeyCase
 }
 
-// Options with every string kept a string.
+// Options with every string kept a string and keys verbatim.
 pub fn json_options() JsonOptions {
-    return .{ dates = DateParsing.Off }
+    return .{ dates = DateParsing.Off, keys = KeyCase.Verbatim }
 }
 
 pub fn json_options(dates: DateParsing) JsonOptions {
-    return .{ dates = dates }
+    return .{ dates = dates, keys = KeyCase.Verbatim }
+}
+
+pub fn json_options(keys: KeyCase) JsonOptions {
+    return .{ dates = DateParsing.Off, keys = keys }
 }
 
 // =============================================================================
@@ -112,7 +120,7 @@ pub fn to_json(
     pretty: bool = false,
     indent: usize = 2,
 ) Result((), JsonError) {
-    let enc = json_encoder(w, pretty, indent)
+    let enc = json_encoder(w, json_options(), pretty, indent)
     value.serialize(&enc.encoder())
     if enc.error.is_some() {
         return Err(enc.error.unwrap())
@@ -192,19 +200,29 @@ fn hex_digit(c: u8) u32? {
 
 pub type JsonEncoder = struct {
     w: Writer
-    // Per open container: 0 = no elements yet, 1 = has elements, 2 = a key awaits its value.
+    // Per open container: 0 = no elements yet, 1 = has elements.
     stack: [u8; 64]
     stack_len: usize
+    // The key given and not yet written: it goes out with its value, so an absent value drops it.
+    pending: String?
+    keys: KeyCase
     pretty: bool
     indent: usize
     error: JsonError?
 }
 
-pub fn json_encoder(w: Writer, pretty: bool = false, indent: usize = 2) JsonEncoder {
+pub fn json_encoder(
+    w: Writer,
+    options: JsonOptions = json_options(),
+    pretty: bool = false,
+    indent: usize = 2,
+) JsonEncoder {
     return .{
         w = w,
         stack = [0u8; 64],
         stack_len = 0,
+        pending = null,
+        keys = options.keys,
         pretty = pretty,
         indent = indent,
         error = null,
@@ -221,23 +239,59 @@ fn fail(self: &JsonEncoder, err: JsonError) {
     }
 }
 
+// Everything that precedes a value: the comma after the previous element, the indent, and the
+// pending key.
 fn write_separator(self: &JsonEncoder) {
     if self.stack_len == 0 {
         return
     }
     const top = self.stack_len - 1
-    const state = self.stack[top]
-    self.stack[top] = 1
-    if state == 2 {
-        return
-    }
-    if state == 1 {
+    if self.stack[top] == 1 {
         write_byte(self.w, ',')
     }
+    self.stack[top] = 1
     if self.pretty {
         write_byte(self.w, '\n')
         self.write_depth()
     }
+    const name = replace(&self.pending, null)
+    if name.is_none() {
+        return
+    }
+    write_byte(self.w, '"')
+    self.keys match {
+        Verbatim => write_escaped_string(name.unwrap(), self.w)
+        Camel => write_camel(name.unwrap(), self.w)
+    }
+    write_byte(self.w, '"')
+    write_byte(self.w, ':')
+    if self.pretty {
+        write_byte(self.w, ' ')
+    }
+}
+
+// `start_line` as `startLine`: each `_` after the first character dropped and the letter after it
+// capitalised. Leading underscores stay.
+fn write_camel(name: String, w: Writer) {
+    let run: usize = 0
+    let upper = false
+    for i in 0..name.len {
+        const c = name[i]
+        const joins = c == '_' and i > 0 and name[i - 1] != '_'
+        if joins {
+            write_escaped_string(name[run..i], w)
+            run = i + 1
+            upper = true
+            continue
+        }
+        if upper and c >= 'a' and c <= 'z' {
+            write_escaped_string(name[run..i], w)
+            write_byte(w, c - 32)
+            run = i + 1
+        }
+        upper = false
+    }
+    write_escaped_string(name[run..name.len], w)
 }
 
 fn write_depth(self: &JsonEncoder) {
@@ -262,6 +316,7 @@ fn close(self: &JsonEncoder, bracket: u8) usize {
         return 0
     }
     self.stack_len = self.stack_len - 1
+    self.pending = null
     if self.pretty {
         if self.stack[self.stack_len] == 1 {
             write_byte(self.w, '\n')
@@ -276,6 +331,14 @@ pub fn encode_null(self: &JsonEncoder) usize {
     self.write_separator()
     write_str(self.w, "null")
     return 4
+}
+
+pub fn encode_none(self: &JsonEncoder) usize {
+    if self.pending.is_some() {
+        self.pending = null
+        return 0
+    }
+    return self.encode_null()
 }
 
 pub fn encode_bool(self: &JsonEncoder, v: bool) usize {
@@ -397,16 +460,9 @@ pub fn end_map(self: &JsonEncoder) usize {
     return self.close('}')
 }
 
+// `name` is written with its value, so it must outlive the call that writes that value.
 pub fn key(self: &JsonEncoder, name: String) usize {
-    self.write_separator()
-    write_byte(self.w, '"')
-    write_escaped_string(name, self.w)
-    write_byte(self.w, '"')
-    write_byte(self.w, ':')
-    if self.pretty {
-        write_byte(self.w, ' ')
-    }
-    self.stack[self.stack_len - 1] = 2
+    self.pending = Some(name)
     return name.len + 3
 }
 
@@ -1139,7 +1195,11 @@ pub fn next_key(self: &JsonDecoder, sb: &StringBuilder) bool {
     }
 
     const start = sb.len
-    if !self.scan_string_into(sb.writer()) {
+    const scanned = self.options.keys match {
+        Verbatim => self.scan_string_into(sb.writer())
+        Camel => self.scan_snake_key(sb)
+    }
+    if !scanned {
         return false
     }
 
@@ -1157,6 +1217,28 @@ pub fn next_key(self: &JsonDecoder, sb: &StringBuilder) bool {
         const name = sb.as_view()[start..sb.len]
         const old = replace(&self.keys[self.keys.len - 1], from_view(name, self.allocator))
         old.deinit()
+    }
+    return true
+}
+
+// Scan a key and append it to `sb` as snake_case: `startLine` as `start_line`.
+fn scan_snake_key(self: &JsonDecoder, sb: &StringBuilder) bool {
+    let raw = string_builder(32, self.allocator)
+    defer raw.deinit()
+    if !self.scan_string_into(raw.writer()) {
+        return false
+    }
+    const text = raw.as_view()
+    for i in 0..text.len {
+        const c = text[i]
+        if c >= 'A' and c <= 'Z' {
+            if i > 0 {
+                sb.append_byte('_')
+            }
+            sb.append_byte(c + 32)
+            continue
+        }
+        sb.append_byte(c)
     }
     return true
 }
@@ -1462,4 +1544,75 @@ test "floats round-trip through JSON text exactly" {
     defer back.deinit()
     assert_eq(back.at(0).unwrap().as_f64().unwrap(), 0.1 + 0.2, "0.1 + 0.2 exactly")
     assert_eq(back.at(1).unwrap().as_f64().unwrap(), 1.0 / 3.0, "a third exactly")
+}
+
+type KeyProbe = struct {
+    start_line: u32
+}
+
+#derive(KeyProbe, serialize)
+
+type NoneProbe = struct {
+    label: String
+    at: KeyProbe
+    tags: List(i32)
+    note: i32?
+}
+
+#derive(NoneProbe, serialize)
+
+test "camel keys respell snake fields, and a None field is left out" {
+    let sb = string_builder(64)
+    defer sb.deinit()
+    let enc = json_encoder(sb.writer(), json_options(KeyCase.Camel))
+    let tags: List(i32) = list(2)
+    tags.push(1)
+    tags.push(2)
+    let p = NoneProbe {
+        label = "a",
+        at = KeyProbe { start_line = 3 },
+        tags = move tags,
+        note = null,
+    }
+    p.serialize(&enc.encoder())
+    assert_eq(
+        sb.as_view(),
+        "{\"label\":\"a\",\"at\":{\"startLine\":3},\"tags\":[1,2]}",
+        "no note key",
+    )
+
+    sb.clear()
+    let enc2 = json_encoder(sb.writer(), json_options(KeyCase.Camel))
+    p.note = Some(5)
+    p.serialize(&enc2.encoder())
+    assert_true(contains(sb.as_view(), "[1,2],\"note\":5}"), "Some writes its payload")
+    p.tags.deinit()
+}
+
+test "a None outside an object is null" {
+    let sb = string_builder(16)
+    defer sb.deinit()
+    let enc = json_encoder(sb.writer())
+    let xs: List(i32?) = list(2)
+    defer xs.deinit()
+    xs.push(null)
+    xs.push(Some(1))
+    xs.serialize(&enc.encoder())
+    assert_eq(sb.as_view(), "[null,1]", "an element cannot be left out")
+}
+
+test "camel keys read back as snake fields" {
+    let mr = mem_reader("{\"startLine\": 7, \"x\": 1}")
+    let dec = json_decoder(mr.reader(), json_options(KeyCase.Camel))
+    defer dec.deinit()
+    let d = dec.decoder()
+    d.begin_map()
+    let kb = string_builder(16)
+    defer kb.deinit()
+    assert_true(d.next_key(&kb), "first key")
+    assert_eq(kb.as_view(), "start_line", "startLine reads as start_line")
+    assert_eq(d.decode_int(8), 7, "its value")
+    kb.clear()
+    assert_true(d.next_key(&kb), "second key")
+    assert_eq(kb.as_view(), "x", "a key without capitals is unchanged")
 }

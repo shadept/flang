@@ -14,6 +14,18 @@ When you discover a bug or limitation:
 
 ---
 
+### W1003 Misses Uses in an Inactive `#if` Branch and By-Name Lowering Hooks
+
+**Status:** open. **Affected:** `lib/flang_analysis/src/unused.f`.
+
+An inactive `#if` branch is never checked, so its calls record no edges: `std.path`'s
+`is_drive_letter` and `std.terminal`'s `enable_vt` (both called only under
+`#if platform.os == "windows"`) warn on every other host. `std.test`'s `install_test_allocator`
+warns too: lowering looks it up by name for the test runner, which no edge records. Fix: root a
+function named in an inactive branch (name-level, conservative), and mark by-name hooks as roots.
+
+---
+
 ### A Default Argument Is Resolved in the Caller's Scope - RESOLVED
 
 **Was:** a parameter's default was checked where the call is, so a default naming something only

@@ -10,7 +10,11 @@
 //
 // Error types and policy (strict/lenient, naming conventions, unknown field handling) are defined
 // by each format, not here. Both sides report failure through `has_error`; each format's own
-// `get_error` says which.
+// `get_error` says which. `KeyCase` is the shared vocabulary a format's naming option uses.
+//
+// `encode_none` is an absent value, what `Option`'s `serialize` writes for `None`: a format that
+// can leave a map entry out drops the key before it, and writes null anywhere else. A map's length
+// hint is therefore an upper bound.
 //
 // Dates and times have their own methods. A format without them (JSON, CSV) writes ISO 8601 / RFC
 // 3339 text and reads it back; `DateParsing` decides whether such a format's decoder reports a
@@ -21,10 +25,12 @@
 //   let enc = json_encoder(&sb)
 //   point.serialize(&enc.encoder())
 
+import std.collections.list
 import std.interface
 import std.io.writer
 import std.option
 import std.result
+import std.string
 import std.string_builder
 import std.time
 
@@ -97,12 +103,21 @@ pub fn temporal_kind(s: String) ValueKind {
     return ValueKind.Str
 }
 
+// How a format spells map keys. Struct fields are snake_case; `Camel` writes `start_line` as
+// `startLine` and reads `startLine` back as `start_line`. A key with no `_` (or no capital, read
+// back) is the same under both.
+pub type KeyCase = enum {
+    Verbatim
+    Camel
+}
+
 // =============================================================================
 // Encoder
 // =============================================================================
 
 #interface(Encoder, struct {
     encode_null: fn() usize
+    encode_none: fn() usize
     encode_bool: fn(v: bool) usize
     encode_int: fn(v: i64, width: u8) usize
     encode_uint: fn(v: u64, width: u8) usize
@@ -136,6 +151,56 @@ pub fn encode_usize(enc: &Encoder, v: usize) usize { return enc.encode_uint(v as
 
 pub fn encode_f32(enc: &Encoder, v: f32) usize { return enc.encode_float(v as f64, 4) }
 pub fn encode_f64(enc: &Encoder, v: f64) usize { return enc.encode_float(v, 8) }
+
+// =============================================================================
+// Serialize
+// =============================================================================
+
+// A type that writes itself to an Encoder. `#derive(T, serialize)` implements it for a struct.
+pub type Serialize = contract {
+    fn serialize(self: &Self, enc: &Encoder)
+}
+
+pub fn serialize(self: &bool, enc: &Encoder) { enc.encode_bool(self.*) }
+pub fn serialize(self: &i8, enc: &Encoder) { encode_i8(enc, self.*) }
+pub fn serialize(self: &i16, enc: &Encoder) { encode_i16(enc, self.*) }
+pub fn serialize(self: &i32, enc: &Encoder) { encode_i32(enc, self.*) }
+pub fn serialize(self: &i64, enc: &Encoder) { encode_i64(enc, self.*) }
+pub fn serialize(self: &isize, enc: &Encoder) { encode_isize(enc, self.*) }
+pub fn serialize(self: &u8, enc: &Encoder) { encode_u8(enc, self.*) }
+pub fn serialize(self: &u16, enc: &Encoder) { encode_u16(enc, self.*) }
+pub fn serialize(self: &u32, enc: &Encoder) { encode_u32(enc, self.*) }
+pub fn serialize(self: &u64, enc: &Encoder) { encode_u64(enc, self.*) }
+pub fn serialize(self: &usize, enc: &Encoder) { encode_usize(enc, self.*) }
+pub fn serialize(self: &f32, enc: &Encoder) { encode_f32(enc, self.*) }
+pub fn serialize(self: &f64, enc: &Encoder) { encode_f64(enc, self.*) }
+pub fn serialize(self: &String, enc: &Encoder) { enc.encode_str(self.*) }
+pub fn serialize(self: &OwnedString, enc: &Encoder) { enc.encode_str(self.view) }
+
+// `None` is an absent value (`encode_none`), `Some` its payload.
+pub fn serialize(self: &Option($T), enc: &Encoder) where T: Serialize {
+    if self.is_none() {
+        enc.encode_none()
+        return
+    }
+    self.unwrap_ref().serialize(enc)
+}
+
+pub fn serialize(self: &$T[], enc: &Encoder) where T: Serialize {
+    enc.begin_seq(self.len)
+    for &x in self.* {
+        x.serialize(enc)
+    }
+    enc.end_seq()
+}
+
+pub fn serialize(self: &List($T), enc: &Encoder) where T: Serialize {
+    enc.begin_seq(self.len)
+    for &x in self {
+        x.serialize(enc)
+    }
+    enc.end_seq()
+}
 
 // =============================================================================
 // Decoder

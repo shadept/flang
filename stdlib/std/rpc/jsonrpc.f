@@ -1,21 +1,21 @@
 // JSON-RPC 2.0 over Content-Length framing.
 //
 //   framing    read_frame / write_frame - `Content-Length: N\r\n\r\n{json}` over Reader/Writer
-//   envelope   RpcMessage (parse side) and write_request / write_response /
-//              write_error / write_notification (serialize side)
-//   format     std.encoding.json
+//   envelope   RpcMessage (parse side) and RpcWriter (serialize side): request / notify /
+//              respond / respond_error, each payload any Serialize type
+//   format     std.encoding.json, with the JsonOptions the RpcWriter was made with
 //
 // Transport-agnostic: everything is written against the Reader/Writer vtable interfaces, so a
 // transcript is testable in-process with MemReader and a StringBuilder-backed writer. This is the
 // wire layer of the LSP; it knows JSON-RPC, not LSP.
 //
 // A parsed RpcMessage owns its whole JSON document and hands out borrowed references into it. The
-// `id` is kept as parsed JSON and echoed back through write_response/write_error, never
-// interpreted.
+// `id` is kept as parsed JSON and echoed back through respond/respond_error, never interpreted.
 
 import std.allocator
 import std.collections.dict
 import std.conv
+import std.derive
 import std.encoding.codec
 import std.encoding.json
 import std.encoding.value
@@ -240,79 +240,84 @@ pub fn read_message(r: Reader, allocator: &Allocator? = null) Result(RpcMessage,
 // Envelope - serialize side
 // =============================================================================
 
-pub fn write_request(w: Writer, id: i64, method: String, params: &Value? = null) {
-    let sb = string_builder(128)
-    defer sb.deinit()
-    let jenc = json_encoder(sb.writer())
-    let e = jenc.encoder()
-    e.begin_map(0)
-    e.key("jsonrpc")
-    e.encode_str("2.0")
-    e.key("id")
-    e.encode_int(id, 8)
-    e.key("method")
-    e.encode_str(method)
-    if params.is_some() {
+// The send side of a connection: every message is one frame on `w`, its payload encoded as JSON
+// under `options` (a protocol with camelCase members passes `KeyCase.Camel`).
+pub type RpcWriter = struct {
+    w: Writer
+    options: JsonOptions
+}
+
+pub fn rpc_writer(w: Writer, options: JsonOptions = json_options()) RpcWriter {
+    return .{ w = w, options = options }
+}
+
+pub fn request(self: &RpcWriter, id: i64, method: String, params: &$P) where P: Serialize {
+    self.send(fn(e: &Encoder) void {
+        e.key("id")
+        e.encode_int(id, 8)
+        e.key("method")
+        e.encode_str(method)
         e.key("params")
-        params.unwrap().serialize(&e)
-    }
-    e.end_map()
-    write_frame(w, sb.as_view())
+        params.serialize(e)
+    })
 }
 
-pub fn write_notification(w: Writer, method: String, params: &Value? = null) {
-    let sb = string_builder(128)
-    defer sb.deinit()
-    let jenc = json_encoder(sb.writer())
-    let e = jenc.encoder()
-    e.begin_map(0)
-    e.key("jsonrpc")
-    e.encode_str("2.0")
-    e.key("method")
-    e.encode_str(method)
-    if params.is_some() {
+// A request without params.
+pub fn request(self: &RpcWriter, id: i64, method: String) {
+    self.send(fn(e: &Encoder) void {
+        e.key("id")
+        e.encode_int(id, 8)
+        e.key("method")
+        e.encode_str(method)
+    })
+}
+
+pub fn notify(self: &RpcWriter, method: String, params: &$P) where P: Serialize {
+    self.send(fn(e: &Encoder) void {
+        e.key("method")
+        e.encode_str(method)
         e.key("params")
-        params.unwrap().serialize(&e)
-    }
-    e.end_map()
-    write_frame(w, sb.as_view())
+        params.serialize(e)
+    })
 }
 
-pub fn write_response(w: Writer, id: &Value, result: &Value) {
-    let sb = string_builder(128)
+// The answer to the request `id` names. A response must carry `result`, and a `None` there is an
+// absent value the encoder leaves out: answer "no result" with `&Value.Null`.
+pub fn respond(self: &RpcWriter, id: &Value, result: &$R) where R: Serialize {
+    self.send(fn(e: &Encoder) void {
+        e.key("id")
+        id.serialize(e)
+        e.key("result")
+        result.serialize(e)
+    })
+}
+
+pub fn respond_error(self: &RpcWriter, id: &Value, code: i64, message: String) {
+    self.send(fn(e: &Encoder) void {
+        e.key("id")
+        id.serialize(e)
+        e.key("error")
+        e.begin_map(2)
+        e.key("code")
+        e.encode_int(code, 8)
+        e.key("message")
+        e.encode_str(message)
+        e.end_map()
+    })
+}
+
+// One frame: the envelope object with its version, the members `body` writes, closed.
+fn send(self: &RpcWriter, body: $F) where F: fn(&Encoder) {
+    let sb = string_builder(256)
     defer sb.deinit()
-    let jenc = json_encoder(sb.writer())
+    let jenc = json_encoder(sb.writer(), self.options)
     let e = jenc.encoder()
     e.begin_map(0)
     e.key("jsonrpc")
     e.encode_str("2.0")
-    e.key("id")
-    id.serialize(&e)
-    e.key("result")
-    result.serialize(&e)
+    body(&e)
     e.end_map()
-    write_frame(w, sb.as_view())
-}
-
-pub fn write_error(w: Writer, id: &Value, code: i64, message: String) {
-    let sb = string_builder(128)
-    defer sb.deinit()
-    let jenc = json_encoder(sb.writer())
-    let e = jenc.encoder()
-    e.begin_map(0)
-    e.key("jsonrpc")
-    e.encode_str("2.0")
-    e.key("id")
-    id.serialize(&e)
-    e.key("error")
-    e.begin_map(0)
-    e.key("code")
-    e.encode_int(code, 8)
-    e.key("message")
-    e.encode_str(message)
-    e.end_map()
-    e.end_map()
-    write_frame(w, sb.as_view())
+    write_frame(self.w, sb.as_view())
 }
 
 // =============================================================================
@@ -421,18 +426,18 @@ test "non-object and missing version are BadEnvelope" {
     assert_eq(missing.unwrap_err().to_string(), "BadEnvelope", "jsonrpc field is required")
 }
 
-test "write_notification exact bytes" {
+test "request without params writes exact bytes" {
     let sb = string_builder(64)
     defer sb.deinit()
-    write_notification(sb.writer(), "initialized")
+    rpc_writer(sb.writer()).request(1, "shutdown")
     assert_eq(
         sb.as_view(),
-        "Content-Length: 40\r\n\r\n{\"jsonrpc\":\"2.0\",\"method\":\"initialized\"}",
+        "Content-Length: 44\r\n\r\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"shutdown\"}",
         "transcript-exact output",
     )
 }
 
-test "write_response echoes an integer id as an integer" {
+test "respond echoes an integer id as an integer" {
     const got = parse_message("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"shutdown\"}")
     let msg = got.unwrap()
     defer msg.deinit()
@@ -440,12 +445,12 @@ test "write_response echoes an integer id as an integer" {
     let sb = string_builder(64)
     defer sb.deinit()
     const nul = Value.Null
-    write_response(sb.writer(), msg.id().unwrap(), &nul)
+    rpc_writer(sb.writer()).respond(msg.id().unwrap(), &nul)
     assert_true(contains(sb.as_view(), "\"id\":7,"), "id 7 comes back as 7")
     assert_true(contains(sb.as_view(), "\"result\":null"), "null result is explicit")
 }
 
-test "write_response echoes string id verbatim" {
+test "respond echoes a string id verbatim" {
     const got = parse_message("{\"jsonrpc\":\"2.0\",\"id\":\"a-1\",\"method\":\"shutdown\"}")
     let msg = got.unwrap()
     defer msg.deinit()
@@ -453,15 +458,36 @@ test "write_response echoes string id verbatim" {
     let sb = string_builder(64)
     defer sb.deinit()
     const nul = Value.Null
-    write_response(sb.writer(), msg.id().unwrap(), &nul)
+    rpc_writer(sb.writer()).respond(msg.id().unwrap(), &nul)
     assert_true(contains(sb.as_view(), "\"id\":\"a-1\""), "string id round-trips")
 }
 
-test "write_error shape" {
+type ProbeParams = struct {
+    start_line: u32
+    note: i32?
+}
+
+#derive(ProbeParams, serialize)
+
+test "notify encodes typed params under the writer's key case" {
+    let sb = string_builder(64)
+    defer sb.deinit()
+    const p = ProbeParams { start_line = 2, note = null }
+    rpc_writer(sb.writer(), json_options(KeyCase.Camel)).notify("x/y", &p)
+    assert_true(
+        contains(
+            sb.as_view(),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"x/y\",\"params\":{\"startLine\":2}}",
+        ),
+        "camelCase member, the None one left out",
+    )
+}
+
+test "respond_error shape" {
     let sb = string_builder(64)
     defer sb.deinit()
     const nul = Value.Null
-    write_error(sb.writer(), &nul, METHOD_NOT_FOUND, "no such method")
+    rpc_writer(sb.writer()).respond_error(&nul, METHOD_NOT_FOUND, "no such method")
     assert_true(
         contains(sb.as_view(), "\"error\":{\"code\":-32601,\"message\":\"no such method\"}"),
         "error object carries code and message",
@@ -469,13 +495,13 @@ test "write_error shape" {
     assert_true(contains(sb.as_view(), "\"id\":null"), "unknown id is null")
 }
 
-test "write_request with params" {
+test "request with params" {
     let sb = string_builder(64)
     defer sb.deinit()
     let params = value_map()
     defer params.deinit()
     params.set("n", Value.Int(2))
-    write_request(sb.writer(), 1, "window/workDoneProgress/create", Some(&params))
+    rpc_writer(sb.writer()).request(1, "window/workDoneProgress/create", &params)
     assert_true(
         contains(sb.as_view(), "\"id\":1,\"method\":\"window/workDoneProgress/create\""),
         "request carries id and method",
@@ -486,7 +512,7 @@ test "write_request with params" {
 test "read_message end to end" {
     let sb = string_builder(64)
     defer sb.deinit()
-    write_notification(sb.writer(), "exit")
+    rpc_writer(sb.writer()).request(1, "exit")
     let mr = mem_reader(sb.as_view())
     const got = read_message(mr.reader())
     assert_true(got.is_ok(), "framed message parses")

@@ -706,6 +706,11 @@ pub fn encode_null(self: &CsvEncoder) usize {
     return 0
 }
 
+// A row's columns are positional, so an absent field is still a cell: an empty one.
+pub fn encode_none(self: &CsvEncoder) usize {
+    return self.encode_null()
+}
+
 pub fn encode_bool(self: &CsvEncoder, v: bool) usize {
     if v {
         self.write_enc_value("true")
