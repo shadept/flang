@@ -5,7 +5,8 @@
 //
 // Analysis runs synchronously between messages: a didOpen of the first file under a `flang.toml`
 // analyzes that whole project behind a `$/progress` spinner, a didSave re-checks it, and a
-// keystroke gets parse-only (tier 1) diagnostics immediately. Requests never start analysis; they
+// keystroke gets fresh parse (tier 1) diagnostics immediately, beside the last analysis's for that
+// file. Requests never start analysis; they
 // answer from the current buffers. With no stdlib path configured the server stays in tier-1-only
 // mode (syntax diagnostics, symbols, folding) and never type-checks.
 //
@@ -324,20 +325,64 @@ fn publish_file_diags(self: &LspServer, uri: String, text: String, diags: &List(
     self.out.notify("textDocument/publishDiagnostics", &params)
 }
 
-// Parse-only diagnostics for one open buffer - the per-keystroke path.
-fn publish_syntax_diags(self: &LspServer, uri: String) {
+// One open buffer's diagnostics: its live parse errors, then what the last analysis found in the
+// file. Those keep the positions of the text they were found in until the next save re-checks it,
+// so an edit shifts them rather than hiding them.
+fn publish_open_file(self: &LspServer, uri: String) {
     const doc = self.docs.get(uri)
     if doc.is_none() {
         return
     }
-    let parsed = parse_doc(doc.unwrap().text.view)
-    let lent: List(&Diagnostic) = list(parsed.diagnostics.len)
-    defer lent.deinit()
-    for &d in parsed.diagnostics {
-        lent.push(d)
+    const d = doc.unwrap()
+    let parsed = parse_doc(d.text.view)
+    defer parsed.deinit()
+    let diagnostics: List(LspDiagnostic) = list(parsed.diagnostics.len)
+    for &x in parsed.diagnostics {
+        diagnostics.push(lsp_diagnostic(&d.index, d.text.view, x, self.encoding))
     }
-    self.publish_file_diags(uri, doc.unwrap().text.view, &lent)
-    parsed.deinit()
+    self.analyzed_diags(d.path.view, &parsed.diagnostics, &diagnostics)
+    let params = PublishDiagnosticsParams { uri = uri, diagnostics = move diagnostics }
+    defer params.deinit()
+    self.out.notify("textDocument/publishDiagnostics", &params)
+}
+
+// The last analysis's diagnostics for `path` onto `out`, positioned in the text it analyzed. The
+// syntax ones are the live parse's to report: frontend codes (E1xxx), and any it reports itself.
+fn analyzed_diags(
+    self: &LspServer,
+    path: String,
+    live: &List(Diagnostic),
+    out: &List(LspDiagnostic),
+) {
+    const pi = if path.len > 0 { self.ws.project_of_path(path) } else { null }
+    if pi.is_none() {
+        return
+    }
+    const unit = &self.ws.projects[pi.unwrap()].unit
+    const fid = file_id_of(unit, path)
+    if fid.is_none() {
+        return
+    }
+    const text = unit.sources[fid.unwrap() as usize].view
+    let idx = line_index(text)
+    defer idx.deinit()
+    for &x in unit.diagnostics {
+        const in_file = x.span.file_id == fid.unwrap()
+        if !in_file or starts_with(x.code, "E1") or reported(live, x) {
+            continue
+        }
+        out.push(lsp_diagnostic(&idx, text, x, self.encoding))
+    }
+}
+
+fn reported(live: &List(Diagnostic), d: &Diagnostic) bool {
+    for &l in live {
+        const same_span = l.span.start == d.span.start and l.span.length == d.span.length
+        if same_span and l.code == d.code and l.message.view == d.message.view {
+            return true
+        }
+    }
+    return false
 }
 
 // The client's URI for `path`: the open document's own spelling when the file is open (so the
@@ -617,7 +662,7 @@ fn on_did_open(self: &LspServer, msg: &RpcMessage) {
     const version = get_i64(td.unwrap(), "version") ?? 0
     self.docs.open(uri.unwrap(), version, text.unwrap())
 
-    self.publish_syntax_diags(uri.unwrap())
+    self.publish_open_file(uri.unwrap())
     const doc = self.docs.get(uri.unwrap())
     if doc.is_some() and doc.unwrap().path.view.len > 0 {
         self.ensure_project(doc.unwrap().path.view)
@@ -661,8 +706,9 @@ fn on_did_change(self: &LspServer, msg: &RpcMessage) {
         return
     }
     self.docs.change(uri.unwrap(), version, text.unwrap())
-    // Parse-only feedback while typing; the type tier catches up on save.
-    self.publish_syntax_diags(uri.unwrap())
+    // Fresh parse errors while typing, beside the last analysis's; the type tier catches up on
+    // save.
+    self.publish_open_file(uri.unwrap())
 }
 
 fn on_did_save(self: &LspServer, msg: &RpcMessage) {
@@ -2459,6 +2505,35 @@ fn demo_run(request: String, out: &StringBuilder) {
     defer srv.deinit()
     demo_project_into(&srv)
     srv.run()
+}
+
+test "opening and editing a file keep the last analysis's warnings" {
+    let change = demo_src_json()
+    defer change.deinit()
+    const edit = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\",\"version\":2}},\"contentChanges\":[{{\"text\":\"// pad\\n{change.view}\"}}]}}}}"
+    defer edit.deinit()
+    let input = demo_input(edit.view)
+    defer input.deinit()
+    let out = string_builder(4096)
+    defer out.deinit()
+    let mr = mem_reader(input.as_view())
+    let srv = lsp_server(mr.reader(), out.writer())
+    defer srv.deinit()
+    demo_project_into(&srv)
+    let diags = &srv.ws.projects[0].unit.diagnostics
+    diags.push(Diagnostic {
+        severity = Severity.Warning,
+        code = "W1003",
+        message = from_view("unused function `point`"),
+        hint = from_view(""),
+        span = SourceSpan { file_id = 0, start = 7, length = 5 },
+    })
+    srv.run()
+    assert_eq(
+        count(out.as_view(), "\"code\":\"W1003\""),
+        2 as usize,
+        "kept on open and on the edit",
+    )
 }
 
 test "hover on a local read renders name and type" {
