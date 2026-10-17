@@ -2839,6 +2839,7 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
     // shape (value <-> &T), mirroring the checker's in-set receiver adaptation - pushing the raw
     // value against an adapted pick was a silent scalar miscompile (an i8 handed to a `&u8`
     // parameter).
+    const adapt = ctx_receiver_adapt(ctx, node_id_of(call.span))
     call.callee.* match {
         MemberAccess(ma) => {
             if sig.params.len == 0 {
@@ -2849,7 +2850,7 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
             // hop; the plain path would pass the wrapper's address at the wrong layout.
             args.push(ctx_receiver_deref(ctx, node_id_of(call.span)) match {
                 Some(c) => lower_deref_receiver(ctx, bb, env, ma.receiver, c, &sig.params[0])
-                None => lower_receiver(ctx, bb, env, ma.receiver, &sig.params[0])
+                None => lower_receiver(ctx, bb, env, ma.receiver, &sig.params[0], adapt)
             })
         }
         // RFC-014: `c(args)` on a value whose type declares `op_call`. The checker resolved it as a
@@ -2867,7 +2868,7 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
                 if c.len > 0 {
                     args.push(lower_deref_receiver(ctx, bb, env, call.callee, c, &sig.params[0]))
                 } else {
-                    args.push(lower_receiver(ctx, bb, env, call.callee, &sig.params[0]))
+                    args.push(lower_receiver(ctx, bb, env, call.callee, &sig.params[0], adapt))
                 }
             }
         }
@@ -3252,77 +3253,57 @@ fn build_range_slot(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty, sv: Operand, ev:
     return slot
 }
 
-// A UFCS receiver adapted to the winner's first-parameter shape. The checker commits value <-> &T
-// adaptation in-set and REWRITES the receiver node's recorded type to the adapted form, so the node
-// table cannot tell the two apart - the decision reads the receiver's MEMORY type (a binding's
-// declared type, a field's substituted declaration) instead. Only scalar shapes need care: an
-// in-memory aggregate's value IS its address, so every aggregate combination coincides and takes
-// the plain path.
-//   - param `&scalar`, memory holds the scalar  -> the place's address
-//   - param `&scalar`, memory holds `&scalar`   -> the pointer value
-//   - param prim,      memory holds `&prim`     -> load through
-// Anything else scalar-adapted (a temporary receiver) refuses - passing raw bytes at the wrong
-// indirection was a silent miscompile (an i8 handed to a `&u8` parameter). Receivers that resolved
-// through an op_deref chain never reach here - `lower_call` routes them to `lower_deref_receiver`
-// via `receiver_derefs`.
-//
+// A UFCS receiver, as the winner's first parameter takes it. The checker records the adaptation it
+// committed (`receiver_adapts`); without one the receiver passes as written. Only scalar shapes
+// need work: an in-memory aggregate's value IS its address, so every aggregate shape coincides.
+//   - `ByRef`, scalar   -> the place's address, or a temporary spilled to a fresh slot
+//   - `ByValue`, scalar -> the value the reference points to
 // Scalar here is `!is_by_ref`, not `is_prim`: a reference, a function value and the pointer-niche
-// `Option(&T)` are all pointer-shaped values with no storage of their own, so a place holding one
-// has to be addressed rather than loaded.
-fn lower_receiver(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, want: &Ty) Operand {
-    let want_inner = tn(ctx, want.*) match {
-        NRef(i) => Some(i)
-        _ => null
+// `Option(&T)` are pointer-shaped values with no storage of their own. Receivers that resolved
+// through an op_deref chain never reach here - `lower_call` routes them to `lower_deref_receiver`.
+fn lower_receiver(
+    ctx: &LowerCtx,
+    bb: &BlockBuilder,
+    env: &Env,
+    recv: &Expr,
+    want: &Ty,
+    adapt: ReceiverAdapt?,
+) Operand {
+    if adapt.is_none() {
+        return lower_expr(ctx, bb, env, recv)
     }
-    let want_ref_scalar = false
-    if want_inner.is_some() {
-        let wi = want_inner.unwrap()
-        want_ref_scalar = !is_by_ref(ctx, &wi)
+    return adapt.unwrap() match {
+        ByRef => receiver_by_ref(ctx, bb, env, recv, want)
+        ByValue => receiver_by_value(ctx, bb, env, recv, want)
     }
+}
 
-    if want_ref_scalar {
-        let inner = want_inner.unwrap()
-        let mem = receiver_place_mem(ctx, bb, env, recv)
-        if mem.is_none() {
-            // A temporary receiver (`n.double().add_five()`): spill the value into a fresh slot and
-            // pass its address - the same `&temporary` rule call arguments already have.
-            let rty = node_ty(ctx, expr_span(recv))
-            if !scalar_rep_eq(ctx, rty, inner) {
-                return unlowerable_why(ctx, "scalar &T receiver with no place")
-            }
-            let v = lower_expr(ctx, bb, env, recv)
-            let slot = alloc_slot(bb, ir_of(ctx, rty))
-            bb.store(ir_of(ctx, rty), v, slot)
-            return slot
-        }
-        let m = mem.unwrap()
-        if ref_scalar_rep_eq(ctx, m.ty, want.*) {
-            // The memory already holds the &T - its value is the arg.
-            return bb.load(IrType.Ptr, m.addr)
-        }
-        if scalar_rep_eq(ctx, m.ty, inner) {
-            return m.addr
-        }
-        return unlowerable_why(ctx, "scalar receiver adaptation mismatch")
+// A value receiver handed to a `&T` parameter.
+fn receiver_by_ref(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, want: &Ty) Operand {
+    const inner = tn(ctx, want.*) match {
+        NRef(i) => i
+        _ => return unlowerable_why(ctx, "by-reference receiver on a value parameter")
     }
-
-    if is_prim(ctx, want.*) {
-        let mem = receiver_place_mem(ctx, bb, env, recv)
-        if mem.is_some() {
-            let m = mem.unwrap()
-            let m_inner = tn(ctx, m.ty) match {
-                NRef(i) => Some(i)
-                _ => null
-            }
-            if m_inner.is_some() and prim_rep_eq(ctx, m_inner.unwrap(), want.*) {
-                // `&prim` memory adapted to a by-value prim: load through.
-                let p = bb.load(IrType.Ptr, m.addr)
-                return bb.load(ir_of(ctx, want.*), p)
-            }
-        }
+    if is_by_ref(ctx, &inner) {
+        return lower_expr(ctx, bb, env, recv)
     }
+    const mem = receiver_place_mem(ctx, bb, env, recv)
+    if mem.is_some() {
+        return mem.unwrap().addr
+    }
+    const v = lower_expr(ctx, bb, env, recv)
+    const slot = alloc_slot(bb, ir_of(ctx, inner))
+    bb.store(ir_of(ctx, inner), v, slot)
+    return slot
+}
 
-    return lower_expr(ctx, bb, env, recv)
+// A reference receiver handed to a value parameter.
+fn receiver_by_value(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, recv: &Expr, want: &Ty) Operand {
+    const p = lower_expr(ctx, bb, env, recv)
+    if is_by_ref(ctx, want) {
+        return p
+    }
+    return bb.load(ir_of(ctx, want.*), p)
 }
 
 // Lowers a receiver the checker resolved through `op_deref` hops - a method call, an index, an
@@ -3352,43 +3333,6 @@ fn lower_deref_receiver(
         return bb.load(ir_of(ctx, want.*), cur)
     }
     return cur
-}
-
-// Same-scalar-representation compares: the checker may commit a pick whose prim differs in NAME but
-// not in machine representation (a `&usize` receiver on a `deinit(&u64)` winner - equal
-// specificity, zero-cost coercion, declaration order arbitrates). The bytes are the same; the call
-// is sound.
-// Two types whose VALUES are the same machine word. An in-memory aggregate is never one: its value
-// is an address, which is a different thing from being pointer-shaped.
-fn scalar_rep_eq(ctx: &LowerCtx, a: Ty, b: Ty) bool {
-    if is_by_ref(ctx, &a) or is_by_ref(ctx, &b) {
-        return false
-    }
-    return ir_of(ctx, a) == ir_of(ctx, b)
-}
-
-fn ref_scalar_rep_eq(ctx: &LowerCtx, a: Ty, b: Ty) bool {
-    let ia = tn(ctx, a) match {
-        NRef(i) => i
-        _ => return false
-    }
-    let ib = tn(ctx, b) match {
-        NRef(i) => i
-        _ => return false
-    }
-    return scalar_rep_eq(ctx, ia, ib)
-}
-
-fn prim_rep_eq(ctx: &LowerCtx, a: Ty, b: Ty) bool {
-    let pa = tn(ctx, a) match {
-        NPrim(p) => p
-        _ => return false
-    }
-    let pb = tn(ctx, b) match {
-        NPrim(p) => p
-        _ => return false
-    }
-    return prim_ir(pa) == prim_ir(pb)
 }
 
 fn is_prim(ctx: &LowerCtx, ty: Ty) bool {
@@ -7274,6 +7218,20 @@ fn ctx_receiver_deref(ctx: &LowerCtx, id: NodeId) &List(ResolvedTarget)? {
     return ctx.result.get_receiver_deref(id)
 }
 
+// The receiver adaptation of the UFCS call at `id` - through the active overlay first.
+fn ctx_receiver_adapt(ctx: &LowerCtx, id: NodeId) ReceiverAdapt? {
+    ctx.overlay match {
+        Some(ov) => {
+            const a = ov.receiver_adapts.get(id)
+            if a.is_some() {
+                return a
+            }
+        }
+        None => {}
+    }
+    return ctx.result.get_receiver_adapt(id)
+}
+
 // The hops an ARGUMENT resolved through (RFC-020), on its own node.
 fn ctx_arg_deref(ctx: &LowerCtx, id: NodeId) &List(ResolvedTarget)? {
     ctx.overlay match {
@@ -7700,7 +7658,7 @@ test "lowers a direct call to the callee's mangled symbol" {
     let mi = find_fn(&m, "main")
     assert_true(mi < m.functions.len, "main was lowered")
     assert_true(
-        first_callee(&m.functions[mi]) == "callee__i32",
+        first_callee(&m.functions[mi]) == "callee__i32__r_i32",
         "call names the callee's signature symbol",
     )
     assert_eq(first_call_argc(&m.functions[mi]), 1 as usize, "one argument passed")
@@ -7717,7 +7675,7 @@ test "a UFCS call passes the receiver as the first argument" {
     let mi = find_fn(&m, "main")
     assert_true(mi < m.functions.len, "main was lowered")
     assert_true(
-        first_callee(&m.functions[mi]) == "twice__i32",
+        first_callee(&m.functions[mi]) == "twice__i32__r_i32",
         "UFCS resolves to the free function",
     )
     assert_eq(first_call_argc(&m.functions[mi]), 1 as usize, "the receiver is the only argument")
@@ -7736,10 +7694,10 @@ test "a call site names the resolved overload's symbol, not the other one" {
     // The call resolved to the two-parameter overload, so it must name that overload's symbol - and
     // that symbol must be defined in the module. Both sides read the one table, so they cannot
     // drift.
-    assert_true(callee == "f__i32__i32", "the call names the two-parameter overload")
+    assert_true(callee == "f__i32__i32__r_i32", "the call names the two-parameter overload")
     assert_true(find_fn(&m, callee) < m.functions.len, "the named symbol is defined in the module")
     assert_true(
-        find_fn(&m, "f__i32") < m.functions.len,
+        find_fn(&m, "f__i32__r_i32") < m.functions.len,
         "the one-parameter overload is defined too",
     )
 }
@@ -7774,7 +7732,7 @@ test "lowers a function over parameters into an add and a return" {
     let m = lower_module(&unit.module, &unit.result)
     assert_eq(m.functions.len, 1 as usize, "one function lowered")
     let f = &m.functions[0]
-    assert_true(f.name == "add__i32__i32", "definition carries its signature symbol")
+    assert_true(f.name == "add__i32__i32__r_i32", "definition carries its signature symbol")
     assert_eq(f.params.len, 2 as usize, "two parameters")
     assert_eq(f.blocks.len, 1 as usize, "single straight-line block")
 
@@ -7841,7 +7799,7 @@ test "skips a function with an unsupported signature type" {
     let m = lower_module(&unit.module, &unit.result)
     assert_eq(m.functions.len, 1 as usize, "only the scalar function is lowered")
     let f = &m.functions[0]
-    assert_true(f.name == "ok", "the slice-taking function was skipped")
+    assert_true(f.name == "ok__r_i32", "the slice-taking function was skipped")
 }
 
 // Whether every byte of `s` is legal in a C identifier.
@@ -8047,7 +8005,7 @@ test "an if expression joins its arms through a block parameter" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "pick__i32")]
+    let f = &m.functions[find_fn(&m, "pick__i32__r_i32")]
     assert_eq(f.blocks.len, 4 as usize, "entry, then, else and join")
     assert_true(ends_in_br_if(f, 0), "entry ends in a conditional branch")
 
@@ -8062,7 +8020,7 @@ test "an if expression joins its arms through a block parameter" {
 test "an if with no else yields nothing and needs no join parameter" {
     let unit = analyze(from_view("fn f(a: i32) i32 { if a > 0 { return 1 } return 0 }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let join = block_starting(f, "join")
     assert_true(join < f.blocks.len, "a join block exists")
     assert_eq(f.blocks[join].params.len, 0 as usize, "no value crosses the join")
@@ -8074,7 +8032,7 @@ test "an arm that returns contributes no edge to the join" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let then_b = block_starting(f, "then")
     let else_b = block_starting(f, "else")
     let t_ret = f.blocks[then_b].terminator match { Ret(_) => true, _ => false }
@@ -8089,7 +8047,7 @@ test "a while loop branches back to its head" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let head = block_starting(f, "while_head")
     let body = block_starting(f, "while_body")
     assert_true(head < f.blocks.len, "a loop head exists")
@@ -8103,7 +8061,7 @@ test "a for over a range carries the induction variable as a block parameter" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let head = block_starting(f, "for_head")
     let latch = block_starting(f, "for_latch")
     assert_true(head < f.blocks.len, "a loop head exists")
@@ -8121,7 +8079,7 @@ test "a range bound is half-open" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let head = block_starting(f, "for_head")
     let instrs = &f.blocks[head].instrs
     let slt = false
@@ -8142,7 +8100,7 @@ test "break exits the loop and continue re-enters the latch" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let exit = f.blocks[block_starting(f, "for_exit")].label
     let latch = f.blocks[block_starting(f, "for_latch")].label
     assert_true(br_target(f, block_starting(f, "then")) == exit, "break leaves the loop")
@@ -8169,7 +8127,7 @@ test "a for over a non-range iterable refuses the function" {
 test "and evaluates its right operand in its own block" {
     let unit = analyze(from_view("fn f(a: i32, b: i32) bool { return a > 0 and b > 0 }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__i32__r_bool")]
     let rhs = block_starting(f, "sc_rhs")
     let join = block_starting(f, "sc_join")
     assert_true(rhs < f.blocks.len, "the right operand got its own block")
@@ -8190,7 +8148,7 @@ test "and evaluates its right operand in its own block" {
 test "a comparison is typed by its operands, not by its bool result" {
     let unit = analyze(from_view("fn f(a: i64, b: i64) bool { return a < b }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i64__i64")]
+    let f = &m.functions[find_fn(&m, "f__i64__i64__r_bool")]
     let ty = compare_operand_ty(f)
     let is_i64 = ty match { I64 => true, _ => false }
     assert_true(is_i64, "compares the i64 operands, not the i8 result")
@@ -8204,7 +8162,7 @@ test "a binding made inside a branch does not leak past it" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     // Slots in emission order: the parameter, the outer `x`, then the shadowing `x` inside the
     // branch.
     let slots: List(u32) = list(4)
@@ -8333,7 +8291,7 @@ fn memcpy_count(f: &Function) usize {
 test "every local and parameter gets a slot it can be assigned through" {
     let unit = analyze(from_view("fn f(a: i32) i32 { let b = a return b }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let slots: List(u32) = list(4)
     collect_slots(f, &slots)
     assert_eq(slots.len, 2 as usize, "the parameter and the let each get storage")
@@ -8344,7 +8302,7 @@ test "every local and parameter gets a slot it can be assigned through" {
 test "assigning a local stores through its slot" {
     let unit = analyze(from_view("fn f(a: i32) i32 { let x = 1 x = a return x }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let slots: List(u32) = list(4)
     collect_slots(f, &slots)
     assert_eq(slots.len, 2 as usize, "no extra slot for the assignment")
@@ -8359,7 +8317,7 @@ test "a local mutated across a loop back edge keeps one slot" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let slots: List(u32) = list(4)
     collect_slots(f, &slots)
     // n, t, and the induction variable's per-iteration copy.
@@ -8375,7 +8333,7 @@ test "a local mutated across a loop back edge keeps one slot" {
 test "taking a local's address hands back its slot, with no load" {
     let unit = analyze(from_view("fn f(a: i32) i32 { let x = a let p = &x return p.* }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let slots: List(u32) = list(4)
     collect_slots(f, &slots)
     // a, x, p - `&x` produces no instruction of its own.
@@ -8386,7 +8344,7 @@ test "taking a local's address hands back its slot, with no load" {
 test "assigning through a dereference stores to the pointee" {
     let unit = analyze(from_view("fn f(p: &i32) i32 { p.* = 9 return p.* }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__ref_i32")]
+    let f = &m.functions[find_fn(&m, "f__ref_i32__r_i32")]
     let slots: List(u32) = list(4)
     collect_slots(f, &slots)
     assert_eq(slots.len, 1 as usize, "only the parameter is slotted")
@@ -8403,7 +8361,7 @@ test "assigning a struct field writes through a gep, not a copy" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f")]
+    let f = &m.functions[find_fn(&m, "f__r_i32")]
     assert_eq(memcpy_count(f), 0 as usize, "a scalar field assignment is a store, not a byte copy")
     // The struct literal also geps to initialize its fields, so counting geps proves nothing; what
     // matters is that the *assignment*'s store targets a field address rather than the local's own
@@ -8419,7 +8377,7 @@ test "assigning an aggregate copies its bytes" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f")]
+    let f = &m.functions[find_fn(&m, "f__r_i32")]
     assert_eq(memcpy_count(f), 1 as usize, "the aggregate assignment is a byte copy")
 }
 
@@ -8485,7 +8443,7 @@ test "match on a scalar chains one test block per arm" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     assert_eq(block_count_starting(f, "m_arm"), 3 as usize, "one body block per arm")
     assert_eq(
         block_count_starting(f, "m_next"),
@@ -8504,7 +8462,7 @@ test "the scrutinee is evaluated once, not per arm" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     // One load for the parameter's slot; the arms reuse that value.
     assert_eq(load_count(f), 1 as usize, "the scrutinee is loaded once for the whole match")
 }
@@ -8515,7 +8473,7 @@ test "a match used as a statement carries no join parameter" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let join = block_starting(f, "m_join")
     assert_true(join < f.blocks.len, "a join block exists")
     assert_eq(f.blocks[join].params.len, 0 as usize, "no value crosses the join")
@@ -8527,7 +8485,7 @@ test "a guard gets its own block and falls through to the next arm" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     assert_eq(
         block_count_starting(f, "m_body"),
         1 as usize,
@@ -8549,7 +8507,7 @@ test "an or-pattern tests every alternative and combines them with ior" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     assert_eq(compare_count(f), 2 as usize, "one compare per alternative; the wildcard needs none")
     assert_true(has_ior_in(f, 0), "the alternatives' tests are or-ed, not branched between")
     assert_eq(block_count_starting(f, "m_arm"), 2 as usize, "the or-pattern is still one arm")
@@ -8561,7 +8519,7 @@ test "a range pattern tests both bounds and combines them with iand" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     assert_eq(compare_count(f), 2 as usize, "one compare per bound")
     assert_true(has_iand_in(f, 0), "the bounds are and-ed into a single test")
 }
@@ -8572,7 +8530,7 @@ test "an arm that returns keeps its return, with no branch over it" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let f = &m.functions[find_fn(&m, "f__i32")]
+    let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let arm = block_starting(f, "m_arm")
     let kept = f.blocks[arm].terminator match { Ret(_) => true, _ => false }
     assert_true(kept, "the arm's own return survives")
@@ -8616,7 +8574,7 @@ test "an unsupported pattern gates the whole match, not just its arm" {
     )
     let m2 = lower_module(&ok.module, &ok.result)
     assert_true(
-        find_fn(&m2, "f__tup_i32_i32") < m2.functions.len,
+        find_fn(&m2, "f__tup_i32_i32__r_i32") < m2.functions.len,
         "a tuple pattern in a tuple parameter lowers",
     )
 }
@@ -9360,7 +9318,7 @@ test "a bare payload-less variant builds a zeroed slot with its tag" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let fi = find_fn(&m, "f")
+    let fi = find_fn(&m, "f__r_test__f__Color")
     assert_true(fi < m.functions.len, "bare variant construction lowers")
     let f = &m.functions[fi]
     assert_true(memset_count(f) >= 1 as usize, "the slot is zero-filled first")
@@ -9373,7 +9331,7 @@ test "a qualified variant constructs - the receiver is a type, not a value" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let fi = find_fn(&m, "f")
+    let fi = find_fn(&m, "f__r_test__f__Color")
     assert_true(fi < m.functions.len, "Color.Blue lowers as construction, not member access")
     assert_eq(store_const_count(&m.functions[fi], 2), 1 as usize, "Blue's tag is stored")
 }
@@ -9431,7 +9389,7 @@ test "niche None is the null pointer" {
         "core.option",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let fi = find_fn(&m, "f")
+    let fi = find_fn(&m, "f__r_core__option__Option_ref_i32")
     assert_true(fi < m.functions.len, "niche None lowers")
     let f = &m.functions[fi]
     let ret_null = f.blocks[0].terminator match {
@@ -9485,10 +9443,10 @@ test "an anonymous literal follows its coerced nominal type" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let fi = find_fn(&m, "f")
+    let fi = find_fn(&m, "f__r_test__f__Pt")
     assert_true(fi < m.functions.len, "an anonymous literal in return position lowers")
     assert_eq(store_const_count(&m.functions[fi], 2), 1 as usize, "both fields store their values")
-    let gi = find_fn(&m, "g")
+    let gi = find_fn(&m, "g__r_i32")
     assert_true(gi < m.functions.len, "an annotated let binds an anonymous literal")
     assert_eq(
         store_const_count(&m.functions[gi], 4),
@@ -9631,7 +9589,7 @@ test "a string literal builds a {ptr,len} view over a data-segment global" {
         "core.string",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let fi = find_fn(&m, "f")
+    let fi = find_fn(&m, "f__r_core__string__String")
     assert_true(fi < m.functions.len, "a function returning a string literal lowers")
     assert_eq(m.globals.len, 1 as usize, "one global holds the bytes")
     assert_true(m.globals[0].size == 3u64, "two content bytes plus the null terminator")
@@ -9666,7 +9624,7 @@ test "string escapes decode before reaching the data segment" {
     assert_true(m.globals[0].size == 4u64, "three decoded bytes plus the terminator")
     let bytes = m.globals[0].init_bytes.unwrap()
     assert_true(bytes[1] == 10, "the escape became the raw newline byte")
-    let f = &m.functions[find_fn(&m, "f")]
+    let f = &m.functions[find_fn(&m, "f__r_core__string__String")]
     assert_eq(store_const_count(f, 3), 1 as usize, "len counts decoded bytes, not source bytes")
 }
 
@@ -9678,11 +9636,11 @@ test "a float literal lowers to its parsed constant" {
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
-    let rf = ret_float_const(&m.functions[find_fn(&m, "f")])
+    let rf = ret_float_const(&m.functions[find_fn(&m, "f__r_f64")])
     assert_true(rf.is_some() and rf.unwrap() == 1.5, "1.5 parses exactly")
-    let rg = ret_float_const(&m.functions[find_fn(&m, "g")])
+    let rg = ret_float_const(&m.functions[find_fn(&m, "g__r_f64")])
     assert_true(rg.is_some() and rg.unwrap() == 350.0, "the exponent scales the mantissa")
-    let rh = ret_float_const(&m.functions[find_fn(&m, "h")])
+    let rh = ret_float_const(&m.functions[find_fn(&m, "h__r_f64")])
     assert_true(rh.is_some() and rh.unwrap() == 0.025, "a negative exponent divides once")
 }
 
@@ -10161,7 +10119,7 @@ test "a let-bound array argument decays into a slice view at the call" {
 test "a DBL_MAX-magnitude literal parses finite, not infinite" {
     let unit = analyze(from_view("fn f() f64 { return 1.7976931348623157e308 }"), "test.f")
     let m = lower_module(&unit.module, &unit.result)
-    let rv = ret_float_const(&m.functions[find_fn(&m, "f")])
+    let rv = ret_float_const(&m.functions[find_fn(&m, "f__r_f64")])
     assert_true(rv.is_some(), "the literal lowers")
     const v = rv.unwrap()
     assert_true(v * 0.5 != v, "the parse stays finite")

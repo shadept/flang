@@ -530,6 +530,11 @@ pub type NodeTargetFact = struct {
     target: ResolvedTarget
 }
 
+pub type NodeAdaptFact = struct {
+    node: NodeId
+    adapt: ReceiverAdapt
+}
+
 pub type NodeOpFact = struct {
     node: NodeId
     op: ResolvedOperator
@@ -612,6 +617,7 @@ pub type ModuleBodyCache = struct {
     arg_lists: List(NodeExprsFact)
     derefs: List(NodeDerefsFact)
     arg_derefs: List(NodeDerefsFact)
+    adapts: List(NodeAdaptFact)
     picks: List(CapturedPick)
     calls: List(PendingCall)
     // Every top-level pick the slot's settlement resolved, in process order, with the
@@ -635,6 +641,8 @@ pub fn deinit(self: move ModuleBodyCache) {
     self.default_args.deinit()
     self.arg_lists.deinit()
     self.derefs.deinit()
+    self.arg_derefs.deinit()
+    self.adapts.deinit()
     self.picks.deinit()
     for pc in self.calls.drain() {
         pc.arg_tys.deinit()
@@ -5690,8 +5698,13 @@ fn instantiate(
 // patches.
 // ─────────────────────────────────────────────────────────────────────
 
-pub fn check_expr(self: &Checker, expr: &Expr) Ty {
-    let ty = check_expr_kind(self, expr)
+// `expected` is the type of the slot the value fills, when it has one: a call's overload set breaks
+// an exact tie on it (overloads that differ only in their return type). Anything else ignores it.
+pub fn check_expr(self: &Checker, expr: &Expr, expected: Ty? = null) Ty {
+    let ty = expr.* match {
+        Call(call) => check_call(self, &call, expected)
+        _ => check_expr_kind(self, expr)
+    }
     self.results.record_type(self.node_of(expr_span(expr)), ty)
     return ty
 }
@@ -6592,7 +6605,7 @@ fn check_assignment(self: &Checker, a: &AssignmentExpr) Ty {
     }
 
     let lhs = check_expr(self, a.lhs)
-    let rhs = check_expr(self, a.rhs)
+    let rhs = check_expr(self, a.rhs, Some(lhs))
     unify_expected(self, rhs, lhs, E_TYPE_MISMATCH, a.span)
     // Scoped mutability (spec 8): a struct's fields are writable only in the module that declares
     // it - the defining module owns the type's invariants. Reads stay unrestricted, and tuples are
@@ -8376,7 +8389,7 @@ fn check_let(self: &Checker, ls: &LetStmt) {
         None => null
     }
     let inferred = ls.init match {
-        Some(e) => Some(check_expr(self, e))
+        Some(e) => Some(check_expr(self, e, annotated))
         None => null
     }
     let bound_ty = annotated match {
@@ -8923,7 +8936,7 @@ fn arith_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
     return lhs
 }
 
-fn check_call(self: &Checker, call: &CallExpr) Ty {
+fn check_call(self: &Checker, call: &CallExpr, expected: Ty? = null) Ty {
     let pos_tys = list(call.args.len, self.allocator)
     let pos_exprs: List(&Expr) = list(call.args.len, self.allocator)
     // Filled as locals, then moved into the bundle: growing a list THROUGH a struct field of a
@@ -8972,7 +8985,7 @@ fn check_call(self: &Checker, call: &CallExpr) Ty {
     if named_seen {
         nref = Some(&named)
     }
-    let rc = resolve_call(self, call, &pos_tys, &pos_exprs, nref)
+    let rc = resolve_call(self, call, &pos_tys, &pos_exprs, nref, expected)
     if rc.is_some() {
         pos_tys.deinit()
         pos_exprs.deinit()
@@ -9072,9 +9085,18 @@ fn resolve_call(
     arg_tys: &List(Ty),
     pos_exprs: &List(&Expr),
     named: &NamedArgs? = null,
+    expected: Ty? = null,
 ) Ty? {
     return call.callee.* match {
-        Identifier(ide) => resolve_direct_call(self, call, &ide, arg_tys, pos_exprs, named)
+        Identifier(ide) => resolve_direct_call(
+            self,
+            call,
+            &ide,
+            arg_tys,
+            pos_exprs,
+            named,
+            expected,
+        )
         MemberAccess(ma) => resolve_method_call(self, call, &ma, arg_tys, pos_exprs, named)
         _ => null
     }
@@ -9089,6 +9111,7 @@ fn resolve_direct_call(
     arg_tys: &List(Ty),
     pos_exprs: &List(&Expr),
     named: &NamedArgs? = null,
+    expected: Ty? = null,
 ) Ty? {
     let vis = fn_visibility(self)
     defer vis.deinit()
@@ -9115,6 +9138,7 @@ fn resolve_direct_call(
             true,
             Some(&ctx),
             Some(&spans),
+            expected,
         )
         candidates.deinit()
         if pick.is_none() and self.overload_deferred {
@@ -9465,6 +9489,9 @@ fn commit_pick(
     return pick match {
         Some(p) => {
             self.results.record_target(self.node_of(span), ResolvedTarget.RtFunction(p.id))
+            if p.adapt.is_some() {
+                self.results.record_receiver_adapt(self.node_of(span), p.adapt.unwrap())
+            }
             warn_deprecated_call(self, p.id, name, span)
             check_consuming_receiver(self, &p, name, recv, span)
             note_pending(self, span, false, &p)
@@ -10208,6 +10235,8 @@ type OverloadPick = struct {
     // How many `op_deref` hops the receiver went through to match: the prefix of the caller's peel
     // chain to record for lowering. Zero for a receiver matched as written or adapted.
     hops: usize
+    // The receiver matched adapted between value and reference; null as written or through hops.
+    adapt: ReceiverAdapt?
 }
 
 pub fn deinit(self: move OverloadPick) {
@@ -10265,7 +10294,8 @@ pub fn deinit(self: move PickInst) {
 // decays to u8[] only when no String parameter takes it) - then higher structural specificity (each
 // concrete type constructor is a constraint the arguments satisfied - `Dict($K,$V)` beats the
 // catch-all `$T`), then lower total cost (receiver adaptation, omitted defaults), then fewer
-// quantified vars, then registration order.
+// quantified vars, then the candidate whose return type fits `expected` (the typed slot the call
+// fills), then registration order.
 fn resolve_overload(
     self: &Checker,
     candidates: &List(&FunctionScheme),
@@ -10277,6 +10307,7 @@ fn resolve_overload(
     report_ambiguity: bool = false,
     peel: &PeelCtx? = null,
     arg_spans: &List(SourceSpan)? = null,
+    expected: Ty? = null,
 ) OverloadPick? {
     // The receiver shapes, tried in tiers across all candidates (spec 7.2): as written (`arg_tys`
     // itself); when no candidate accepts that, `alt_recv` - the UFCS receiver adapted value <-> &T;
@@ -10434,7 +10465,18 @@ fn resolve_overload(
                     tie_breaker(self, candidates, best.unwrap(), ci, arg_tys) match {
                         TieByLiteral => ambiguous = true
                         TieByOpenVar => var_ambiguous = true
-                        TieByShape => {}
+                        TieByShape => {
+                            // Overloads that differ only in their return type: the slot the call
+                            // fills chooses, where it has a type.
+                            const takes_ci = expected.is_some() and returns_into(
+                                self,
+                                c,
+                                expected.unwrap(),
+                            ) and !returns_into(self, candidates[best.unwrap()], expected.unwrap())
+                            if takes_ci {
+                                best = Some(ci)
+                            }
+                        }
                     }
                 }
             }
@@ -10535,6 +10577,13 @@ fn resolve_overload(
         binds.deinit()
     }
     let hops = if best_used > 0 { alts[best_used - 1].hops } else { 0usize }
+    let adapt: ReceiverAdapt? = null
+    if best_used > 0 and hops == 0 {
+        adapt = ty_node(self, alts[best_used - 1].ty) match {
+            NRef(_) => Some(ReceiverAdapt.ByRef)
+            _ => Some(ReceiverAdapt.ByValue)
+        }
+    }
     return Some(
         OverloadPick {
             id = w.id,
@@ -10542,6 +10591,7 @@ fn resolve_overload(
             params = move fparams,
             inst = move inst,
             hops = hops,
+            adapt = adapt,
         },
     )
 }
@@ -10637,6 +10687,19 @@ type TieBreaker = enum {
     TieByLiteral
     TieByOpenVar
     TieByShape
+}
+
+// Whether `c`'s return type, freshly instantiated, unifies with `expected`. Probed and rolled back.
+fn returns_into(self: &Checker, c: &FunctionScheme, expected: Ty) bool {
+    const fn_ty = self.engine.resolve(self.engine.specialize(&c.signature))
+    const ret = ty_node(self, fn_ty) match {
+        NFunc(f) => f.ret
+        _ => return false
+    }
+    return self.engine.try_unify(ret, expected) match {
+        Unified(_) => true
+        _ => false
+    }
 }
 
 fn tie_breaker(
@@ -14530,6 +14593,7 @@ pub fn check_all(
     let out_arg_lists = self.results.take_arg_lists()
     let out_receiver_derefs = self.results.take_receiver_derefs()
     let out_arg_derefs = self.results.take_arg_derefs()
+    let out_receiver_adapts = self.results.take_receiver_adapts()
     // The snapshot takes the original; the checker keeps a deep copy (see below).
     const kept_nominals = self.nominals.carried_copy(self.allocator)
     let out_nominals = replace(&self.nominals, kept_nominals)
@@ -14574,6 +14638,7 @@ pub fn check_all(
         default_args = move out_default_args,
         arg_lists = move out_arg_lists,
         receiver_derefs = move out_receiver_derefs,
+        receiver_adapts = move out_receiver_adapts,
         arg_derefs = move out_arg_derefs,
         nominals = move out_nominals,
         functions = move out_functions,
@@ -14789,6 +14854,7 @@ type SigWatermark = struct {
     default_args: usize
     arg_lists: usize
     receiver_derefs: usize
+    receiver_adapts: usize
     synth_strings: usize
     instantiated: usize
     pending_specs: usize
@@ -14810,6 +14876,7 @@ fn sig_watermark(self: &Checker) SigWatermark {
         default_args = self.results.default_args.len(),
         arg_lists = self.results.arg_lists.len(),
         receiver_derefs = self.results.receiver_derefs.len(),
+        receiver_adapts = self.results.receiver_adapts.len(),
         synth_strings = self.results.synth_strings.len,
         instantiated = self.results.instantiated_types.len,
         pending_specs = self.pending_specs.len,
@@ -14849,6 +14916,7 @@ fn finish_sig_capture(
         and self.results.default_args.len() == w.default_args
         and self.results.arg_lists.len() == w.arg_lists
         and self.results.receiver_derefs.len() == w.receiver_derefs
+        and self.results.receiver_adapts.len() == w.receiver_adapts
         and self.results.synth_strings.len == w.synth_strings
         and self.results.instantiated_types.len == w.instantiated
         and self.pending_specs.len == w.pending_specs and self.pending_calls.len == w.pending_calls
@@ -15098,6 +15166,7 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
         arg_lists = list(0, self.allocator),
         derefs = list(0, self.allocator),
         arg_derefs = list(0, self.allocator),
+        adapts = list(0, self.allocator),
         picks = move picks,
         calls = move calls,
         spec_sites = move sites,
@@ -15170,6 +15239,9 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
         let chain: List(ResolvedTarget) = list(f.chain.len, self.allocator)
         chain.push_all(f.chain.as_slice())
         self.results.record_arg_deref(f.node, chain)
+    }
+    for &f in c.adapts {
+        self.results.record_receiver_adapt(f.node, f.adapt)
     }
     for _k in 0..c.var_burn {
         self.engine.burn_var()
@@ -15495,6 +15567,17 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
             let chain: List(ResolvedTarget) = list(found.unwrap().len, self.allocator)
             chain.push_all(found.unwrap().as_slice())
             c.arg_derefs.push(NodeDerefsFact { node = n, chain = move chain })
+        }
+    }
+    seen.clear()
+    for n in c.keys.adapts {
+        if seen.contains(n) {
+            continue
+        }
+        seen.add(n)
+        const a = self.results.receiver_adapts.get(n)
+        if a.is_some() {
+            c.adapts.push(NodeAdaptFact { node = n, adapt = a.unwrap() })
         }
     }
     seen.deinit()

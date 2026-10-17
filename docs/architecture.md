@@ -288,6 +288,11 @@ lowering cannot re-derive:
   through these"; on a call whose callee is NOT a member access it means
   "the callee value IS the receiver" (RFC-014 `op_call`), with an empty
   chain for the direct case.
+- `receiver_adapts` — a UFCS receiver the winner took adapted between
+  value and reference (`ByRef`, `ByValue`); a call with no entry passes
+  its receiver as written. `lower_receiver` acts on it (a `ByRef` scalar
+  temporary spills to a slot) and never infers the shape from types,
+  which an open receiver bound to the parameter's shape would misreport.
 
 **Self-describing results.** A node id packs `(file_id, start, length)`
 into a `u64` and clamps a span longer than 64 KB or a file past 65535, so
@@ -493,7 +498,7 @@ build/
 ## C99 Backend
 
 - **Name mangling only in codegen.** IR carries `SymbolBaseName` — the module-qualified base (`module.path.name`, stamped on `FunctionDeclarationNode.ModulePath` at signature collection) — and `HmCCodeGenerator` applies `IrNameMangling.MangleFunctionName()` (parameter/return tokens) when emitting C. Module qualification is load-bearing: two file-private functions with the same name and signature in different modules used to merge into one C symbol, with one body silently dropped. `main` and foreigns are never mangled.
-- **Mangling is total over the module path.** The path comes from the project name and file path, not from a FLang identifier, so both manglers escape rather than pass bytes through — see `docs/spec.md` §7.1.1, property 4. `symbol_table.f::append_module_path`: `.` → `__`, `_` → `_0`, any byte outside `[A-Za-z0-9]` → `_x<hex>`; injective, because a literal `_` always becomes `_0`, so `__` and `_x` can only come from an escape. `#foreign` structs keep their original C name and are exempt.
+- **Mangling is total over the module path.** The path comes from the project name and file path, not from a FLang identifier, so both manglers escape rather than pass bytes through — see `docs/spec.md` §7.1.1, property 4. `symbol_table.f::append_module_path`: `.` → `__`, `_` → `_0`, any byte outside `[A-Za-z0-9]` → `_x<hex>`; injective, because a literal `_` always becomes `_0`, so `__` and `_x` can only come from an escape. `#foreign` structs keep their original C name and are exempt. After the parameter tokens, a non-void return appends `__r_<type>` (`m__f__i32__r_bool`), so overloads that differ only in return type stay distinct; a specialization appends `__ret_<type>` instead, keeping it apart from a same-shaped monomorphic overload.
 - **Foreign/intrinsic symbols are not mangled.** `#foreign` and `#intrinsic` calls use their declared names directly.
 - **By-value aggregates cross C boundaries as real structs.** `IrType.Agg` carries `{name, size, align}`; the matching `AggDef` on `IrModule.aggs` carries the member list the backend emits as a `typedef struct`, nested types first. Members are faithful (a `f32` emits as `float`) because the platform ABI classifies a struct by its member types. Only foreign calls use this — native calls still pass addresses and return through sret. `symbol_table.f::agg_abi_safe` is the single gate, and it tests **layout agreement**: an aggregate may cross only if C's natural layout of its members reproduces the FLang layout, which rules out every `Repr.Auto` struct whose fields got reordered by descending alignment.
 - **Foreign structs skip codegen.** `IrStruct.IsForeign` structs have no typedef or definition emitted — the `#include` of the original C header provides them. Their `CName` is the original C name (e.g. `Color`), not mangled.

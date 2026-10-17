@@ -157,6 +157,11 @@ pub type InferenceResults = struct {
     // receiver's address and passes the last hop's result as the receiver argument. Generic hops
     // are rewritten to their specializations by the M10 drain, like `resolved_targets`.
     receiver_derefs: Dict(NodeId, List(ResolvedTarget))
+    // A UFCS call whose receiver took the winner's first parameter adapted between value and
+    // reference (spec 7.2), keyed by the call node. A call with no entry passes its receiver as
+    // written. Lowering reads this rather than comparing types: a receiver whose type was still
+    // open at the call is bound to the parameter's shape, so its type cannot tell the two apart.
+    receiver_adapts: Dict(NodeId, ReceiverAdapt)
     // An ARGUMENT that reached its parameter through `op_deref` (RFC-020), keyed by the argument's
     // own node: the pick per hop, outermost first. Separate from `receiver_derefs` because a node
     // can be both - `f(xs[i])` records the index receiver's chain on the same `xs[i]` node.
@@ -182,7 +187,16 @@ pub type InferenceResults = struct {
     cap_arg_lists: List(NodeId)
     cap_derefs: List(NodeId)
     cap_arg_derefs: List(NodeId)
+    cap_adapts: List(NodeId)
     allocator: &Allocator?
+}
+
+// How a UFCS receiver was adapted to its parameter.
+pub type ReceiverAdapt = enum {
+    // A value taken by a `&T` parameter: the callee gets its address, a temporary's spilled slot.
+    ByRef
+    // A reference taken by a value parameter: the callee gets the value it points to.
+    ByValue
 }
 
 // The keys one capture window collected, moved out by `end_capture`.
@@ -197,6 +211,7 @@ pub type CapturedKeys = struct {
     arg_lists: List(NodeId)
     derefs: List(NodeId)
     arg_derefs: List(NodeId)
+    adapts: List(NodeId)
 }
 
 pub fn captured_keys(allocator: &Allocator? = null) CapturedKeys {
@@ -211,6 +226,7 @@ pub fn captured_keys(allocator: &Allocator? = null) CapturedKeys {
         arg_lists = list(0, allocator),
         derefs = list(0, allocator),
         arg_derefs = list(0, allocator),
+        adapts = list(0, allocator),
     }
 }
 
@@ -225,6 +241,7 @@ pub fn deinit(self: move CapturedKeys) {
     self.arg_lists.deinit()
     self.derefs.deinit()
     self.arg_derefs.deinit()
+    self.adapts.deinit()
 }
 
 pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
@@ -239,6 +256,7 @@ pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
         default_args = dict(allocator),
         arg_lists = dict(allocator),
         receiver_derefs = dict(allocator),
+        receiver_adapts = dict(allocator),
         arg_derefs = dict(allocator),
         spans = dict(allocator),
         cap_on = false,
@@ -252,6 +270,7 @@ pub fn inference_results(allocator: &Allocator? = null) InferenceResults {
         cap_arg_lists = list(0, allocator),
         cap_derefs = list(0, allocator),
         cap_arg_derefs = list(0, allocator),
+        cap_adapts = list(0, allocator),
         allocator = allocator,
     }
 }
@@ -270,6 +289,7 @@ pub type TableCaps = struct {
     arg_lists: usize
     derefs: usize
     arg_derefs: usize
+    adapts: usize
 }
 
 // Rebuild the node-keyed tables at the given capacities. Only meaningful on a fresh, empty result
@@ -285,6 +305,7 @@ pub fn presize_tables(self: &InferenceResults, s: &TableCaps) {
     install(&self.arg_lists, dict(s.arg_lists, self.allocator))
     install(&self.receiver_derefs, dict(s.derefs, self.allocator))
     install(&self.arg_derefs, dict(s.arg_derefs, self.allocator))
+    install(&self.receiver_adapts, dict(s.adapts, self.allocator))
 }
 
 // Start collecting the keys of every entry recorded from here on.
@@ -306,6 +327,7 @@ pub fn end_capture(self: &InferenceResults) CapturedKeys {
         arg_lists = replace(&self.cap_arg_lists, list(0, self.allocator)),
         derefs = replace(&self.cap_derefs, list(0, self.allocator)),
         arg_derefs = replace(&self.cap_arg_derefs, list(0, self.allocator)),
+        adapts = replace(&self.cap_adapts, list(0, self.allocator)),
     }
     return out
 }
@@ -321,6 +343,7 @@ pub fn deinit(self: move InferenceResults) {
     self.default_args.deinit()
     self.arg_lists.deinit()
     self.receiver_derefs.deinit()
+    self.receiver_adapts.deinit()
     self.arg_derefs.deinit()
     self.spans.deinit()
     self.cap_spans.deinit()
@@ -333,6 +356,7 @@ pub fn deinit(self: move InferenceResults) {
     self.cap_arg_lists.deinit()
     self.cap_derefs.deinit()
     self.cap_arg_derefs.deinit()
+    self.cap_adapts.deinit()
 }
 
 // Note the span an id was minted from. Two spans share an id only by clamping to the same bits, so
@@ -424,6 +448,13 @@ pub fn record_receiver_deref(
     self.receiver_derefs.set(id, chain)
     if self.cap_on {
         self.cap_derefs.push(id)
+    }
+}
+
+pub fn record_receiver_adapt(self: &InferenceResults, id: NodeId, adapt: ReceiverAdapt) {
+    self.receiver_adapts.set(id, adapt)
+    if self.cap_on {
+        self.cap_adapts.push(id)
     }
 }
 
@@ -582,6 +613,10 @@ pub fn deep_copy(self: &InferenceResults, allocator: &Allocator? = null) Inferen
         chain.push_all(e.value.as_slice())
         arg_derefs.set(e.key, chain)
     }
+    let adapts: Dict(NodeId, ReceiverAdapt) = dict(allocator)
+    for e in self.receiver_adapts {
+        adapts.set(e.key, e.value)
+    }
     let spans: Dict(NodeId, SourceSpan) = dict(self.spans.len(), allocator)
     for e in self.spans {
         spans.set(e.key, e.value)
@@ -597,6 +632,7 @@ pub fn deep_copy(self: &InferenceResults, allocator: &Allocator? = null) Inferen
     install(&out.arg_lists, arg_lists)
     install(&out.receiver_derefs, derefs)
     install(&out.arg_derefs, arg_derefs)
+    install(&out.receiver_adapts, adapts)
     install(&out.spans, spans)
     return out
 }
@@ -644,6 +680,11 @@ pub fn take_receiver_derefs(self: &InferenceResults) Dict(NodeId, List(ResolvedT
     return out
 }
 
+pub fn take_receiver_adapts(self: &InferenceResults) Dict(NodeId, ReceiverAdapt) {
+    const out = replace(&self.receiver_adapts, dict(self.allocator))
+    return out
+}
+
 pub fn take_arg_derefs(self: &InferenceResults) Dict(NodeId, List(ResolvedTarget)) {
     const out = replace(&self.arg_derefs, dict(self.allocator))
     return out
@@ -670,6 +711,7 @@ pub fn reset_side_tables(self: &InferenceResults) {
     self.default_args = dict(self.allocator)
     self.arg_lists = dict(self.allocator)
     self.receiver_derefs = dict(self.allocator)
+    self.receiver_adapts = dict(self.allocator)
     self.arg_derefs = dict(self.allocator)
     self.spans = dict(self.allocator)
 }

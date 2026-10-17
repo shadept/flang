@@ -52,6 +52,9 @@ pub type TypeCheckResult = struct {
     // Per UFCS call site, the op_deref hops the receiver resolved through - see
     // InferenceResults.receiver_derefs.
     receiver_derefs: Dict(NodeId, List(ResolvedTarget))
+    // Per UFCS call site whose receiver was adapted between value and reference - see
+    // InferenceResults.receiver_adapts.
+    receiver_adapts: Dict(NodeId, ReceiverAdapt)
     // Per argument that reached its parameter through `op_deref` (RFC-020), the hops - see
     // InferenceResults.arg_derefs.
     arg_derefs: Dict(NodeId, List(ResolvedTarget))
@@ -119,6 +122,7 @@ pub fn empty_result(allocator: &Allocator? = null) TypeCheckResult {
         default_args = dict(allocator),
         arg_lists = dict(allocator),
         receiver_derefs = dict(allocator),
+        receiver_adapts = dict(allocator),
         arg_derefs = dict(allocator),
         nominals = nominal_registry(allocator),
         functions = function_registry(allocator),
@@ -144,6 +148,7 @@ pub fn deinit(self: move TypeCheckResult) {
     self.default_args.deinit()
     self.arg_lists.deinit()
     self.receiver_derefs.deinit()
+    self.receiver_adapts.deinit()
     self.arg_derefs.deinit()
     self.nominals.deinit()
     self.functions.deinit()
@@ -170,6 +175,7 @@ pub fn slim_retire(self: &TypeCheckResult) {
     install(&self.default_args, dict())
     install(&self.arg_lists, dict())
     install(&self.receiver_derefs, dict())
+    install(&self.receiver_adapts, dict())
     install(&self.arg_derefs, dict())
     install(&self.nominals, nominal_registry())
     install(&self.functions, function_registry())
@@ -217,6 +223,7 @@ pub fn table_caps(self: &TypeCheckResult) TableCaps {
         arg_lists = self.arg_lists.len(),
         derefs = self.receiver_derefs.len(),
         arg_derefs = self.arg_derefs.len(),
+        adapts = self.receiver_adapts.len(),
     }
 }
 
@@ -246,6 +253,10 @@ pub fn get_arg_list(self: &TypeCheckResult, id: NodeId) &List(&Expr)? {
 
 pub fn get_receiver_deref(self: &TypeCheckResult, id: NodeId) &List(ResolvedTarget)? {
     return self.receiver_derefs.get_ref(id)
+}
+
+pub fn get_receiver_adapt(self: &TypeCheckResult, id: NodeId) ReceiverAdapt? {
+    return self.receiver_adapts.get(id)
 }
 
 pub fn get_arg_deref(self: &TypeCheckResult, id: NodeId) &List(ResolvedTarget)? {

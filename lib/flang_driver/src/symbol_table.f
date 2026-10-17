@@ -482,6 +482,7 @@ fn add_function_symbol(self: &SymbolBuilder, decl: &FunctionDecl, fqn: String) {
         decl.name,
         foreign,
         &s.params,
+        s.ret,
         self.nominals,
         self.allocator,
     )
@@ -749,13 +750,15 @@ fn append_mangled(
 
 // The C symbol a function lowers to. The entry point and foreign functions keep their declared
 // names - both name symbols fixed outside the compiler (the backend's entry wiring, and the C
-// linker). Everything else is qualified by module path and separated by parameter types.
+// linker). Everything else is qualified by module path and separated by parameter types, then by a
+// non-void return as `__r_<type>`: overloads may differ in their return alone.
 fn mangle_symbol(
     it: &TypeInterner,
     fqn: String,
     name: String,
     is_foreign: bool,
     params: &List(Ty),
+    ret: Ty,
     reg: &NominalRegistry,
     allocator: &Allocator? = null,
 ) OwnedString {
@@ -766,6 +769,14 @@ fn mangle_symbol(
     let sb = string_builder(fqn.len + name.len + 16, allocator)
     defer sb.deinit()
     append_mangled(it, &sb, fqn, name, params, reg)
+    const is_void = it.node(ret) match {
+        NVoid => true
+        _ => false
+    }
+    if !is_void {
+        sb.append("__r_")
+        append_type_token(it, &sb, ret, reg)
+    }
     return sb.to_string()
 }
 
@@ -809,13 +820,13 @@ test "mangles symbols by module fqn, keeping main and foreigns bare" {
     // unambiguously the separator.
     let it = type_interner()
     defer it.deinit()
-    let a = mangle_symbol(&it, "flang_typer.checker", "deinit", false, &none, &reg)
+    let a = mangle_symbol(&it, "flang_typer.checker", "deinit", false, &none, TY_VOID, &reg)
     defer a.deinit()
-    let b = mangle_symbol(&it, "core.io", "printf", true, &none, &reg)
+    let b = mangle_symbol(&it, "core.io", "printf", true, &none, TY_VOID, &reg)
     defer b.deinit()
-    let c = mangle_symbol(&it, "app.entry", "main", false, &none, &reg)
+    let c = mangle_symbol(&it, "app.entry", "main", false, &none, TY_VOID, &reg)
     defer c.deinit()
-    let d = mangle_symbol(&it, "", "add", false, &none, &reg)
+    let d = mangle_symbol(&it, "", "add", false, &none, TY_VOID, &reg)
     defer d.deinit()
     assert_true(
         a.view == "flang_0typer__checker__deinit",
@@ -837,9 +848,9 @@ test "escaping keeps a dotted path distinct from an underscored name" {
 
     let it = type_interner()
     defer it.deinit()
-    let dotted = mangle_symbol(&it, "a.b", "c", false, &none, &reg)
+    let dotted = mangle_symbol(&it, "a.b", "c", false, &none, TY_VOID, &reg)
     defer dotted.deinit()
-    let underscored = mangle_symbol(&it, "a", "b__c", false, &none, &reg)
+    let underscored = mangle_symbol(&it, "a", "b__c", false, &none, TY_VOID, &reg)
     defer underscored.deinit()
     assert_true(dotted.view == "a__b__c", "dotted path uses the separator")
     assert_true(underscored.view == "a__b_0_0c", "source underscores escape")
@@ -863,9 +874,9 @@ test "overloads separate by parameter type, with no counter" {
     two.push(prim_of(PrimitiveKind.I32))
     two.push(prim_of(PrimitiveKind.I32))
 
-    let a = mangle_symbol(&it, "m", "f", false, &one, &reg)
+    let a = mangle_symbol(&it, "m", "f", false, &one, TY_VOID, &reg)
     defer a.deinit()
-    let b = mangle_symbol(&it, "m", "f", false, &two, &reg)
+    let b = mangle_symbol(&it, "m", "f", false, &two, TY_VOID, &reg)
     defer b.deinit()
     assert_true(a.view == "m__f__i32", "one i32 parameter")
     assert_true(b.view == "m__f__i32__i32", "two i32 parameters")
@@ -873,7 +884,27 @@ test "overloads separate by parameter type, with no counter" {
 
     // Re-mangling the same declaration yields the same symbol - the property the ordinal scheme
     // could not provide.
-    let again = mangle_symbol(&it, "m", "f", false, &one, &reg)
+    let again = mangle_symbol(&it, "m", "f", false, &one, TY_VOID, &reg)
     defer again.deinit()
     assert_true(again.view == a.view, "deterministic across calls")
+}
+
+test "overloads that differ only in their return type get distinct symbols" {
+    let reg = nominal_registry()
+    defer reg.deinit()
+    let it = type_interner()
+    defer it.deinit()
+    let one: List(Ty) = list(1)
+    defer one.deinit()
+    one.push(prim_of(PrimitiveKind.I32))
+
+    let v = mangle_symbol(&it, "m", "f", false, &one, TY_VOID, &reg)
+    defer v.deinit()
+    let i = mangle_symbol(&it, "m", "f", false, &one, prim_of(PrimitiveKind.I32), &reg)
+    defer i.deinit()
+    let b = mangle_symbol(&it, "m", "f", false, &one, prim_of(PrimitiveKind.Bool), &reg)
+    defer b.deinit()
+    assert_true(v.view == "m__f__i32", "a void return adds nothing")
+    assert_true(i.view == "m__f__i32__r_i32", "a value return is encoded")
+    assert_true(!(i.view == b.view), "two returns, two symbols")
 }
