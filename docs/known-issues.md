@@ -14,6 +14,51 @@ When you discover a bug or limitation:
 
 ---
 
+### A Default Argument Is Resolved in the Caller's Scope - RESOLVED
+
+**Was:** a parameter's default was checked where the call is, so a default naming something only
+the declaring module imports failed at every call site (E2004). `materialize_default_args` now
+checks each default through `check_default`: the declaring module is current and the caller's local
+scopes are hidden (`TypeEnv.hide_locals`). Harness: `functions/default_arg_declaring_scope.f`.
+
+---
+
+### A Match Arm Opening With `..` Is Swallowed Into the Arm Above - RESOLVED
+
+**Was:** a half-open range pattern opening an arm (`..0x20 =>`) continued the arm above as a range
+expression. A binary `..` at the start of a line now ends the expression before it. Harness:
+`match/match_prefix_range_arm_after_call.f`.
+
+---
+
+### A Float Division by a Literal Zero Fails the C Build Under MSVC - RESOLVED
+
+**Was:** `1.0 / 0.0` reached the C as a division by a constant zero, which MSVC refuses (C2124). The
+C backend now writes it as `a * INFINITY` (or `-INFINITY` for `-0.0`), the IEEE 754 result.
+`std.encoding.toml` still builds its `inf` and `nan` at run time until a promote carries the fix to
+the seed. Harness: `operators/float_div_by_zero_constant.f`.
+
+---
+
+### Float Text Does Not Round-Trip - RESOLVED
+
+**Was:** `to_json` and `to_toml` wrote 6 fractional digits and `parse_f64` accumulated digits in
+binary floating point. `std.conv` now has `format_f64_shortest` (the fewest digits that read back)
+and a correctly rounded `parse_f64`: exact powers of ten when the digits fit, otherwise Go's
+multiprecision `decimal`. The JSON, TOML and CSV encoders and the compiler's float literals
+(`lower.f::parse_float`) use them. `format_f64` (string interpolation, `write_f64`) keeps its fixed
+precision. ponytail: the slow path is O(digits) per shift; Ryu and Eisel-Lemire are the upgrade if
+float text shows in a profile.
+
+---
+
+### `CsvReader` and `CsvDecoder` Leak Their Lists - RESOLVED
+
+**Was:** the reader, table and decoder `deinit`s skipped their header, row and span lists, and the
+reader's parse left one empty field list behind. All released now; the CSV tests run leak-free.
+
+---
+
 ### RFC-033 Ownership Gaps After the Checker Step
 
 **Status:** Open
@@ -1365,9 +1410,9 @@ before the last M11 fixes):
    stage-2's guards were `v > inf` and it emitted a bare `inf`
    identifier into stage-3's C. The guards are rewritten to
    `v * 0.5 == v` (no huge literal needed), and the parser applies
-   scale in exact 10^22 chunks. Residual ceiling: a user literal
-   within a few ulp of DBL_MAX may still parse as inf (documented at
-   `parse_float`; upgrade to strtod-grade parsing to close).
+   scale in exact 10^22 chunks. The residual ceiling (a literal within
+   a few ulp of DBL_MAX parsing as inf) closed when `parse_float`
+   moved to the correctly rounded `std.conv.parse_f64`.
 
 Follow-up (same day): the EXPLICIT form `b.*` on a nominal was typed as
 a fresh var by the self-host checker, so `pick(&b.*)` / `byval(b.*)`

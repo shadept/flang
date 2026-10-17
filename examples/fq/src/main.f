@@ -1,4 +1,5 @@
 import std.encoding.json
+import std.encoding.value
 import std.env
 import std.io.file
 import std.io.print
@@ -14,7 +15,7 @@ fn print_usage() {
     println("If [file] is omitted, fq reads JSON from stdin.")
 }
 
-fn apply_query(root: &JsonValue, query: String) &JsonValue? {
+fn apply_query(root: &Value, query: String) &Value? {
     if query.len == 0 or query == "." {
         return Some(root)
     }
@@ -43,10 +44,7 @@ fn apply_query(root: &JsonValue, query: String) &JsonValue? {
         }
 
         const key = query[segment_start..i]
-        current.* match {
-            Object(obj) => { current = obj.json_get_ref(key)? }
-            else => { return null }
-        }
+        current = current.get(key)?
 
         if at_end {
             break
@@ -59,14 +57,19 @@ fn apply_query(root: &JsonValue, query: String) &JsonValue? {
     return Some(current)
 }
 
-fn print_selected(root: &JsonValue, query: String) {
+fn print_selected(root: &Value, query: String) {
     const selected = apply_query(root, query)
     if selected.is_none() {
         println("null")
         return
     }
 
-    stringify_pretty(selected.unwrap(), stdout.writer(), 2)
+    const written = to_json(selected.unwrap(), stdout.writer(), true)
+    if written.is_err() {
+        print("fq: cannot write JSON: ")
+        println(written.unwrap_err().to_string())
+        return
+    }
     println("")
 }
 
@@ -88,7 +91,7 @@ pub fn main() i32 {
     }
 
     if file_path.len == 0 {
-        const parsed = parse(stdin.reader())
+        const parsed = parse_json(stdin.reader())
         if parsed.is_err() {
             print("fq: failed to parse JSON: ")
             println(parsed.unwrap_err().to_string())
@@ -109,7 +112,7 @@ pub fn main() i32 {
     }
 
     let file = opened.unwrap()
-    const parsed = parse(file.reader())
+    const parsed = parse_json(file.reader())
     close_file(file)
 
     if parsed.is_err() {

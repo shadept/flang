@@ -1,5 +1,5 @@
 // Zero-allocation conversion functions.
-// Buffer-based formatting and parsing for integers and booleans.
+// Buffer-based formatting and parsing for integers, floats and booleans.
 
 import std.option
 import std.result
@@ -629,97 +629,628 @@ pub fn parse_isize(s: u8[], base: u8 = 10) Result((i64, usize), ConvError) {
 // Buffer → Float
 // =============================================================================
 
-// Parse a 64-bit float from a byte buffer.
-// Handles: optional sign, integer digits, fractional part, exponent (e/E). Returns (value,
-// bytes_consumed).
+// Format an f64 as the shortest decimal text that reads back as the same value: `0.1`, `1e+21`,
+// `5e-324`, `-0`. Plain decimal for exponents -7 through 20, `d.ddde+X` outside them (the layout of
+// JavaScript's Number.toString). Non-finite values write `nan` / `inf` / `-inf`. A whole number
+// carries no `.0`.
+//
+// Required buffer capacity: 32 bytes. Returns `Err(BufferTooSmall)` if `buf` is short.
+pub fn format_f64_shortest(val: f64, buf: u8[]) Result(usize, ConvError) {
+    if val != val {
+        return write_word(buf, "nan")
+    }
+    const bits = f64_bits(val)
+    const negative = (bits >> 63) != 0
+    const biased = ((bits >> 52) & 0x7FF) as i64
+    if biased == 0x7FF {
+        return write_word(buf, if negative { "-inf" } else { "inf" })
+    }
+    if buf.len < 32 {
+        return Err(ConvError.BufferTooSmall)
+    }
+    let mant = bits & 0xF_FFFF_FFFF_FFFF
+    let exp = biased
+    if exp == 0 {
+        exp = 1
+    } else {
+        mant = mant | (1u64 << 52)
+    }
+    exp = exp - 1023
+
+    let d = decimal()
+    d.assign(mant)
+    d.shift(exp - 52)
+    d.round_shortest(mant, exp)
+    return Ok(write_shortest(&d, negative, buf))
+}
+
+// Lay out `d`'s digits as format_f64_shortest describes.
+fn write_shortest(d: &Decimal, negative: bool, buf: u8[]) usize {
+    let pos: usize = 0
+    if negative {
+        buf[0] = '-'
+        pos = 1
+    }
+    if d.nd == 0 {
+        buf[pos] = '0'
+        return pos + 1
+    }
+    const nd = d.nd
+    const dp = d.dp
+    if dp > 21 or dp <= -6 {
+        buf[pos] = d.at(0)
+        pos = pos + 1
+        if nd > 1 {
+            buf[pos] = '.'
+            pos = pos + 1
+            for i in 1..nd {
+                buf[pos] = d.at(i)
+                pos = pos + 1
+            }
+        }
+        buf[pos] = 'e'
+        buf[pos + 1] = if dp - 1 < 0 { '-' } else { '+' }
+        pos = pos + 2
+        const e = if dp - 1 < 0 { 1 - dp } else { dp - 1 }
+        const n = format_u64(e as u64, buf[pos..buf.len]).unwrap()
+        return pos + n
+    }
+    if dp <= 0 {
+        buf[pos] = '0'
+        buf[pos + 1] = '.'
+        pos = pos + 2
+        for _i in 0..0 - dp {
+            buf[pos] = '0'
+            pos = pos + 1
+        }
+        for i in 0..nd {
+            buf[pos] = d.at(i)
+            pos = pos + 1
+        }
+        return pos
+    }
+    for i in 0..dp {
+        buf[pos] = if i < nd { d.at(i) } else { '0' }
+        pos = pos + 1
+    }
+    if nd > dp {
+        buf[pos] = '.'
+        pos = pos + 1
+        for i in dp..nd {
+            buf[pos] = d.at(i)
+            pos = pos + 1
+        }
+    }
+    return pos
+}
+
+// Parse a 64-bit float from a byte buffer, correctly rounded (round half to even), as C's `strtod`
+// does. Handles: optional sign, integer digits, fractional part, exponent (e/E). A value past the
+// f64 range is an infinity, one below it zero. Returns (value, bytes_consumed).
 pub fn parse_f64(s: u8[]) Result((f64, usize), ConvError) {
-    if s.len == 0 {
-        return Err(ConvError.InvalidInput)
+    const text = scan_float(s)?
+    const fast = exact_f64(s, text)
+    if fast.is_some() {
+        return Ok((fast.unwrap(), text.end))
     }
+    let d = decimal()
+    d.read(s, text)
+    return Ok((f64_from_bits(d.float_bits()), text.end))
+}
 
-    let pos = 0usize
+// Where the parts of a float's text are.
+type FloatText = struct {
+    negative: bool
+    // First digit, end of the digits and point, end of the whole text.
+    digits_start: usize
+    digits_end: usize
+    end: usize
+    exponent: i64
+}
+
+fn scan_float(s: u8[]) Result(FloatText, ConvError) {
+    let pos: usize = 0
     let negative = false
-
-    // Optional sign
-    if s[0] == '-' {
-        negative = true
-        pos = 1
-    } else if s[0] == '+' {
+    if s.len > 0 and (s[0] == '-' or s[0] == '+') {
+        negative = s[0] == '-'
         pos = 1
     }
-
-    // Integer part
-    let result: f64 = 0.0
+    const digits_start = pos
     let has_digits = false
     while pos < s.len and s[pos] >= '0' and s[pos] <= '9' {
-        result = result * 10.0 + (s[pos] - '0') as f64
         has_digits = true
         pos = pos + 1
     }
-
-    // Fractional part
-    if pos < s.len {
-        if s[pos] == '.' {
+    if pos < s.len and s[pos] == '.' {
+        pos = pos + 1
+        while pos < s.len and s[pos] >= '0' and s[pos] <= '9' {
+            has_digits = true
             pos = pos + 1
-            let frac_mul = 0.1
-            while pos < s.len and s[pos] >= '0' and s[pos] <= '9' {
-                result = result + (s[pos] - '0') as f64 * frac_mul
-                frac_mul = frac_mul * 0.1
-                has_digits = true
-                pos = pos + 1
-            }
         }
     }
-
-    if has_digits == false {
+    if !has_digits {
         return Err(ConvError.InvalidInput)
     }
-
-    // Exponent part
-    if pos < s.len {
-        if s[pos] == 'e' or s[pos] == 'E' {
+    const digits_end = pos
+    let exponent: i64 = 0
+    if pos < s.len and (s[pos] == 'e' or s[pos] == 'E') {
+        pos = pos + 1
+        let exp_negative = false
+        if pos < s.len and (s[pos] == '-' or s[pos] == '+') {
+            exp_negative = s[pos] == '-'
             pos = pos + 1
-            let exp_negative = false
-            if pos < s.len {
-                if s[pos] == '-' {
-                    exp_negative = true
-                    pos = pos + 1
-                } else if s[pos] == '+' {
-                    pos = pos + 1
-                }
+        }
+        const exp_start = pos
+        while pos < s.len and s[pos] >= '0' and s[pos] <= '9' {
+            // Past 10000 the value is already infinite or zero.
+            if exponent < 10000 {
+                exponent = exponent * 10 + (s[pos] - '0') as i64
             }
-            let exp: i64 = 0
-            let has_exp_digits = false
-            while pos < s.len and s[pos] >= '0' and s[pos] <= '9' {
-                exp = exp * 10 + (s[pos] - '0') as i64
-                has_exp_digits = true
-                pos = pos + 1
-            }
-            if has_exp_digits == false {
-                return Err(ConvError.InvalidInput)
-            }
-            if exp_negative {
-                exp = 0 - exp
-            }
-            // Apply 10^exp
-            let abs_exp = if exp < 0 { 0 - exp } else { exp }
-            let mul = 1.0
-            for i in 0..abs_exp {
-                mul = mul * 10.0
-            }
-            if exp >= 0 {
-                result = result * mul
-            } else {
-                result = result / mul
-            }
+            pos = pos + 1
+        }
+        if pos == exp_start {
+            return Err(ConvError.InvalidInput)
+        }
+        if exp_negative {
+            exponent = 0 - exponent
         }
     }
+    return Ok(.{
+        negative = negative,
+        digits_start = digits_start,
+        digits_end = digits_end,
+        end = pos,
+        exponent = exponent,
+    })
+}
 
-    if negative {
-        result = 0.0 - result
+// The value when its digits fit 2^53 and its power of ten 10^22: both are exact f64s, so one
+// multiplication or division rounds once, correctly. Null otherwise.
+fn exact_f64(s: u8[], text: FloatText) f64? {
+    let mant: u64 = 0
+    let digits: usize = 0
+    let scale: i64 = 0
+    let seen_point = false
+    for i in text.digits_start..text.digits_end {
+        const c = s[i]
+        if c == '.' {
+            seen_point = true
+            continue
+        }
+        if mant == 0 and c == '0' {
+            if seen_point {
+                scale = scale - 1
+            }
+            continue
+        }
+        if digits == 19 {
+            return null
+        }
+        mant = mant * 10 + (c - '0') as u64
+        digits = digits + 1
+        if seen_point {
+            scale = scale - 1
+        }
+    }
+    const e = text.exponent + scale
+    const fits = mant <= (1u64 << 53) and e >= -22 and e <= 22
+    if !fits {
+        return null
+    }
+    let p = 1.0
+    const abs_e = if e < 0 { 0 - e } else { e }
+    for _i in 0..abs_e {
+        p = p * 10.0
+    }
+    const m = mant as f64
+    const v = if e < 0 { m / p } else { m * p }
+    return Some(if text.negative { -v } else { v })
+}
+
+fn f64_from_bits(bits: u64) f64 {
+    let b = bits
+    let p = &b
+    let q = p as &f64
+    return q.*
+}
+
+// =============================================================================
+// Exact decimal arithmetic - the slow path of float text, both directions
+// =============================================================================
+
+// The number 0.d[0]d[1]...d[nd-1] x 10^dp, digits as ASCII. 800 digits hold every finite f64
+// exactly. The algorithm is Go's strconv `decimal`: shift by powers of two in decimal, round at a
+// digit. ponytail: exact but O(digits) per shift; Ryu (format) and Eisel-Lemire (parse) are the
+// fast paths if float text ever shows up in a profile.
+const DECIMAL_DIGITS: i64 = 800
+
+// The largest shift one pass takes: 9 << 60 still fits a u64.
+const MAX_SHIFT: i64 = 60
+
+type Decimal = struct {
+    d: [u8; 800]
+    nd: i64
+    dp: i64
+    neg: bool
+    // Nonzero digits were dropped past `d[nd - 1]`.
+    trunc: bool
+}
+
+fn decimal() Decimal {
+    return .{ d = [0u8; 800], nd = 0, dp = 0, neg = false, trunc = false }
+}
+
+fn at(self: &Decimal, i: i64) u8 {
+    return self.d[i as usize]
+}
+
+fn put(self: &Decimal, i: i64, c: u8) {
+    self.d[i as usize] = c
+}
+
+fn assign(self: &Decimal, v: u64) {
+    let buf = [0u8; 24]
+    let n: i64 = 0
+    let x = v
+    while x > 0 {
+        const q = x / 10
+        buf[n as usize] = (x - 10 * q) as u8 + '0'
+        n = n + 1
+        x = q
+    }
+    self.nd = 0
+    while n > 0 {
+        n = n - 1
+        self.put(self.nd, buf[n as usize])
+        self.nd = self.nd + 1
+    }
+    self.dp = self.nd
+    self.trim()
+}
+
+// Reads the digits `scan_float` found.
+fn read(self: &Decimal, s: u8[], text: FloatText) {
+    self.neg = text.negative
+    let seen_point = false
+    for i in text.digits_start..text.digits_end {
+        const c = s[i]
+        if c == '.' {
+            seen_point = true
+            self.dp = self.nd
+            continue
+        }
+        if c == '0' and self.nd == 0 {
+            self.dp = self.dp - 1
+            continue
+        }
+        if self.nd < DECIMAL_DIGITS {
+            self.put(self.nd, c)
+            self.nd = self.nd + 1
+        } else if c != '0' {
+            self.trunc = true
+        }
+    }
+    if !seen_point {
+        self.dp = self.nd
+    }
+    self.dp = self.dp + text.exponent
+    self.trim()
+}
+
+fn trim(self: &Decimal) {
+    while self.nd > 0 and self.at(self.nd - 1) == '0' {
+        self.nd = self.nd - 1
+    }
+    if self.nd == 0 {
+        self.dp = 0
+    }
+}
+
+// Multiplies by 2^k, a negative `k` dividing.
+fn shift(self: &Decimal, k: i64) {
+    if self.nd == 0 {
+        return
+    }
+    let left = k
+    while left > MAX_SHIFT {
+        self.left_shift(MAX_SHIFT as u64)
+        left = left - MAX_SHIFT
+    }
+    while left < 0 - MAX_SHIFT {
+        self.right_shift(MAX_SHIFT as u64)
+        left = left + MAX_SHIFT
+    }
+    if left > 0 {
+        self.left_shift(left as u64)
+    } else if left < 0 {
+        self.right_shift((0 - left) as u64)
+    }
+}
+
+fn right_shift(self: &Decimal, k: u64) {
+    let r: i64 = 0
+    let w: i64 = 0
+    let n: u64 = 0
+    while (n >> k) == 0 {
+        if r >= self.nd {
+            if n == 0 {
+                self.nd = 0
+                return
+            }
+            while (n >> k) == 0 {
+                n = n * 10
+                r = r + 1
+            }
+            break
+        }
+        n = n * 10 + (self.at(r) - '0') as u64
+        r = r + 1
+    }
+    self.dp = self.dp - (r - 1)
+
+    const mask = (1u64 << k) - 1
+    while r < self.nd {
+        const c = (self.at(r) - '0') as u64
+        const dig = n >> k
+        n = n & mask
+        self.put(w, dig as u8 + '0')
+        w = w + 1
+        n = n * 10 + c
+        r = r + 1
+    }
+    while n > 0 {
+        const dig = n >> k
+        n = n & mask
+        if w < DECIMAL_DIGITS {
+            self.put(w, dig as u8 + '0')
+            w = w + 1
+        } else if dig > 0 {
+            self.trunc = true
+        }
+        n = n * 10
+    }
+    self.nd = w
+    self.trim()
+}
+
+// Digits are written from the end, `delta` past the old end: at least as many as the shift can add,
+// since log10(2) < 0.30103. The unused leading slots are then closed up.
+fn left_shift(self: &Decimal, k: u64) {
+    const delta = (k as i64 * 30103) / 100000 + 1
+    const end = self.nd + delta
+    let r = self.nd
+    let w = end
+    let n: u64 = 0
+    while r > 0 {
+        r = r - 1
+        n = n + (((self.at(r) - '0') as u64) << k)
+        w = w - 1
+        self.put_digit(w, n % 10)
+        n = n / 10
+    }
+    while n > 0 {
+        w = w - 1
+        self.put_digit(w, n % 10)
+        n = n / 10
+    }
+    const kept_end = if end < DECIMAL_DIGITS { end } else { DECIMAL_DIGITS }
+    for i in w..kept_end {
+        self.put(i - w, self.at(i))
+    }
+    self.dp = self.dp + (end - w) - self.nd
+    self.nd = kept_end - w
+    self.trim()
+}
+
+// Writes digit `v` at `i`, or records it as dropped past the last slot.
+fn put_digit(self: &Decimal, i: i64, v: u64) {
+    if i < DECIMAL_DIGITS {
+        self.put(i, v as u8 + '0')
+    } else if v != 0 {
+        self.trunc = true
+    }
+}
+
+// Whether chopping at `nd` digits rounds up: past half, or exactly half and the kept digit odd.
+fn should_round_up(self: &Decimal, nd: i64) bool {
+    if nd < 0 or nd >= self.nd {
+        return false
+    }
+    if self.at(nd) == '5' and nd + 1 == self.nd {
+        if self.trunc {
+            return true
+        }
+        return nd > 0 and (self.at(nd - 1) - '0') % 2 != 0
+    }
+    return self.at(nd) >= '5'
+}
+
+fn round(self: &Decimal, nd: i64) {
+    if self.should_round_up(nd) {
+        self.round_up(nd)
+    } else {
+        self.round_down(nd)
+    }
+}
+
+fn round_down(self: &Decimal, nd: i64) {
+    if nd < 0 or nd >= self.nd {
+        return
+    }
+    self.nd = nd
+    self.trim()
+}
+
+fn round_up(self: &Decimal, nd: i64) {
+    if nd < 0 or nd >= self.nd {
+        return
+    }
+    let i = nd - 1
+    while i >= 0 {
+        if self.at(i) < '9' {
+            self.put(i, self.at(i) + 1)
+            self.nd = i + 1
+            return
+        }
+        i = i - 1
+    }
+    self.put(0, '1')
+    self.nd = 1
+    self.dp = self.dp + 1
+}
+
+// The integer part, rounded at the point.
+fn rounded_integer(self: &Decimal) u64 {
+    if self.dp > 20 {
+        return 0xFFFF_FFFF_FFFF_FFFF
+    }
+    let n: u64 = 0
+    let i: i64 = 0
+    while i < self.dp and i < self.nd {
+        n = n * 10 + (self.at(i) - '0') as u64
+        i = i + 1
+    }
+    while i < self.dp {
+        n = n * 10
+        i = i + 1
+    }
+    if self.should_round_up(self.dp) {
+        n = n + 1
+    }
+    return n
+}
+
+// The shift that brings `dp` digits of point toward zero without overshooting.
+fn power_step(dp: i64) i64 {
+    return dp match {
+        0 => 1
+        1 => 3
+        2 => 6
+        3 => 9
+        4 => 13
+        5 => 16
+        6 => 19
+        7 => 23
+        8 => 26
+        else => 27
+    }
+}
+
+// The nearest f64's bits, rounding half to even.
+fn float_bits(self: &Decimal) u64 {
+    const sign = if self.neg { 1u64 << 63 } else { 0u64 }
+    if self.nd == 0 or self.dp < -330 {
+        return sign
+    }
+    const infinity = sign | (0x7FFu64 << 52)
+    if self.dp > 310 {
+        return infinity
     }
 
-    return Ok((result, pos))
+    // Scale to [0.5, 1) by powers of two, then into the f64 range [1, 2).
+    let exp: i64 = 0
+    while self.dp > 0 {
+        const n = power_step(self.dp)
+        self.shift(0 - n)
+        exp = exp + n
+    }
+    while self.dp < 0 or (self.dp == 0 and self.at(0) < '5') {
+        const n = power_step(0 - self.dp)
+        self.shift(n)
+        exp = exp - n
+    }
+    exp = exp - 1
+
+    // Below the smallest normal exponent the value is subnormal: fewer mantissa bits.
+    if exp < -1022 {
+        const n = -1022 - exp
+        self.shift(0 - n)
+        exp = exp + n
+    }
+    if exp + 1023 >= 0x7FF {
+        return infinity
+    }
+
+    self.shift(53)
+    let mant = self.rounded_integer()
+    if mant == 1u64 << 53 {
+        mant = mant >> 1
+        exp = exp + 1
+        if exp + 1023 >= 0x7FF {
+            return infinity
+        }
+    }
+    const is_subnormal = (mant & (1u64 << 52)) == 0
+    const biased = if is_subnormal { 0 } else { exp + 1023 }
+    return sign | ((biased as u64) << 52) | (mant & 0xF_FFFF_FFFF_FFFF)
+}
+
+// Rounds this decimal - the exact value of the f64 `mant` x 2^(exp - 52) - to the fewest digits
+// that still read back as that f64: any decimal strictly between the midpoints to its neighbours,
+// or on one when `mant` is even (round half to even then lands on it).
+fn round_shortest(self: &Decimal, mant: u64, exp: i64) {
+    if mant == 0 {
+        self.nd = 0
+        return
+    }
+    // Already shortest when the gap to the next shorter decimal exceeds the f64 spacing (log2(10) >
+    // 3.32).
+    const min_exp: i64 = -1022
+    if exp > min_exp and 332 * (self.dp - self.nd) >= 100 * (exp - 52) {
+        return
+    }
+
+    let upper = decimal()
+    upper.assign(mant * 2 + 1)
+    upper.shift(exp - 52 - 1)
+
+    const lower_is_wider = mant > (1u64 << 52) or exp == min_exp
+    const mant_lo = if lower_is_wider { mant - 1 } else { mant * 2 - 1 }
+    const exp_lo = if lower_is_wider { exp } else { exp - 1 }
+    let lower = decimal()
+    lower.assign(mant_lo * 2 + 1)
+    lower.shift(exp_lo - 52 - 1)
+
+    const inclusive = mant % 2 == 0
+
+    // 0: the digits so far equal upper's; 1: they differ by one, then 9s against upper's 0s; 2:
+    // rounding up stays below upper.
+    let upper_delta: u8 = 0
+    let ui: i64 = 0
+    loop {
+        const mi = ui - upper.dp + self.dp
+        if mi >= self.nd {
+            return
+        }
+        const li = ui - upper.dp + lower.dp
+        const l = if li >= 0 and li < lower.nd { lower.at(li) } else { '0' }
+        const m = if mi >= 0 { self.at(mi) } else { '0' }
+        const u = if ui < upper.nd { upper.at(ui) } else { '0' }
+
+        const ok_down = l != m or (inclusive and li + 1 == lower.nd)
+        if upper_delta == 0 and m + 1 < u {
+            upper_delta = 2
+        } else if upper_delta == 0 and m != u {
+            upper_delta = 1
+        } else if upper_delta == 1 and (m != '9' or u != '0') {
+            upper_delta = 2
+        }
+        const ok_up = upper_delta > 0 and (inclusive or upper_delta > 1 or ui + 1 < upper.nd)
+
+        if ok_down and ok_up {
+            self.round(mi + 1)
+            return
+        }
+        if ok_down {
+            self.round_down(mi + 1)
+            return
+        }
+        if ok_up {
+            self.round_up(mi + 1)
+            return
+        }
+        ui = ui + 1
+    }
 }
 
 // =============================================================================
@@ -1086,4 +1617,77 @@ test "parse_f64 empty returns error" {
     const s = slice_from_raw_parts(input.ptr, input.len)
     const result = parse_f64(s)
     assert_true(result.is_err(), "empty should return error")
+}
+
+fn shortest_is(v: f64, expected: String) bool {
+    let buf = [0u8; 32]
+    const n = format_f64_shortest(v, buf).unwrap()
+    return buf[0..n] as String == expected
+}
+
+// The f64 the shortest text of `v` reads back as.
+fn reread(v: f64) f64 {
+    let buf = [0u8; 32]
+    const n = format_f64_shortest(v, buf).unwrap()
+    return parse_f64(buf[0..n]).unwrap().0
+}
+
+fn parsed(s: String) f64 {
+    return parse_f64(s.as_raw_bytes()).unwrap().0
+}
+
+test "format_f64_shortest writes the fewest digits that read back" {
+    assert_true(shortest_is(0.1, "0.1"), "0.1")
+    assert_true(shortest_is(0.1 + 0.2, "0.30000000000000004"), "0.1 + 0.2")
+    assert_true(shortest_is(1.0 / 3.0, "0.3333333333333333"), "a third")
+    assert_true(shortest_is(100.0, "100"), "whole")
+    assert_true(shortest_is(123.456, "123.456"), "fraction")
+    assert_true(shortest_is(1e21, "1e+21"), "large")
+    assert_true(shortest_is(1e20, "100000000000000000000"), "below the exponent cutoff")
+    assert_true(shortest_is(1e-7, "1e-7"), "small")
+    assert_true(shortest_is(0.000001, "0.000001"), "above the exponent cutoff")
+    assert_true(shortest_is(f64_from_bits(1), "5e-324"), "smallest subnormal")
+    assert_true(
+        shortest_is(f64_from_bits(0x7FEF_FFFF_FFFF_FFFF), "1.7976931348623157e+308"),
+        "largest finite",
+    )
+    assert_true(shortest_is(0.0, "0"), "zero")
+    assert_true(shortest_is(-0.0, "-0"), "negative zero")
+    assert_true(shortest_is(-2.5, "-2.5"), "negative")
+}
+
+test "parse_f64 rounds correctly where repeated multiplication does not" {
+    assert_eq(f64_bits(parsed("0.1")), f64_bits(0.1), "0.1")
+    assert_eq(f64_bits(parsed("1.7976931348623157e308")), 0x7FEF_FFFF_FFFF_FFFF, "largest finite")
+    assert_eq(f64_bits(parsed("4.9406564584124654e-324")), 1u64, "smallest subnormal")
+    assert_eq(
+        f64_bits(parsed("2.2250738585072011e-308")),
+        0x000F_FFFF_FFFF_FFFF,
+        "largest subnormal",
+    )
+    assert_eq(f64_bits(parsed("9007199254740993")), 0x4340_0000_0000_0000, "2^53 + 1 ties to even")
+    assert_eq(f64_bits(parsed("1e400")), 0x7FF0_0000_0000_0000, "overflow is infinity")
+    assert_eq(f64_bits(parsed("1e-400")), 0u64, "underflow is zero")
+    assert_eq(f64_bits(parsed("-0.0")), 0x8000_0000_0000_0000, "negative zero")
+    assert_eq(
+        parse_f64("12.5e1x".as_raw_bytes()).unwrap().1,
+        6 as usize,
+        "consumes the float prefix",
+    )
+    assert_true(parse_f64("1e".as_raw_bytes()).is_err(), "exponent needs digits")
+}
+
+test "every f64 survives format_f64_shortest then parse_f64" {
+    let state: u64 = 0x9E37_79B9_7F4A_7C15
+    for _i in 0..20000usize {
+        state = state ^ (state << 13)
+        state = state ^ (state >> 7)
+        state = state ^ (state << 17)
+        const v = f64_from_bits(state)
+        if v != v {
+            continue
+        }
+        const back = reread(v)
+        assert_eq(f64_bits(back), state, "bit-exact round trip")
+    }
 }

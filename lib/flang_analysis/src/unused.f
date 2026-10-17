@@ -31,6 +31,7 @@ import std.collections.multimap
 import std.collections.set
 import std.io.fs
 import std.option
+import std.result
 import std.string
 import std.string_builder
 import std.test
@@ -894,7 +895,7 @@ fn cmp_site(a: ImportSite, b: ImportSite) Ord {
 // pass runs exactly as a build runs it.
 
 fn analyzed(source: String, manifest: String) AnalyzedProject {
-    let proj = parse_project(manifest)
+    let proj = parse_project(manifest).unwrap()
     defer proj.deinit()
     let ctx = resolve_ctx(&proj, "")
     defer ctx.deinit()
@@ -924,7 +925,7 @@ fn analyzed_fixture(source: String) AnalyzedProject {
     const root = if exists("fixtures/leaf.f") { "fixtures" } else { "lib/flang_analysis/fixtures" }
     const manifest = $"[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"{root}/**/*.f\"\n"
     defer manifest.deinit()
-    let proj = parse_project(manifest.view)
+    let proj = parse_project(manifest.view).unwrap()
     defer proj.deinit()
     let ctx = resolve_ctx(&proj, "")
     defer ctx.deinit()

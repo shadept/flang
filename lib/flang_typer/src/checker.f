@@ -9786,7 +9786,7 @@ fn materialize_arg_list(
         }
         decl_params[pi].default_value match {
             Some(e) => {
-                const t = check_expr(self, e)
+                const t = check_default(self, p.id, e)
                 unify_expected(self, t, p.params[pi], E_TYPE_MISMATCH, span)
                 exprs.push(e)
             }
@@ -9852,8 +9852,7 @@ fn synth_variadic_pack(
 // the winner's instantiated parameter types, and the list is recorded on the call node for lowering
 // to append after the explicit arguments.
 //
-// Scope note: identifiers inside a default resolve in the CALLER's context (reference parity). The
-// in-tree corpus is literals, `null`, and nullary calls, where caller and callee scope agree.
+// Identifiers inside a default resolve as at the declaration (`check_default`).
 //
 // Bail-outs (call lowers short and refuses, exactly the pre-M11 state): an omitted param with no
 // default (the variadic tail), a defaulted param whose instantiated type still carries a free var
@@ -9891,7 +9890,7 @@ fn materialize_default_args(self: &Checker, p: &OverloadPick, supplied: usize, s
         }
         decl_params[i].default_value match {
             Some(e) => {
-                const t = check_expr(self, e)
+                const t = check_default(self, p.id, e)
                 unify_expected(self, t, p.params[i], E_TYPE_MISMATCH, span)
                 exprs.push(e)
             }
@@ -9905,6 +9904,21 @@ fn materialize_default_args(self: &Checker, p: &OverloadPick, supplied: usize, s
     } else {
         exprs.deinit()
     }
+}
+
+// A parameter's default checked at a call as its declaration sees it: in the declaring module, with
+// the caller's locals hidden.
+fn check_default(self: &Checker, fn_id: u32, e: &Expr) Ty {
+    const caller_module = self.current_module
+    const decl = self.functions.find_by_id(fn_id)
+    if decl.is_some() and decl.unwrap().module.is_some() {
+        self.current_module = decl.unwrap().module
+    }
+    const hidden = self.env.hide_locals()
+    const t = check_expr(self, e)
+    self.env.reveal(hidden)
+    self.current_module = caller_module
+    return t
 }
 
 // E2111 (RFC-014): when an overload failed and one of the arguments is a capturing closure, the

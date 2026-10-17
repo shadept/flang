@@ -1,17 +1,22 @@
-// JSON encoding, decoding, and DOM manipulation.
+// JSON encoding and decoding.
 //
 //   JsonEncoder  - implements Encoder for JSON output to a Writer
-//   JsonDecoder  - implements Decoder for JSON input from a Reader;
-//                  also handles DOM parsing (parse_value)
-//   JsonValue    - recursive tagged union with custom serialize/deserialize
-//   parse()      - DOM-level parse from Reader or String
-//   stringify()  - DOM-level serialize via JsonEncoder
+//   JsonDecoder  - implements Decoder for JSON input from a Reader
+//   parse_json   - a whole document into a std.encoding.value tree
+//   to_json      - a tree back to text
+//
+// Numbers without a fraction or exponent that fit an i64 read as ints, every other number as a
+// float. JSON has no dates: the encoder writes them as ISO 8601 / RFC 3339 strings, and the decoder
+// reads strings back as dates and times where `JsonOptions.dates` says so. Object keys keep their
+// order.
 
 import std.allocator
-import std.collections.dict
 import std.collections.list
+import std.collections.ordered_dict
 import std.conv
 import std.encoding.codec
+import std.encoding.utf8
+import std.encoding.value
 import std.enum
 import std.interface
 import std.io.reader
@@ -22,9 +27,10 @@ import std.string
 import std.string_builder
 import std.string_reader
 import std.test
+import std.time
 
 // =============================================================================
-// Errors
+// Errors and options
 // =============================================================================
 
 pub type JsonError = enum {
@@ -35,254 +41,148 @@ pub type JsonError = enum {
     InvalidUnicode
     MaxDepthExceeded
     TrailingContent
+    // NaN or an infinity, which JSON cannot write.
+    NonFiniteNumber
+    // A string read as a date or time that is not one.
+    InvalidDate
 }
 
 #enum_utils(JsonError)
 
-// =============================================================================
-// DOM Types
-// =============================================================================
+// Nesting the encoder and decoder track: arrays and objects open at once.
+const MAX_DEPTH: usize = 64
 
-pub type JsonValue = enum {
-    Null
-    Bool(bool)
-    Number(f64)
-    Str(OwnedString)
-    Array(List(JsonValue))
-    Object(Dict(OwnedString, JsonValue))
+pub type JsonOptions = struct {
+    // Which strings the decoder reports as dates and times.
+    dates: DateParsing
+}
+
+// Options with every string kept a string.
+pub fn json_options() JsonOptions {
+    return .{ dates = DateParsing.Off }
+}
+
+pub fn json_options(dates: DateParsing) JsonOptions {
+    return .{ dates = dates }
 }
 
 // =============================================================================
-// DOM Constructors
+// Documents
 // =============================================================================
 
-pub fn json_null() JsonValue { return JsonValue.Null }
-pub fn json_bool(value: bool) JsonValue { return JsonValue.Bool(value) }
-pub fn json_number(value: f64) JsonValue { return JsonValue.Number(value) }
-
-pub fn json_string(value: String, allocator: &Allocator? = null) JsonValue {
-    return JsonValue.Str(from_view(value, allocator))
-}
-
-pub fn json_array(allocator: &Allocator? = null) JsonValue {
-    let items: List(JsonValue) = list(0, allocator)
-    return JsonValue.Array(move items)
-}
-
-pub fn json_object(allocator: &Allocator? = null) JsonValue {
-    let d: Dict(OwnedString, JsonValue) = dict(allocator)
-    return JsonValue.Object(move d)
-}
-
-// =============================================================================
-// DOM Predicates
-// =============================================================================
-
-pub fn is_null(self: &JsonValue) bool {
-    return self.* match { Null => true, else => false }
-}
-
-pub fn is_bool(self: &JsonValue) bool {
-    return self.* match { Bool(_) => true, else => false }
-}
-
-pub fn is_number(self: &JsonValue) bool {
-    return self.* match { Number(_) => true, else => false }
-}
-
-pub fn is_string(self: &JsonValue) bool {
-    return self.* match { Str(_) => true, else => false }
-}
-
-pub fn is_array(self: &JsonValue) bool {
-    return self.* match { Array(_) => true, else => false }
-}
-
-pub fn is_object(self: &JsonValue) bool {
-    return self.* match { Object(_) => true, else => false }
-}
-
-// =============================================================================
-// DOM Accessors
-// =============================================================================
-
-pub fn as_bool(self: &JsonValue) bool? {
-    return self.* match { Bool(v) => Some(v), else => null }
-}
-
-pub fn as_number(self: &JsonValue) f64? {
-    return self.* match { Number(v) => Some(v), else => null }
-}
-
-pub fn as_string(self: &JsonValue) String? {
-    return self.* match { Str(s) => Some(s.view), else => null }
-}
-
-pub fn as_array(self: &JsonValue) &List(JsonValue)? {
-    return self.* match { Array(arr) => Some(&arr), else => null }
-}
-
-pub fn as_object(self: &JsonValue) &Dict(OwnedString, JsonValue)? {
-    return self.* match { Object(obj) => Some(&obj), else => null }
-}
-
-// =============================================================================
-// JSON Object convenience - String-key access for Dict(OwnedString, JsonValue)
-// =============================================================================
-
-pub fn json_get_ref(self: &Dict(OwnedString, JsonValue), key: String) &JsonValue? {
-    return self.get_ref(key)
-}
-
-pub fn json_set(self: &Dict(OwnedString, JsonValue), key: String, value: move JsonValue) {
-    self.set(key, value)
-}
-
-pub fn json_contains(self: &Dict(OwnedString, JsonValue), key: String) bool {
-    return self.contains(key)
-}
-
-// =============================================================================
-// Cleanup
-// =============================================================================
-
-pub fn deinit(self: move JsonValue) {
-    self match {
-        Str(s) => s.deinit()
-        Array(arr) => arr.deinit()
-        Object(obj) => obj.deinit()
-        else => {}
+// Parse one JSON document from a Reader into a tree.
+pub fn parse_json(
+    r: Reader,
+    options: JsonOptions = json_options(),
+    allocator: &Allocator? = null,
+) Result(Value, JsonError) {
+    let dec = json_decoder(r, options, allocator)
+    defer dec.deinit()
+    const d = dec.decoder()
+    if d.peek_kind() == ValueKind.End {
+        return Err(dec.error ?? JsonError.UnexpectedEnd)
     }
+    let v = read_value(&d, allocator)
+    if dec.error.is_some() {
+        v.deinit()
+        return Err(dec.error.unwrap())
+    }
+    dec.skip_whitespace()
+    if dec.peek().is_some() {
+        v.deinit()
+        return Err(JsonError.TrailingContent)
+    }
+    return Ok(move v)
 }
 
-// The element form: a container releases its elements with an allocator in hand. The value carries
-// its own.
-pub fn deinit(self: move JsonValue, allocator: &Allocator) {
-    self.deinit()
+// Parse one JSON document from a string into a tree.
+pub fn parse_json(
+    input: String,
+    options: JsonOptions = json_options(),
+    allocator: &Allocator? = null,
+) Result(Value, JsonError) {
+    let mr = mem_reader(input)
+    return parse_json(mr.reader(), options, allocator)
+}
+
+// Write a tree as compact JSON, or indented by `indent` spaces when `pretty`.
+pub fn to_json(
+    value: &Value,
+    w: Writer,
+    pretty: bool = false,
+    indent: usize = 2,
+) Result((), JsonError) {
+    let enc = json_encoder(w, pretty, indent)
+    value.serialize(&enc.encoder())
+    if enc.error.is_some() {
+        return Err(enc.error.unwrap())
+    }
+    return Ok(())
+}
+
+// A tree as compact JSON text.
+pub fn to_json(value: &Value, allocator: &Allocator? = null) Result(OwnedString, JsonError) {
+    let sb = string_builder(64, allocator)
+    defer sb.deinit()
+    to_json(value, sb.writer())?
+    return Ok(sb.to_string())
 }
 
 // =============================================================================
-// Writer helpers
+// Text helpers
 // =============================================================================
 
 fn write_escaped_string(s: String, w: Writer) {
     for i in 0..s.len {
         const c = s[i]
-        if c == '"' {
-            write_str(w, "\\\"")
-        }
-        else if c == '\\' {
-            write_str(w, "\\\\")
-        }
-        else if c == '\n' {
-            write_str(w, "\\n")
-        }
-        else if c == '\r' {
-            write_str(w, "\\r")
-        }
-        else if c == '\t' {
-            write_str(w, "\\t")
-        }
-        else if c < 0x20 {
-            write_str(w, "\\u00")
-            let hi = (c >> 4) & 0x0F
-            let lo = c & 0x0F
-            write_byte(w, if hi < 10 { '0' + hi } else { 'a' + hi - 10 })
-            write_byte(w, if lo < 10 { '0' + lo } else { 'a' + lo - 10 })
-        }
-        else {
-            write_byte(w, c)
-        }
-    }
-}
-
-// =============================================================================
-// DOM Parsing
-// =============================================================================
-
-// Parse a complete JSON document from a Reader.
-pub fn parse(r: Reader, allocator: &Allocator? = null) Result(JsonValue, JsonError) {
-    let p = json_decoder(r, allocator)
-    let result = p.parse_value()
-    if result.is_err() {
-        return result
-    }
-    p.skip_whitespace()
-    if p.peek().is_some() {
-        return Result.Err(JsonError.TrailingContent)
-    }
-    return result
-}
-
-// Parse a complete JSON document from a string.
-pub fn parse(input: String, allocator: &Allocator? = null) Result(JsonValue, JsonError) {
-    let mr = mem_reader(input)
-    return parse(mr.reader(), allocator)
-}
-
-// =============================================================================
-// DOM Serialization
-// =============================================================================
-
-// Custom serialize for JsonValue - walks the DOM tree via the Encoder interface. This is the single
-// implementation; stringify/stringify_pretty are thin wrappers.
-pub fn serialize(self: &JsonValue, enc: &Encoder) {
-    self.* match {
-        Null => { enc.encode_null() }
-        Bool(b) => { enc.encode_bool(b) }
-        Number(n) => { enc.encode_float(n, 8) }
-        Str(s) => { enc.encode_str(s.view) }
-        Array(arr) => {
-            enc.begin_seq(arr.len)
-            for i in 0..arr.len as isize {
-                let item = &arr[i as usize]
-                item.serialize(enc)
+        c match {
+            '"' => write_str(w, "\\\"")
+            '\\' => write_str(w, "\\\\")
+            '\n' => write_str(w, "\\n")
+            '\r' => write_str(w, "\\r")
+            '\t' => write_str(w, "\\t")
+            0..=0x1F => {
+                write_str(w, "\\u00")
+                const hi = (c >> 4) & 0x0F
+                const lo = c & 0x0F
+                write_byte(w, if hi < 10 { '0' + hi } else { 'a' + hi - 10 })
+                write_byte(w, if lo < 10 { '0' + lo } else { 'a' + lo - 10 })
             }
-            enc.end_seq()
-        }
-        Object(obj) => {
-            enc.begin_map(obj.len())
-            let it = obj.iter()
-            loop {
-                let e = it.next() match {
-                    Some(e) => e
-                    None => break
-                }
-                enc.key(e.key.view)
-                let v = &e.value
-                v.serialize(enc)
-            }
-            enc.end_map()
+            else => write_byte(w, c)
         }
     }
 }
 
-pub fn stringify(value: &JsonValue, w: Writer) {
-    let enc = json_encoder(w)
-    value.serialize(&enc.encoder())
-}
-
-pub fn stringify(value: &JsonValue) OwnedString {
-    let sb = string_builder(64)
-    defer sb.deinit()
-    let enc = json_encoder(sb.writer())
-    value.serialize(&enc.encoder())
-    let result = sb.to_string()
-    return result
-}
-
-pub fn stringify_pretty(value: &JsonValue, w: Writer, indent: usize = 2) {
-    let enc = json_encoder(w, true, indent)
-    value.serialize(&enc.encoder())
-}
-
-// Format protocol - compact by default, "p" for pretty.
-pub fn format(self: &JsonValue, w: Writer, spec: String) {
-    if spec == "p" {
-        stringify_pretty(self, w)
+// Whether `s` is number text without a fraction or exponent.
+fn is_integral(s: String) bool {
+    for i in 0..s.len {
+        const c = s[i]
+        if c == '.' or c == 'e' or c == 'E' {
+            return false
+        }
     }
-    else {
-        stringify(self, w)
+    return true
+}
+
+// The i64 `s` spells in full, or null.
+fn whole_i64(s: String) i64? {
+    const r = parse_i64(s.as_raw_bytes())
+    if r.is_err() {
+        return null
+    }
+    const pair = r.unwrap()
+    if pair.1 != s.len {
+        return null
+    }
+    return Some(pair.0)
+}
+
+fn hex_digit(c: u8) u32? {
+    return c match {
+        '0'..='9' => Some((c - '0') as u32)
+        'a'..='f' => Some((c - 'a' + 10) as u32)
+        'A'..='F' => Some((c - 'A' + 10) as u32)
+        else => null
     }
 }
 
@@ -292,37 +192,84 @@ pub fn format(self: &JsonValue, w: Writer, spec: String) {
 
 pub type JsonEncoder = struct {
     w: Writer
-    stack: [u8; 64] // 0 = no elements yet, 1 = has elements
+    // Per open container: 0 = no elements yet, 1 = has elements, 2 = a key awaits its value.
+    stack: [u8; 64]
     stack_len: usize
     pretty: bool
     indent: usize
+    error: JsonError?
 }
 
 pub fn json_encoder(w: Writer, pretty: bool = false, indent: usize = 2) JsonEncoder {
-    return .{ w = w, stack = [0u8; 64], stack_len = 0, pretty = pretty, indent = indent }
+    return .{
+        w = w,
+        stack = [0u8; 64],
+        stack_len = 0,
+        pretty = pretty,
+        indent = indent,
+        error = null,
+    }
+}
+
+pub fn get_error(self: &JsonEncoder) JsonError? {
+    return self.error
+}
+
+fn fail(self: &JsonEncoder, err: JsonError) {
+    if self.error.is_none() {
+        self.error = Some(err)
+    }
 }
 
 fn write_separator(self: &JsonEncoder) {
-    if self.stack_len > 0 {
-        if self.stack[self.stack_len - 1] == 1 {
-            write_byte(self.w, ',')
-            if self.pretty {
-                write_byte(self.w, '\n')
-                self.write_depth()
-            }
-        } else {
-            self.stack[self.stack_len - 1] = 1
-            if self.pretty {
-                write_byte(self.w, '\n')
-                self.write_depth()
-            }
-        }
+    if self.stack_len == 0 {
+        return
+    }
+    const top = self.stack_len - 1
+    const state = self.stack[top]
+    self.stack[top] = 1
+    if state == 2 {
+        return
+    }
+    if state == 1 {
+        write_byte(self.w, ',')
+    }
+    if self.pretty {
+        write_byte(self.w, '\n')
+        self.write_depth()
     }
 }
 
 fn write_depth(self: &JsonEncoder) {
     const total = self.stack_len * self.indent
     for i in 0..total as isize { write_byte(self.w, ' ') }
+}
+
+fn open(self: &JsonEncoder, bracket: u8) usize {
+    self.write_separator()
+    if self.stack_len >= MAX_DEPTH {
+        self.fail(JsonError.MaxDepthExceeded)
+        return 0
+    }
+    write_byte(self.w, bracket)
+    self.stack[self.stack_len] = 0
+    self.stack_len = self.stack_len + 1
+    return 1
+}
+
+fn close(self: &JsonEncoder, bracket: u8) usize {
+    if self.stack_len == 0 {
+        return 0
+    }
+    self.stack_len = self.stack_len - 1
+    if self.pretty {
+        if self.stack[self.stack_len] == 1 {
+            write_byte(self.w, '\n')
+            self.write_depth()
+        }
+    }
+    write_byte(self.w, bracket)
+    return 1
 }
 
 pub fn encode_null(self: &JsonEncoder) usize {
@@ -359,10 +306,23 @@ pub fn encode_uint(self: &JsonEncoder, v: u64, width: u8) usize {
     return len
 }
 
+// A float always carries a fraction or exponent, so it reads back as a float.
 pub fn encode_float(self: &JsonEncoder, v: f64, width: u8) usize {
+    const is_nan = v != v
+    const is_inf = v != 0.0 and v * 0.5 == v
+    if is_nan or is_inf {
+        self.fail(JsonError.NonFiniteNumber)
+        return 0
+    }
     self.write_separator()
-    write_f64(self.w, v)
-    return 0
+    let buf = [0u8; 32]
+    const n = format_f64_shortest(v, buf).unwrap()
+    const text = buf[0..n] as String
+    self.w.write(buf[0..n])
+    if is_integral(text) {
+        write_str(self.w, ".0")
+    }
+    return n
 }
 
 pub fn encode_str(self: &JsonEncoder, v: String) usize {
@@ -389,44 +349,52 @@ pub fn encode_bytes(self: &JsonEncoder, v: u8[]) usize {
     return 0
 }
 
-pub fn begin_seq(self: &JsonEncoder, len: usize) usize {
+pub fn encode_date(self: &JsonEncoder, v: Date) usize {
     self.write_separator()
-    write_byte(self.w, '[')
-    self.stack[self.stack_len] = 0
-    self.stack_len = self.stack_len + 1
-    return 1
+    write_byte(self.w, '"')
+    v.format(self.w, "")
+    write_byte(self.w, '"')
+    return 0
+}
+
+pub fn encode_time(self: &JsonEncoder, v: Time) usize {
+    self.write_separator()
+    write_byte(self.w, '"')
+    v.format(self.w, "")
+    write_byte(self.w, '"')
+    return 0
+}
+
+pub fn encode_datetime(self: &JsonEncoder, v: DateTime) usize {
+    self.write_separator()
+    write_byte(self.w, '"')
+    v.format(self.w, "")
+    write_byte(self.w, '"')
+    return 0
+}
+
+pub fn encode_offset_datetime(self: &JsonEncoder, v: OffsetDateTime) usize {
+    self.write_separator()
+    write_byte(self.w, '"')
+    v.format(self.w, "")
+    write_byte(self.w, '"')
+    return 0
+}
+
+pub fn begin_seq(self: &JsonEncoder, len: usize) usize {
+    return self.open('[')
 }
 
 pub fn end_seq(self: &JsonEncoder) usize {
-    self.stack_len = self.stack_len - 1
-    if self.pretty {
-        if self.stack[self.stack_len] == 1 {
-            write_byte(self.w, '\n')
-            self.write_depth()
-        }
-    }
-    write_byte(self.w, ']')
-    return 1
+    return self.close(']')
 }
 
 pub fn begin_map(self: &JsonEncoder, len: usize) usize {
-    self.write_separator()
-    write_byte(self.w, '{')
-    self.stack[self.stack_len] = 0
-    self.stack_len = self.stack_len + 1
-    return 1
+    return self.open('{')
 }
 
 pub fn end_map(self: &JsonEncoder) usize {
-    self.stack_len = self.stack_len - 1
-    if self.pretty {
-        if self.stack[self.stack_len] == 1 {
-            write_byte(self.w, '\n')
-            self.write_depth()
-        }
-    }
-    write_byte(self.w, '}')
-    return 1
+    return self.close('}')
 }
 
 pub fn key(self: &JsonEncoder, name: String) usize {
@@ -438,12 +406,15 @@ pub fn key(self: &JsonEncoder, name: String) usize {
     if self.pretty {
         write_byte(self.w, ' ')
     }
-    // Mark that the value following this key should NOT get a separator
-    self.stack[self.stack_len - 1] = 0
+    self.stack[self.stack_len - 1] = 2
     return name.len + 3
 }
 
 pub fn is_human_readable(self: &JsonEncoder) bool { return true }
+
+pub fn has_error(self: &JsonEncoder) bool {
+    return self.error.is_some()
+}
 
 #implement(JsonEncoder, Encoder)
 
@@ -451,9 +422,9 @@ pub fn is_human_readable(self: &JsonEncoder) bool { return true }
 // JsonDecoder - implements Decoder for JSON input from a Reader
 // =============================================================================
 
-// Unified JSON decoder: handles both DOM parsing (parse_value) and streaming deserialization
-// (Decoder interface). Reads from a Reader with an internal 256-byte buffer and single-byte
-// lookahead.
+// Streaming JSON decoder over a Reader, with an internal 256-byte buffer and single-byte lookahead.
+// `peek_kind` scans a number, and a string when dates are parsed, ahead of the decode that takes
+// it. Call `deinit` when done.
 pub type JsonDecoder = struct {
     reader: Reader
     buf: [u8; 256]
@@ -462,13 +433,28 @@ pub type JsonDecoder = struct {
     peeked: u8?
     pos: usize
     allocator: &Allocator?
+    options: JsonOptions
     error: JsonError?
     // Comma state per nesting level: 0 = expect first, 1 = expect comma
     stack: [u8; 64]
     stack_len: usize
+    // `peek_kind` already read the comma before the value it looked at.
+    sep_done: bool
+    // Number text scanned ahead by `peek_kind`; `num_len` 0 when none.
+    num: [u8; 32]
+    num_len: usize
+    // String scanned ahead by `peek_kind`, or the last string a date decode read.
+    text: StringBuilder
+    has_text: bool
+    // The innermost key of each open object, tracked for DateParsing.Keys only.
+    keys: List(OwnedString)
 }
 
-pub fn json_decoder(r: Reader, allocator: &Allocator? = null) JsonDecoder {
+pub fn json_decoder(
+    r: Reader,
+    options: JsonOptions = json_options(),
+    allocator: &Allocator? = null,
+) JsonDecoder {
     return .{
         reader = r,
         buf = [0u8; 256],
@@ -477,10 +463,22 @@ pub fn json_decoder(r: Reader, allocator: &Allocator? = null) JsonDecoder {
         peeked = null,
         pos = 0,
         allocator = allocator,
+        options = options,
         error = null,
         stack = [0u8; 64],
         stack_len = 0,
+        sep_done = false,
+        num = [0u8; 32],
+        num_len = 0,
+        text = string_builder(0, allocator),
+        has_text = false,
+        keys = list(0, allocator),
     }
+}
+
+pub fn deinit(self: move JsonDecoder) {
+    self.text.deinit()
+    self.keys.deinit()
 }
 
 pub fn get_error(self: &JsonDecoder) JsonError? { return self.error }
@@ -563,360 +561,336 @@ fn skip_whitespace(self: &JsonDecoder) {
         }
 }
 
-// ---- DOM parsing ----
-
-fn parse_value(self: &JsonDecoder) Result(JsonValue, JsonError) {
-    self.skip_whitespace()
-    let c = self.peek()
-    if c.is_none() {
-        return Result.Err(JsonError.UnexpectedEnd)
-    }
-
-    if c.unwrap() == '"' {
-        return self.scan_string_value()
-    }
-    if c.unwrap() == '{' {
-        return self.scan_object()
-    }
-    if c.unwrap() == '[' {
-        return self.scan_array()
-    }
-    if c.unwrap() == 't' {
-        return self.scan_true()
-    }
-    if c.unwrap() == 'f' {
-        return self.scan_false()
-    }
-    if c.unwrap() == 'n' {
-        return self.scan_null()
-    }
-    if c.unwrap() == '-' {
-        return self.scan_number()
-    }
-    if c.unwrap() >= '0' and c.unwrap() <= '9' {
-        return self.scan_number()
-    }
-
-    return Result.Err(JsonError.UnexpectedChar)
-}
-
-fn scan_null(self: &JsonDecoder) Result(JsonValue, JsonError) {
-    if self.expect_string("null") == false {
-        return Result.Err(JsonError.UnexpectedChar)
-    }
-    return Result.Ok(JsonValue.Null)
-}
-
-fn scan_true(self: &JsonDecoder) Result(JsonValue, JsonError) {
-    if self.expect_string("true") == false {
-        return Result.Err(JsonError.UnexpectedChar)
-    }
-    return Result.Ok(JsonValue.Bool(true))
-}
-
-fn scan_false(self: &JsonDecoder) Result(JsonValue, JsonError) {
-    if self.expect_string("false") == false {
-        return Result.Err(JsonError.UnexpectedChar)
-    }
-    return Result.Ok(JsonValue.Bool(false))
-}
-
-fn scan_string_value(self: &JsonDecoder) Result(JsonValue, JsonError) {
-    let sb = string_builder(32, self.allocator)
-    if self.scan_string_into(sb.writer()) == false {
-        sb.deinit()
-        return Result.Err(JsonError.UnexpectedEnd)
-    }
-    let result = sb.to_string()
-    sb.deinit()
-    return Result.Ok(JsonValue.Str(move result))
-}
-
-// Parse a JSON string, writing unescaped content to w. Returns false on error.
+// Parse a JSON string, writing unescaped content to w. Returns false on error, with the error set.
 fn scan_string_into(self: &JsonDecoder, w: Writer) bool {
     if self.expect_char('"') == false {
+        self.set_error(JsonError.UnexpectedChar)
         return false
     }
 
     loop {
         let c = self.advance()
         if c.is_none() {
+            self.set_error(JsonError.UnexpectedEnd)
             return false
         }
         if c.unwrap() == '"' {
             return true
         }
-        if c.unwrap() == '\\' {
-            let escaped = self.advance()
-            if escaped.is_none() {
-                return false
-            }
-            if escaped.unwrap() == '"' {
-                write_byte(w, '"')
-            }
-            else if escaped.unwrap() == '\\' {
-                write_byte(w, '\\')
-            }
-            else if escaped.unwrap() == '/' {
-                write_byte(w, '/')
-            }
-            else if escaped.unwrap() == 'n' {
-                write_byte(w, '\n')
-            }
-            else if escaped.unwrap() == 'r' {
-                write_byte(w, '\r')
-            }
-            else if escaped.unwrap() == 't' {
-                write_byte(w, '\t')
-            }
-            else if escaped.unwrap() == 'b' {
-                write_byte(w, 8 as u8)
-            }
-            else if escaped.unwrap() == 'f' {
-                write_byte(w, 12 as u8)
-            }
-            else if escaped.unwrap() == 'u' {
-                // TODO: \uXXXX unicode escapes
-                return false
-            }
-            else {
-                return false
-            }
-        } else {
+        if c.unwrap() != '\\' {
             write_byte(w, c.unwrap())
+            continue
+        }
+        let escaped = self.advance()
+        if escaped.is_none() {
+            self.set_error(JsonError.UnexpectedEnd)
+            return false
+        }
+        const ok = escaped.unwrap() match {
+            '"' => write_unescaped(w, '"')
+            '\\' => write_unescaped(w, '\\')
+            '/' => write_unescaped(w, '/')
+            'n' => write_unescaped(w, '\n')
+            'r' => write_unescaped(w, '\r')
+            't' => write_unescaped(w, '\t')
+            'b' => write_unescaped(w, 8 as u8)
+            'f' => write_unescaped(w, 12 as u8)
+            'u' => self.scan_unicode_escape(w)
+            else => {
+                self.set_error(JsonError.InvalidEscape)
+                false
+            }
+        }
+        if !ok {
+            return false
         }
     }
     return false
 }
 
-// Scan a JSON number, copying digit bytes into buf. Returns the number of bytes written.
+fn write_unescaped(w: Writer, c: u8) bool {
+    write_byte(w, c)
+    return true
+}
+
+// Four hex digits after `\u`, or null with the error set.
+fn scan_hex4(self: &JsonDecoder) u32? {
+    let cp: u32 = 0
+    for _i in 0..4usize {
+        const c = self.advance()
+        if c.is_none() {
+            self.set_error(JsonError.UnexpectedEnd)
+            return null
+        }
+        const d = hex_digit(c.unwrap())
+        if d.is_none() {
+            self.set_error(JsonError.InvalidUnicode)
+            return null
+        }
+        cp = cp * 16 + d.unwrap()
+    }
+    return Some(cp)
+}
+
+// The rest of a `\uXXXX` escape, joining a UTF-16 surrogate pair, written as UTF-8.
+fn scan_unicode_escape(self: &JsonDecoder, w: Writer) bool {
+    const first = self.scan_hex4()
+    if first.is_none() {
+        return false
+    }
+    let cp = first.unwrap()
+    const is_low = cp >= 0xDC00 and cp <= 0xDFFF
+    if is_low {
+        self.set_error(JsonError.InvalidUnicode)
+        return false
+    }
+    const is_high = cp >= 0xD800 and cp <= 0xDBFF
+    if is_high {
+        if !self.expect_char('\\') or !self.expect_char('u') {
+            self.set_error(JsonError.InvalidUnicode)
+            return false
+        }
+        const second = self.scan_hex4()
+        if second.is_none() {
+            return false
+        }
+        const lo = second.unwrap()
+        if lo < 0xDC00 or lo > 0xDFFF {
+            self.set_error(JsonError.InvalidUnicode)
+            return false
+        }
+        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)
+    }
+    let utf8 = [0u8; 4]
+    const n = encode_char(cp as char, utf8)
+    w.write(utf8[0..n])
+    return true
+}
+
+// Scan a JSON number, copying its bytes into buf. Returns the number of bytes written; 0 with the
+// error set when there is no number or it does not fit `buf`.
 fn scan_number_into(self: &JsonDecoder, buf: u8[]) usize {
     let len: usize = 0
-
-    // Optional minus
     let c = self.peek()
-    if c.is_some() {
-        if c.unwrap() == '-' {
-            buf[len] = c.unwrap()
-            len = len + 1
-            self.advance()
-        }
+    if c.is_some() and c.unwrap() == '-' {
+        buf[0] = '-'
+        len = 1
+        self.advance()
+    }
+    len = self.scan_digits(buf, len)
+
+    c = self.peek()
+    if c.is_some() and c.unwrap() == '.' and len < buf.len {
+        buf[len] = '.'
+        len = len + 1
+        self.advance()
+        len = self.scan_digits(buf, len)
     }
 
-    // Integer digits
-    for i in 0..64u8 {
-        c = self.peek()
-        if c.is_none() {
-            break
-        }
-        if c.unwrap() < '0' {
-            break
-        }
-        if c.unwrap() > '9' {
-            break
-        }
+    c = self.peek()
+    if c.is_some() and (c.unwrap() == 'e' or c.unwrap() == 'E') and len < buf.len {
         buf[len] = c.unwrap()
         len = len + 1
         self.advance()
-    }
-
-    // Fractional part
-    c = self.peek()
-    if c.is_some() {
-        if c.unwrap() == '.' {
+        c = self.peek()
+        if c.is_some() and (c.unwrap() == '+' or c.unwrap() == '-') and len < buf.len {
             buf[len] = c.unwrap()
             len = len + 1
             self.advance()
-            for i in 0..64u8 {
-                c = self.peek()
-                if c.is_none() {
-                    break
-                }
-                if c.unwrap() < '0' {
-                    break
-                }
-                if c.unwrap() > '9' {
-                    break
-                }
-                buf[len] = c.unwrap()
-                len = len + 1
-                self.advance()
-            }
         }
+        len = self.scan_digits(buf, len)
     }
 
-    // Exponent part
     c = self.peek()
-    if c.is_some() {
-        if c.unwrap() == 'e' or c.unwrap() == 'E' {
-            buf[len] = c.unwrap()
-            len = len + 1
-            self.advance()
-            c = self.peek()
-            if c.is_some() {
-                if c.unwrap() == '+' or c.unwrap() == '-' {
-                    buf[len] = c.unwrap()
-                    len = len + 1
-                    self.advance()
-                }
-            }
-            for i in 0..64u8 {
-                c = self.peek()
-                if c.is_none() {
-                    break
-                }
-                if c.unwrap() < '0' {
-                    break
-                }
-                if c.unwrap() > '9' {
-                    break
-                }
-                buf[len] = c.unwrap()
-                len = len + 1
-                self.advance()
-            }
-        }
+    const too_long = c.is_some() and len == buf.len
+    if len == 0 or too_long {
+        self.set_error(JsonError.InvalidNumber)
+        return 0
     }
-
     return len
 }
 
-fn scan_number(self: &JsonDecoder) Result(JsonValue, JsonError) {
-    let num_buf = [0u8; 32]
-    let num_len = self.scan_number_into(slice_from_raw_parts(&num_buf[0], 32))
-    if num_len == 0 {
-        return Result.Err(JsonError.InvalidNumber)
+// Appends the digits ahead to `buf` from `len`, stopping when it is full. Returns the new length.
+fn scan_digits(self: &JsonDecoder, buf: u8[], len: usize) usize {
+    let n = len
+    while n < buf.len {
+        const c = self.peek()
+        if c.is_none() {
+            break
+        }
+        if c.unwrap() < '0' or c.unwrap() > '9' {
+            break
+        }
+        buf[n] = c.unwrap()
+        n = n + 1
+        self.advance()
     }
-    const result = parse_f64(slice_from_raw_parts(&num_buf[0], num_len))
-    if result.is_err() {
-        return Result.Err(JsonError.InvalidNumber)
-    }
-    return Result.Ok(JsonValue.Number(result.unwrap().0))
+    return n
 }
 
-fn scan_array(self: &JsonDecoder) Result(JsonValue, JsonError) {
-    self.expect_char('[')
-    self.skip_whitespace()
-
-    let items: List(JsonValue) = list(0, self.allocator)
-
-    let c = self.peek()
-    if c.is_some() {
-        if c.unwrap() == ']' {
-            self.advance()
-            return Result.Ok(JsonValue.Array(move items))
-        }
-    }
-
-    loop {
-        let elem = self.parse_value()
-        if elem.is_err() {
-            items.deinit()
-            return Result.Err(elem.unwrap_err())
-        }
-        items.push(elem.unwrap())
-
+// The next number's text: the one `peek_kind` scanned ahead, or scanned now. Valid until the next
+// number is scanned. Empty on error.
+fn number_text(self: &JsonDecoder) String {
+    if self.num_len == 0 {
         self.skip_whitespace()
-        c = self.peek()
-        if c.is_none() {
-            items.deinit()
-            return Result.Err(JsonError.UnexpectedEnd)
-        }
-        if c.unwrap() == ']' {
-            self.advance()
-            return Result.Ok(JsonValue.Array(move items))
-        }
-        if c.unwrap() == ',' {
-            self.advance()
-            continue
-        }
-
-        items.deinit()
-        return Result.Err(JsonError.UnexpectedChar)
+        self.num_len = self.scan_number_into(self.num[0..32])
     }
-
-    items.deinit()
-    return Result.Err(JsonError.UnexpectedEnd)
+    const text = self.num[0..self.num_len] as String
+    self.num_len = 0
+    return text
 }
 
-fn scan_object(self: &JsonDecoder) Result(JsonValue, JsonError) {
-    self.expect_char('{')
+// The next string, unescaped into `self.text`: the one `peek_kind` scanned ahead, or scanned now.
+fn read_text(self: &JsonDecoder) bool {
+    if self.has_text {
+        self.has_text = false
+        return true
+    }
+    self.text.clear()
     self.skip_whitespace()
+    return self.scan_string_into(self.text.writer())
+}
 
-    let obj: Dict(OwnedString, JsonValue) = dict(self.allocator)
+// ---- Nesting ----
 
-    let c = self.peek()
-    if c.is_some() {
-        if c.unwrap() == '}' {
-            self.advance()
-            return Result.Ok(JsonValue.Object(move obj))
-        }
+// Reads the comma before an element, unless `peek_kind` already did.
+fn consume_separator(self: &JsonDecoder) {
+    if self.sep_done {
+        self.sep_done = false
+        return
     }
+    self.separate()
+}
 
-    loop {
-        self.skip_whitespace()
-
-        // Key
-        let key_sb = string_builder(32, self.allocator)
-        if self.scan_string_into(key_sb.writer()) == false {
-            key_sb.deinit()
-            obj.deinit()
-            return Result.Err(JsonError.UnexpectedEnd)
-        }
-
-        self.skip_whitespace()
-        if self.expect_char(':') == false {
-            key_sb.deinit()
-            obj.deinit()
-            return Result.Err(JsonError.UnexpectedChar)
-        }
-
-        // Value
-        let val_result = self.parse_value()
-        if val_result.is_err() {
-            key_sb.deinit()
-            obj.deinit()
-            return Result.Err(val_result.unwrap_err())
-        }
-
-        let key = key_sb.to_string()
-        key_sb.deinit()
-        obj.set(key, val_result.unwrap())
-
-        self.skip_whitespace()
-        c = self.peek()
-        if c.is_none() {
-            obj.deinit()
-            return Result.Err(JsonError.UnexpectedEnd)
-        }
-        if c.unwrap() == '}' {
-            self.advance()
-            return Result.Ok(JsonValue.Object(move obj))
-        }
-        if c.unwrap() == ',' {
-            self.advance()
-            continue
-        }
-
-        obj.deinit()
-        return Result.Err(JsonError.UnexpectedChar)
+fn separate(self: &JsonDecoder) {
+    if self.stack_len == 0 {
+        return
     }
+    if self.stack[self.stack_len - 1] == 0 {
+        self.stack[self.stack_len - 1] = 1
+        return
+    }
+    self.skip_whitespace()
+    if self.expect_char(',') == false {
+        self.set_error(JsonError.UnexpectedChar)
+    }
+}
 
-    obj.deinit()
-    return Result.Err(JsonError.UnexpectedEnd)
+fn open(self: &JsonDecoder, bracket: u8) bool {
+    if self.error.is_some() {
+        return false
+    }
+    self.consume_separator()
+    self.skip_whitespace()
+    if self.expect_char(bracket) == false {
+        self.set_error(JsonError.UnexpectedChar)
+        return false
+    }
+    if self.stack_len >= MAX_DEPTH {
+        self.set_error(JsonError.MaxDepthExceeded)
+        return false
+    }
+    self.stack[self.stack_len] = 0
+    self.stack_len = self.stack_len + 1
+    return true
+}
+
+fn close(self: &JsonDecoder, bracket: u8) bool {
+    if self.error.is_some() {
+        return false
+    }
+    self.skip_whitespace()
+    const c = self.advance()
+    if c.is_none() {
+        self.set_error(JsonError.UnexpectedEnd)
+        return false
+    }
+    if c.unwrap() != bracket {
+        self.set_error(JsonError.UnexpectedChar)
+        return false
+    }
+    self.stack_len = self.stack_len - 1
+    return true
+}
+
+fn tracks_keys(self: &JsonDecoder) bool {
+    return self.options.dates match { Keys(_) => true, else => false }
+}
+
+// The innermost object key above the next value, when tracked.
+fn current_key(self: &JsonDecoder) String? {
+    const top = self.keys.last_ref()?
+    return Some(top.view)
 }
 
 // ---- Decoder interface ----
 
-fn consume_separator(self: &JsonDecoder) {
-    if self.stack_len > 0 {
-        if self.stack[self.stack_len - 1] == 1 {
-            self.skip_whitespace()
-            let _sep = self.expect_char(',')
-        } else {
-            self.stack[self.stack_len - 1] = 1
+pub fn peek_kind(self: &JsonDecoder) ValueKind {
+    if self.error.is_some() {
+        return ValueKind.End
+    }
+    if self.num_len > 0 {
+        return self.number_kind()
+    }
+    if self.has_text {
+        return temporal_kind(self.text.as_view())
+    }
+    self.skip_whitespace()
+    let c = self.peek()
+    if c.is_none() {
+        return ValueKind.End
+    }
+    if c.unwrap() == ']' or c.unwrap() == '}' {
+        return ValueKind.End
+    }
+    if !self.sep_done {
+        self.separate()
+        self.sep_done = true
+        self.skip_whitespace()
+        c = self.peek()
+        if c.is_none() {
+            self.set_error(JsonError.UnexpectedEnd)
+            return ValueKind.End
         }
     }
+    return c.unwrap() match {
+        '"' => self.string_kind()
+        '{' => ValueKind.Map
+        '[' => ValueKind.Seq
+        't' | 'f' => ValueKind.Bool
+        'n' => ValueKind.Null
+        '-' | '0'..='9' => {
+            self.num_len = self.scan_number_into(self.num[0..32])
+            self.number_kind()
+        }
+        else => {
+            self.set_error(JsonError.UnexpectedChar)
+            ValueKind.End
+        }
+    }
+}
+
+fn number_kind(self: &JsonDecoder) ValueKind {
+    if self.num_len == 0 {
+        return ValueKind.End
+    }
+    const text = self.num[0..self.num_len] as String
+    if is_integral(text) and whole_i64(text).is_some() {
+        return ValueKind.Int
+    }
+    return ValueKind.Float
+}
+
+fn string_kind(self: &JsonDecoder) ValueKind {
+    if !self.options.dates.applies(self.current_key()) {
+        return ValueKind.Str
+    }
+    self.text.clear()
+    if !self.scan_string_into(self.text.writer()) {
+        return ValueKind.End
+    }
+    self.has_text = true
+    return temporal_kind(self.text.as_view())
 }
 
 pub fn decode_null(self: &JsonDecoder) bool {
@@ -972,20 +946,12 @@ pub fn decode_int(self: &JsonDecoder, width: u8) i64 {
         return 0
     }
     self.consume_separator()
-    self.skip_whitespace()
-    let num_buf = [0u8; 32]
-    let num_len = self.scan_number_into(slice_from_raw_parts(&num_buf[0], 32))
-    if num_len == 0 {
+    const n = whole_i64(self.number_text())
+    if n.is_none() {
         self.set_error(JsonError.InvalidNumber)
         return 0
     }
-    const s = slice_from_raw_parts(&num_buf[0], num_len) as String
-    const result = parse_i64(s)
-    if result.is_err() {
-        self.set_error(JsonError.InvalidNumber)
-        return 0
-    }
-    return result.unwrap().0
+    return n.unwrap()
 }
 
 pub fn decode_uint(self: &JsonDecoder, width: u8) u64 {
@@ -993,16 +959,9 @@ pub fn decode_uint(self: &JsonDecoder, width: u8) u64 {
         return 0
     }
     self.consume_separator()
-    self.skip_whitespace()
-    let num_buf = [0u8; 32]
-    let num_len = self.scan_number_into(slice_from_raw_parts(&num_buf[0], 32))
-    if num_len == 0 {
-        self.set_error(JsonError.InvalidNumber)
-        return 0
-    }
-    const s = slice_from_raw_parts(&num_buf[0], num_len) as String
-    const result = parse_u64(s)
-    if result.is_err() {
+    const s = self.number_text()
+    const result = parse_u64(s.as_raw_bytes())
+    if result.is_err() or result.unwrap().1 != s.len {
         self.set_error(JsonError.InvalidNumber)
         return 0
     }
@@ -1014,15 +973,9 @@ pub fn decode_float(self: &JsonDecoder, width: u8) f64 {
         return 0.0
     }
     self.consume_separator()
-    self.skip_whitespace()
-    let num_buf = [0u8; 32]
-    let num_len = self.scan_number_into(slice_from_raw_parts(&num_buf[0], 32))
-    if num_len == 0 {
-        self.set_error(JsonError.InvalidNumber)
-        return 0.0
-    }
-    const result = parse_f64(slice_from_raw_parts(&num_buf[0], num_len))
-    if result.is_err() {
+    const s = self.number_text()
+    const result = parse_f64(s.as_raw_bytes())
+    if result.is_err() or result.unwrap().1 != s.len {
         self.set_error(JsonError.InvalidNumber)
         return 0.0
     }
@@ -1034,124 +987,125 @@ pub fn decode_str(self: &JsonDecoder, w: Writer) bool {
         return false
     }
     self.consume_separator()
-    self.skip_whitespace()
-    if self.scan_string_into(w) == false {
-        self.set_error(JsonError.UnexpectedEnd)
-        return false
+    if self.has_text {
+        self.has_text = false
+        w.write_str(self.text.as_view())
+        return true
     }
-    return true
+    self.skip_whitespace()
+    return self.scan_string_into(w)
 }
 
 pub fn decode_bytes(self: &JsonDecoder, w: Writer) bool {
     // JSON has no native bytes type. Decode an array of numbers.
-    if self.error.is_some() {
+    if !self.open('[') {
         return false
-    }
-    self.consume_separator()
-    self.skip_whitespace()
-    if self.expect_char('[') == false {
-        self.set_error(JsonError.UnexpectedChar)
-        return false
-    }
-    self.skip_whitespace()
-    let c = self.peek()
-    if c.is_some() {
-        if c.unwrap() == ']' {
-            self.advance()
-            return true
-        }
     }
     loop {
         self.skip_whitespace()
-        let num_buf = [0u8; 32]
-        let num_len = self.scan_number_into(slice_from_raw_parts(&num_buf[0], 32))
-        if num_len == 0 {
-            self.set_error(JsonError.InvalidNumber)
-            return false
-        }
-        const s = slice_from_raw_parts(&num_buf[0], num_len) as String
-        const result = parse_u64(s)
-        if result.is_err() {
-            self.set_error(JsonError.InvalidNumber)
-            return false
-        }
-        let byte = result.unwrap().0 as u8
-        w.write(slice_from_raw_parts(&byte, 1))
-        self.skip_whitespace()
-        c = self.peek()
+        let c = self.peek()
         if c.is_none() {
             self.set_error(JsonError.UnexpectedEnd)
             return false
         }
         if c.unwrap() == ']' {
-            self.advance()
-            return true
+            return self.close(']')
         }
-        if c.unwrap() == ',' {
-            self.advance()
-            continue
+        self.separate()
+        self.skip_whitespace()
+        const s = self.number_text()
+        const result = parse_u64(s.as_raw_bytes())
+        if result.is_err() or result.unwrap().1 != s.len or result.unwrap().0 > 255 {
+            self.set_error(JsonError.InvalidNumber)
+            return false
         }
-        self.set_error(JsonError.UnexpectedChar)
-        return false
+        let byte = result.unwrap().0 as u8
+        w.write(slice_from_raw_parts(&byte, 1))
     }
-    self.set_error(JsonError.UnexpectedEnd)
     return false
 }
 
-pub fn begin_seq(self: &JsonDecoder) usize {
+pub fn decode_date(self: &JsonDecoder) Date {
+    const r = if self.date_text() { parse_date(
+        self.text.as_view(),
+    ) } else { Err(TimeError.BadFormat) }
+    if r.is_err() {
+        self.set_error(JsonError.InvalidDate)
+        return date_from_epoch_day(0)
+    }
+    return r.unwrap()
+}
+
+pub fn decode_time(self: &JsonDecoder) Time {
+    const r = if self.date_text() { parse_time(
+        self.text.as_view(),
+    ) } else { Err(TimeError.BadFormat) }
+    if r.is_err() {
+        self.set_error(JsonError.InvalidDate)
+        return Time { ticks = 0 }
+    }
+    return r.unwrap()
+}
+
+pub fn decode_datetime(self: &JsonDecoder) DateTime {
+    const r = if self.date_text() {
+        parse_datetime(self.text.as_view())
+    } else {
+        Err(TimeError.BadFormat)
+    }
+    if r.is_err() {
+        self.set_error(JsonError.InvalidDate)
+        return datetime_from_ticks(0)
+    }
+    return r.unwrap()
+}
+
+pub fn decode_offset_datetime(self: &JsonDecoder) OffsetDateTime {
+    const r = if self.date_text() {
+        parse_offset_datetime(self.text.as_view())
+    } else {
+        Err(TimeError.BadFormat)
+    }
+    if r.is_err() {
+        self.set_error(JsonError.InvalidDate)
+        return OffsetDateTime { instant = UNIX_EPOCH, offset = 0 }
+    }
+    return r.unwrap()
+}
+
+// The string a date decode reads, in `self.text`.
+fn date_text(self: &JsonDecoder) bool {
     if self.error.is_some() {
-        return 0
+        return false
     }
     self.consume_separator()
-    self.skip_whitespace()
-    if self.expect_char('[') == false {
-        self.set_error(JsonError.UnexpectedChar)
-        return 0
-    }
-    self.stack[self.stack_len] = 0
-    self.stack_len = self.stack_len + 1
+    return self.read_text()
+}
+
+pub fn begin_seq(self: &JsonDecoder) usize {
+    self.open('[')
     return 0
 }
 
 pub fn end_seq(self: &JsonDecoder) bool {
-    if self.error.is_some() {
-        return false
-    }
-    self.skip_whitespace()
-    if self.expect_char(']') == false {
-        self.set_error(JsonError.UnexpectedChar)
-        return false
-    }
-    self.stack_len = self.stack_len - 1
-    return true
+    return self.close(']')
 }
 
 pub fn begin_map(self: &JsonDecoder) usize {
-    if self.error.is_some() {
-        return 0
+    if self.open('{') and self.tracks_keys() {
+        self.keys.push(from_view("", self.allocator))
     }
-    self.consume_separator()
-    self.skip_whitespace()
-    if self.expect_char('{') == false {
-        self.set_error(JsonError.UnexpectedChar)
-        return 0
-    }
-    self.stack[self.stack_len] = 0
-    self.stack_len = self.stack_len + 1
     return 0
 }
 
 pub fn end_map(self: &JsonDecoder) bool {
-    if self.error.is_some() {
-        return false
+    if self.tracks_keys() {
+        const k = self.keys.pop()
+        if k.is_some() {
+            k.unwrap().deinit()
+        }
     }
-    self.skip_whitespace()
-    if self.expect_char('}') == false {
-        self.set_error(JsonError.UnexpectedChar)
-        return false
-    }
-    self.stack_len = self.stack_len - 1
-    return true
+    return self.close('}')
 }
 
 // Read the next key in an object. Appends key text to sb. Returns false when '}' is reached (no
@@ -1184,26 +1138,26 @@ pub fn next_key(self: &JsonDecoder, sb: &StringBuilder) bool {
         }
     }
 
-    // Parse key string
-    if self.scan_string_into(sb.writer()) == false {
-        self.set_error(JsonError.UnexpectedEnd)
+    const start = sb.len
+    if !self.scan_string_into(sb.writer()) {
         return false
     }
 
-    // Expect colon
     self.skip_whitespace()
     if self.expect_char(':') == false {
         self.set_error(JsonError.UnexpectedChar)
         return false
     }
 
-    // Reset separator state so the following value decoder does not
-    // try to consume a comma before the value.  next_key already
-    // handles commas between key-value pairs.
+    // The value after the key takes no comma: next_key reads the commas between entries.
     if self.stack_len > 0 {
         self.stack[self.stack_len - 1] = 0
     }
-
+    if self.tracks_keys() and self.keys.len > 0 {
+        const name = sb.as_view()[start..sb.len]
+        const old = replace(&self.keys[self.keys.len - 1], from_view(name, self.allocator))
+        old.deinit()
+    }
     return true
 }
 
@@ -1212,126 +1166,94 @@ pub fn skip_value(self: &JsonDecoder) bool {
     if self.error.is_some() {
         return false
     }
+    self.consume_separator()
+    if self.num_len > 0 {
+        self.num_len = 0
+        return true
+    }
+    if self.has_text {
+        self.has_text = false
+        return true
+    }
+    return self.skip_raw()
+}
+
+// Skips the value ahead, nested values included, leaving the nesting state alone.
+fn skip_raw(self: &JsonDecoder) bool {
     self.skip_whitespace()
-    let c = self.peek()
+    const c = self.peek()
     if c.is_none() {
         self.set_error(JsonError.UnexpectedEnd)
         return false
     }
-
-    if c.unwrap() == '"' {
-        self.advance()
-        loop {
-            let ch = self.advance()
-            if ch.is_none() {
-                self.set_error(JsonError.UnexpectedEnd)
-                return false
-            }
-            if ch.unwrap() == '"' {
-                return true
-            }
-            if ch.unwrap() == '\\' {
-                let esc = self.advance()
-                if esc.is_none() {
-                    self.set_error(JsonError.UnexpectedEnd)
-                    return false
-                }
-            }
-        }
-        return false
+    return c.unwrap() match {
+        '"' => self.skip_string()
+        '{' => self.skip_container('}', true)
+        '[' => self.skip_container(']', false)
+        't' => self.expect_string("true")
+        'f' => self.expect_string("false")
+        'n' => self.expect_string("null")
+        else => self.number_text().len > 0
     }
-    if c.unwrap() == '{' {
-        self.advance()
-        self.skip_whitespace()
-        c = self.peek()
-        if c.is_some() {
-            if c.unwrap() == '}' {
-                self.advance()
-                return true
-            }
+}
+
+fn skip_string(self: &JsonDecoder) bool {
+    self.advance()
+    loop {
+        const ch = self.advance()
+        if ch.is_none() {
+            self.set_error(JsonError.UnexpectedEnd)
+            return false
         }
-        loop {
-            self.skip_whitespace()
-            if self.skip_value() == false {
+        if ch.unwrap() == '"' {
+            return true
+        }
+        if ch.unwrap() == '\\' and self.advance().is_none() {
+            self.set_error(JsonError.UnexpectedEnd)
+            return false
+        }
+    }
+    return false
+}
+
+// Skips an array, or an object when `keyed`, up to and including `bracket`.
+fn skip_container(self: &JsonDecoder, bracket: u8, keyed: bool) bool {
+    self.advance()
+    self.skip_whitespace()
+    const first = self.peek()
+    if first.is_some() and first.unwrap() == bracket {
+        self.advance()
+        return true
+    }
+    loop {
+        if keyed {
+            if !self.skip_raw() {
                 return false
             }
             self.skip_whitespace()
-            if self.expect_char(':') == false {
+            if !self.expect_char(':') {
                 self.set_error(JsonError.UnexpectedChar)
                 return false
             }
-            if self.skip_value() == false {
-                return false
-            }
-            self.skip_whitespace()
-            c = self.peek()
-            if c.is_none() {
-                self.set_error(JsonError.UnexpectedEnd)
-                return false
-            }
-            if c.unwrap() == '}' {
-                self.advance()
-                return true
-            }
-            if c.unwrap() == ',' {
-                self.advance()
-                continue
-            }
-            self.set_error(JsonError.UnexpectedChar)
+        }
+        if !self.skip_raw() {
             return false
         }
-        return false
-    }
-    if c.unwrap() == '[' {
-        self.advance()
         self.skip_whitespace()
-        c = self.peek()
-        if c.is_some() {
-            if c.unwrap() == ']' {
-                self.advance()
-                return true
-            }
+        const c = self.advance()
+        if c.is_none() {
+            self.set_error(JsonError.UnexpectedEnd)
+            return false
         }
-        loop {
-            if self.skip_value() == false {
-                return false
-            }
-            self.skip_whitespace()
-            c = self.peek()
-            if c.is_none() {
-                self.set_error(JsonError.UnexpectedEnd)
-                return false
-            }
-            if c.unwrap() == ']' {
-                self.advance()
-                return true
-            }
-            if c.unwrap() == ',' {
-                self.advance()
-                continue
-            }
+        if c.unwrap() == bracket {
+            return true
+        }
+        if c.unwrap() != ',' {
             self.set_error(JsonError.UnexpectedChar)
             return false
         }
-        return false
     }
-    if c.unwrap() == 't' {
-        return self.expect_string("true")
-    }
-    if c.unwrap() == 'f' {
-        return self.expect_string("false")
-    }
-    if c.unwrap() == 'n' {
-        return self.expect_string("null")
-    }
-    // Number
-    let num_buf = [0u8; 32]
-    let num_len = self.scan_number_into(slice_from_raw_parts(&num_buf[0], 32))
-    if num_len == 0 {
-        self.set_error(JsonError.InvalidNumber)
-        return false
-    }
-    return true
+    return false
 }
 
 pub fn has_error(self: &JsonDecoder) bool {
@@ -1344,135 +1266,137 @@ pub fn has_error(self: &JsonDecoder) bool {
 // Tests
 // =============================================================================
 
-test "parse null" {
-    let result = parse("null")
-    assert_true(result.is_ok(), "should parse null")
-    let val = result.unwrap()
-    assert_true(val.is_null(), "should be null")
+fn parsed_kind(text: String) ValueKind {
+    let v = parse_json(text).unwrap()
+    defer v.deinit()
+    return v.kind()
 }
 
-test "parse true" {
-    let result = parse("true")
-    assert_true(result.is_ok(), "should parse true")
-    let val = result.unwrap()
-    assert_true(val.is_bool(), "should be bool")
-    assert_eq(val.as_bool().unwrap(), true, "should be true")
+fn parsed_number(text: String) f64 {
+    let v = parse_json(text).unwrap()
+    defer v.deinit()
+    return v.as_f64().unwrap()
 }
 
-test "parse false" {
-    let result = parse("false")
-    assert_true(result.is_ok(), "should parse false")
-    let val = result.unwrap()
-    assert_eq(val.as_bool().unwrap(), false, "should be false")
+fn parse_error(text: String) JsonError {
+    const r = parse_json(text)
+    return r match {
+        Ok(v) => {
+            v.deinit()
+            panic("parsed")
+        }
+        Err(e) => e
+    }
 }
 
-test "parse string" {
-    let result = parse("\"hello\"")
-    assert_true(result.is_ok(), "should parse string")
-    let val = result.unwrap()
-    assert_true(val.is_string(), "should be string")
-    assert_eq(val.as_string().unwrap(), "hello", "should be hello")
-    val.deinit()
+test "scalars parse to their kinds" {
+    assert_true(parsed_kind("null") == ValueKind.Null, "null")
+    assert_true(parsed_kind("true") == ValueKind.Bool, "true")
+    assert_true(parsed_kind("42") == ValueKind.Int, "int")
+    assert_eq(parsed_number("-7"), -7.0, "negative int")
+    assert_true(parsed_kind("-3.14") == ValueKind.Float, "fraction makes a float")
+    const n = parsed_number("-3.14")
+    assert_true(n > -3.15 and n < -3.13, "~-3.14")
+    assert_true(parsed_kind("1e3") == ValueKind.Float, "exponent makes a float")
+    assert_true(parsed_kind("123456789012345678901") == ValueKind.Float, "past i64 is a float")
 }
 
-test "parse string with escapes" {
-    let result = parse("\"hello\\nworld\"")
-    assert_true(result.is_ok(), "should parse escaped string")
-    let val = result.unwrap()
-    assert_eq(val.as_string().unwrap(), "hello\nworld", "should have newline")
-    val.deinit()
+test "strings unescape, \\u escapes included" {
+    let v = parse_json("\"a\\nb \\u00e9 \\ud83d\\ude00\"").unwrap()
+    defer v.deinit()
+    assert_eq(v.as_string().unwrap(), "a\nb \u00e9 \u1F600", "escapes decoded")
+    assert_true(parse_error("\"\\ude00\"") == JsonError.InvalidUnicode, "lone low surrogate")
+    assert_true(parse_error("\"\\ud83d\"") == JsonError.InvalidUnicode, "lone high surrogate")
+    assert_true(parse_error("\"\\q\"") == JsonError.InvalidEscape, "bad escape")
 }
 
-test "parse empty array" {
-    let result = parse("[]")
-    assert_true(result.is_ok(), "should parse empty array")
-    let val = result.unwrap()
-    assert_true(val.is_array(), "should be array")
-    assert_eq(val.as_array().unwrap().len, 0, "should be empty")
-    val.deinit()
+test "arrays and objects nest, and object keys keep their order" {
+    let v = parse_json(
+        "{\"z\": [1, 2.5, \"x\", [], {}], \"a\": {\"k\": null}, \"m\": true}",
+    ).unwrap()
+    defer v.deinit()
+    assert_eq(v.len(), 3 as usize, "three keys")
+    const m = v.as_map().unwrap()
+    assert_true(m.entry_at(0).unwrap().key.view == "z", "first key")
+    assert_true(m.entry_at(1).unwrap().key.view == "a", "second key")
+    const z = v.get("z").unwrap()
+    assert_eq(z.len(), 5 as usize, "five elements")
+    assert_eq(z.at(0).unwrap().as_i64().unwrap(), 1i64, "int element")
+    assert_true(z.at(1).unwrap().is_float(), "float element")
+    assert_true(z.at(3).unwrap().is_array(), "empty array")
+    assert_true(z.at(4).unwrap().is_map(), "empty object")
+    assert_true(v.get("a").unwrap().get("k").unwrap().is_null(), "nested null")
 }
 
-test "parse empty object" {
-    let result = parse("{}")
-    assert_true(result.is_ok(), "should parse empty object")
-    let val = result.unwrap()
-    assert_true(val.is_object(), "should be object")
-    let obj = val.as_object().unwrap()
-    assert_eq(obj.len(), 0, "should be empty")
-    val.deinit()
+test "malformed documents are errors" {
+    assert_true(parse_error("") == JsonError.UnexpectedEnd, "empty")
+    assert_true(parse_error("null null") == JsonError.TrailingContent, "trailing")
+    assert_true(parse_error("[1 2]") == JsonError.UnexpectedChar, "missing comma")
+    assert_true(parse_error("[1,]") == JsonError.UnexpectedChar, "trailing comma")
+    assert_true(parse_error("{\"a\" 1}") == JsonError.UnexpectedChar, "missing colon")
+    assert_true(parse_error("[1") == JsonError.UnexpectedEnd, "unclosed")
+    let deep = string_builder(256)
+    defer deep.deinit()
+    for _i in 0..100usize {
+        deep.append("[")
+    }
+    assert_true(parse_error(deep.as_view()) == JsonError.MaxDepthExceeded, "depth")
 }
 
-test "parse nested object" {
-    let result = parse("{\"name\": \"flang\", \"version\": 2}")
-    assert_true(result.is_ok(), "should parse object")
-    let val = result.unwrap()
-    assert_true(val.is_object(), "should be object")
-    let obj = val.as_object().unwrap()
-    assert_eq(obj.len(), 2, "should have 2 entries")
-    assert_eq(obj.len(), 2, "should have 2 entries")
-    val.deinit()
-}
-
-test "stringify compact" {
-    let obj = json_object()
-    let o = obj.as_object().unwrap()
-    o.json_set("a", json_number(1.0))
-    o.json_set("b", json_bool(true))
-    o.json_set("c", JsonValue.Null)
+test "to_json writes compact text that parses back" {
+    let v = parse_json("{\"b\": [1, 2.0, \"s\\\"q\"], \"a\": {\"x\": null, \"y\": false}}").unwrap()
+    defer v.deinit()
+    let text = to_json(&v).unwrap()
+    defer text.deinit()
+    assert_eq(text.view, "{\"b\":[1,2.0,\"s\\\"q\"],\"a\":{\"x\":null,\"y\":false}}", "compact")
 
     let sb = string_builder(64)
-    stringify(&obj, sb.writer())
-    assert_true(sb.as_view().len > 0, "should produce output")
-    sb.deinit()
-    obj.deinit()
+    defer sb.deinit()
+    to_json(v.get("a").unwrap(), sb.writer(), true).unwrap()
+    assert_eq(sb.as_view(), "{\n  \"x\": null,\n  \"y\": false\n}", "pretty")
 }
 
-test "parse number" {
-    let result = parse("42")
-    assert_true(result.is_ok(), "should parse number")
-    let val = result.unwrap()
-    assert_true(val.is_number(), "should be number")
-    assert_eq(val.as_number().unwrap(), 42.0, "should be 42")
+test "a non-finite float is an encoder error" {
+    let sb = string_builder(16)
+    defer sb.deinit()
+    let zero = 0.0
+    const nan = zero / zero
+    const v = Value.Float(nan)
+    assert_true(to_json(&v, sb.writer()).unwrap_err() == JsonError.NonFiniteNumber, "nan")
 }
 
-test "parse negative number" {
-    let result = parse("-3.14")
-    assert_true(result.is_ok(), "should parse negative decimal")
-    let val = result.unwrap()
-    let n = val.as_number().unwrap()
-    assert_true(n > -3.15 and n < -3.13, "should be ~-3.14")
+test "dates are written as ISO 8601 strings and read back where options say" {
+    let v = value_map()
+    defer v.deinit()
+    v.set("day", Value.Date(date(2026, Month.October, 14).unwrap()))
+    v.set("at", Value.OffsetDateTime(parse_offset_datetime("2026-10-14T09:30:00+01:00").unwrap()))
+    v.set("note", value_str("2026-01-01"))
+    let text = to_json(&v).unwrap()
+    defer text.deinit()
+    assert_eq(
+        text.view,
+        "{\"day\":\"2026-10-14\",\"at\":\"2026-10-14T09:30:00+01:00\",\"note\":\"2026-01-01\"}",
+        "ISO text",
+    )
+
+    let off = parse_json(text.view).unwrap()
+    defer off.deinit()
+    assert_true(off.get("day").unwrap().is_string(), "Off keeps strings")
+
+    let all = parse_json(text.view, json_options(DateParsing.All)).unwrap()
+    defer all.deinit()
+    assert_true(all.get("day").unwrap().as_date().is_some(), "All reads the date")
+    assert_true(all.get("at").unwrap().as_offset_datetime().is_some(), "and the timestamp")
+    assert_true(all.get("note").unwrap().as_date().is_some(), "and every other date string")
+
+    const keys = ["day", "at"]
+    let some = parse_json(text.view, json_options(DateParsing.Keys(keys[..]))).unwrap()
+    defer some.deinit()
+    assert_true(some.get("day").unwrap().as_date().is_some(), "listed key read")
+    assert_true(some.get("note").unwrap().is_string(), "unlisted key kept")
 }
 
-test "trailing content is error" {
-    let result = parse("null null")
-    assert_true(result.is_err(), "should reject trailing content")
-}
-
-test "json_object builder" {
-    let val = json_object()
-    let obj = val.as_object().unwrap()
-    obj.json_set("key", json_string("value"))
-    assert_true(obj.json_contains("key"), "should contain key")
-    val.deinit()
-}
-
-test "json_object get_ref" {
-    let val = json_object()
-    let obj = val.as_object().unwrap()
-    obj.json_set("count", json_number(7.0))
-
-    const got = obj.json_get_ref("count")
-    assert_true(got.is_some(), "should return reference for existing key")
-    assert_true(got.unwrap().is_number(), "referenced value should be number")
-    assert_eq(got.unwrap().as_number().unwrap(), 7.0, "referenced value should equal 7")
-
-    const missing = obj.json_get_ref("missing")
-    assert_true(missing.is_none(), "missing key should return null")
-
-    val.deinit()
-}
-
-test "encoder compact" {
+test "encoder writes a stream by hand" {
     let sb = string_builder(64)
     let enc = json_encoder(sb.writer())
     let e = enc.encoder()
@@ -1486,25 +1410,56 @@ test "encoder compact" {
     sb.deinit()
 }
 
-test "decoder basic" {
-    let mr = mem_reader("{\"x\": 42, \"y\": true}")
+test "decoder reads a stream by hand" {
+    let mr = mem_reader("{\"x\": 42, \"skip\": [1, {\"a\": 2}], \"y\": true}")
     let dec = json_decoder(mr.reader())
+    defer dec.deinit()
     let d = dec.decoder()
     d.begin_map()
     let kb = string_builder(16)
+    defer kb.deinit()
 
-    kb.clear()
     assert_true(d.next_key(&kb), "should have key x")
     assert_eq(kb.as_view(), "x", "key should be x")
     assert_eq(d.decode_int(8), 42, "x should be 42")
 
     kb.clear()
+    assert_true(d.next_key(&kb), "should have key skip")
+    assert_true(d.skip_value(), "skipped")
+
+    kb.clear()
     assert_true(d.next_key(&kb), "should have key y")
-    assert_eq(kb.as_view(), "y", "key should be y")
     assert_eq(d.decode_bool(), true, "y should be true")
 
     assert_true(d.next_key(&kb) == false, "no more keys")
     d.end_map()
     assert_true(d.has_error() == false, "no errors")
-    kb.deinit()
+}
+
+test "transcode streams JSON to JSON" {
+    let mr = mem_reader("{\"a\": [1, 2.5, \"x\"], \"b\": {}}")
+    let dec = json_decoder(mr.reader())
+    defer dec.deinit()
+    let sb = string_builder(64)
+    defer sb.deinit()
+    let enc = json_encoder(sb.writer())
+    transcode(&dec.decoder(), &enc.encoder())
+    assert_true(!dec.has_error(), "decoded")
+    assert_eq(sb.as_view(), "{\"a\":[1,2.5,\"x\"],\"b\":{}}", "same document")
+}
+
+test "floats round-trip through JSON text exactly" {
+    let v = value_array()
+    defer v.deinit()
+    v.push(Value.Float(0.1 + 0.2))
+    v.push(Value.Float(1.0 / 3.0))
+    v.push(Value.Float(1e300))
+    v.push(Value.Float(-0.0))
+    let text = to_json(&v).unwrap()
+    defer text.deinit()
+    assert_eq(text.view, "[0.30000000000000004,0.3333333333333333,1e+300,-0.0]", "shortest text")
+    let back = parse_json(text.view).unwrap()
+    defer back.deinit()
+    assert_eq(back.at(0).unwrap().as_f64().unwrap(), 0.1 + 0.2, "0.1 + 0.2 exactly")
+    assert_eq(back.at(1).unwrap().as_f64().unwrap(), 1.0 / 3.0, "a third exactly")
 }

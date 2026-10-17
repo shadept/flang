@@ -1090,11 +1090,13 @@ test "an override stands in for a file that is not on disk" {
 // stdlib root leaves the prelude unresolved and `seed_stdlib` a no-op, so the module set is exactly
 // the override.
 fn tested_unit(source: String, tests: bool) AnalyzedProject {
-    let proj = parse_project("[project]
+    let proj = parse_project(
+        "[project]
 name = \"p\"
 kind = \"exe\"
 source = \"src/**/*.f\"
-")
+",
+    ).unwrap()
     defer proj.deinit()
     let ctx = resolve_ctx(&proj, "")
     defer ctx.deinit()
@@ -1138,7 +1140,9 @@ test \"t\" { let _v = helper() }
 }
 
 test "one file reached under two spellings loads once" {
-    let proj = parse_project("[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n")
+    let proj = parse_project(
+        "[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n",
+    ).unwrap()
     defer proj.deinit()
     let ctx = resolve_ctx(&proj, "")
     defer ctx.deinit()
@@ -1160,7 +1164,9 @@ test "re-analysis republishes diagnostics rather than appending to them" {
     // One warning stays one warning across a re-demand of the same sources. An empty stdlib root
     // leaves `core.prelude` unresolved and `seed_stdlib` a no-op, so the module set is exactly what
     // the override supplies.
-    let proj = parse_project("[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n")
+    let proj = parse_project(
+        "[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n",
+    ).unwrap()
     defer proj.deinit()
     let ctx = resolve_ctx(&proj, "")
     defer ctx.deinit()
@@ -1189,7 +1195,9 @@ test "re-analysis republishes diagnostics rather than appending to them" {
 test "an edit adds, removes and leaves declarations alone" {
     // A declaration the edit does not touch answers to the id it already had, across an insertion
     // above it, a removal beside it, and a use of the removed name.
-    let proj = parse_project("[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n")
+    let proj = parse_project(
+        "[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n",
+    ).unwrap()
     defer proj.deinit()
     let ctx = resolve_ctx(&proj, "")
     defer ctx.deinit()

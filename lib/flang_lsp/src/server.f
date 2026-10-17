@@ -18,6 +18,7 @@ import std.collections.list
 import std.collections.set
 import std.encoding.codec
 import std.encoding.json
+import std.encoding.value
 import std.io.file
 import std.io.fs
 import std.io.reader
@@ -118,7 +119,7 @@ pub fn run(self: &LspServer) i32 {
         if got.is_err() {
             got.unwrap_err() match {
                 BadJson | BadEnvelope => {
-                    const nul = json_null()
+                    const nul = Value.Null
                     write_error(self.writer, &nul, PARSE_ERROR, "invalid message")
                 }
                 else => {
@@ -184,11 +185,10 @@ fn access_log(self: &LspServer, dir: String, msg: &RpcMessage, elapsed_us: u64?)
     sb.append(msg.method() ?? "<reply>")
     const id = msg.id()
     if id.is_some() {
-        const n = id.unwrap().as_number()
+        const n = id.unwrap().as_i64()
         if n.is_some() {
             sb.append(" #")
-            const nv: f64 = n.unwrap()
-            sb.append(nv as i64)
+            sb.append(n.unwrap())
         } else {
             sb.append(" #")
             sb.append(id.unwrap().as_string() ?? "?")
@@ -209,31 +209,31 @@ fn access_log(self: &LspServer, dir: String, msg: &RpcMessage, elapsed_us: u64?)
 
 // ---- JSON param helpers ----
 
-fn get_member(v: &JsonValue, name: String) &JsonValue? {
-    return v.as_object() match {
-        Some(o) => o.json_get_ref(name)
-        None => null
-    }
+fn get_member(v: &Value, name: String) &Value? {
+    return v.get(name)
 }
 
-fn get_str(v: &JsonValue, name: String) String? {
+fn get_str(v: &Value, name: String) String? {
     return get_member(v, name) match {
         Some(m) => m.as_string()
         None => null
     }
 }
 
-fn get_i64(v: &JsonValue, name: String) i64? {
+fn get_i64(v: &Value, name: String) i64? {
     const m = get_member(v, name)
     if m.is_none() {
         return null
     }
-    const n = m.unwrap().as_number()
-    if n.is_none() {
+    const n = m.unwrap().as_i64()
+    if n.is_some() {
+        return n
+    }
+    const f = m.unwrap().as_f64()
+    if f.is_none() {
         return null
     }
-    const f: f64 = n.unwrap()
-    const whole: i64 = f as i64
+    const whole: i64 = f.unwrap() as i64
     return Some(whole)
 }
 
@@ -253,8 +253,8 @@ fn doc_uri(msg: &RpcMessage) String? {
 // ---- Raw JSON writing ----
 //
 // Payload-bearing messages (diagnostics, symbols, progress, status) are encoded straight into a
-// StringBuilder envelope rather than built as JsonValue trees - the payloads are big and the tree
-// would be allocated only to be serialized once.
+// StringBuilder envelope rather than built as Value trees - the payloads are big and the tree would
+// be allocated only to be serialized once.
 
 fn envelope_notification(e: &Encoder, method: String) {
     e.begin_map(0)
@@ -265,7 +265,7 @@ fn envelope_notification(e: &Encoder, method: String) {
     e.key("params")
 }
 
-fn envelope_response(e: &Encoder, id: &JsonValue) {
+fn envelope_response(e: &Encoder, id: &Value) {
     e.begin_map(0)
     e.key("jsonrpc")
     e.encode_str("2.0")
@@ -425,8 +425,8 @@ fn progress_begin(self: &LspServer, title: String) OwnedString {
     self.next_id = self.next_id + 1
     const token = $"flang-{self.next_id}"
 
-    let params = json_object()
-    params.as_object().unwrap().json_set("token", json_string(token.view))
+    let params = value_map()
+    params.set("token", value_str(token.view))
     write_request(self.writer, self.next_id, "window/workDoneProgress/create", Some(&params))
     params.deinit()
 
@@ -513,7 +513,7 @@ fn send_status(self: &LspServer) {
 // selects the byte-offset fast path. Absent or without utf-8 (VS Code), utf-16 is the mandatory
 // default.
 // The member at a dotted path of object keys, or null where the path leaves the object.
-fn member_path(params: &JsonValue?, path: String[]) &JsonValue? {
+fn member_path(params: &Value?, path: String[]) &Value? {
     if params.is_none() {
         return null
     }
@@ -529,7 +529,7 @@ fn member_path(params: &JsonValue?, path: String[]) &JsonValue? {
 }
 
 // `capabilities.textDocument.definition.linkSupport`, false when absent.
-fn definition_link_support(params: &JsonValue?) bool {
+fn definition_link_support(params: &Value?) bool {
     const link = member_path(params, ["capabilities", "textDocument", "definition", "linkSupport"])
     return link match {
         Some(v) => v.as_bool() ?? false
@@ -537,7 +537,7 @@ fn definition_link_support(params: &JsonValue?) bool {
     }
 }
 
-fn negotiate_encoding(params: &JsonValue?) PositionEncoding {
+fn negotiate_encoding(params: &Value?) PositionEncoding {
     const encodings = member_path(params, ["capabilities", "general", "positionEncodings"])
     if encodings.is_none() {
         return PositionEncoding.Utf16
@@ -559,7 +559,7 @@ fn negotiate_encoding(params: &JsonValue?) PositionEncoding {
 
 // Workspace folder names, for the status notification. `workspaceFolders` when present, else the
 // last segment of `rootUri`'s path.
-fn collect_folders(self: &LspServer, params: &JsonValue?) {
+fn collect_folders(self: &LspServer, params: &Value?) {
     if params.is_none() {
         return
     }
@@ -599,39 +599,39 @@ fn collect_folders(self: &LspServer, params: &JsonValue?) {
     p.deinit()
 }
 
-fn initialize_result(self: &LspServer) JsonValue {
-    let sync = json_object()
-    sync.as_object().unwrap().json_set("openClose", json_bool(true))
-    sync.as_object().unwrap().json_set("change", json_number(1.0)) // TextDocumentSyncKind.Full
-    sync.as_object().unwrap().json_set("save", json_bool(true))
+fn initialize_result(self: &LspServer) Value {
+    let sync = value_map()
+    sync.set("openClose", Value.Bool(true))
+    sync.set("change", Value.Int(1)) // TextDocumentSyncKind.Full
+    sync.set("save", Value.Bool(true))
 
-    let caps = json_object()
+    let caps = value_map()
     const enc_name = if is_utf8_encoding(self.encoding) { "utf-8" } else { "utf-16" }
-    caps.as_object().unwrap().json_set("positionEncoding", json_string(enc_name))
-    caps.as_object().unwrap().json_set("textDocumentSync", sync)
-    caps.as_object().unwrap().json_set("documentSymbolProvider", json_bool(true))
-    caps.as_object().unwrap().json_set("foldingRangeProvider", json_bool(true))
-    caps.as_object().unwrap().json_set("workspaceSymbolProvider", json_bool(true))
-    caps.as_object().unwrap().json_set("hoverProvider", json_bool(true))
-    caps.as_object().unwrap().json_set("definitionProvider", json_bool(true))
-    caps.as_object().unwrap().json_set("typeDefinitionProvider", json_bool(true))
-    caps.as_object().unwrap().json_set("referencesProvider", json_bool(true))
-    caps.as_object().unwrap().json_set("inlayHintProvider", json_bool(true))
-    caps.as_object().unwrap().json_set("documentFormattingProvider", json_bool(true))
-    let trig = json_array()
-    trig.as_array().unwrap().push(json_string("("))
-    trig.as_array().unwrap().push(json_string(","))
-    let sig = json_object()
-    sig.as_object().unwrap().json_set("triggerCharacters", trig)
-    caps.as_object().unwrap().json_set("signatureHelpProvider", sig)
+    caps.set("positionEncoding", value_str(enc_name))
+    caps.set("textDocumentSync", sync)
+    caps.set("documentSymbolProvider", Value.Bool(true))
+    caps.set("foldingRangeProvider", Value.Bool(true))
+    caps.set("workspaceSymbolProvider", Value.Bool(true))
+    caps.set("hoverProvider", Value.Bool(true))
+    caps.set("definitionProvider", Value.Bool(true))
+    caps.set("typeDefinitionProvider", Value.Bool(true))
+    caps.set("referencesProvider", Value.Bool(true))
+    caps.set("inlayHintProvider", Value.Bool(true))
+    caps.set("documentFormattingProvider", Value.Bool(true))
+    let trig = value_array()
+    trig.push(value_str("("))
+    trig.push(value_str(","))
+    let sig = value_map()
+    sig.set("triggerCharacters", trig)
+    caps.set("signatureHelpProvider", sig)
 
-    let info = json_object()
-    info.as_object().unwrap().json_set("name", json_string("flang-lsp"))
-    info.as_object().unwrap().json_set("version", json_string(self.version.view))
+    let info = value_map()
+    info.set("name", value_str("flang-lsp"))
+    info.set("version", value_str(self.version.view))
 
-    let root = json_object()
-    root.as_object().unwrap().json_set("capabilities", caps)
-    root.as_object().unwrap().json_set("serverInfo", info)
+    let root = value_map()
+    root.set("capabilities", caps)
+    root.set("serverInfo", info)
     return root
 }
 
@@ -654,7 +654,7 @@ fn on_initialize(self: &LspServer, msg: &RpcMessage) {
 fn on_shutdown(self: &LspServer, msg: &RpcMessage) {
     self.shutdown_requested = true
     if msg.id().is_some() {
-        const nul = json_null()
+        const nul = Value.Null
         write_response(self.writer, msg.id().unwrap(), &nul)
     }
 }
@@ -1161,7 +1161,7 @@ fn request_ctx(self: &LspServer, msg: &RpcMessage) ReqCtx? {
 }
 
 // A `{line, character}` object as a Position, or null when either field is missing.
-fn pos_of(v: &JsonValue) Position? {
+fn pos_of(v: &Value) Position? {
     const line = get_i64(v, "line")
     const ch = get_i64(v, "character")
     if line.is_none() or ch.is_none() {
@@ -1209,7 +1209,7 @@ fn cursor_at(self: &LspServer, msg: &RpcMessage) Cursor? {
 }
 
 fn respond_null(self: &LspServer, msg: &RpcMessage) {
-    const nul = json_null()
+    const nul = Value.Null
     write_response(self.writer, msg.id().unwrap(), &nul)
 }
 
@@ -2015,7 +2015,7 @@ fn on_inlay_hint(self: &LspServer, msg: &RpcMessage) {
     write_frame(self.writer, sb.as_view())
 }
 
-fn range_bound(range: &JsonValue, key: String) Position? {
+fn range_bound(range: &Value, key: String) Position? {
     return get_member(range, key) match {
         Some(v) => pos_of(v)
         None => null
@@ -2187,14 +2187,17 @@ fn apply_project_fmt(path: String, cfg: &FmtConfig) OwnedString {
         return from_view("")
     }
     let toml = got.unwrap()
-    let proj = parse_project(toml.view)
+    defer toml.deinit()
+    const parsed = parse_project(toml.view)
+    if parsed.is_err() {
+        return from_view("")
+    }
+    let proj = parsed.unwrap()
+    defer proj.deinit()
     for &e in proj.fmt {
         const _ok = set_option(cfg, e.key.view, e.value.view)
     }
-    const name = from_view(proj.name.view)
-    proj.deinit()
-    toml.deinit()
-    return name
+    return from_view(proj.name.view)
 }
 
 // =============================================================================
@@ -2492,7 +2495,7 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
     let origin = &unit.project_origin
     origin.push(true)
     let index = build_indexes(&unit)
-    let proj = parse_project("[project]\nname = \"t\"\n")
+    let proj = parse_project("[project]\nname = \"t\"\n").unwrap()
     let ctx = resolve_ctx(&proj, "")
     proj.deinit()
     srv.ws.projects.push(OpenProject {
@@ -2539,7 +2542,7 @@ fn demo_project_into(srv: &LspServer) {
     origin.push(true)
     origin.push(false)
     let index = build_indexes(&unit)
-    let proj = parse_project("[project]\nname = \"t\"\n")
+    let proj = parse_project("[project]\nname = \"t\"\n").unwrap()
     let ctx = resolve_ctx(&proj, "")
     proj.deinit()
     srv.ws.projects.push(OpenProject {
@@ -2663,7 +2666,7 @@ fn demo_import_run(request: String, out: &StringBuilder, links: bool = false) {
     origin.push(true)
     origin.push(false)
     let index = build_indexes(&unit)
-    let proj = parse_project("[project]\nname = \"t\"\n")
+    let proj = parse_project("[project]\nname = \"t\"\n").unwrap()
     let ctx = resolve_ctx(&proj, "")
     proj.deinit()
     srv.ws.projects.push(OpenProject {

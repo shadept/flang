@@ -1979,7 +1979,7 @@ An `if` with no `else` is not an expression and yields no value, so it is never 
 Every arm of a `match` used as an expression must join to one type, under the same both-directions rule as E2074.
 
 ```flang
-fn as_bool(self: &JsonValue) bool? {
+fn as_bool(self: &Value) bool? {
     return self.* match {
         Bool(v) => v,           // bool
         else => null,           // Option(?) — joins to Option(bool)

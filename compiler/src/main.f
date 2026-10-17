@@ -568,7 +568,12 @@ fn build_project(opts: &BuildOpts) i32 {
     let toml = toml_res.unwrap()
     defer toml.deinit()
 
-    let proj = parse_project(toml.view)
+    const parsed = parse_project(toml.view)
+    if parsed.is_err() {
+        report_manifest_error(parsed.unwrap_err())
+        return 1
+    }
+    let proj = parsed.unwrap()
     defer proj.deinit()
 
     let sources = glob_sources(proj.source.view)
@@ -994,6 +999,12 @@ fn report_read_error(path: String, e: FileError) {
     println(m.view)
 }
 
+fn report_manifest_error(e: ManifestError) {
+    const m = $"flang: invalid flang.toml: {e}"
+    defer m.deinit()
+    println(m.view)
+}
+
 fn report_build_error(e: &BuildError, path: String) {
     const label = e.* match {
         NoCompilerFound => "no C compiler found"
@@ -1070,7 +1081,12 @@ fn run_fmt(cli: &Cli) i32 {
         }
         let toml = toml_res.unwrap()
         defer toml.deinit()
-        let proj = parse_project(toml.view)
+        const parsed = parse_project(toml.view)
+        if parsed.is_err() {
+            report_manifest_error(parsed.unwrap_err())
+            return 1
+        }
+        let proj = parsed.unwrap()
         defer proj.deinit()
         install(&project_name, from_view(proj.name.view))
         set_project(&cfg, project_name.view)

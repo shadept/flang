@@ -1488,6 +1488,11 @@ fn parse_binary_expression(self: &Parser, parent_precedence: i32) CstNodeId {
             break
         }
         if k == TokenKind.DotDot {
+            // A `..` opening a line starts a prefix range there (a match arm's `..0x20` pattern),
+            // not a range over the line above.
+            if self.at_line_start() {
+                break
+            }
             // Range - right side optional.
             let b = self.open(NodeKind.RangeExpr)
             b.start = self.tree.nodes[left].start as usize

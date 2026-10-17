@@ -74,7 +74,7 @@ type Result = enum(T, E) { Ok(T), Err(E) }
 type UnmanagedSet = struct(T: Hash + Eq) { __inner: UnmanagedDict(T, u8) }
 ```
 
-**Instantiation uses parentheses**: `Option(i32)`, `List(String)`, `Result(JsonValue, JsonError)`.
+**Instantiation uses parentheses**: `Option(i32)`, `List(String)`, `Result(Value, JsonError)`.
 
 Inference is multi-phase: constraints flow bidirectionally from return positions, parameter annotations, and assignment targets. Untyped integer and float literals are placeholders that must unify with a concrete type before compilation completes.
 
@@ -723,7 +723,7 @@ Implicit: `String` automatically accepted where `u8[]` expected. Reverse (`u8[]`
 ### 7.1 Functions
 
 - Overloading supported by name and parameter types. The type checker selects the strictest applicable overload.
-- **Default parameters**: `fn foo(x: i32, y: i32 = 10)`. Evaluated fresh at each call site. Must follow required parameters.
+- **Default parameters**: `fn foo(x: i32, y: i32 = 10)`. Evaluated fresh at each call site, with its names resolved as at the declaration: the declaring module's imports, none of the caller's locals. Must follow required parameters.
 - **Named arguments**: `foo(y = 20, x = 10)`. Positional args first. Not supported for indirect calls.
 - **Variadic parameters**: `fn bar(..args: i32)`. Received as `i32[]` slice. One variadic, must be last. Foreign functions use C-style `...`.
 - All three are caller-side transformations — lowering sees a normal positional argument list.
@@ -872,8 +872,8 @@ Match is an expression — all arms unify to a common type. Enum references auto
 **Binding mode**: a pattern variable bound to an *aggregate* (struct, enum payload, tuple element, array) names the scrutinee's own storage — `&binding` is a pointer into the scrutinee, and writing through the binding is visible to the matched value. This is what lets an accessor hand out a handle into a payload:
 
 ```
-pub fn as_object(self: &JsonValue) &Dict(OwnedString, JsonValue)? {
-    return self.* match { Object(obj) => Some(&obj), else => null }
+pub fn as_map(self: &Value) &OrderedDict(OwnedString, Value)? {
+    return self.* match { Map(d) => Some(&d), else => null }
 }
 ```
 
@@ -1121,8 +1121,8 @@ Requires `import std.test`. Test blocks are module-scoped, not exported. Run wit
 ```
 core/             runtime bindings, platform integration (auto-imported)
 std/              standard modules: text (string, string_builder), allocator, option, result, ...
-std/collections/  List, Dict, Set, Stack, Deque, Bitset, the iterator combinators, Journal, MultiMap, StringPool
-std/encoding/     serialization (JSON, codec)
+std/collections/  List, Dict, OrderedDict, Set, Stack, Deque, Bitset, the iterator combinators, Journal, MultiMap, StringPool
+std/encoding/     serialization: the codec interfaces, the Value tree every format reads into, JSON, TOML, CSV
 std/io/           input/output, filesystem, readers/writers
 std/time/         Date, Time, DateTime, Instant, OffsetDateTime, Duration, Period, TimeZone, clocks
 ```
@@ -1137,9 +1137,9 @@ the buffer and every operation on it; the ones that allocate take the allocator 
 `UnmanagedList` with an allocator and allocates through that (`xs.push(v)`), reaching the storage
 through `op_deref` so `xs.len`, `xs.pop()` and the rest read the same on either. The storage field
 is `__storage`: readable, as every field is, and by convention not touched. A null `&Allocator` is
-the global allocator (§4.1), so a zero-initialised `List` is a valid empty list. `Dict`, `Set`,
-`Stack` and `Deque` follow the same split (`UnmanagedDict`, `UnmanagedSet`, `UnmanagedStack`,
-`UnmanagedDeque`); the set and stack flavours wrap the dict and list of the matching flavour, so
+the global allocator (§4.1), so a zero-initialised `List` is a valid empty list. `Dict`,
+`OrderedDict`, `Set`, `Stack` and `Deque` follow the same split (`UnmanagedDict`,
+`UnmanagedOrderedDict`, `UnmanagedSet`, `UnmanagedStack`, `UnmanagedDeque`); the set and stack flavours wrap the dict and list of the matching flavour, so
 an unmanaged composite stores no allocator at any depth. Where such a composite knows its
 allocator for a scope, `s.items.managed(s.allocator)` makes a `ListRef(T)` (`DictRef(K, V)` for a
 dict): a managed handle holding the storage by reference, so it reads and grows the field in place

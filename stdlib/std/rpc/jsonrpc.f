@@ -18,6 +18,7 @@ import std.collections.dict
 import std.conv
 import std.encoding.codec
 import std.encoding.json
+import std.encoding.value
 import std.enum
 import std.io.reader
 import std.io.writer
@@ -146,21 +147,18 @@ pub fn write_frame(w: Writer, payload: String) {
 // One parsed JSON-RPC message. Owns the whole document; accessors return borrowed views/references
 // into it, valid until deinit.
 pub type RpcMessage = struct {
-    doc: JsonValue
+    doc: Value
 }
 
 pub fn deinit(self: move RpcMessage) {
     self.doc.deinit()
 }
 
-fn field_ref(self: &RpcMessage, name: String) &JsonValue? {
-    return self.doc.as_object() match {
-        Some(o) => o.json_get_ref(name)
-        None => null
-    }
+fn field_ref(self: &RpcMessage, name: String) &Value? {
+    return self.doc.get(name)
 }
 
-pub fn id(self: &RpcMessage) &JsonValue? {
+pub fn id(self: &RpcMessage) &Value? {
     return self.field_ref("id")
 }
 
@@ -171,15 +169,15 @@ pub fn method(self: &RpcMessage) String? {
     }
 }
 
-pub fn params(self: &RpcMessage) &JsonValue? {
+pub fn params(self: &RpcMessage) &Value? {
     return self.field_ref("params")
 }
 
-pub fn result(self: &RpcMessage) &JsonValue? {
+pub fn result(self: &RpcMessage) &Value? {
     return self.field_ref("result")
 }
 
-pub fn error(self: &RpcMessage) &JsonValue? {
+pub fn error(self: &RpcMessage) &Value? {
     return self.field_ref("error")
 }
 
@@ -206,18 +204,15 @@ pub fn is_response(self: &RpcMessage) bool {
 
 // Parse one message body. Requires a JSON object with "jsonrpc": "2.0".
 pub fn parse_message(payload: String, allocator: &Allocator? = null) Result(RpcMessage, RpcError) {
-    const parsed = parse(payload, allocator)
+    const parsed = parse_json(payload, json_options(), allocator)
     if parsed.is_err() {
         return Err(RpcError.BadJson)
     }
     let doc = parsed.unwrap()
 
-    const versioned = doc.as_object() match {
-        Some(o) => o.json_get_ref("jsonrpc") match {
-            Some(v) => v.as_string() match {
-                Some(s) => s == "2.0"
-                None => false
-            }
+    const versioned = doc.get("jsonrpc") match {
+        Some(v) => v.as_string() match {
+            Some(s) => s == "2.0"
             None => false
         }
         None => false
@@ -245,7 +240,7 @@ pub fn read_message(r: Reader, allocator: &Allocator? = null) Result(RpcMessage,
 // Envelope - serialize side
 // =============================================================================
 
-pub fn write_request(w: Writer, id: i64, method: String, params: &JsonValue? = null) {
+pub fn write_request(w: Writer, id: i64, method: String, params: &Value? = null) {
     let sb = string_builder(128)
     defer sb.deinit()
     let jenc = json_encoder(sb.writer())
@@ -265,7 +260,7 @@ pub fn write_request(w: Writer, id: i64, method: String, params: &JsonValue? = n
     write_frame(w, sb.as_view())
 }
 
-pub fn write_notification(w: Writer, method: String, params: &JsonValue? = null) {
+pub fn write_notification(w: Writer, method: String, params: &Value? = null) {
     let sb = string_builder(128)
     defer sb.deinit()
     let jenc = json_encoder(sb.writer())
@@ -283,7 +278,7 @@ pub fn write_notification(w: Writer, method: String, params: &JsonValue? = null)
     write_frame(w, sb.as_view())
 }
 
-pub fn write_response(w: Writer, id: &JsonValue, result: &JsonValue) {
+pub fn write_response(w: Writer, id: &Value, result: &Value) {
     let sb = string_builder(128)
     defer sb.deinit()
     let jenc = json_encoder(sb.writer())
@@ -299,7 +294,7 @@ pub fn write_response(w: Writer, id: &JsonValue, result: &JsonValue) {
     write_frame(w, sb.as_view())
 }
 
-pub fn write_error(w: Writer, id: &JsonValue, code: i64, message: String) {
+pub fn write_error(w: Writer, id: &Value, code: i64, message: String) {
     let sb = string_builder(128)
     defer sb.deinit()
     let jenc = json_encoder(sb.writer())
@@ -393,7 +388,7 @@ test "parse request" {
     assert_true(!msg.is_notification(), "not a notification")
     assert_eq(msg.method().unwrap(), "initialize", "method text")
     assert_true(msg.params().is_some(), "params present")
-    assert_true(msg.id().unwrap().is_number(), "id is a number")
+    assert_true(msg.id().unwrap().is_int(), "id is an integer")
 }
 
 test "parse notification" {
@@ -437,14 +432,14 @@ test "write_notification exact bytes" {
     )
 }
 
-test "write_response echoes integer id without fraction" {
+test "write_response echoes an integer id as an integer" {
     const got = parse_message("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"shutdown\"}")
     let msg = got.unwrap()
     defer msg.deinit()
 
     let sb = string_builder(64)
     defer sb.deinit()
-    const nul = json_null()
+    const nul = Value.Null
     write_response(sb.writer(), msg.id().unwrap(), &nul)
     assert_true(contains(sb.as_view(), "\"id\":7,"), "id 7 comes back as 7")
     assert_true(contains(sb.as_view(), "\"result\":null"), "null result is explicit")
@@ -457,7 +452,7 @@ test "write_response echoes string id verbatim" {
 
     let sb = string_builder(64)
     defer sb.deinit()
-    const nul = json_null()
+    const nul = Value.Null
     write_response(sb.writer(), msg.id().unwrap(), &nul)
     assert_true(contains(sb.as_view(), "\"id\":\"a-1\""), "string id round-trips")
 }
@@ -465,7 +460,7 @@ test "write_response echoes string id verbatim" {
 test "write_error shape" {
     let sb = string_builder(64)
     defer sb.deinit()
-    const nul = json_null()
+    const nul = Value.Null
     write_error(sb.writer(), &nul, METHOD_NOT_FOUND, "no such method")
     assert_true(
         contains(sb.as_view(), "\"error\":{\"code\":-32601,\"message\":\"no such method\"}"),
@@ -477,9 +472,9 @@ test "write_error shape" {
 test "write_request with params" {
     let sb = string_builder(64)
     defer sb.deinit()
-    let params = json_object()
+    let params = value_map()
     defer params.deinit()
-    params.as_object().unwrap().json_set("n", json_number(2.0))
+    params.set("n", Value.Int(2))
     write_request(sb.writer(), 1, "window/workDoneProgress/create", Some(&params))
     assert_true(
         contains(sb.as_view(), "\"id\":1,\"method\":\"window/workDoneProgress/create\""),

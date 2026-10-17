@@ -304,7 +304,11 @@ fn dep_source_root(dep_dir: String, allocator: &Allocator?) OwnedString {
     }
     let t = text.unwrap()
     defer t.deinit()
-    let dp = parse_project(t.view, allocator)
+    const parsed = parse_project(t.view, allocator)
+    if parsed.is_err() {
+        return source_root(dep_dir, "src/**/*.f", allocator)
+    }
+    let dp = parsed.unwrap()
     defer dp.deinit()
     return source_root(dep_dir, dp.source.view, allocator)
 }
@@ -618,7 +622,7 @@ test "canon_path folds dots, absolutizes, and lowercases the drive" {
 test "resolve_ctx_at roots the project and its deps under the given directory" {
     let proj = parse_project(
         "[project]\nname = \"p\"\nkind = \"lib\"\nsource = \"src/**/*.f\"\n\n[dependencies]\ncore = { path = \"../core\" }\n",
-    )
+    ).unwrap()
     defer proj.deinit()
     let ctx = resolve_ctx_at(&proj, "w/proj", "stdlib")
     defer ctx.deinit()
@@ -638,7 +642,9 @@ test "resolve_ctx normalises a backslash stdlib root" {
     // An absolute argv[0]-derived path on Windows arrives with `\` separators; roots must be stored
     // forward-slashed so strip_root classifies stdlib files instead of falling back to their bare
     // stem.
-    let proj = parse_project("[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n")
+    let proj = parse_project(
+        "[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n",
+    ).unwrap()
     defer proj.deinit()
     let ctx = resolve_ctx(&proj, "C:\\x\\build\\stdlib")
     defer ctx.deinit()

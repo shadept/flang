@@ -9,7 +9,12 @@
 // Free functions widen narrower types and delegate to the vtable method with the correct width.
 //
 // Error types and policy (strict/lenient, naming conventions, unknown field handling) are defined
-// by each format, not here.
+// by each format, not here. Both sides report failure through `has_error`; each format's own
+// `get_error` says which.
+//
+// Dates and times have their own methods. A format without them (JSON, CSV) writes ISO 8601 / RFC
+// 3339 text and reads it back; `DateParsing` decides whether such a format's decoder reports a
+// string that reads as one as a date or time in `peek_kind`.
 //
 // Usage:
 //   #derive(MyStruct, serialize, deserialize)
@@ -18,7 +23,79 @@
 
 import std.interface
 import std.io.writer
+import std.option
+import std.result
 import std.string_builder
+import std.time
+
+// =============================================================================
+// Kinds
+// =============================================================================
+
+// What a self-describing decoder holds next (`peek_kind`). `End` is the close of the enclosing
+// sequence, the end of the input, or an error.
+pub type ValueKind = enum {
+    Null
+    Bool
+    Int
+    Float
+    Str
+    Date
+    Time
+    DateTime
+    OffsetDateTime
+    Seq
+    Map
+    End
+}
+
+// Which strings a text format without dates of its own reads as dates and times.
+pub type DateParsing = enum {
+    // Strings stay strings.
+    Off
+    // Every string that reads as ISO 8601 / RFC 3339.
+    All
+    // Only values under these keys (CSV: columns), by the innermost key above the value.
+    Keys(String[])
+}
+
+// Whether a value under `key` is read for dates. `key` is null outside any map.
+pub fn applies(self: DateParsing, key: String?) bool {
+    return self match {
+        Off => false
+        All => true
+        Keys(names) => {
+            if key.is_none() {
+                return false
+            }
+            for name in names {
+                if name == key.unwrap() {
+                    return true
+                }
+            }
+            false
+        }
+    }
+}
+
+// The date or time kind `s` reads as in ISO 8601 / RFC 3339, or `Str`. A date alone is a `Date`, a
+// time alone a `Time`, a date and time with an offset an `OffsetDateTime`, without one a
+// `DateTime`.
+pub fn temporal_kind(s: String) ValueKind {
+    if parse_date(s).is_ok() {
+        return ValueKind.Date
+    }
+    if parse_time(s).is_ok() {
+        return ValueKind.Time
+    }
+    if parse_offset_datetime(s).is_ok() {
+        return ValueKind.OffsetDateTime
+    }
+    if parse_datetime(s).is_ok() {
+        return ValueKind.DateTime
+    }
+    return ValueKind.Str
+}
 
 // =============================================================================
 // Encoder
@@ -38,6 +115,11 @@ import std.string_builder
     end_map: fn() usize
     key: fn(name: String) usize
     is_human_readable: fn() bool
+    encode_date: fn(v: Date) usize
+    encode_time: fn(v: Time) usize
+    encode_datetime: fn(v: DateTime) usize
+    encode_offset_datetime: fn(v: OffsetDateTime) usize
+    has_error: fn() bool
 })
 
 pub fn encode_i8(enc: &Encoder, v: i8) usize { return enc.encode_int(v as i64, 1) }
@@ -74,6 +156,11 @@ pub fn encode_f64(enc: &Encoder, v: f64) usize { return enc.encode_float(v, 8) }
     next_key: fn(sb: &StringBuilder) bool
     skip_value: fn() bool
     has_error: fn() bool
+    peek_kind: fn() ValueKind
+    decode_date: fn() Date
+    decode_time: fn() Time
+    decode_datetime: fn() DateTime
+    decode_offset_datetime: fn() OffsetDateTime
 })
 
 pub fn decode_i8(dec: &Decoder) i8 { return dec.decode_int(1) as i8 }

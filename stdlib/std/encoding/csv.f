@@ -34,6 +34,7 @@ import std.string
 import std.string_builder
 import std.string_reader
 import std.test
+import std.time
 
 // =============================================================================
 // Errors
@@ -43,6 +44,8 @@ pub type CsvError = enum {
     UnexpectedEnd
     InvalidQuoting
     IOError
+    // A field read as a date or time that is not one.
+    InvalidDate
 }
 
 #enum_utils(CsvError)
@@ -55,10 +58,12 @@ pub type CsvOptions = struct {
     delimiter: u8
     quote: u8
     has_headers: bool
+    // Which fields the decoder reports as dates and times; `Keys` names columns.
+    dates: DateParsing
 }
 
 pub fn csv_options() CsvOptions {
-    return .{ delimiter = ',', quote = '"', has_headers = true }
+    return .{ delimiter = ',', quote = '"', has_headers = true, dates = DateParsing.Off }
 }
 
 // =============================================================================
@@ -85,6 +90,10 @@ pub fn get(record: &CsvRecord, name: String) String? {
         }
     }
     return null
+}
+
+pub fn deinit(self: move CsvRecord) {
+    self.fields.deinit()
 }
 
 pub fn field_count(record: &CsvRecord) usize {
@@ -290,6 +299,8 @@ pub type CsvDecoder = struct {
     spans: List(FieldSpan)
     current_field: usize
     row_parsed: bool
+    // `peek_kind` read a row that `begin_map` has not opened yet.
+    row_pending: bool
     eof: bool
     error: CsvError?
     state: ParseState
@@ -505,6 +516,10 @@ pub fn end_seq(self: &CsvDecoder) bool { return true }
 
 pub fn begin_map(self: &CsvDecoder) usize {
     self.ensure_decoder_headers()
+    if self.row_pending {
+        self.row_pending = false
+        self.row_parsed = true
+    }
     if self.row_parsed == false {
         self.parse_decoder_row()
         self.row_parsed = true
@@ -533,9 +548,90 @@ pub fn skip_value(self: &CsvDecoder) bool {
 
 pub fn has_error(self: &CsvDecoder) bool { return self.error.is_some() }
 
+// Outside a row, a row is a map (End past the last one); inside one, a field is a string, or a date
+// or time where `options.dates` applies to its column.
+pub fn peek_kind(self: &CsvDecoder) ValueKind {
+    if self.error.is_some() {
+        return ValueKind.End
+    }
+    if self.row_pending {
+        return ValueKind.Map
+    }
+    if !self.row_parsed {
+        self.ensure_decoder_headers()
+        if !self.parse_decoder_row() {
+            return ValueKind.End
+        }
+        self.row_pending = true
+        return ValueKind.Map
+    }
+    if self.current_field >= self.spans.len {
+        return ValueKind.End
+    }
+    const column = self.headers.get(self.current_field)
+    if !self.options.dates.applies(column) {
+        return ValueKind.Str
+    }
+    return temporal_kind(self.get_decoder_field(self.current_field))
+}
+
+// The next field, stepped past, as date or time text.
+fn date_field(self: &CsvDecoder) String {
+    if self.current_field >= self.spans.len {
+        return ""
+    }
+    const val = self.get_decoder_field(self.current_field)
+    self.current_field = self.current_field + 1
+    return val
+}
+
+fn bad_date(self: &CsvDecoder) {
+    if self.error.is_none() {
+        self.error = Some(CsvError.InvalidDate)
+    }
+}
+
+pub fn decode_date(self: &CsvDecoder) Date {
+    const r = parse_date(self.date_field())
+    if r.is_err() {
+        self.bad_date()
+        return date_from_epoch_day(0)
+    }
+    return r.unwrap()
+}
+
+pub fn decode_time(self: &CsvDecoder) Time {
+    const r = parse_time(self.date_field())
+    if r.is_err() {
+        self.bad_date()
+        return Time { ticks = 0 }
+    }
+    return r.unwrap()
+}
+
+pub fn decode_datetime(self: &CsvDecoder) DateTime {
+    const r = parse_datetime(self.date_field())
+    if r.is_err() {
+        self.bad_date()
+        return datetime_from_ticks(0)
+    }
+    return r.unwrap()
+}
+
+pub fn decode_offset_datetime(self: &CsvDecoder) OffsetDateTime {
+    const r = parse_offset_datetime(self.date_field())
+    if r.is_err() {
+        self.bad_date()
+        return OffsetDateTime { instant = UNIX_EPOCH, offset = 0 }
+    }
+    return r.unwrap()
+}
+
 pub fn deinit(self: move CsvDecoder) {
     self.field_buf.deinit()
     self.header_buf.deinit()
+    self.headers.deinit()
+    self.spans.deinit()
 }
 
 #implement(CsvDecoder, Decoder)
@@ -637,10 +733,9 @@ pub fn encode_uint(self: &CsvEncoder, v: u64, width: u8) usize {
 }
 
 pub fn encode_float(self: &CsvEncoder, v: f64, width: u8) usize {
-    let sb = string_builder(32)
-    sb.append(v)
-    self.write_enc_value(sb.as_view())
-    sb.deinit()
+    let buf = [0u8; 32]
+    const n = format_f64_shortest(v, buf).unwrap()
+    self.write_enc_value(buf[0..n] as String)
     return 0
 }
 
@@ -709,6 +804,40 @@ pub fn key(self: &CsvEncoder, name: String) usize {
 }
 
 pub fn is_human_readable(self: &CsvEncoder) bool { return true }
+
+pub fn has_error(self: &CsvEncoder) bool { return false }
+
+pub fn encode_date(self: &CsvEncoder, v: Date) usize {
+    let sb = string_builder(16)
+    defer sb.deinit()
+    v.format(sb.writer(), "")
+    self.write_enc_value(sb.as_view())
+    return 0
+}
+
+pub fn encode_time(self: &CsvEncoder, v: Time) usize {
+    let sb = string_builder(24)
+    defer sb.deinit()
+    v.format(sb.writer(), "")
+    self.write_enc_value(sb.as_view())
+    return 0
+}
+
+pub fn encode_datetime(self: &CsvEncoder, v: DateTime) usize {
+    let sb = string_builder(40)
+    defer sb.deinit()
+    v.format(sb.writer(), "")
+    self.write_enc_value(sb.as_view())
+    return 0
+}
+
+pub fn encode_offset_datetime(self: &CsvEncoder, v: OffsetDateTime) usize {
+    let sb = string_builder(40)
+    defer sb.deinit()
+    v.format(sb.writer(), "")
+    self.write_enc_value(sb.as_view())
+    return 0
+}
 
 #implement(CsvEncoder, Encoder)
 
@@ -845,6 +974,8 @@ fn parse_all(self: &CsvReader) {
             if field_start < data_len {
                 current_fields.push(self.extract_field(data, field_start, data_len))
                 rows.push(CsvRecord { fields = move current_fields, headers = Some(&self.headers) })
+            } else {
+                current_fields.deinit()
             }
             break
         }
@@ -961,6 +1092,8 @@ pub fn row_count(self: &CsvReader) usize {
 
 pub fn deinit(self: move CsvReader) {
     self.buffer.deinit()
+    self.headers.deinit()
+    self.rows.deinit()
 }
 
 // =============================================================================
@@ -992,6 +1125,8 @@ pub fn csv_table(
 
 pub fn deinit(self: move CsvTable) {
     self.buffer.deinit()
+    self.headers.deinit()
+    self.rows.deinit()
 }
 
 pub fn row_count(table: &CsvTable) usize {

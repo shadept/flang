@@ -218,7 +218,8 @@ let area = rect match {
     Rect { width, height }      => width * height,
 }
 
-// range patterns — `..` half-open, `..=` inclusive (pattern-only token)
+// range patterns — `..` half-open, `..=` inclusive (pattern-only token). A `..` opening a line
+// starts a new range; a range expression keeps `..` on its left operand's line.
 let bucket = n match {
     ..0      => -1,
     0        => 0,

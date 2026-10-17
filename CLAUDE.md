@@ -27,12 +27,14 @@ You own and maintain these docs. They are the source of truth for the project. W
 
 ## Rules
 
+- **The compiler is built on the stdlib.** Where general-purpose functionality is needed (parsing a format, a data structure, an OS facility), it lives in `stdlib/` and the compiler and `lib/*` use it. A private copy in `lib/*` or `compiler/` is a candidate to move into the stdlib.
 - **Seed rule.** Compiler (`compiler/`), `lib/*`, and `stdlib/` sources may only use language features the committed seed in `boot/` supports. New feature order: implement, harness-test, promote (`dotnet run promote.cs`), then use. Never edit `boot/` by hand; promote is the only writer, and each promote is its own commit tagged `seed/<YYYYMMDD>` — one tag per date, moved when a second promote lands the same day. See `docs/architecture.md` §Bootstrap Seed.
 
 - `docs/spec.md` is authoritative. If a request conflicts with it, flag the conflict — don't silently deviate.
 - `docs/architecture.md` constraints are non-negotiable without explicit approval.
 - Language feature tests go in `tests/harness/` using lit-style `.f` files. Stdlib tests are colocated in the `.f` source file using `test "name" { ... }` blocks.
 - `test {}` bodies are checked only when the demand asks for it (`flang test`, `flang check`, the LSP). A plain `flang build` does not look inside them, so a test-only type error will not fail a build - run `flang check` before calling a change done.
+- **Match, not `if`/`else if` chains.** A chain testing one value against constants (bytes, enum variants, kinds) is a `match`; an arm that needs a statement takes a block or calls a helper.
 - **Default to inference.** Omit any type annotation the checker can work out, in FLang code and in the stdlib alike. A free type variable in a return position is a working feature, not a gap: `let l = list(3)` followed by `l.push(3i32)` resolves to `List(i32)`, and an unsuffixed literal pushed first resolves the same way. Annotate only where inference has no source to draw from.
 - **Library layout.** `flang.toml [project].name` is the import namespace; files under `src/` sit directly in it. `lib/flang_parser/src/ast.f` is `import flang_parser.ast`. Never nest a `src/<name>/` folder.
 - **Allocator parameter goes last.** A stdlib function that takes an allocator takes it as its final parameter, after everything else (`push(self, value, allocator)`, `list(capacity, allocator)`, `map(self, f, allocator)`). `self` stays first as always. Managed containers default it (`allocator: &Allocator? = null`, null meaning the global allocator); the unmanaged flavours require it, still last.

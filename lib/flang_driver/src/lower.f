@@ -55,7 +55,9 @@ import std.allocator
 import std.collections.dict
 import std.collections.list
 import std.collections.set
+import std.conv
 import std.option
+import std.result
 import std.string
 import std.string_builder
 import std.test
@@ -7511,102 +7513,20 @@ fn digit_val(c: u8) i64 {
 }
 
 // Parse a float literal's source text (`3.14`, `1.5e10`, `1_000.5`, with `_` digit separators) into
-// its f64 value. Suffixes are stripped by the lexer, so `text` is the numeric form only.
-//
-// ponytail: digit-by-digit accumulation - exact while the mantissa fits 2^53 and the power of ten
-// stays within 10^22; larger scales apply in exact 10^22 chunks (one rounding each). A
-// 20-significant-digit literal may land an ulp or two off the correctly-rounded value, and a
-// literal within a few ulp of DBL_MAX can still round over into infinity - the in-tree DBL_MAX
-// guards were rewritten to `v * 0.5 == v` for exactly that reason. Upgrade to a strtod-grade
-// algorithm if a literal ever needs that last ulp.
+// its correctly rounded f64 value. Suffixes are stripped by the lexer, so `text` is the numeric
+// form only.
 fn parse_float(text: String) f64 {
-    let i: usize = 0
-    let mant: f64 = 0.0
-    while i < text.len {
-        const c = text[i]
-        if c == '_' {
-            i = i + 1
-            continue
-        }
-        if c < '0' or c > '9' {
-            break
-        }
-        mant = mant * 10.0 + (digit_val(c) as f64)
-        i = i + 1
+    if find(text, '_').is_none() {
+        return parse_f64(text.as_raw_bytes()).unwrap().0
     }
-    let scale: i64 = 0
-    if i < text.len and text[i] == '.' {
-        i = i + 1
-        while i < text.len {
-            const c = text[i]
-            if c == '_' {
-                i = i + 1
-                continue
-            }
-            if c < '0' or c > '9' {
-                break
-            }
-            mant = mant * 10.0 + (digit_val(c) as f64)
-            scale = scale - 1
-            i = i + 1
+    let digits = string_builder(text.len)
+    defer digits.deinit()
+    for i in 0..text.len {
+        if text[i] != '_' {
+            digits.append_byte(text[i])
         }
     }
-    if i < text.len and (text[i] == 'e' or text[i] == 'E') {
-        i = i + 1
-        let neg_exp = false
-        if i < text.len and (text[i] == '+' or text[i] == '-') {
-            neg_exp = text[i] == '-'
-            i = i + 1
-        }
-        let e: i64 = 0
-        while i < text.len {
-            const c = text[i]
-            if c == '_' {
-                i = i + 1
-                continue
-            }
-            if c < '0' or c > '9' {
-                break
-            }
-            e = e * 10 + digit_val(c)
-            i = i + 1
-        }
-        if neg_exp {
-            scale = scale - e
-        } else {
-            scale = scale + e
-        }
-    }
-    if scale == 0 {
-        return mant
-    }
-    // Divide for negative scales rather than multiply by a tiny power: 10^-k is inexact, 10^k (k <=
-    // 22) is exact, and one division rounds once. Scales beyond 22 apply in exact 10^22 chunks -
-    // one rounding per chunk instead of one per decimal digit, which is what kept a
-    // DBL_MAX-magnitude literal from tipping over into infinity.
-    let k = scale
-    if k < 0 {
-        k = 0 - k
-    }
-    let acc = mant
-    while k > 22 {
-        if scale < 0 {
-            acc = acc / 1.0e22
-        } else {
-            acc = acc * 1.0e22
-        }
-        k = k - 22
-    }
-    let p: f64 = 1.0
-    let j: i64 = 0
-    while j < k {
-        p = p * 10.0
-        j = j + 1
-    }
-    if scale < 0 {
-        return acc / p
-    }
-    return acc * p
+    return parse_f64(digits.as_view().as_raw_bytes()).unwrap().0
 }
 
 // A char/byte literal's codepoint constant. The lexer validates the form but keeps the raw source

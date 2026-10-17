@@ -1149,13 +1149,26 @@ fn emit_binary(b: &BinaryInstr, sb: &StringBuilder) {
             sb.append(" * ")
             emit_operand(&b.rhs, sb)
         }
-        FDiv => {
-            emit_operand(&b.lhs, sb)
-            sb.append(" / ")
-            emit_operand(&b.rhs, sb)
-        }
+        FDiv => emit_fdiv(&b.lhs, &b.rhs, sb)
     }
     sb.append(";\n")
+}
+
+// `a / b`. A division by a constant zero is a constraint violation MSVC refuses (C2124), so it is
+// written as its IEEE 754 result: `a` times an infinity of the zero's sign.
+fn emit_fdiv(a: &Operand, b: &Operand, sb: &StringBuilder) {
+    const divisor = b.* match {
+        FloatConst(v) => Some(v)
+        else => null
+    }
+    emit_operand(a, sb)
+    if divisor.is_none() or divisor.unwrap() != 0.0 {
+        sb.append(" / ")
+        emit_operand(b, sb)
+        return
+    }
+    const negative_zero = 1.0 / divisor.unwrap() < 0.0
+    sb.append(if negative_zero { " * (-INFINITY)" } else { " * INFINITY" })
 }
 
 fn emit_wrap_binop(a: &Operand, b: &Operand, ty: IrType, op: String, sb: &StringBuilder) {

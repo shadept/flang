@@ -46,6 +46,8 @@ pub type TypeEnv = struct {
     scopes: UnmanagedStack(Scope)
     // The one allocator every scope allocates through.
     allocator: &Allocator
+    // Scopes 1 through `floor - 1` are hidden from lookups (`hide_locals`); 0 hides none.
+    floor: usize
 }
 
 pub fn type_env(allocator: &Allocator? = null) TypeEnv {
@@ -83,6 +85,24 @@ pub fn pop_scope(self: &TypeEnv) {
     scope.bindings.deinit(self.allocator)
 }
 
+// Hides every open scope but the outermost from lookups, for an expression that belongs to another
+// declaration: a parameter's default sees the declaring module's names, never the caller's locals.
+// Scopes pushed afterwards stay visible. Returns what `reveal` restores.
+pub fn hide_locals(self: &TypeEnv) usize {
+    const prev = self.floor
+    self.floor = self.scopes.len()
+    return prev
+}
+
+pub fn reveal(self: &TypeEnv, prev: usize) {
+    self.floor = prev
+}
+
+// Whether scope `i` is open to lookups.
+fn is_visible(self: &TypeEnv, i: usize) bool {
+    return i == 0 or i >= self.floor
+}
+
 pub fn bind(self: &TypeEnv, name: String, binding: move Binding) {
     self.scopes.peek_ref() match {
         Some(top) => top.bindings.set(name, binding, self.allocator)
@@ -96,6 +116,10 @@ pub fn lookup(self: &TypeEnv, name: String) &Binding? {
     loop {
         if i < 0 {
             break
+        }
+        if !self.is_visible(i as usize) {
+            i = i - 1
+            continue
         }
         let scope = &frames[i as usize]
         let hit = scope.bindings.get_ref(name)
@@ -120,7 +144,7 @@ pub fn lookup_depth(self: &TypeEnv, name: String) usize? {
     let i = frames.len
     while i > 0 {
         i = i - 1
-        if frames[i].bindings.contains(name) {
+        if self.is_visible(i) and frames[i].bindings.contains(name) {
             return Some(i)
         }
     }

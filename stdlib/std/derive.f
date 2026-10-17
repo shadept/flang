@@ -84,6 +84,14 @@ pub import std.io.writer
                         enc.encode_str(self.#(field.name))
                     } #elif field.type_info.name == "OwnedString" {
                         enc.encode_str(self.#(field.name).as_view())
+                    } #elif field.type_info.name == "Date" {
+                        enc.encode_date(self.#(field.name))
+                    } #elif field.type_info.name == "Time" {
+                        enc.encode_time(self.#(field.name))
+                    } #elif field.type_info.name == "DateTime" {
+                        enc.encode_datetime(self.#(field.name))
+                    } #elif field.type_info.name == "OffsetDateTime" {
+                        enc.encode_offset_datetime(self.#(field.name))
                     } #else {
                         self.#(field.name).serialize(enc)
                     }
@@ -135,6 +143,14 @@ pub import std.io.writer
                                 let _str_buf = string_builder(32)
                                 dec.decode_str(_str_buf.writer())
                                 result.#(field.name) = _str_buf.to_string()
+                            } #elif field.type_info.name == "Date" {
+                                result.#(field.name) = dec.decode_date()
+                            } #elif field.type_info.name == "Time" {
+                                result.#(field.name) = dec.decode_time()
+                            } #elif field.type_info.name == "DateTime" {
+                                result.#(field.name) = dec.decode_datetime()
+                            } #elif field.type_info.name == "OffsetDateTime" {
+                                result.#(field.name) = dec.decode_offset_datetime()
                             } #else {
                                 result.#(field.name) = #(field.type_info.name).deserialize(dec)
                             }

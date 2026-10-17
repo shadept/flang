@@ -235,7 +235,11 @@ fn load_project(
     }
     let toml = text.unwrap()
     defer toml.deinit()
-    let proj = parse_project(toml.view, allocator)
+    const parsed = parse_project(toml.view, allocator)
+    if parsed.is_err() {
+        return null
+    }
+    let proj = parsed.unwrap()
     defer proj.deinit()
 
     let ctx = resolve_ctx_at(&proj, dir, self.stdlib_path.view, allocator)
