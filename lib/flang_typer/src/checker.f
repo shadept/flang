@@ -8470,8 +8470,10 @@ fn captures_contain(fr: &LambdaFrame, name: String) bool {
 }
 
 // `arity` is the parameter count an arrow-less lambda takes from its call (RFC-039): its `it`
-// parameter is kept at one and dropped at zero. A lambda with `=>` ignores it.
-fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1) Ty {
+// parameter is kept at one and dropped at zero. A lambda with `=>` ignores it. `expected` is the
+// function type the lambda fills: it types the unannotated parameters, and a `void` return there
+// discards the body's value.
+fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NFuncNode? = null) Ty {
     // Frame first, then the parameter scope: a binding at or above `boundary` is lambda-local,
     // anything below it is a capture.
     self.env.push_scope()
@@ -8490,8 +8492,13 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1) Ty {
     let moves = 0usize
     for &p in lam.params_at(arity) {
         let unannotated = p.type_expr match { Error(_) => true, _ => false }
-        let ty = if unannotated { self.engine.fresh_var() }
-        else { resolve_type_expr(self, p.type_expr) }
+        let ty = if !unannotated {
+            resolve_type_expr(self, p.type_expr)
+        } else if expected.is_some() and params.len < expected.unwrap().params.len {
+            self.engine.interner.child_at(expected.unwrap().params, params.len)
+        } else {
+            self.engine.fresh_var()
+        }
         moves = moves | move_bit_of(self, params.len, p.is_move, ty, p.span)
         const p_node = self.node_of(p.span)
         self.results.record_type(p_node, ty)
@@ -8501,9 +8508,11 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1) Ty {
         )
         params.push(ty)
     }
+    const expects_void = expected.is_some()
+        and self.engine.resolve(expected.unwrap().ret) == TY_VOID
     let ret = lam.return_type match {
         Some(rt) => resolve_type_expr(self, rt)
-        None => self.engine.fresh_var()
+        None => if expects_void { TY_VOID } else { self.engine.fresh_var() }
     }
 
     self.fn_stack.push(FnFrame { name = "<lambda>", return_ty = ret, decl_span = lam.span })
@@ -9531,17 +9540,18 @@ fn check_call(self: &Checker, call: &CallExpr, expected: Ty? = null) Ty {
     return ty
 }
 
-// An arrow-less lambda argument (RFC-039): its arity comes from the parameter it fills, so the call
-// resolves with `slot` standing in for its type and the body is checked after.
+// A lambda argument without a return-type annotation (RFC-039): its arity, parameter types and
+// return type come from the parameter it fills, so the call resolves with `slot` standing in for
+// its type and the body is checked after, against that parameter's function type.
 type DeferredLambda = struct {
     lam: &LambdaExpr
     slot: Ty
 }
 
-// The argument's type, or a placeholder for an arrow-less lambda whose check waits for the call.
+// The argument's type, or a placeholder for a lambda whose check waits for the call.
 fn check_arg(self: &Checker, e: &Expr, deferred: &List(DeferredLambda)) Ty {
     e.* match {
-        Lambda(lam) => if lam.arrowless {
+        Lambda(lam) => if lam.return_type.is_none() {
             const slot = self.engine.fresh_var()
             deferred.push(DeferredLambda { lam = &lam, slot = slot })
             return slot
@@ -9552,8 +9562,10 @@ fn check_arg(self: &Checker, e: &Expr, deferred: &List(DeferredLambda)) Ty {
 }
 
 fn check_deferred_lambda(self: &Checker, d: &DeferredLambda, call_span: SourceSpan) {
-    const arity = slot_arity(self, d.slot, call_span)
-    if arity.is_none() or arity.unwrap() > 1 {
+    const shape = slot_shape(self, d.slot, call_span)
+    const arity: usize? = if shape.is_some() { Some(shape.unwrap().params.len) } else { null }
+    const arity_bad = arity.is_none() or arity.unwrap() > 1
+    if d.lam.arrowless and arity_bad {
         push_diag_e(
             self,
             d.lam.span,
@@ -9563,7 +9575,7 @@ fn check_deferred_lambda(self: &Checker, d: &DeferredLambda, call_span: SourceSp
             ),
         )
     }
-    const t = check_lambda(self, d.lam, arity ?? 1)
+    const t = check_lambda(self, d.lam, arity ?? 1, shape)
     if closure_of(self, self.engine.resolve(t)).is_some() and slot_is_fn(self, d.slot) {
         push_diag_e(
             self,
@@ -9585,12 +9597,12 @@ fn slot_is_fn(self: &Checker, slot: Ty) bool {
     }
 }
 
-// The parameter count of the callable a call expects in `slot`: a function type, or a type
-// parameter the picked overload bounds by one. Null when nothing says.
-fn slot_arity(self: &Checker, slot: Ty, call_span: SourceSpan) usize? {
+// The function type a call expects in `slot`: the parameter's own, or the bound the picked overload
+// places on the type parameter there. Null when nothing says.
+fn slot_shape(self: &Checker, slot: Ty, call_span: SourceSpan) NFuncNode? {
     const r = self.engine.resolve(slot)
     ty_node(self, r) match {
-        NFunc(f) => return Some(f.params.len)
+        NFunc(f) => return Some(f)
         _ => {}
     }
     if !self.engine.is_var(r) {
@@ -9603,14 +9615,14 @@ fn slot_arity(self: &Checker, slot: Ty, call_span: SourceSpan) usize? {
         const same_call = p.span.start == call_span.start and p.span.length == call_span.length
             and p.span.file_id == call_span.file_id
         if same_call {
-            return bound_arity(self, p, r)
+            return bound_shape(self, p, r)
         }
     }
     return null
 }
 
-// The arity of the callable bound `p`'s function places on the variable `v`.
-fn bound_arity(self: &Checker, p: &PendingSpec, v: Ty) usize? {
+// The callable bound `p`'s function places on the variable `v`.
+fn bound_shape(self: &Checker, p: &PendingSpec, v: Ty) NFuncNode? {
     const atoms = self.fn_bounds.get_ref(p.function_id)
     if atoms.is_none() {
         return null
@@ -9627,7 +9639,7 @@ fn bound_arity(self: &Checker, p: &PendingSpec, v: Ty) usize? {
             continue
         }
         ty_node(self, self.engine.resolve(atom_inst(self, a.shape, Some(&p.tp_binds)))) match {
-            NFunc(f) => return Some(f.params.len)
+            NFunc(f) => return Some(f)
             _ => {}
         }
     }
