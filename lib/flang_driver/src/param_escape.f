@@ -18,7 +18,7 @@
 //
 // Anything else that mentions the parameter copies. The matches over `Expr`, `Stmt` and `Pattern`
 // are total, so a new variant is a build error here.
-import std.allocator
+
 import std.collections.dict
 import std.collections.list
 import std.option

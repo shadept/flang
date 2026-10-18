@@ -7,7 +7,6 @@
 // parameter types; docs/spec.md 7.1.1, docs/adr/0004), so inserting a function cannot rename
 // another.
 
-import std.allocator
 import std.collections.dict
 import std.collections.list
 import std.option

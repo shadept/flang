@@ -1,7 +1,6 @@
 // One-shot build: lower a checked unit to FIR and hand it to the C backend. The back half of the
 // pipeline `flang_driver.analyze` opens.
 
-import std.allocator
 import std.collections.list
 import std.io.fs
 import std.io.print

@@ -11,7 +11,6 @@
 // Default `auto` reorders fields by descending alignment to minimise size; `#foreign` is `repr(C)`
 // (declaration order). The C# backend still does C-order always - see docs/known-issues.md.
 
-import std.allocator
 import std.collections.dict
 import std.collections.list
 import std.option

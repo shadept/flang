@@ -51,7 +51,6 @@
 // `ast` and `fir` both export `BinaryOp`/`UnaryOp`; neither is named here (operators match AST
 // variants and emit through builder methods).
 
-import std.allocator
 import std.collections.dict
 import std.collections.list
 import std.collections.set
