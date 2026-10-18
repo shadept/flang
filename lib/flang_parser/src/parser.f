@@ -2103,17 +2103,33 @@ fn parse_interp_hole_into(self: &Parser, b: &NodeBuilder) {
 // ─────────────────────────────────────────────────────────────────────────
 
 pub fn parse_type(self: &Parser) CstNodeId {
-    const inner = self.parse_prefix_type()
-    // Postfix `?` for optional.
-    let cur = inner
-    while self.current_kind() == TokenKind.Question {
-        let b = self.open(NodeKind.OptionalType)
-        b.start = self.tree.nodes[cur].start as usize
-        self.push_node_into(&b, cur)
-        self.eat_into(&b)
-        cur = self.finish(b)
+    // Postfix `?` for optional, then `?` and `[]` left to right: `T?[]` is a slice of `T?`.
+    let cur = self.parse_prefix_type()
+    loop {
+        if self.current_kind() == TokenKind.Question {
+            cur = self.wrap_type_suffix(cur, NodeKind.OptionalType)
+            continue
+        }
+        const at_slice = self.current_kind() == TokenKind.OpenBracket
+            and self.peek_kind(1) == TokenKind.CloseBracket
+        if at_slice and self.tree.nodes[cur].kind == NodeKind.OptionalType {
+            cur = self.wrap_type_suffix(cur, NodeKind.SliceType)
+            continue
+        }
+        return cur
     }
-    return cur
+}
+
+// `inner` wrapped in a `kind` node that eats its suffix: `?`, or `[` `]` for a slice.
+fn wrap_type_suffix(self: &Parser, inner: CstNodeId, kind: NodeKind) CstNodeId {
+    let b = self.open(kind)
+    b.start = self.tree.nodes[inner].start as usize
+    self.push_node_into(&b, inner)
+    self.eat_into(&b)
+    if kind == NodeKind.SliceType {
+        self.eat_into(&b)
+    }
+    return self.finish(b)
 }
 
 fn parse_prefix_type(self: &Parser) CstNodeId {
@@ -2133,12 +2149,7 @@ fn parse_prefix_type(self: &Parser) CstNodeId {
     // Postfix `[]` for slice (only when `]` immediately follows `[`).
     while self.current_kind() == TokenKind.OpenBracket
         and self.peek_kind(1) == TokenKind.CloseBracket {
-        let b = self.open(NodeKind.SliceType)
-        b.start = self.tree.nodes[cur].start as usize
-        self.push_node_into(&b, cur)
-        self.eat_into(&b)
-        self.eat_into(&b)
-        cur = self.finish(b)
+        cur = self.wrap_type_suffix(cur, NodeKind.SliceType)
     }
     return cur
 }

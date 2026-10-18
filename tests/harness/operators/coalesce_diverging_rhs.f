@@ -15,7 +15,7 @@ fn plus_one(o: i32?) i32 {
     return v + 1
 }
 
-fn sum_present(xs: Option(i32)[]) i32 {
+fn sum_present(xs: i32?[]) i32 {
     let total: i32 = 0
     for o in xs {
         let v: i32 = o ?? continue
@@ -24,7 +24,7 @@ fn sum_present(xs: Option(i32)[]) i32 {
     return total
 }
 
-fn count_until_missing(xs: Option(i32)[]) i32 {
+fn count_until_missing(xs: i32?[]) i32 {
     let n: i32 = 0
     for o in xs {
         let _v: i32 = o ?? break

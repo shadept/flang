@@ -39,6 +39,7 @@ listed here, it does not exist in FLang.
 | `&T` | Non-null reference |
 | `T?` | Optional (`Option(T)`) |
 | `&T?` | Nullable reference (`Option(&T)`) |
+| `T?[]` / `T[]?` | Slice of optionals / optional slice: `?` and `[]` apply left to right (`&` binds tighter: `&T?[]` is a slice of `&T?`) |
 | `(A, B)` | Tuple (sugar for `{ _0: A, _1: B }`) |
 | `()` | Unit |
 | `fn(T1, T2) R` | Function type; `fn(move T) R` takes ownership of its argument |
