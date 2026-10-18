@@ -114,11 +114,11 @@ fn error_at(self: &TemplateParser, index: usize, code: String, message: move Own
         start = self.tokens[index].offset
         length = self.tokens[index].text.len
     }
-    self.diags.push(error(code, message, .{
-        file_id = self.file_id,
-        start = self.base + start,
-        length = length,
-    }))
+    self.diags.push(error(
+        code,
+        message,
+        .{ file_id = self.file_id, start = self.base + start, length = length },
+    ))
 }
 
 // Move body-relative parser diagnostics out, shifted to file offsets.
@@ -236,11 +236,11 @@ fn parse_for(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
     const iterable = project_expression(cst, self.file_id, self.alloc)
     let body: List(TemplateNode) = list(0, self.alloc)
     const after = self.parse_braced_body(self.parser.token_index(), &body)
-    out.push(
-        TemplateNode.Loop(
-            TemplateFor { var_name = var_name, iterable = iterable, body = move body },
-        ),
-    )
+    out.push(TemplateNode.Loop(TemplateFor {
+        var_name = var_name,
+        iterable = iterable,
+        body = move body,
+    }))
     return after
 }
 
@@ -261,9 +261,11 @@ fn parse_if(self: &TemplateParser, i: usize, out: &List(TemplateNode)) usize {
         self.cursor = self.tokens[after].offset
         after = self.parse_braced_body(after + 2, &else_body)
     }
-    out.push(
-        TemplateNode.Cond(TemplateIf { cond = cond, body = move body, else_body = move else_body }),
-    )
+    out.push(TemplateNode.Cond(TemplateIf {
+        cond = cond,
+        body = move body,
+        else_body = move else_body,
+    }))
     return after
 }
 
@@ -312,11 +314,11 @@ fn parse_string_holes(self: &TemplateParser, tok: Token, out: &List(TemplateNode
         if p.token_index() < scan.len and scan[p.token_index()].kind == TokenKind.CloseParenthesis {
             close_end = (scan[p.token_index()].offset + 1) as u32
         } else {
-            self.diags.push(error("E1002", $"expected `)` to close `#(` inside a string literal", .{
-                file_id = self.file_id,
-                start = self.base + cst.end,
-                length = 0,
-            }))
+            self.diags.push(error(
+                "E1002",
+                $"expected `)` to close `#(` inside a string literal",
+                .{ file_id = self.file_id, start = self.base + cst.end, length = 0 },
+            ))
         }
         self.shift_from(&p.diagnostics)
         out.push(TemplateNode.Interp(TemplateInterp { expr = e, in_string = true }))

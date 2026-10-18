@@ -193,21 +193,13 @@ pub fn next_token(self: &Lexer) Token {
             const adjusted = adjust_for_hole_mode(self, kind, top_idx)
             if adjusted.is_some() {
                 const new_kind = adjusted.unwrap()
-                return Token {
-                    kind = new_kind,
-                    text = text,
-                    offset = token_start,
-                }
+                return Token { kind = new_kind, text = text, offset = token_start }
             }
         }
     }
 
     self.position = trailing_end(self.source, self.position, self.source.len)
-    return Token {
-        kind = kind,
-        text = text,
-        offset = token_start,
-    }
+    return Token { kind = kind, text = text, offset = token_start }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -832,11 +824,7 @@ fn lex_segment(self: &Lexer) Token {
                 offset = close_start,
             }
             queue_token(self, end_tok)
-            return Token {
-                kind = TokenKind.InterpSegment,
-                text = seg_text,
-                offset = seg_start,
-            }
+            return Token { kind = TokenKind.InterpSegment, text = seg_text, offset = seg_start }
         }
 
         if c == '{' {
@@ -857,11 +845,7 @@ fn lex_segment(self: &Lexer) Token {
                 offset = hole_start_pos,
             }
             queue_token(self, hole_tok)
-            return Token {
-                kind = TokenKind.InterpSegment,
-                text = seg_text,
-                offset = seg_start,
-            }
+            return Token { kind = TokenKind.InterpSegment, text = seg_text, offset = seg_start }
         }
 
         if c == '}' {
@@ -940,11 +924,7 @@ fn lex_format_spec(self: &Lexer) Token {
         offset = close_start,
     }
     queue_token(self, hole_end)
-    return Token {
-        kind = TokenKind.InterpFormatSpec,
-        text = spec_text,
-        offset = spec_start,
-    }
+    return Token { kind = TokenKind.InterpFormatSpec, text = spec_text, offset = spec_start }
 }
 
 // Track bracket depths inside a hole. Returns the rewritten kind when
@@ -1002,12 +982,7 @@ fn queue_token(self: &Lexer, tok: Token) {
 }
 
 fn empty_token(allocator: &Allocator) Token {
-    return Token {
-        kind = TokenKind.Eof,
-        text = "",
-        offset = 0,
-        allocator = allocator,
-    }
+    return Token { kind = TokenKind.Eof, text = "", offset = 0, allocator = allocator }
 }
 
 // ─────────────────────────────────────────────────────────────────────────

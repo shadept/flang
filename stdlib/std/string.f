@@ -378,11 +378,7 @@ pub type Lines = struct {
 }
 
 pub fn lines(s: String) Lines {
-    return .{
-        buf = slice_from_raw_parts(s.ptr, s.len),
-        pos = 0,
-        done = false,
-    }
+    return .{ buf = slice_from_raw_parts(s.ptr, s.len), pos = 0, done = false }
 }
 
 pub fn iter(self: &Lines) &Lines {

@@ -279,11 +279,7 @@ pub type Cst = struct {
     allocator: &Allocator
 }
 
-pub fn cst(
-    tokens: move List(Token),
-    source: String,
-    allocator: &Allocator = context.allocator,
-) Cst {
+pub fn cst(tokens: move List(Token), source: String, allocator: &Allocator = context.allocator) Cst {
     return .{
         source = source,
         nodes = list(64, allocator),

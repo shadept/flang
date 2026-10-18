@@ -583,29 +583,22 @@ fn initialize_result(self: &LspServer, triggers: String[]) InitializeResult {
     if self.run_test_command {
         lens = Some(CodeLensOptions { resolve_provider = false })
     }
-    return .{
-        capabilities = ServerCapabilities {
-            position_encoding = if is_utf8_encoding(self.encoding) { "utf-8" } else { "utf-16" },
-            // TextDocumentSyncKind.Full
-            text_document_sync = TextDocumentSyncOptions {
-                open_close = true,
-                change = 1,
-                save = true,
-            },
-            document_symbol_provider = true,
-            folding_range_provider = true,
-            workspace_symbol_provider = true,
-            hover_provider = true,
-            definition_provider = true,
-            type_definition_provider = true,
-            references_provider = true,
-            inlay_hint_provider = true,
-            document_formatting_provider = true,
-            code_lens_provider = lens,
-            signature_help_provider = SignatureHelpOptions { trigger_characters = triggers },
-        },
-        server_info = ServerInfo { name = "flang-lsp", version = self.version.view },
-    }
+    return .{ capabilities = ServerCapabilities {
+        position_encoding = if is_utf8_encoding(self.encoding) { "utf-8" } else { "utf-16" },
+        // TextDocumentSyncKind.Full
+        text_document_sync = TextDocumentSyncOptions { open_close = true, change = 1, save = true },
+        document_symbol_provider = true,
+        folding_range_provider = true,
+        workspace_symbol_provider = true,
+        hover_provider = true,
+        definition_provider = true,
+        type_definition_provider = true,
+        references_provider = true,
+        inlay_hint_provider = true,
+        document_formatting_provider = true,
+        code_lens_provider = lens,
+        signature_help_provider = SignatureHelpOptions { trigger_characters = triggers },
+    }, server_info = ServerInfo { name = "flang-lsp", version = self.version.view } }
 }
 
 fn is_utf8_encoding(enc: PositionEncoding) bool {

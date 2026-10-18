@@ -33,10 +33,7 @@ pub fn as_view(sb: &StringBuilder) String {
 const SB_DEFAULT_CAPACITY: usize = 16
 
 // Create a new empty StringBuilder with the given initial capacity.
-pub fn string_builder(
-    capacity: usize = 0,
-    allocator: &Allocator = context.allocator,
-) StringBuilder {
+pub fn string_builder(capacity: usize = 0, allocator: &Allocator = context.allocator) StringBuilder {
     let sb: StringBuilder
     sb.allocator = allocator
     if (capacity > 0) {
@@ -165,10 +162,7 @@ pub fn to_string(sb: &StringBuilder, allocator: &Allocator) OwnedString {
     // Null-terminate for C FFI compatibility
     const term = buf.ptr + sb.len
     term.* = 0
-    const result = OwnedString {
-        view = .{ ptr = buf.ptr, len = sb.len },
-        allocator = allocator,
-    }
+    const result = OwnedString { view = .{ ptr = buf.ptr, len = sb.len }, allocator = allocator }
     sb.ptr = 0usize as &u8
     sb.len = 0
     return result

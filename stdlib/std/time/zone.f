@@ -209,9 +209,10 @@ fn in_zone(dt: DateTime, tz: TimeZone) Result(OffsetDateTime, TimeError) {
 
 // The wall-clock reading at the offset.
 pub fn datetime(self: OffsetDateTime) DateTime {
-    return datetime_from_ticks(
-        checked_add(self.instant.ticks, self.offset as i64 * TICKS_PER_SECOND),
-    )
+    return datetime_from_ticks(checked_add(
+        self.instant.ticks,
+        self.offset as i64 * TICKS_PER_SECOND,
+    ))
 }
 
 // By instant, as C# compares DateTimeOffset: the same moment read at two offsets is equal.

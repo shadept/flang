@@ -680,14 +680,28 @@ Design:
           14, 80, 58, 6, 39,
       ]
 
-  A group is broken when its author put a line break straight after its
-  opener (so a broken list stays broken), or when a line it sits on is wider
-  than `max-width` and it is the outermost flat group on that line - inner
-  groups are only considered once the outer ones are broken. A trailing
-  comment does not count toward the width. Overflow is found by rendering:
-  a render that breaks a group is rerun under the new set, until one breaks
-  none. A brace body inside a flat group (a lambda argument) keeps the group
-  flat on its opening line: `g(fn() {`.
+  Layout is width-driven, as in rustfmt: where the author broke a list does
+  not matter. A group is broken when a line it sits on is wider than
+  `max-width` and it is the outermost flat group on that line - inner groups
+  are only considered once the outer ones are broken - or when a comment or
+  a blank line sits between its own elements, which a flat layout would
+  lose. A trailing comment does not count toward the width, and neither does
+  the `{` opening a function body: a signature fits when it fits up to the
+  end of its return type. Overflow is found by rendering: a render that
+  breaks a group is rerun under the new set, until one breaks none. A call
+  whose one argument is a struct or array literal hands its overflow to the
+  literal, and through another one-argument call to that call's list
+  (rustfmt's last-argument overflow); only when the hugged line still
+  overflows does the call itself break:
+
+      xs.push(Some(Pair {
+          left = 1,
+          right = 2,
+      }))
+
+  A brace body inside a flat group (a lambda argument) keeps the group flat
+  on its opening line: `g(fn() {`. With `join-lines` off, an authored break
+  after an opener keeps its group broken.
 - **Signatures.** A `where` clause is a group the body's `{` closes, and a
   signature holding one is a group around both lists: an overflowing
   signature first moves `where` to a line of its own at the declaration's

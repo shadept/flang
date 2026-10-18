@@ -102,12 +102,7 @@ type History = struct {
 }
 
 fn history() History {
-    let h = History {
-        entries = [0u8; 16384],
-        offsets = [0usize; 128],
-        count = 0,
-        buf_used = 0,
-    }
+    let h = History { entries = [0u8; 16384], offsets = [0usize; 128], count = 0, buf_used = 0 }
     return h
 }
 

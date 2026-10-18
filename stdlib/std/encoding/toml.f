@@ -76,10 +76,7 @@ pub fn format(self: TomlError, w: Writer, spec: String) {
 // =============================================================================
 
 // Parse a TOML document into a map.
-pub fn parse_toml(
-    input: String,
-    allocator: &Allocator = context.allocator,
-) Result(Value, TomlError) {
+pub fn parse_toml(input: String, allocator: &Allocator = context.allocator) Result(Value, TomlError) {
     let p = parser(input, allocator)
     defer p.deinit()
     let root = value_map(allocator)

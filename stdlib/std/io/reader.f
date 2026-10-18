@@ -38,12 +38,7 @@ pub type BufferedReader = struct {
 // Create a BufferedReader over the given storage slice. If storage is empty, reads pass through
 // directly (unbuffered).
 pub fn buffered_reader(r: Reader, storage: u8[]) BufferedReader {
-    return .{
-        inner = r,
-        buf = storage,
-        pos = 0,
-        end = 0,
-    }
+    return .{ inner = r, buf = storage, pos = 0, end = 0 }
 }
 
 // Read a single byte. Returns the byte in an Option; null on EOF.

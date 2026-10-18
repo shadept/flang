@@ -246,10 +246,7 @@ const counting_allocator_vtable = AllocatorVTable {
 }
 
 pub fn allocator(state: &CountingAllocator) Allocator {
-    return Allocator {
-        impl = state as &u8,
-        vtable = &counting_allocator_vtable,
-    }
+    return Allocator { impl = state as &u8, vtable = &counting_allocator_vtable }
 }
 
 // Start counting again from here, with whatever is currently live as the new baseline. Measures one
@@ -396,17 +393,11 @@ const fixed_buffer_allocator_vtable = AllocatorVTable {
 // Initialize a FixedBufferAllocator from a pre-allocated buffer. This allocator should not outlive
 // the provided buffer.
 pub fn fixed_buffer_allocator(buffer: u8[]) FixedBufferAllocatorState {
-    return .{
-        buffer = buffer,
-        offset = 0,
-    }
+    return .{ buffer = buffer, offset = 0 }
 }
 
 pub fn allocator(state: &FixedBufferAllocatorState) Allocator {
-    return Allocator {
-        impl = state as &u8,
-        vtable = &fixed_buffer_allocator_vtable,
-    }
+    return Allocator { impl = state as &u8, vtable = &fixed_buffer_allocator_vtable }
 }
 
 // Reset a FixedBufferAllocator to reuse its buffer from the beginning.
@@ -636,10 +627,7 @@ pub fn reset(state: &ArenaAllocator) {
 }
 
 pub fn allocator(state: &ArenaAllocator) Allocator {
-    return Allocator {
-        impl = state as &u8,
-        vtable = &arena_allocator_vtable,
-    }
+    return Allocator { impl = state as &u8, vtable = &arena_allocator_vtable }
 }
 
 test "a null allocator reference is the global allocator" {

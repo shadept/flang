@@ -153,11 +153,7 @@ fn synth_eof(self: &Parser) Token {
         return self.tree.tokens[self.tree.tokens.len - 1]
     }
     // Zero-token input - caller misuse. Hand back a degenerate Eof.
-    return Token {
-        kind = TokenKind.Eof,
-        text = "",
-        offset = 0usize,
-    }
+    return Token { kind = TokenKind.Eof, text = "", offset = 0usize }
 }
 
 fn current_kind(self: &Parser) TokenKind {
@@ -190,12 +186,7 @@ fn token_end(tok: Token) usize {
 
 fn open(self: &Parser, kind: NodeKind) NodeBuilder {
     const tok = self.current()
-    return .{
-        kind = kind,
-        start = tok.offset,
-        end = tok.offset,
-        mark = self.scratch.len,
-    }
+    return .{ kind = kind, start = tok.offset, end = tok.offset, mark = self.scratch.len }
 }
 
 // Close the node: move its buffered children into the flat array and register it. Returns the id,
@@ -207,17 +198,15 @@ fn finish(self: &Parser, b: NodeBuilder) CstNodeId {
     }
     self.scratch.truncate(b.mark)
     const id = self.tree.nodes.len as CstNodeId
-    self.tree.nodes.push(
-        CstNodeData {
-            kind = b.kind,
-            start = b.start as u32,
-            end = b.end as u32,
-            children = ChildSpan {
-                start = start as u32,
-                len = (self.tree.children.len - start) as u32,
-            },
+    self.tree.nodes.push(CstNodeData {
+        kind = b.kind,
+        start = b.start as u32,
+        end = b.end as u32,
+        children = ChildSpan {
+            start = start as u32,
+            len = (self.tree.children.len - start) as u32,
         },
-    )
+    })
     return id
 }
 

@@ -74,11 +74,7 @@ pub type BufferedWriter = struct {
 // Create a BufferedWriter over the given storage slice. If storage is empty, writes flush
 // immediately (unbuffered).
 pub fn buffered_writer(w: Writer, storage: u8[]) BufferedWriter {
-    return .{
-        inner = w,
-        buf = storage,
-        pos = 0,
-    }
+    return .{ inner = w, buf = storage, pos = 0 }
 }
 
 // Write a single byte through the buffer.

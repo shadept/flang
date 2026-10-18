@@ -117,11 +117,7 @@ fn classify_chunk(chunk_ptr: &u8, delimiter: u8, quote: u8) ChunkMasks {
     const quote_mask = v128_movemask(v128_cmpeq_u8(chunk, v128_splat_u8(quote)))
     const lf_mask = v128_movemask(v128_cmpeq_u8(chunk, v128_splat_u8(0x0A)))
     const cr_mask = v128_movemask(v128_cmpeq_u8(chunk, v128_splat_u8(0x0D)))
-    return .{
-        delimiters = delim_mask,
-        quotes = quote_mask,
-        newlines = lf_mask | cr_mask,
-    }
+    return .{ delimiters = delim_mask, quotes = quote_mask, newlines = lf_mask | cr_mask }
 }
 
 fn compute_quote_parity(quote_mask: u32, carry: u64) (u32, u64) {

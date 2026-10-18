@@ -310,12 +310,7 @@ pub fn set(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: 
 
 // String-key insert for `UnmanagedDict(OwnedString, V)`: the key is a borrowed view, copied into an
 // owned key only when it is new to the table.
-pub fn set(
-    self: &UnmanagedDict(OwnedString, $V),
-    key: String,
-    value: move V,
-    allocator: &Allocator,
-) {
+pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V, allocator: &Allocator) {
     const existing = self.find_index(key)
     if existing.is_some() {
         const i = existing.unwrap()

@@ -44,12 +44,7 @@ pub fn main() i32 {
     let args = get_args()
     defer args.deinit()
 
-    let opts: Options = .{
-        path = "",
-        time_mode = false,
-        iterations = 1,
-        help = false,
-    }
+    let opts: Options = .{ path = "", time_mode = false, iterations = 1, help = false }
     let parsed = parse_args(args.as_slice(), &opts)
     if !parsed {
         return 1

@@ -193,10 +193,7 @@ pub fn deinit(self: move Doomed) {
 // The whole tree is collected before the first deletion: readdir behaviour while a directory is
 // being modified is implementation-defined. That costs one owned path per entry, which is the right
 // trade for a build directory and the wrong one for a filesystem root.
-pub fn remove_dir_all(
-    path: String,
-    allocator: &Allocator = context.allocator,
-) Result((), DirError) {
+pub fn remove_dir_all(path: String, allocator: &Allocator = context.allocator) Result((), DirError) {
     let walk = walk_dir(path, allocator).map_err(to_dir_error)?
     defer walk.deinit()
 

@@ -42,12 +42,7 @@ pub type ComptimeCtx = struct {
 // The compiling host's context. os/arch resolve through this compiler's OWN #if - evaluated when
 // the compiler binary itself was built.
 pub fn host_ctx() ComptimeCtx {
-    return .{
-        os = host_os(),
-        arch = host_arch(),
-        testing = false,
-        release = false,
-    }
+    return .{ os = host_os(), arch = host_arch(), testing = false, release = false }
 }
 
 fn host_os() String {
@@ -192,12 +187,7 @@ pub type CtEnv = struct {
 }
 
 pub fn ct_env(ctx: &ComptimeCtx, alloc: &Allocator, lookup: CtLookup) CtEnv {
-    return .{
-        ctx = ctx,
-        bindings = dict(alloc),
-        lookup = lookup,
-        alloc = alloc,
-    }
+    return .{ ctx = ctx, bindings = dict(alloc), lookup = lookup, alloc = alloc }
 }
 
 // Evaluates a #if condition to its branch decision, or the diagnostic to report. Never guesses: any
@@ -454,12 +444,7 @@ fn ct_index(env: &CtEnv, ix: &IndexExpr) Result(CtValue, CtError) {
     }
 }
 
-fn ct_slice(
-    env: &CtEnv,
-    recv: &CtValue,
-    rg: &RangeExpr,
-    span: SourceSpan,
-) Result(CtValue, CtError) {
+fn ct_slice(env: &CtEnv, recv: &CtValue, rg: &RangeExpr, span: SourceSpan) Result(CtValue, CtError) {
     const items: List(CtValue) = recv.* match {
         List(l) => move l
         _ => return ct_err("E2118", $"cannot slice {describe(recv)}", span)
@@ -493,13 +478,11 @@ fn ct_expect_int(env: &CtEnv, e: &Expr) Result(i64, CtError) {
     const v = ct_eval(env, e)?
     return v match {
         I(i) => Ok(i)
-        _ => Err(
-            CtError {
-                code = "E2118",
-                message = $"expected an integer, got {describe(&v)}",
-                span = expr_span(e),
-            },
-        )
+        _ => Err(CtError {
+            code = "E2118",
+            message = $"expected an integer, got {describe(&v)}",
+            span = expr_span(e),
+        })
     }
 }
 
@@ -577,12 +560,7 @@ fn ct_call(env: &CtEnv, c: &CallExpr) Result(CtValue, CtError) {
     return ct_err("E2116", $"unknown compile-time function `{name}`", c.span)
 }
 
-fn ct_member(
-    env: &CtEnv,
-    recv: &CtValue,
-    member: String,
-    span: SourceSpan,
-) Result(CtValue, CtError) {
+fn ct_member(env: &CtEnv, recv: &CtValue, member: String, span: SourceSpan) Result(CtValue, CtError) {
     return recv.* match {
         NsPlatform => {
             if member == "os" {

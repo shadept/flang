@@ -172,10 +172,7 @@ pub fn walk_dir(root: String, allocator: &Allocator = context.allocator) Result(
     const root_len = sb.len
 
     let stack: Stack(WalkFrame) = stack(8, allocator)
-    stack.push(WalkFrame {
-        dir = move root_iter,
-        path_len_before = root_len,
-    })
+    stack.push(WalkFrame { dir = move root_iter, path_len_before = root_len })
 
     return Ok(WalkIter { stack = move stack, path_buf = move sb, last_error = null, done = false })
 }
@@ -221,11 +218,7 @@ pub fn next(self: &WalkIter) WalkEntry? {
         const depth = self.stack.len() - 1
 
         const path_view = self.path_buf.as_view()
-        const result = WalkEntry {
-            path = path_view,
-            kind = entry.kind,
-            depth = depth,
-        }
+        const result = WalkEntry { path = path_view, kind = entry.kind, depth = depth }
 
         // Descend into directories (not symlinks - avoid cycles).
         if is_kind_dir(entry.kind) {
@@ -291,11 +284,7 @@ pub fn glob(pattern: String, allocator: &Allocator = context.allocator) Result(G
     let pat_buf = string_builder(pattern.len + 1, allocator)
     pat_buf.append(pattern)
 
-    return Ok(GlobIter {
-        walk = move walk,
-        pattern = move pat_buf,
-        done = false,
-    })
+    return Ok(GlobIter { walk = move walk, pattern = move pat_buf, done = false })
 }
 
 pub fn iter(self: &GlobIter) &GlobIter {

@@ -277,10 +277,7 @@ pub type PathComponents = struct {
 }
 
 pub fn components(self: &Path) PathComponents {
-    return .{
-        bytes = self.as_raw_bytes(),
-        pos = 0,
-    }
+    return .{ bytes = self.as_raw_bytes(), pos = 0 }
 }
 
 pub fn iter(self: &PathComponents) &PathComponents {
