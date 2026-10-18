@@ -406,7 +406,6 @@ fn is_scalar_ty(it: &TypeInterner, ty: Ty) bool {
     return it.node(ty) match {
         NPrim(_) => true
         NRef(_) => true
-        NFunc(_) => true
         _ => false
     }
 }

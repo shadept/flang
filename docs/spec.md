@@ -574,7 +574,7 @@ fn handle(req: &Request) {
 4. **Generics are unaffected.** The context is not part of an instantiation.
 5. **Entry.** `main`, the constant initializers and every `test {}` block run under the root context: every field at its default.
 
-**ABI.** Every FLang function, closure body and test block takes the address of the current context (`const Context *`) as its first parameter, and every call to one passes it; `#foreign` functions take none. A `fn` value is a FLang function, so a call through one passes the context too, and a `#foreign` function is no `fn` value (lowering refuses it). A rebind builds the new context in the caller's frame and passes its address within the body; leaving the body needs no code. The layout of `Context` holds every field of the program, ordered by module FQN then declaration order.
+**ABI.** Every FLang function, closure body and test block takes two hidden parameters after its own, and after the result buffer of an aggregate return: the address of the current context (`const Context *`), then `env`, the state of the function being called (RFC-037). Every call passes both; a direct call passes a null `env`, which only a closure body reads. `#foreign` functions take neither. A `fn` value calls through the same convention, and a `#foreign` function is no `fn` value (lowering refuses it). A rebind builds the new context in the caller's frame and passes its address within the body; leaving the body needs no code. The layout of `Context` holds every field of the program, ordered by module FQN then declaration order.
 
 ---
 
@@ -874,14 +874,16 @@ In an `if`, `while` or `for` header the `{` at the header's level opens the body
 
 **Arrow-less lambdas and `it`.** A lambda with no `=>` takes its arity from the callable expected where it is passed: a function type, or a type parameter the callee bounds by one. At arity one its parameter is named `it`; at arity zero it has none, and an outer `it` stays visible. An expected arity above one, or none at all, is E2154. `it` is not a keyword: it names the parameter only inside an arrow-less lambda, shadowing any outer `it`, and a nested arrow-less lambda's `it` shadows the enclosing one's. An arrow-less lambda appears only in argument or trailing position.
 
-A lambda with no captured names desugars to a synthesised module-level function (effectively a bare function pointer). A lambda that references names from the enclosing scope is a **capturing closure** (RFC-014): the compiler synthesises an anonymous `__Closure_N` struct holding a reference to each captured binding and an `op_call(self: &__Closure_N, ...)` body that reads and writes each capture through `self`.
+A lambda with no captured names desugars to a synthesised module-level function. A lambda that references names from the enclosing scope is a **capturing closure** (RFC-014): the compiler synthesises an anonymous `__Closure_N` struct holding a reference to each captured binding and an `op_call(self: &__Closure_N, ...)` body that reads and writes each capture through `self`.
 
 **Capture rules** (RFC-033):
 - Every capture is by reference. The closure sees the binding's current value when it runs, and an assignment inside the body (`c = c + 1`, `xs.push(v)`, `&c`) writes the enclosing binding.
 - A closure that outlives a captured binding dangles, as a returned `&local` does (§3.6).
 - Moving a capture out of the closure is refused (E2131); a capture of a parameter without `move` stays read-only. The body is otherwise checked like any function body.
 - A nested closure captures through the enclosing one: a name from further out is taken from the enclosing closure's environment.
-- A capturing closure has an anonymous nominal type and **cannot decay into a bare `fn(...) Ret` slot** (E2111) — that slot has no env storage. Pass capturing closures through a generic parameter (`fn apply(f: $F, x: i32) i32 { return f(x) }`) which dispatches via `op_call`.
+- A capturing closure has an anonymous nominal type. It converts to a function type its signature fits, as any callable does (below), or travels through a generic parameter (`fn apply(f: $F, x: i32) i32 { return f(x) }`), which instantiates per closure type and calls its body directly.
+
+**Function values** (RFC-037). `fn(P1, ..., Pn) R` is the type of any callable of that shape. A named function, a lambda and a capturing closure convert to it where a value of that type is expected: an argument, an initializer, a field, a context field. The value is a pair, `{ code, env }`: `code` is the callable's body and `env` its state, null for a named function or a non-capturing lambda and the closure's address for a capturing one. A function that takes `fn(...)` is compiled once, whatever is passed. The value borrows the closure it was made from and owns nothing, so it is copyable and lives no longer than the frame that made the closure; one made from a named function or a non-capturing lambda is valid anywhere. An overloaded name converts to the overload whose signature is the function type. Parameters and return match exactly, except that a closure's reading parameter also fills a `move` slot.
 
 **Parameter type inference** mirrors anonymous-struct rules. Each unannotated parameter must have its type inferable from one of:
 - the corresponding parameter type at the call site (typed callback parameter, e.g. passing the lambda to `map(fn(T) U)`),

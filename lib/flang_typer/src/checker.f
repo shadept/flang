@@ -2468,6 +2468,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
 pub fn collect_signatures(self: &Checker, module: &Module, module_path: String) {
     self.current_module = Some(module_path)
     self.engine.set_nominal_registry(&self.nominals)
+    self.engine.set_closure_table(&self.closures)
 
     for &decl in module.decls {
         collect_one_signature(self, decl)
@@ -8572,8 +8573,8 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
     }
 
     // Capturing closure: synthesize the environment struct (one `&T` field per capture, RFC-033)
-    // and record how to call it. The literal's type is the anonymous nominal - it can never unify
-    // with a bare fn type (E2111); it travels through generic `$F` slots instead.
+    // and record how to call it. The literal's type is the anonymous nominal; it converts to a
+    // function type its signature fits (RFC-037).
     let module_name = self.current_module.unwrap_or("__synthetic")
     let fields: List(Field) = list(frame.captures.len)
     for i in 0..frame.captures.len {
@@ -9558,25 +9559,8 @@ fn check_deferred_lambda(self: &Checker, d: &DeferredLambda, call_span: SourceSp
         )
     }
     const t = check_lambda(self, d.lam, arity ?? 1, shape)
-    if closure_of(self, self.engine.resolve(t)).is_some() and slot_is_fn(self, d.slot) {
-        push_diag_e(
-            self,
-            d.lam.span,
-            E_CLOSURE_TO_FN,
-            from_view(
-                "a capturing closure cannot coerce to a bare `fn` parameter (it has no environment slot); pass it through a generic `$F` parameter instead",
-            ),
-        )
-        return
-    }
+    self.results.record_type(self.node_of(d.lam.span), t)
     unify_expected(self, t, d.slot, E_TYPE_MISMATCH, d.lam.span)
-}
-
-fn slot_is_fn(self: &Checker, slot: Ty) bool {
-    return ty_node(self, self.engine.resolve(slot)) match {
-        NFunc(_) => true
-        _ => false
-    }
 }
 
 // The function type a call expects in `slot`: the parameter's own, or the bound the picked overload
@@ -9847,9 +9831,6 @@ fn resolve_direct_call(
         if pick.is_none() and no_slot {
             return Some(report_no_trailing_slot(self, ide.name, call.span))
         }
-        if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
-            return Some(self.engine.fresh_var())
-        }
         return Some(commit_pick(
             self,
             pick,
@@ -9978,9 +9959,6 @@ fn resolve_method_call(
         full.push(recv_ty)
         full.push_all(arg_tys.as_slice())
         return Some(park_call(self, call, ma.member, &full, pos_exprs, 1usize, Some(adapted)))
-    }
-    if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
-        return Some(self.engine.fresh_var())
     }
     return Some(commit_pick(
         self,
@@ -10676,28 +10654,6 @@ fn check_default(self: &Checker, fn_id: u32, e: &Expr) Ty {
     self.env.reveal(hidden)
     self.current_module = caller_module
     return t
-}
-
-// E2111 (RFC-014): when an overload failed and one of the arguments is a capturing closure, the
-// likely cause is a bare `fn` parameter the closure cannot decay into - say so instead of the
-// generic message.
-fn closure_arg_hint(self: &Checker, arg_tys: &List(Ty), span: SourceSpan) bool {
-    for i in 0..arg_tys.len {
-        let z = self.engine.resolve(arg_tys[i])
-        let cls = closure_of(self, z)
-        if cls.is_some() {
-            push_diag_e(
-                self,
-                span,
-                E_CLOSURE_TO_FN,
-                from_view(
-                    "a capturing closure cannot coerce to a bare `fn` parameter (it has no environment slot); pass it through a generic `$F` parameter instead",
-                ),
-            )
-            return true
-        }
-    }
-    return false
 }
 
 // `recv.field(args)` where `field` is a Func-typed struct field - the vtable-dispatch pattern. Null
@@ -15235,6 +15191,7 @@ pub fn check_all(
     const signatures_start = monotonic_ns()
     const fns_before = self.functions.next_id
     self.engine.set_nominal_registry(&self.nominals)
+    self.engine.set_closure_table(&self.closures)
     // Context fields first, every module every demand: a signature's default value may read one
     // declared further down or in a module checked later. A field re-registers at the id it held.
     for i in seq {
@@ -18236,14 +18193,14 @@ test "a nested closure captures through the enclosing one (RFC-033)" {
     assert_eq(errs, 0 as usize, "transitive captures check")
 }
 
-test "a capturing closure cannot fill a bare fn slot (E2111 hint)" {
+test "a capturing closure converts to a fn parameter (RFC-037)" {
     let errs = count_check_errors(
         [
-            "fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { let k = 1\n return apply({ v => v + k }, 2) }\n",
+            "fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { let k = 1\n let g = { v: i32 => v + k }\n return apply({ v => v + k }, 2) + apply(g, 2) }\n",
         ],
         ["m"],
     )
-    assert_true(errs > 0, "closure into fn slot reports")
+    assert_eq(errs, 0 as usize, "a closure literal and a closure local both fill the fn slot")
 }
 
 test "a lambda inside a generic template records per instantiation" {

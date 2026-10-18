@@ -47,6 +47,7 @@ pub fn function(name: String, return_ty: IrType?) FunctionBuilder {
             blocks = move blocks,
             variadic = false,
             cc = CallConv.C,
+            exported = false,
             next_value_id = 0u32,
             label_storage = move labels,
         },
@@ -80,6 +81,11 @@ pub fn param(self: &FunctionBuilder, ty: IrType) Operand {
 // Set the function's calling convention; a new builder's is `C`.
 pub fn set_cc(self: &FunctionBuilder, cc: CallConv) {
     self.func.set_cc(cc)
+}
+
+// Give the function external linkage; a new builder's is file-local.
+pub fn set_exported(self: &FunctionBuilder, on: bool) {
+    self.func.set_exported(on)
 }
 
 // Create the entry block. The function's parameters (declared via `.param()`) are already in scope.

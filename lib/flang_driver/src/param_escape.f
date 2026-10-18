@@ -200,8 +200,8 @@ fn bound_escapes(e: &Expr?, al: &List(String), r: &TypeCheckResult, ov: &Inferen
     }
 }
 
-// Whether the checker typed `e` as a value held in a register: a primitive, a reference or a
-// function. A node it did not type is not.
+// Whether the checker typed `e` as a value held in a register: a primitive or a reference. A node
+// it did not type is not.
 fn is_scalar(e: &Expr, r: &TypeCheckResult, ov: &InferenceResults?) bool {
     const id = node_id_of(expr_span(e))
     const own = ov match {
@@ -212,7 +212,6 @@ fn is_scalar(e: &Expr, r: &TypeCheckResult, ov: &InferenceResults?) bool {
         Some(ty) => r.interner.node(ty) match {
             NPrim(_) => true
             NRef(_) => true
-            NFunc(_) => true
             _ => false
         }
         None => false

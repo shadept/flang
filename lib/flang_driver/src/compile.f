@@ -55,6 +55,8 @@ pub fn build_unit(unit: &AnalyzedUnit, output_path: String) Result(BuildResult, 
 // cannot link for. `tests`, when given, builds a test binary instead of the program: it is parallel
 // to `modules` and marks the ones whose `test {}` blocks to run, `name_filter` narrows those by
 // label, and the entry point becomes the generated runner rather than the project's `main`.
+// `exports`, parallel to `modules`, marks the modules whose `pub` functions keep external linkage;
+// every other function is `static`.
 pub fn build_program(
     modules: &List(Module),
     fqns: &List(OwnedString),
@@ -76,9 +78,19 @@ pub fn build_program(
     emit_only: bool = false,
     tests: &List(bool)? = null,
     name_filter: String? = null,
+    exports: &List(bool)? = null,
 ) Result(BuildResult, BuildError) {
     const lower_start = monotonic_ns()
-    let m = lower_program(modules, fqns, result, comptime_ctx, demanded, tests, name_filter)
+    let m = lower_program(
+        modules,
+        fqns,
+        result,
+        comptime_ctx,
+        demanded,
+        tests,
+        name_filter,
+        exports,
+    )
     const lower_ns = elapsed_ns(lower_start)
     if stats and m.skip_notes.len > 0 {
         const hdr = $"  {m.functions.len} function(s) emitted, {m.skip_notes.len} skipped:"

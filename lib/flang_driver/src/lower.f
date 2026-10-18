@@ -170,6 +170,8 @@ type LowerCtx = struct {
     // far, which is what names them.
     testing: bool
     next_test: usize
+    // The module being lowered exports its `pub` functions (`lower_program`'s `exports`).
+    exporting: bool
     // `core.rtti.TypeInfo` descriptors minted so far, keyed by type (`static_typeinfo`): one global
     // per type for the whole program, so `&TypeInfo` identity is type identity.
     rtti_syms: Dict(Ty, String)
@@ -433,6 +435,7 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult) IrModule {
         lay_cache = layout_cache(),
         testing = false,
         next_test = 0,
+        exporting = false,
         rtti_syms = dict(),
         cur_ctx = Operand.GlobalRef(ROOT_CONTEXT_SYM),
     }
@@ -463,7 +466,8 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult) IrModule {
 // marks. Test mode leaves the project's `main` out, because the backend's generated runner is the
 // entry point instead, and it emits the constant initializers as their own function for that runner
 // to call. Both filters (`--name`, the path argument) are already applied in `tests` and
-// `test_labels` by the caller, so what lowers is exactly what will run.
+// `test_labels` by the caller, so what lowers is exactly what will run. `exports`, parallel to
+// `modules`, marks the modules whose `pub` functions keep external linkage.
 pub fn lower_program(
     modules: &List(Module),
     fqns: &List(OwnedString),
@@ -472,6 +476,7 @@ pub fn lower_program(
     demanded: &List(bool)? = null,
     tests: &List(bool)? = null,
     name_filter: String? = null,
+    exports: &List(bool)? = null,
 ) IrModule {
     let m = module()
     let sb = symbol_builder(result)
@@ -515,6 +520,7 @@ pub fn lower_program(
         lay_cache = layout_cache(),
         testing = tests.is_some(),
         next_test = 0,
+        exporting = false,
         rtti_syms = dict(),
         cur_ctx = Operand.GlobalRef(ROOT_CONTEXT_SYM),
     }
@@ -532,7 +538,9 @@ pub fn lower_program(
     const root = lower_root_context(&m, &ctx, modules.as_slice(), fqns.as_slice())
     for i in 0..modules.len {
         if module_demanded(demanded, i) {
+            ctx.exporting = exports.is_some() and i < exports.unwrap().len and exports.unwrap()[i]
             lower_into(&m, &ctx, &modules[i], fqns[i].view)
+            ctx.exporting = false
         } else {
             lower_foreign_decls(&m, &ctx, &modules[i], fqns[i].view)
         }
@@ -864,6 +872,7 @@ fn lower_test_block(m: &IrModule, ctx: &LowerCtx, td: &TestDecl, fqn: String) {
     let fb = function(sym, null)
     fb.set_cc(CallConv.Flang)
     ctx.cur_ctx = fb.param(IrType.Ptr)
+    const _env_param = fb.param(IrType.Ptr)
     let env = new_env()
     let cur = fb.entry()
     ctx.blocked = false
@@ -1402,11 +1411,15 @@ fn const_struct(
     return true
 }
 
-// A function name in value position decays to its address (RFC-014), which is a relocation. Only
-// names the checker resolved to a function qualify - a local shadows one, and a const read names
-// storage rather than code.
+// A function name in value position is a `{ code, env }` pair (RFC-037): `code` is the function's
+// address, a relocation, and `env` stays zero. Only names the checker resolved to a function
+// qualify - a local shadows one, and a const read names storage rather than code.
 fn const_fn_ref(ctx: &LowerCtx, ty: &Ty, id: &IdentifierExpr, rel: &List(Reloc), at: usize) bool {
-    if is_by_ref(ctx, ty) {
+    const is_fn = tn(ctx, ty.*) match {
+        NFunc(_) => true
+        _ => false
+    }
+    if !is_fn {
         return false
     }
     let tgt = ctx_target(ctx, node_id_of(id.span))
@@ -1740,7 +1753,7 @@ fn lower_function(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) {
         return
     }
     let sig = sig_opt.unwrap()
-    lower_function_body(m, ctx, decl, sym, sig)
+    lower_function_body(m, ctx, decl, sym, sig, null, ctx.exporting and decl.is_pub)
 }
 
 // Lower every specialization the checker instantiated (M10): the template's declaration re-lowers
@@ -1865,6 +1878,7 @@ fn lower_function_body(
     sym: String,
     sig: &FnSig,
     closure: LoweredClosure? = null,
+    exported: bool = false,
 ) {
     // The scheme and the decl are two views of one declaration; a length mismatch is a violated
     // contract, not a case to paper over.
@@ -1883,22 +1897,7 @@ fn lower_function_body(
     }
 
     let fb = function(sym, return_ir)
-    // Every FLang function takes the caller's context first (RFC-038). `main` takes none: the C
-    // entry point calls it, and it runs under the root.
-    if sym == "main" {
-        ctx.cur_ctx = Operand.GlobalRef(ROOT_CONTEXT_SYM)
-    } else {
-        fb.set_cc(CallConv.Flang)
-        ctx.cur_ctx = fb.param(IrType.Ptr)
-    }
-    let env = new_env()
-    // A closure op_call takes its environment struct's address as a leading parameter, before the
-    // lambda's own parameters (and before the sret slot, mirroring the call-site layout in
-    // `lower_callee_value_call`).
-    let self_op: Operand? = null
-    if closure.is_some() {
-        self_op = Some(fb.param(IrType.Ptr))
-    }
+    fb.set_exported(exported)
     let param_ops: List(Operand) = list(decl.params.len + 1)
     for i in 0..sig.params.len {
         param_ops.push(fb.param(ir_of(ctx, sig.params[i])))
@@ -1907,6 +1906,18 @@ fn lower_function_body(
     if ret_agg {
         sret_op = Some(fb.param(IrType.Ptr))
     }
+    // Every FLang function takes the caller's context and then `env` after its own parameters
+    // (RFC-037, RFC-038); a closure's `env` is its capture struct, any other function ignores it.
+    // `main` takes neither: the C entry point calls it, and it runs under the root.
+    let self_op: Operand? = null
+    if sym == "main" {
+        ctx.cur_ctx = Operand.GlobalRef(ROOT_CONTEXT_SYM)
+    } else {
+        fb.set_cc(CallConv.Flang)
+        ctx.cur_ctx = fb.param(IrType.Ptr)
+        self_op = Some(fb.param(IrType.Ptr))
+    }
+    let env = new_env()
 
     // `cur` is the block cursor: control flow moves it, so the body's final terminator lands on
     // whatever block lowering ended in, not the entry.
@@ -2959,7 +2970,7 @@ fn lower_lambda(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lam: &LambdaExpr) 
     let info = info_opt.unwrap()
     ctx.pending_lambdas.push(PendingLambda { lam = lam, info = info, overlay = ctx.overlay })
     if info.captures.len == 0 {
-        return Operand.FuncRef(info.symbol.view)
+        return fn_value(bb, Operand.FuncRef(info.symbol.view), Operand.NullPtr)
     }
     let cid = info.closure_id.unwrap()
     let no_args: List(Ty) = list(0)
@@ -3156,6 +3167,10 @@ fn lower_adapted(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, e: &Expr, want: &
         return lower_deref_receiver(ctx, bb, env, e, chain.unwrap(), want)
     }
     let src = node_ty(ctx, expr_span(e))
+    const cv = closure_fn_value(ctx, bb, env, e, src, want)
+    if cv.is_some() {
+        return cv.unwrap()
+    }
     // `[T; N]` or `&[T; N]` - either way `lower_expr` yields the elements' base address (an
     // aggregate IS its address; a reference's value is the pointee's).
     let a = tn(ctx, src) match {
@@ -4025,7 +4040,8 @@ fn intercept_rtti(ctx: &LowerCtx, sym: String, sig: &FnSig) Operand? {
 // Emit a direct call to `sym` with declared signature `sig`, handling the three return classes:
 // void (and Never), scalar, and aggregate - the last through a caller-allocated buffer passed as a
 // trailing sret argument, mirroring `lower_function`'s parameter layout. Takes ownership of `args`.
-// The result operand of an aggregate-returning call is the buffer's address.
+// The result operand of an aggregate-returning call is the buffer's address. `env` is the callee's
+// own state: a closure's capture struct, null for any other function.
 fn emit_call(
     ctx: &LowerCtx,
     bb: &BlockBuilder,
@@ -4033,28 +4049,30 @@ fn emit_call(
     sig: &FnSig,
     args: move List(Operand),
     foreign: bool = false,
+    env: Operand = Operand.NullPtr,
 ) Operand {
     if foreign {
         return emit_foreign_call(ctx, bb, sym, sig, args)
     }
-    // The current context goes first (RFC-038).
-    let full: List(Operand) = list(args.len + 2)
-    full.push(ctx.cur_ctx)
-    full.push_all(args.as_slice())
-    args.deinit()
+    let tmp: Operand? = null
     if is_by_ref(ctx, &sig.ret) {
         let lay = lay_of(ctx, sig.ret)
-        let tmp = bb.stack_slot(lay.size as u64, lay.align as u64)
-        full.push(tmp)
-        bb.call_void(sym, full)
-        return tmp
+        tmp = Some(bb.stack_slot(lay.size as u64, lay.align as u64))
+        args.push(tmp.unwrap())
+    }
+    // The context and `env` follow the arguments (RFC-037, RFC-038).
+    args.push(ctx.cur_ctx)
+    args.push(env)
+    if tmp.is_some() {
+        bb.call_void(sym, args)
+        return tmp.unwrap()
     }
     let returns_value = !(sig.ret == TY_VOID or sig.ret == TY_NEVER)
     if !returns_value {
-        bb.call_void(sym, full)
+        bb.call_void(sym, args)
         return Operand.IntConst(0)
     }
-    return bb.call(sym, ir_of(ctx, sig.ret), full)
+    return bb.call(sym, ir_of(ctx, sig.ret), args)
 }
 
 // A call across a C boundary. Aggregates travel BY VALUE here, not by address as they do between
@@ -4094,9 +4112,47 @@ fn emit_foreign_call(
     return bb.call(sym, ir_of(ctx, sig.ret), args)
 }
 
+// A capturing closure landing in a function-typed slot (RFC-037): the pair of its call body and its
+// own address, which the body reads its captures through. Null for any other value.
+fn closure_fn_value(
+    ctx: &LowerCtx,
+    bb: &BlockBuilder,
+    env: &Env,
+    e: &Expr,
+    src: Ty,
+    want: &Ty,
+) Operand? {
+    const to_fn = tn(ctx, want.*) match {
+        NFunc(_) => true
+        _ => false
+    }
+    if !to_fn {
+        return null
+    }
+    const cid = tn(ctx, src) match {
+        NNominal(nn) => nn.id
+        _ => return null
+    }
+    const c = ctx.result.get_closure(cid)
+    if c.is_none() {
+        return null
+    }
+    const closure = lower_expr(ctx, bb, env, e)
+    return Some(fn_value(bb, Operand.FuncRef(c.unwrap().symbol.view), closure))
+}
+
+// A function value (RFC-037): a fresh `{ code, env }` pair. Its operand is the pair's address, as
+// for any aggregate.
+fn fn_value(bb: &BlockBuilder, code: Operand, env: Operand) Operand {
+    let slot = bb.stack_slot(16u64, 8u64)
+    bb.store(IrType.Ptr, code, slot)
+    bb.store(IrType.Ptr, env, bb.gep(slot, Operand.IntConst(8)))
+    return slot
+}
+
 // A call whose callee is a value rather than a resolved symbol. A closure value dispatches directly
-// to its synthesized op_call with the value's address as the leading env argument; a bare fn-typed
-// value calls through `CallIndirect`. Anything else is a call the checker left unresolved - refuse.
+// to its synthesized op_call with the value's address as `env`; a bare fn-typed value calls through
+// `CallIndirect`. Anything else is a call the checker left unresolved - refuse.
 fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Operand {
     let callee_ty = node_ty(ctx, expr_span(call.callee))
 
@@ -4110,17 +4166,17 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
             return unlowerable(ctx)
         }
         let c = cs.unwrap()
-        let args: List(Operand) = list(call.args.len + 2)
+        let args: List(Operand) = list(call.args.len + 3)
         // The closure struct is an aggregate: lowering it yields its address, which IS the env
         // pointer op_call expects.
-        args.push(lower_expr(ctx, bb, env, call.callee))
+        const closure_env = lower_expr(ctx, bb, env, call.callee)
         for i in 0..call.args.len {
             call.args[i] match {
                 Positional(e) => args.push(lower_expr(ctx, bb, env, e))
                 Named(_) => {}
             }
         }
-        if args.len != c.params.len + 1 {
+        if args.len != c.params.len {
             args.deinit()
             return unlowerable(ctx)
         }
@@ -4131,7 +4187,7 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
         }
         let sig_params: List(Ty) = list(0)
         let sig = FnSig { params = move sig_params, ret = c.ret }
-        return emit_call(ctx, bb, c.symbol.view, &sig, args)
+        return emit_call(ctx, bb, c.symbol.view, &sig, args, false, closure_env)
     }
 
     let ft = tn(ctx, callee_ty) match {
@@ -4150,23 +4206,22 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
         }
     }
     let f = ft.unwrap()
-    let fn_ptr = lower_expr(ctx, bb, env, call.callee)
+    let pair = lower_expr(ctx, bb, env, call.callee)
+    let fn_ptr = bb.load(IrType.Ptr, pair)
+    let fn_env = bb.load(IrType.Ptr, bb.gep(pair, Operand.IntConst(8)))
     let n_fparams = f.params.len
-    // A fn value is a FLang function: the current context goes first (RFC-038).
-    let ptys: List(IrType) = list(n_fparams + 2)
-    ptys.push(IrType.Ptr)
+    let ptys: List(IrType) = list(n_fparams + 3)
     for i in 0..n_fparams {
         ptys.push(ir_of(ctx, tyit(ctx).child_at(f.params, i)))
     }
-    let args: List(Operand) = list(call.args.len + 2)
-    args.push(ctx.cur_ctx)
+    let args: List(Operand) = list(call.args.len + 3)
     for i in 0..call.args.len {
         call.args[i] match {
             Positional(e) => args.push(lower_expr(ctx, bb, env, e))
             Named(_) => {}
         }
     }
-    if args.len != n_fparams + 1 {
+    if args.len != n_fparams {
         args.deinit()
         ptys.deinit()
         return unlowerable(ctx)
@@ -4177,13 +4232,22 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
         ptys.deinit()
         return unlowerable(ctx)
     }
+    let tmp: Operand? = null
     if is_by_ref(ctx, &f.ret) {
         let lay = lay_of(ctx, f.ret)
-        let tmp = bb.stack_slot(lay.size as u64, lay.align as u64)
-        args.push(tmp)
+        tmp = Some(bb.stack_slot(lay.size as u64, lay.align as u64))
+        args.push(tmp.unwrap())
         ptys.push(IrType.Ptr)
+    }
+    // A fn value is a FLang function: the context and `env` follow the arguments (RFC-037,
+    // RFC-038).
+    args.push(ctx.cur_ctx)
+    ptys.push(IrType.Ptr)
+    args.push(fn_env)
+    ptys.push(IrType.Ptr)
+    if tmp.is_some() {
         bb.call_indirect_void(fn_ptr, ptys, args, CallConv.Flang)
-        return tmp
+        return tmp.unwrap()
     }
     let returns_value = !(f.ret == TY_VOID or f.ret == TY_NEVER)
     if !returns_value {
@@ -6932,7 +6996,7 @@ fn lower_identifier(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, id: &Identifie
                     }
                     let s = ctx.syms.lookup_symbol(f)
                     if s.is_some() {
-                        return Operand.FuncRef(s.unwrap())
+                        return fn_value(bb, Operand.FuncRef(s.unwrap()), Operand.NullPtr)
                     }
                 }
                 // An overloaded name resolved to a generic winner
@@ -6940,7 +7004,7 @@ fn lower_identifier(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, id: &Identifie
                 RtSpecialized(sid) => {
                     let s2 = ctx.syms.spec_symbol(sid)
                     if s2.is_some() {
-                        return Operand.FuncRef(s2.unwrap())
+                        return fn_value(bb, Operand.FuncRef(s2.unwrap()), Operand.NullPtr)
                     }
                 }
                 RtConst(fqn) => return read_const(ctx, bb, fqn, &want)
@@ -7541,16 +7605,15 @@ fn node_ty(ctx: &LowerCtx, span: SourceSpan) Ty {
     return prim_of(PrimitiveKind.I32)
 }
 
-// A resolved `Ty` to its FIR scalar type. References and function values are pointers; other
-// non-scalar shapes fold to `i64` so placeholder arithmetic over a still-refused construct emits
-// compilable C. An unresolved type variable is different: since M10 every lowered body is concrete,
-// so a `Var` here is a checker bug, not a subset gap - fail loudly rather than bake a guessed width
-// into real code.
+// A resolved `Ty` to its FIR scalar type. References are pointers; other non-scalar shapes,
+// function values included (`ir_of` passes those by address), fold to `i64` so placeholder
+// arithmetic over a still-refused construct emits compilable C. An unresolved type variable is
+// different: since M10 every lowered body is concrete, so a `Var` here is a checker bug, not a
+// subset gap - fail loudly rather than bake a guessed width into real code.
 fn ty_to_ir(ctx: &LowerCtx, ty: Ty) IrType {
     return tn(ctx, ty) match {
         NPrim(p) => prim_ir(p)
         NRef(_) => IrType.Ptr
-        NFunc(_) => IrType.Ptr
         NVar(_) => panic("unresolved type variable reached lowering - checker bug")
         _ => IrType.I64
     }
@@ -7890,7 +7953,11 @@ test "lowers a direct call to the callee's mangled symbol" {
         first_callee(&m.functions[mi]) == "callee__i32__r_i32",
         "call names the callee's signature symbol",
     )
-    assert_eq(first_call_argc(&m.functions[mi]), 2 as usize, "the context and one argument")
+    assert_eq(
+        first_call_argc(&m.functions[mi]),
+        3 as usize,
+        "one argument, then the context and env",
+    )
 }
 
 test "a UFCS call passes the receiver as the first argument" {
@@ -7909,8 +7976,8 @@ test "a UFCS call passes the receiver as the first argument" {
     )
     assert_eq(
         first_call_argc(&m.functions[mi]),
-        2 as usize,
-        "the context, then the receiver as the only argument",
+        3 as usize,
+        "the receiver as the only argument, then the context and env",
     )
 }
 
@@ -7966,7 +8033,7 @@ test "lowers a function over parameters into an add and a return" {
     assert_eq(m.functions.len, 1 as usize, "one function lowered")
     let f = &m.functions[0]
     assert_true(f.name == "add__i32__i32__r_i32", "definition carries its signature symbol")
-    assert_eq(f.params.len, 3 as usize, "the context and two parameters")
+    assert_eq(f.params.len, 4 as usize, "two parameters, then the context and env")
     assert_eq(f.blocks.len, 1 as usize, "single straight-line block")
 
     let is_ret = f.blocks[0].terminator match { Ret(_) => true, _ => false }
@@ -8829,7 +8896,7 @@ test "a ref-form index operator is called, and its result is the address to load
     let m = lower_module(&unit.module, &unit.result)
     let f = &m.functions[find_fn_starting(&m, "f__ref")]
     assert_eq(call_count(f), 1 as usize, "the operator is called once")
-    assert_eq(first_call_argc(f), 3 as usize, "context, receiver and index")
+    assert_eq(first_call_argc(f), 4 as usize, "receiver and index, then the context and env")
     assert_true(is_load_result(f, returned_local(f)), "the value is loaded, not the pointer itself")
 }
 
@@ -8962,7 +9029,11 @@ test "an aggregate parameter arrives by pointer, and a read-only body copies not
     let ci = find_fn_starting(&m, "get_0x__")
     assert_true(ci < m.functions.len, "the by-value struct signature is lowerable now")
     let callee = &m.functions[ci]
-    assert_eq(callee.params.len, 2 as usize, "the context, then one pointer carrying the struct")
+    assert_eq(
+        callee.params.len,
+        3 as usize,
+        "one pointer carrying the struct, then the context and env",
+    )
     assert_eq(
         memcpy_count(callee),
         0 as usize,
@@ -8988,7 +9059,11 @@ test "an aggregate return travels through a trailing sret parameter" {
     let ci = find_fn_starting(&m, "make__i32")
     assert_true(ci < m.functions.len, "the aggregate-returning signature is lowerable now")
     let callee = &m.functions[ci]
-    assert_eq(callee.params.len, 3 as usize, "the context, the declared param, the sret pointer")
+    assert_eq(
+        callee.params.len,
+        4 as usize,
+        "the declared param, the sret pointer, the context, env",
+    )
     assert_true(
         callee.return_ty.is_none(),
         "FIR return slot is empty - the buffer carries the value",
@@ -9460,7 +9535,7 @@ test "an enum parameter passes by value and its payload binds in a match" {
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "a by-value enum signature is lowerable now")
     let f = &m.functions[fi]
-    assert_eq(f.params.len, 2 as usize, "the context, then one pointer carrying the enum")
+    assert_eq(f.params.len, 3 as usize, "one pointer carrying the enum, then the context and env")
     assert_true(block_count_starting(f, "m_arm") == 2 as usize, "both arms lowered")
 }
 

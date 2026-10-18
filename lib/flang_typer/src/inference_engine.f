@@ -34,6 +34,7 @@ import flang_core.span
 
 import flang_typer.coercion
 import flang_typer.copyable
+import flang_typer.inference_results
 import flang_typer.interner
 import flang_typer.nominal_registry
 import flang_typer.scheme
@@ -153,6 +154,9 @@ pub type Engine = struct {
     // The checker calls `set_nominal_registry` after `collect_nominals` finishes; until then
     // nominal-aware rules silently no-op.
     nominals: &NominalRegistry?
+    // The checker's capturing closures, by their nominal id: what a closure converts to a function
+    // type by (RFC-037). Wired by `set_closure_table` beside the registry.
+    closures: &Dict(NominalId, ClosureSig)?
     // Rigid variables: a generic body's own type parameters while the body is checked without an
     // instantiation (RFC-029). One unifies with itself and with an unbound variable, nothing else;
     // the value is whether a `where T: copyable` bound lets it copy.
@@ -179,6 +183,7 @@ pub fn engine() Engine {
         var_counter = 0u32,
         level = 0u32,
         nominals = null,
+        closures = null,
         rigid = dict(),
     }
 }
@@ -188,6 +193,12 @@ pub fn engine() Engine {
 // HM-without-sugar works in isolation.
 pub fn set_nominal_registry(self: &Engine, reg: &NominalRegistry) {
     self.nominals = Some(reg)
+}
+
+// Wire the checker's closure table into the engine, so a capturing closure converts to a function
+// type its signature fits.
+pub fn set_closure_table(self: &Engine, closures: &Dict(NominalId, ClosureSig)) {
+    self.closures = Some(closures)
 }
 
 pub fn deinit(self: move Engine) {
@@ -722,10 +733,45 @@ fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
             if r9.is_some() {
                 return r9
             }
+            let r11 = try_closure_to_fn(self, from, to)
+            if r11.is_some() {
+                return r11
+            }
         }
         None => {}
     }
     return null
+}
+
+// A capturing closure converts to a function type with its own parameter and return types
+// (RFC-037). A closure's parameters only read, so it fits a `move` slot too: the side-unification
+// takes the slot's `move` marks.
+fn try_closure_to_fn(self: &Engine, from: Ty, to: Ty) Coercion? {
+    const table = self.closures match {
+        Some(t) => t
+        None => return null
+    }
+    const id = self.interner.node(from) match {
+        NNominal(nn) => nn.id
+        _ => return null
+    }
+    const want = self.interner.node(to) match {
+        NFunc(f) => f
+        _ => return null
+    }
+    const sig = table.get_ref(id) match {
+        Some(s) => s
+        None => return null
+    }
+    if sig.params.len != want.params.len {
+        return null
+    }
+    let ps: List(Ty) = list(sig.params.len)
+    ps.push_all(sig.params.as_slice())
+    const have = self.mk_func(ps, sig.ret, want.moves)
+    let side: List(Constraint) = list(1)
+    side.push(Constraint { a = have, b = to })
+    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
 }
 
 // Commit a coercion atomically: open a checkpoint, run every side- unification through the main

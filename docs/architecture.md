@@ -441,21 +441,21 @@ Lowering keys locals by name (`HmAstLowering._locals`). A block is a lexical sco
 
 ### Parameter copy elision
 
-`lib/flang_driver/src/param_elision.f` runs on each function as the builder finishes it, before it
-reaches an `IrModule`. It removes the prologue shadow copy of a by-value aggregate parameter whose
-body neither writes to it nor lets its address escape, which is what spec §3.2 promises. It is part
-of lowering rather than the optimization pipeline because the elision is a language guarantee, not a
-speed-up: the address of a read-only parameter is observably the caller's, and E2122 exists to keep
-that observation sound.
+`lib/flang_driver/src/param_escape.f` reads each checked body before `lower_function_body` emits
+it, and a by-value aggregate parameter the body neither writes nor lets escape gets no prologue
+shadow copy: it keeps the caller's pointer. It runs in lowering because lowering is where the
+shadow is emitted, so a read-only parameter never gets one to delete. The elision is what spec
+§3.2's value semantics permit, not a promise: whether a parameter shares the caller's storage is
+unspecified. E2122 keeps the copy-on-write analysis sound, since a reference fabricated from an
+integer could write through a laundered parameter address.
 
 A non-copyable parameter gets no shadow whatever its body does (RFC-033): without `move` the
 checker refuses every write (E2131), and with `move` the caller's binding is dead after the call,
 so writing the caller's storage is unobservable. The copyable bit is read before the analysis.
 
 The analysis is intraprocedural and reads no callee bodies - any tainted address reaching a call
-argument is an escape. Working on FIR is what makes the classification total: twelve instruction
-forms cover every construct the language has, since desugars, operators, UFCS receivers and template
-expansions all arrive as loads, stores, geps and calls.
+argument is an escape. Its matches over `Expr`, `Stmt` and `Pattern` are total, so a new variant is
+a build error there.
 
 ## Runtime Context (RFC-038)
 
@@ -465,7 +465,11 @@ Language rules are spec §4.4; this is how the pipeline carries them.
 
 **Assembly.** At the end of `check_all`, `assemble_context` sorts every registered field by module FQN then source offset and installs them as the fields of `core.runtime.Context`'s definition, so ordinary layout queries size the context; `TypeCheckResult.context_fields` lists their FQNs in that order. Field names may repeat across modules, so lowering finds a field by FQN index, never by name, and `struct_field_lookup` ignores `Context`'s fields.
 
-**Calling conventions.** `fir.CallConv` is `C` (`#foreign`, the generated entry points, constant initializers) or `Flang`. A `Flang` function's first FIR parameter is the `const Context *` it runs under; lowering adds it in `lower_function_body` (closures and specializations included, ahead of a closure's environment pointer) and `lower_test_block`, and passes `LowerCtx.cur_ctx` first in `emit_call` and in every `CallIndirect` (`cc = Flang`), since every `fn` value is a FLang function. A `#foreign` function used as a value is refused rather than given a context it does not take. The C backend has no special case: the context is an ordinary `void*` parameter.
+**Calling conventions.** `fir.CallConv` is `C` (`#foreign`, the generated entry points, constant initializers) or `Flang`. A `Flang` function's last two FIR parameters are the `const Context *` it runs under and `env` (RFC-037), after its own parameters and the sret pointer; lowering adds them in `lower_function_body` (closures and specializations included: a closure body's `env` is its capture struct) and `lower_test_block`. `emit_call` appends `LowerCtx.cur_ctx` and the callee's `env` (null except for a closure body called through its nominal type), and every `CallIndirect` (`cc = Flang`) appends the context and the `fn` value's own `env`. A `#foreign` function used as a value is refused rather than given a context it does not take. The C backend has no special case: both are ordinary `void*` parameters.
+
+**Function values** (RFC-037). A `fn(...)` type lays out as a 16-byte `{ code, env }` aggregate (`layout.f`), so it crosses calls by address and returns through sret like any aggregate. `fn_value` builds one in a stack slot: a function name or a non-capturing lambda pairs its `FuncRef` with null, and `closure_fn_value` (in `lower_adapted`) pairs a capturing closure's call body with the closure's address when the closure lands in a function-typed slot. A function name in a constant is a relocation at the pair's offset with a zero `env`. `lower_callee_value_call` loads both words and calls `code` with `env` last. The checker side is the `try_closure_to_fn` coercion in `inference_engine.f`, which reads the checker's closure table (`set_closure_table`).
+
+**Linkage.** Every generated function is `static` except `main` and `Function.exported` ones: the `pub` functions of the build root's own modules when it is `kind = "lib"` (`build_program`'s `exports`). The C compiler then sees every caller, so it can drop an unused hidden parameter and delete a body it inlined everywhere.
 
 **Root and entry.** `lower_root_context` encodes every field's default at its offset into one relocated global, `ROOT_CONTEXT_SYM`, pushed after every other global so the plain globals its relocations name precede it. FIR `main` takes no parameter and runs with `cur_ctx = GlobalRef(root)`, as the `__finit_*` constant initializers do; the test runner passes the root to `std.test.run_test` (lowering finds it by name), which rebinds the test's context and calls the test.
 

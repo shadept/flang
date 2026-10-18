@@ -388,6 +388,9 @@ pub type Function = struct {
     blocks: List(Block)
     variadic: bool
     cc: CallConv
+    // External linkage: a `pub` function of a `kind = "lib"` build root. Every other function is
+    // file-local, so the C compiler sees all its callers.
+    exported: bool
     next_value_id: u32
     // Owned backing buffers for builder-minted block labels; every `Block.label` and branch target
     // is a view into one of these.
@@ -669,6 +672,10 @@ pub fn add_param(self: &Function, p: BlockParam) {
 
 pub fn set_cc(self: &Function, cc: CallConv) {
     self.cc = cc
+}
+
+pub fn set_exported(self: &Function, on: bool) {
+    self.exported = on
 }
 
 // Append a block and return its index.

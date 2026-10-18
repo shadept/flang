@@ -240,7 +240,8 @@ fn layout_rec(it: &TypeInterner, ty: Ty, reg: &NominalRegistry, cache: &LayoutCa
         NVar(_) => panic("unresolved type variable reached layout - checker bug")
         NPrim(p) => prim_layout(p)
         NRef(_) => lay(8, 8)
-        NFunc(_) => lay(8, 8)
+        // `{ code, env }` (RFC-037).
+        NFunc(_) => lay(16, 8)
         NArray(a) => array_layout(it, &a, reg, cache)
         NTuple(span) => span_size(it, span, reg, cache)
         NRecord(rec) => span_size(it, rec.tys, reg, cache)
@@ -688,9 +689,10 @@ fn next_pow2(v: usize) usize {
 // Whether a type is SPELLED as an aggregate. Purely syntactic - the pointer-niche `Option(&T)` is
 // nominal and so counts, even though its runtime value is a bare pointer. Use `is_by_ref` for the
 // runtime classification; this stays the right test for `ir_of`, where the niche form is `ptr`
-// either way.
+// either way. A function value is the `{ code, env }` pair (RFC-037).
 pub fn is_aggregate(it: &TypeInterner, ty: Ty) bool {
     return it.node(ty) match {
+        NFunc(_) => true
         NNominal(_) => true
         NRecord(_) => true
         NTuple(_) => true

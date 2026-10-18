@@ -2442,7 +2442,7 @@ With the original name `Directive`, `Directive.Inline` errored as `No variant In
 
 ### RFC-014 Phase 2 Follow-ups
 
-**Status:** Phase 1 (`op_call`) and Phase 2 (capturing lambdas, by-value) landed. Single-level capturing closures synthesise an anonymous `__Closure_N` struct holding captures by value, and an `op_call(self: &__Closure_N, ...)` body with capture references projected through `self`. Tests in `tests/harness/closures/`. Coercion of capturing closures into bare `fn(...) ret` slots is rejected with **E2111**; assignment to a captured name from inside the body is rejected with **E2112** (capture is by value, so the write would only mutate the closure's own field, which is misleading).
+**Status:** Phase 1 (`op_call`) and Phase 2 (capturing lambdas, by-value) landed. Single-level capturing closures synthesise an anonymous `__Closure_N` struct holding captures by value, and an `op_call(self: &__Closure_N, ...)` body with capture references projected through `self`. Tests in `tests/harness/closures/`. Coercion of capturing closures into bare `fn(...) ret` slots was rejected with **E2111** until RFC-037 made a function value a `{ code, env }` pair; assignment to a captured name from inside the body is rejected with **E2112** (capture is by value, so the write would only mutate the closure's own field, which is misleading).
 
 **Resolved — captured callables called inside the closure body.** A capturing closure whose captured variable was itself a callable (a fn value or another closure) type-checked but miscompiled: the body emitted a direct call to the captured name (`g(x)` → undeclared C function) instead of projecting through the env. Two combined causes in the checker: `TryIndirectCall` looked the callee up via `Scopes.Lookup`, bypassing `InferIdentifier`'s crossed-frame capture recording (a callable used *only* in call position was never captured, so the lambda lowered as non-capturing), and `RewriteCaptureRefsExpr` rewrote identifier/argument positions but never a call's `FunctionName`. Fixed by sharing the capture-recording (`RecordCrossedFrameCaptures`) with `TryIndirectCall` and rewriting bare calls to captured callables into the field-call `self.g(x)` — `TryFieldCall` then calls fn-pointer fields indirectly and dispatches closure-typed fields through `op_call`. Also covers a `$F` param captured by a lambda inside a generic fn (exercised per-specialization). Tests: `tests/harness/closures/closure_capture_fn_value.f`, `closure_capture_closure.f`, `closure_capture_generic_fn_param.f`.
 
@@ -2578,18 +2578,25 @@ When a `match` arm binds a payload, the binding is always **by value**. `match s
 
 ---
 
-### Overloaded Functions Can't Be Used As First-Class Values
+### Overloaded Functions Can't Fill a Generic Callable Slot
 
 **Status:** Open
-**Affected:** Type inference when a bare function name is passed as a `fn(...)` value
+**Affected:** A bare overloaded name passed where the parameter is a type parameter bounded by a function type
 
-`op_cmp` is overloaded across many types. Passing it as a function-typed argument — e.g. `_quicksort_range(s, 0, s.len, op_cmp)` — fails because overload resolution has no expected type at the point the name is taken as a value, and the compiler picks the first registered overload (typically `op_cmp(String, String)`) regardless of context.
+A bare overloaded name passed to a `fn(...)` parameter picks the overload whose signature is that type (`resolve_fn_name_values`): `apply(21, twice)` with `f: fn(i32) i32` takes `twice(i32) i32`. Passed to `f: $F where F: fn(T, T) Ord`, it is E2001 ("cannot infer the type arguments"): the name's slot unifies with `F`'s variable, which never becomes a function type, so nothing picks an overload.
 
-**Workaround:** Wrap in an inline lambda: `{ a: T, b: T => op_cmp(a, b) }`. This defers overload resolution until the call site, where T is concrete. The `std.sort` wrappers (`sort(s)`, `quicksort(s)`, etc.) use this pattern internally.
+**Workaround:** Wrap in a lambda: `{ a, b => op_cmp(a, b) }`. `std.sort` does, for `sort(s) where T: Ordered`.
 
-**Concrete case (2026-08-20):** `self.__cwd.map(deinit)` for `__cwd: OwnedString?` ICEs at lowering ("unresolved type variable reached lowering") — `deinit` has ~40 overloads and nothing picks `deinit(&OwnedString)` from `map`'s `fn(T) $U` parameter. Functions as values are a first-class feature of the language; overload resolution here is a compiler bug, not a design limit — the expected parameter type names the overload unambiguously. The rewritten site uses `Option.deinit` instead (`self.__cwd.deinit()`), which is the better idiom regardless.
+**Fix:** once the call resolves, pin each still-open overloaded-name argument to the function type its parameter's bound gives (`slot_shape`, as deferred lambdas do); `resolve_fn_name_values` then picks unchanged. With the stdlib on `fn(...)` callbacks (RFC-037) the generic form is opt-in, so this matters less. A `&T`-taking overload (`deinit`) still fits only a `&T` slot.
 
-**Future (agreed direction, 2026-08-20):** With the stdlib combinators now duck-typed (`f: $F`), context-directed pick by expected type no longer applies — a `$F` slot carries no signature. The agreed design is **instantiation-time resolution**: bind the slot to an unresolved overload-set and resolve it against concrete argument types at the instantiation's internal call site (the same machinery that pins unannotated lambda params through `$F`). See docs/tickets/019 §4. The by-ref wrinkle stands: `deinit` overloads take `&T` and combinators invoke value-mode, so this also depends on the argument-adaptation decision (ticket 019 §1).
+---
+
+### Function Values: `op_call` Types and C Callbacks Do Not Convert
+
+**Status:** Open (RFC-037 plan step 3 leftovers)
+**Affected:** `fn(...)` slots filled by a value with `op_call`; `#foreign` signatures naming a function type
+
+A named function, a lambda and a capturing closure convert to a function type. A user type with `op_call(self: &Self, ...)` does not yet: RFC-037 converts it through a thunk passing `env` as `self`, which is not emitted. Pass it through a generic `$F` parameter meanwhile. A `#foreign` signature that takes or returns a function type is not lowerable (`ty_lowerable` refuses the pair at a C boundary); RFC-037's thin form, a thunk supplying the root context, is not built either. No stdlib foreign takes a callback today.
 
 ---
 

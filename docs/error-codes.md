@@ -3490,33 +3490,10 @@ return r.map(fn(u) u.name).ok()
 
 ---
 
-### E2111: Capturing Closure Cannot Coerce to Bare Function Pointer
+### E2111: Capturing Closure Cannot Coerce to Bare Function Pointer (retired)
 
-**Category**: Type Checking
-**Severity**: Error
-
-#### Description
-
-A `fn(...) Ret` value-position type is a bare function pointer with no env storage. RFC-014 captures by value, so a closure with a non-empty capture set cannot decay to that representation — it would lose the captured environment. Empty-capture lambdas decay normally.
-
-#### Example
-
-```flang
-fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }
-
-pub fn main() i32 {
-    let k = 7
-    return apply({ x: i32 => x * k }, 5)   // error E2111
-}
-```
-
-#### Solution
-
-Either remove the capture (pass `k` as an extra argument), make the higher-order function generic over the callable type, or wrap the closure with an explicit boxing helper.
-
-```flang
-fn apply(f: $F, x: i32) i32 { return f(x) }   // generic over the closure type
-```
+Retired by RFC-037. A function type is a `{ code, env }` pair, so a capturing closure converts to
+one whose signature it fits.
 
 ---
 

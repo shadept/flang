@@ -113,7 +113,7 @@ pub fn translate(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = null) 
 // optimizer to mangle on exactly the failure path they are meant to count.
 fn emit_test_runner(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = null) {
     sb.append("\n/* flang test runner */\n")
-    sb.append("typedef void (*__flang_test_fn)(void*);\n")
+    sb.append("typedef void (*__flang_test_fn)(void*, void*);\n")
 
     // Both tables carry a trailing null the count leaves out. It costs a pointer and spares the
     // zero-test case: an empty initializer list is not a C array, and a run whose filters matched
@@ -182,16 +182,21 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = nul
     // `std.test.run_test` rebinds the test's context; without it the test runs under the root.
     m.run_test match {
         Some(sym) => {
+            // `run_test(body: fn())` takes the test as a `{ code, env }` pair, by address.
+            sb.append("            ")
+            sb.append(
+                "void* __flang_test_body[2] = { (void*)__flang_test_fns[__flang_test_i], 0 };\n",
+            )
             sb.append("            ")
             sb.append(sym.view)
-            sb.append("(")
+            sb.append("((void*)__flang_test_body, ")
             emit_operand(Operand.GlobalRef(ROOT_CONTEXT_SYM), sb)
-            sb.append(", (void*)__flang_test_fns[__flang_test_i]);\n")
+            sb.append(", 0);\n")
         }
         None => {
             sb.append("            __flang_test_fns[__flang_test_i](")
             emit_operand(Operand.GlobalRef(ROOT_CONTEXT_SYM), sb)
-            sb.append(");\n")
+            sb.append(", 0);\n")
         }
     }
     sb.append("            __flang_test_active = 0;\n")
@@ -768,6 +773,9 @@ fn emit_fn_decl(f: &Function, sb: &StringBuilder) {
         // is captured into runtime globals.
         sb.append("int main(int __flang_argc_, char** __flang_argv_)")
         return
+    }
+    if !f.exported {
+        sb.append("static ")
     }
     emit_ret_type(f.return_ty, sb)
     sb.append(" ")

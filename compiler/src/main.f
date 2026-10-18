@@ -633,7 +633,8 @@ fn build_project(opts: &BuildOpts) i32 {
     const suffix = if opts.testing { "-test" } else { "" }
     const out = $"{proj.output.view}/{proj.name.view}{suffix}"
     defer out.deinit()
-    return finish_build(&unit, proj.name.view, out.view, opts, &libs, &ldflags)
+    const lib_root = proj.kind match { Lib => true, _ => false }
+    return finish_build(&unit, proj.name.view, out.view, opts, &libs, &ldflags, lib_root)
 }
 
 // Single-file mode: the file is the sole entry of a project-less build, so its imports resolve
@@ -713,7 +714,8 @@ fn expand_all(items: &List(OwnedString), missing: &List(OwnedString)) List(Owned
     return out
 }
 
-// Shared render -> gate -> lower -> link tail for both build modes.
+// Shared render -> gate -> lower -> link tail for both build modes. `lib_root`: the build root is a
+// `kind = "lib"` project, whose own `pub` functions keep external linkage.
 fn finish_build(
     unit: &AnalyzedProject,
     label: String,
@@ -721,6 +723,7 @@ fn finish_build(
     opts: &BuildOpts,
     libs: &List(OwnedString),
     ldflags: &List(OwnedString),
+    lib_root: bool = false,
 ) i32 {
     const style = resolve_style(opts.color)
     render_project_diagnostics(&unit.diagnostics, &unit.file_paths, &unit.sources, &style)
@@ -779,6 +782,7 @@ fn finish_build(
     }
 
     let prof_out: String? = if opts.profile_out.len > 0 { Some(opts.profile_out) } else { null }
+    let exports: &List(bool)? = if lib_root { Some(&unit.project_origin) } else { null }
     let result = build_program(
         &unit.modules,
         &unit.fqns,
@@ -800,6 +804,7 @@ fn finish_build(
         opts.emit_c_only,
         tests,
         name_filter,
+        exports,
     )
     if result.is_err() {
         report_build_error(&result.unwrap_err(), label)

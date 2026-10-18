@@ -3,7 +3,7 @@ status: implemented
 type: language
 created: 2026-10-17
 implemented: 2026-10-18
-relates: [RFC-005, RFC-014, RFC-037]
+relates: [RFC-005, RFC-014, RFC-037, RFC-041]
 ---
 
 # RFC-038: Runtime context
@@ -104,18 +104,20 @@ const mesh = context(allocator = &frame) {
 ### ABI
 
 - **Two conventions.** `flang`: every FLang function, closure `op_call`, test body and
-  `#inline` body; takes `const Context *` as its first C parameter. `c`: `#foreign` functions; no
-  context.
-- **`fn` values carry `flang`.** An indirect call passes the context first; under RFC-037 the code
-  pointer is `R code(ctx, env, args...)`.
+  `#inline` body; takes `const Context *` after its own parameters, followed only by RFC-037's
+  `env`: `R f(args..., ctx, env)`. `c`: `#foreign` functions; no context. First implemented with the
+  context first; RFC-037 moved it last, so the user's arguments keep the argument registers and the
+  hidden parameters are the first to spill.
+- **`fn` values carry `flang`.** An indirect call passes the context; under RFC-037 the code
+  pointer is `R code(args..., ctx, env)`.
 - **Entry.** C `main` initializes the runtime and passes the address of the static root context
   to the constant initializers, to FLang `main`, and to each test function.
 - **Rebinding** builds a new `Context` in the current frame (copy of the base with the named
   fields replaced) and passes its address within the body. Exit needs no code: the outer
   pointer is still live in the frame, so `return`, `?` and panics are correct.
-- **Register.** On the C backend the context arrives in the first argument register; the C
-  compiler places it from there. Pinning a register is a native-backend decision, deferred until
-  that backend exists.
+- **Register.** On the C backend the context arrives in the argument register after the user's
+  arguments, or on the stack once they fill the registers; the C compiler places it from there.
+  Pinning a register is a native-backend decision, deferred to RFC-041.
 - Not crossing C: a C-to-FLang callback has no context. None exist today; when they do, they get
   the root context through a thunk.
 
@@ -217,7 +219,7 @@ Step 6's promote is `seed/20261017`. Step 7 landed revised, 2026-10-18:
 
 ## Out of scope
 
-- Register pinning (native backend).
+- Register pinning (native backend, RFC-041).
 - Context for C-to-FLang callbacks (TLS slot), until a callback exists.
 - Bare `logger` resolving to a context field when ordinary lookup fails. Revisit if `context.`
   proves too heavy in server code.
