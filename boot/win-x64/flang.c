@@ -2853,7 +2853,7 @@ static void flang_0typer__checker__own_0collect_0slots__ref_flang_0typer__checke
 static int8_t flang_0typer__checker__own_0is_0slot__ref_flang_0typer__checker__OwnPass__u64__r_bool(void* v0, int64_t v1, void* v2, void* v3);
 static void flang_0typer__checker__own_0slot_0root__ref_flang_0typer__checker__Checker__ref_flang_0typer__checker__OwnPass__ref_flang_0parser__ast__Expr__r_core__option__Option_u64(void* v0, void* v1, void* v2, void* v3, void* v4, void* v5);
 static void flang_0typer__checker__own_0run__ref_flang_0typer__checker__Checker__ref_flang_0parser__ast__BlockExpr__std__collections__list__List_u64__std__collections__list__List_u64__bool__std__collections__list__List_u64(void* v0, void* v1, void* v2, void* v3, int8_t v4, void* v5, void* v6, void* v7);
-static void flang_0typer__checker__own_0collect_0lent__ref_flang_0typer__checker__Checker__ref_std__collections__list__List_u64__core__slice__Slice_flang_0parser__ast__FunctionParam(void* v0, void* v1, void* v2, void* v3, void* v4);
+static void flang_0typer__checker__own_0collect_0lent__ref_flang_0typer__checker__Checker__ref_std__collections__list__List_u64__core__slice__Slice_flang_0parser__ast__FunctionParam__usize(void* v0, void* v1, void* v2, int64_t v3, void* v4, void* v5);
 static void flang_0typer__checker__own_0lambda__ref_flang_0typer__checker__Checker__ref_flang_0typer__checker__OwnPass__ref_flang_0parser__ast__LambdaExpr(void* v0, void* v1, void* v2, void* v3, void* v4);
 static void flang_0typer__checker__own_0deinit__flang_0typer__checker__OwnPass(void* v0, void* v1, void* v2);
 static int8_t flang_0typer__checker__own_0is_0lent__ref_flang_0typer__checker__OwnPass__u64__r_bool(void* v0, int64_t v1, void* v2, void* v3);
@@ -3976,6 +3976,7 @@ static void flang_0typer__inference_0engine__unify_0rigid__ref_flang_0typer__inf
 static void flang_0typer__inference_0engine__unify_0concrete__ref_flang_0typer__inference_0engine__Engine__u32__u32__r_flang_0typer__inference_0engine__UnifyOutcome(void* v0, int32_t v1, int32_t v2, void* v3, void* v4, void* v5);
 static void flang_0typer__inference_0engine__try_0coercion__ref_flang_0typer__inference_0engine__Engine__u32__u32__r_core__option__Option_flang_0typer__coercion__Coercion(void* v0, int32_t v1, int32_t v2, void* v3, void* v4, void* v5);
 static void flang_0typer__inference_0engine__try_0closure_0to_0fn__ref_flang_0typer__inference_0engine__Engine__u32__u32__r_core__option__Option_flang_0typer__coercion__Coercion(void* v0, int32_t v1, int32_t v2, void* v3, void* v4, void* v5);
+static void flang_0typer__inference_0engine__try_0fn_0subsume__ref_flang_0typer__inference_0engine__Engine__u32__u32__ref_flang_0typer__nominal_0registry__NominalRegistry__r_core__option__Option_flang_0typer__coercion__Coercion(void* v0, int32_t v1, int32_t v2, void* v3, void* v4, void* v5, void* v6);
 static void flang_0typer__inference_0engine__apply_0coercion__ref_flang_0typer__inference_0engine__Engine__flang_0typer__coercion__Coercion__flang_0typer__inference_0engine__UnifyOutcome__r_flang_0typer__inference_0engine__UnifyOutcome(void* v0, void* v1, void* v2, void* v3, void* v4, void* v5);
 static void flang_0typer__inference_0engine__unify_0var_0var__ref_flang_0typer__inference_0engine__Engine__flang_0typer__type__TyVar__flang_0typer__type__TyVar__r_flang_0typer__inference_0engine__UnifyOutcome(void* v0, void* v1, void* v2, void* v3, void* v4, void* v5);
 static void flang_0typer__inference_0engine__bind_0var__ref_flang_0typer__inference_0engine__Engine__flang_0typer__type__TyVar__u32__r_flang_0typer__inference_0engine__UnifyOutcome(void* v0, void* v1, int32_t v2, void* v3, void* v4, void* v5);
@@ -253333,7 +253334,7 @@ for_exit32:;
     void* v51; memcpy(&v51, v6, sizeof(void*));
     void* v52 = (void*)((char*)v51 + (intptr_t)((int64_t)0));
     void* v53; memcpy(&v53, v7, sizeof(void*));
-    void* v54 = (void*)((char*)v53 + (intptr_t)((int64_t)64));
+    void* v54 = (void*)((char*)v53 + (intptr_t)((int64_t)72));
     int32_t v55; memcpy(&v55, v54, sizeof(int32_t));
     void* v56; memcpy(&v56, v8, sizeof(void*));
     void* v57 = (void*)((char*)v56 + (intptr_t)((int64_t)24));
@@ -277433,12 +277434,15 @@ static int32_t flang_0typer__checker__check_0lambda__ref_flang_0typer__checker__
     int32_t v65 = 0;
     int8_t v74 = 0;
     int32_t v86 = 0;
-    int8_t v138 = 0;
-    int32_t v152 = 0;
-    int32_t v169 = 0;
-    void* v259 = 0;
-    int8_t v270 = 0;
-    int64_t v369 = 0;
+    int8_t v103 = 0;
+    int8_t v107 = 0;
+    int8_t v124 = 0;
+    int8_t v156 = 0;
+    int32_t v170 = 0;
+    int32_t v187 = 0;
+    void* v277 = 0;
+    int8_t v288 = 0;
+    int64_t v389 = 0;
     _Alignas(8) unsigned char __slot6[8];
     void* v6 = (void*)__slot6;
     { void* __sv = ((void*)v0); memcpy(v6, &__sv, sizeof(void*)); }
@@ -277528,15 +277532,15 @@ fit_body42:;
     }
 
 fit_exit43:;
-    int8_t v135 = std__option__is_0some__ref_core__option__Option_flang_0typer__interner__NFuncNode__ret_bool(v9, v4, ((void*)0));
-    if (v135) {
-        goto sc_rhs136;
+    int8_t v153 = std__option__is_0some__ref_core__option__Option_flang_0typer__interner__NFuncNode__ret_bool(v9, v4, ((void*)0));
+    if (v153) {
+        goto sc_rhs154;
     } else {
         {
             int8_t __mv0 = ((int8_t)0);
-            v138 = __mv0;
+            v156 = __mv0;
         }
-        goto sc_join137;
+        goto sc_join155;
     }
 
 m_join50:;
@@ -277604,56 +277608,16 @@ join64:;
     _Alignas(4) unsigned char __slot99[4];
     void* v99 = (void*)__slot99;
     { int32_t __sv = ((int32_t)v65); memcpy(v99, &__sv, sizeof(int32_t)); }
-    int64_t v100; memcpy(&v100, v36, sizeof(int64_t));
-    void* v101; memcpy(&v101, v6, sizeof(void*));
-    void* v102 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v35, v4, ((void*)0));
-    void* v103 = (void*)((char*)v102 + (intptr_t)((int64_t)8));
-    int64_t v104; memcpy(&v104, v103, sizeof(int64_t));
-    void* v105; memcpy(&v105, v46, sizeof(void*));
-    void* v106 = (void*)((char*)v105 + (intptr_t)((int64_t)57));
-    int8_t v107; memcpy(&v107, v106, sizeof(int8_t));
-    int32_t v108; memcpy(&v108, v99, sizeof(int32_t));
-    void* v109; memcpy(&v109, v46, sizeof(void*));
-    void* v110 = (void*)((char*)v109 + (intptr_t)((int64_t)0));
-    int64_t v111 = flang_0typer__checker__move_0bit_0of__ref_flang_0typer__checker__Checker__usize__bool__u32__flang_0core__span__SourceSpan__r_usize(v101, v104, v107, v108, v110, v4, ((void*)0));
-    int64_t v112 = v100 | v111;
-    { int64_t __sv = ((int64_t)v112); memcpy(v36, &__sv, sizeof(int64_t)); }
-    void* v113; memcpy(&v113, v6, sizeof(void*));
-    void* v114; memcpy(&v114, v46, sizeof(void*));
-    void* v115 = (void*)((char*)v114 + (intptr_t)((int64_t)0));
-    int64_t v116 = flang_0typer__checker__node_0of__ref_flang_0typer__checker__Checker__flang_0core__span__SourceSpan__r_u64(v113, v115, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot117[8];
-    void* v117 = (void*)__slot117;
-    { int64_t __sv = ((int64_t)v116); memcpy(v117, &__sv, sizeof(int64_t)); }
-    void* v118; memcpy(&v118, v6, sizeof(void*));
-    void* v119 = (void*)((char*)v118 + (intptr_t)((int64_t)1456));
-    int64_t v120; memcpy(&v120, v117, sizeof(int64_t));
-    int32_t v121; memcpy(&v121, v99, sizeof(int32_t));
-    flang_0typer__inference_0results__record_0type__ref_flang_0typer__inference_0results__InferenceResults__u64__u32(v119, v120, v121, v4, ((void*)0));
-    void* v122; memcpy(&v122, v6, sizeof(void*));
-    void* v123 = (void*)((char*)v122 + (intptr_t)((int64_t)752));
-    void* v124; memcpy(&v124, v46, sizeof(void*));
-    void* v125 = (void*)((char*)v124 + (intptr_t)((int64_t)24));
-    _Alignas(8) unsigned char __slot126[64];
-    void* v126 = (void*)__slot126;
-    memset(v126, (int)0, (size_t)((uint64_t)64));
-    int32_t v127; memcpy(&v127, v99, sizeof(int32_t));
-    _Alignas(8) unsigned char __slot128[48];
-    void* v128 = (void*)__slot128;
-    flang_0typer__scheme__mono__u32__r_flang_0typer__scheme__Scheme(v127, v128, v4, ((void*)0));
-    void* v129 = (void*)((char*)v126 + (intptr_t)((int64_t)0));
-    memcpy(v129, v128, (size_t)((uint64_t)48));
-    int64_t v130; memcpy(&v130, v117, sizeof(int64_t));
-    void* v131 = (void*)((char*)v126 + (intptr_t)((int64_t)48));
-    { int64_t __sv = ((int64_t)v130); memcpy(v131, &__sv, sizeof(int64_t)); }
-    void* v132 = (void*)((char*)v126 + (intptr_t)((int64_t)56));
-    { int8_t __sv = ((int8_t)0); memcpy(v132, &__sv, sizeof(int8_t)); }
-    void* v133 = (void*)((char*)v126 + (intptr_t)((int64_t)57));
-    { int8_t __sv = ((int8_t)0); memcpy(v133, &__sv, sizeof(int8_t)); }
-    flang_0typer__env__bind__ref_flang_0typer__env__TypeEnv__core__string__String__flang_0typer__env__Binding(v123, v125, v126, v4, ((void*)0));
-    int32_t v134; memcpy(&v134, v99, sizeof(int32_t));
-    std__collections__list__push__ref_std__collections__list__List_u32__u32__ret_void(v35, v134, v4, ((void*)0));
-    goto fit_head41;
+    int8_t v100; memcpy(&v100, v59, sizeof(int8_t));
+    if (v100) {
+        goto sc_rhs101;
+    } else {
+        {
+            int8_t __mv0 = ((int8_t)0);
+            v103 = __mv0;
+        }
+        goto sc_join102;
+    }
 
 sc_rhs72:;
     void* v75 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v35, v4, ((void*)0));
@@ -277714,761 +277678,877 @@ join85:;
     }
     goto join64;
 
-sc_rhs136:;
-    void* v139; memcpy(&v139, v6, sizeof(void*));
-    void* v140 = (void*)((char*)v139 + (intptr_t)((int64_t)0));
-    _Alignas(8) unsigned char __slot141[32];
-    void* v141 = (void*)__slot141;
-    std__option__unwrap__core__option__Option_flang_0typer__interner__NFuncNode__ret_flang_0typer__interner__NFuncNode(v9, v141, v4, ((void*)0));
-    void* v142 = (void*)((char*)v141 + (intptr_t)((int64_t)24));
-    int32_t v143; memcpy(&v143, v142, sizeof(int32_t));
-    int32_t v144 = flang_0typer__inference_0engine__resolve__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v140, v143, v4, ((void*)0));
-    int32_t v145; memcpy(&v145, ((void*)g___fconst_flang_0typer__type__TY_0VOID), sizeof(int32_t));
-    int8_t v146 = (int8_t)(((int32_t)v144) == ((int32_t)v145));
+sc_rhs101:;
+    int8_t v104 = std__option__is_0some__ref_core__option__Option_flang_0typer__interner__NFuncNode__ret_bool(v9, v4, ((void*)0));
     {
-        int8_t __mv0 = ((int8_t)v146);
-        v138 = __mv0;
+        int8_t __mv0 = ((int8_t)v104);
+        v103 = __mv0;
     }
-    goto sc_join137;
+    goto sc_join102;
 
-sc_join137:;
-    _Alignas(1) unsigned char __slot147[1];
-    void* v147 = (void*)__slot147;
-    { int8_t __sv = ((int8_t)v138); memcpy(v147, &__sv, sizeof(int8_t)); }
-    void* v148; memcpy(&v148, v7, sizeof(void*));
-    void* v149 = (void*)((char*)v148 + (intptr_t)((int64_t)40));
-    void* v150; memcpy(&v150, v149, sizeof(void*));
-    int8_t v155 = (int8_t)(((void*)v150) != ((void*)((void*)0)));
-    int8_t v156 = v155 & 1;
-    if (v156) {
-        goto m_arm153;
-    } else {
-        goto m_next154;
-    }
-
-m_join151:;
-    _Alignas(4) unsigned char __slot174[4];
-    void* v174 = (void*)__slot174;
-    { int32_t __sv = ((int32_t)v152); memcpy(v174, &__sv, sizeof(int32_t)); }
-    void* v175; memcpy(&v175, v6, sizeof(void*));
-    void* v176 = (void*)((char*)v175 + (intptr_t)((int64_t)2416));
-    _Alignas(8) unsigned char __slot177[48];
-    void* v177 = (void*)__slot177;
-    memset(v177, (int)0, (size_t)((uint64_t)48));
-    _Alignas(8) unsigned char __slot178[16];
-    void* v178 = (void*)__slot178;
-    void* v179 = (void*)((char*)v178 + (intptr_t)((int64_t)0));
-    { void* __sv = ((void*)((void*)g_str_1165)); memcpy(v179, &__sv, sizeof(void*)); }
-    void* v180 = (void*)((char*)v178 + (intptr_t)((int64_t)8));
-    { int64_t __sv = ((int64_t)8); memcpy(v180, &__sv, sizeof(int64_t)); }
-    void* v181 = (void*)((char*)v177 + (intptr_t)((int64_t)0));
-    memcpy(v181, v178, (size_t)((uint64_t)16));
-    int32_t v182; memcpy(&v182, v174, sizeof(int32_t));
-    void* v183 = (void*)((char*)v177 + (intptr_t)((int64_t)40));
-    { int32_t __sv = ((int32_t)v182); memcpy(v183, &__sv, sizeof(int32_t)); }
-    void* v184; memcpy(&v184, v7, sizeof(void*));
-    void* v185 = (void*)((char*)v184 + (intptr_t)((int64_t)0));
-    void* v186 = (void*)((char*)v177 + (intptr_t)((int64_t)16));
-    memcpy(v186, v185, (size_t)((uint64_t)24));
-    std__collections__list__push__ref_std__collections__list__List_flang_0typer__checker__FnFrame__flang_0typer__checker__FnFrame__ret_void(v176, v177, v4, ((void*)0));
-    void* v187; memcpy(&v187, v6, sizeof(void*));
-    void* v188; memcpy(&v188, v7, sizeof(void*));
-    void* v189 = (void*)((char*)v188 + (intptr_t)((int64_t)48));
-    void* v190; memcpy(&v190, v189, sizeof(void*));
-    int32_t v191 = flang_0typer__checker__check_0block__ref_flang_0typer__checker__Checker__ref_flang_0parser__ast__BlockExpr__r_u32(v187, v190, v4, ((void*)0));
-    _Alignas(4) unsigned char __slot192[4];
-    void* v192 = (void*)__slot192;
-    { int32_t __sv = ((int32_t)v191); memcpy(v192, &__sv, sizeof(int32_t)); }
-    int32_t v193; memcpy(&v193, v192, sizeof(int32_t));
-    int32_t v194; memcpy(&v194, ((void*)g___fconst_flang_0typer__type__TY_0VOID), sizeof(int32_t));
-    int8_t v195 = (int8_t)(((int32_t)v193) == ((int32_t)v194));
-    if (v195) {
-        goto then196;
-    } else {
-        goto else197;
-    }
-
-m_arm153:;
-    _Alignas(8) unsigned char __slot157[8];
-    void* v157 = (void*)__slot157;
-    { void* __sv = ((void*)v150); memcpy(v157, &__sv, sizeof(void*)); }
-    void* v158; memcpy(&v158, v6, sizeof(void*));
-    void* v159; memcpy(&v159, v157, sizeof(void*));
-    int32_t v160 = flang_0typer__checker__resolve_0type_0expr__ref_flang_0typer__checker__Checker__ref_flang_0parser__ast__TypeExpr__r_u32(v158, v159, v4, ((void*)0));
-    {
-        int32_t __mv0 = ((int32_t)v160);
-        v152 = __mv0;
-    }
-    goto m_join151;
-
-m_next154:;
-    int8_t v163 = (int8_t)(((void*)v150) == ((void*)((void*)0)));
-    if (v163) {
-        goto m_arm161;
-    } else {
-        goto m_next162;
-    }
-
-m_arm161:;
-    _Alignas(8) unsigned char __slot164[8];
-    void* v164 = (void*)__slot164;
-    { void* __sv = ((void*)v150); memcpy(v164, &__sv, sizeof(void*)); }
-    int8_t v165; memcpy(&v165, v147, sizeof(int8_t));
-    if (v165) {
-        goto then166;
-    } else {
-        goto else167;
-    }
-
-m_next162:;
-    abort(); /* unreachable */
-
-then166:;
-    int32_t v170; memcpy(&v170, ((void*)g___fconst_flang_0typer__type__TY_0VOID), sizeof(int32_t));
-    {
-        int32_t __mv0 = ((int32_t)v170);
-        v169 = __mv0;
-    }
-    goto join168;
-
-else167:;
-    void* v171; memcpy(&v171, v6, sizeof(void*));
-    void* v172 = (void*)((char*)v171 + (intptr_t)((int64_t)0));
-    int32_t v173 = flang_0typer__inference_0engine__fresh_0var__ref_flang_0typer__inference_0engine__Engine__r_u32(v172, v4, ((void*)0));
-    {
-        int32_t __mv0 = ((int32_t)v173);
-        v169 = __mv0;
-    }
-    goto join168;
-
-join168:;
-    {
-        int32_t __mv0 = ((int32_t)v169);
-        v152 = __mv0;
-    }
-    goto m_join151;
-
-then196:;
-    void* v199; memcpy(&v199, v6, sizeof(void*));
-    void* v200 = (void*)((char*)v199 + (intptr_t)((int64_t)0));
-    void* v201; memcpy(&v201, v6, sizeof(void*));
-    void* v202 = (void*)((char*)v201 + (intptr_t)((int64_t)0));
-    int32_t v203; memcpy(&v203, v174, sizeof(int32_t));
-    int32_t v204 = flang_0typer__inference_0engine__resolve__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v202, v203, v4, ((void*)0));
-    int8_t v205 = flang_0typer__inference_0engine__is_0var__ref_flang_0typer__inference_0engine__Engine__u32__r_bool(v200, v204, v4, ((void*)0));
-    if (v205) {
-        goto then206;
-    } else {
-        goto else207;
-    }
-
-else197:;
-    void* v214; memcpy(&v214, v6, sizeof(void*));
-    void* v215 = (void*)((char*)v214 + (intptr_t)((int64_t)0));
-    int32_t v216; memcpy(&v216, v174, sizeof(int32_t));
-    int32_t v217 = flang_0typer__inference_0engine__resolve__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v215, v216, v4, ((void*)0));
-    int32_t v218; memcpy(&v218, ((void*)g___fconst_flang_0typer__type__TY_0VOID), sizeof(int32_t));
-    int8_t v219 = (int8_t)(((int32_t)v217) == ((int32_t)v218));
-    _Alignas(1) unsigned char __slot220[1];
-    void* v220 = (void*)__slot220;
-    { int8_t __sv = ((int8_t)v219); memcpy(v220, &__sv, sizeof(int8_t)); }
-    int8_t v221; memcpy(&v221, v220, sizeof(int8_t));
-    int8_t v222 = (int8_t)(((int8_t)v221) == ((int8_t)0));
-    if (v222) {
-        goto then223;
-    } else {
-        goto else224;
-    }
-
-join198:;
-    void* v231; memcpy(&v231, v6, sizeof(void*));
-    void* v232 = (void*)((char*)v231 + (intptr_t)((int64_t)2416));
-    void* v233 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__checker__FnFrame__ret_ref_std__collections__list__UnmanagedList_flang_0typer__checker__FnFrame(v232, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot234[56];
-    void* v234 = (void*)__slot234;
-    std__collections__list__pop__ref_std__collections__list__UnmanagedList_flang_0typer__checker__FnFrame__ret_core__option__Option_flang_0typer__checker__FnFrame(v233, v234, v4, ((void*)0));
-    void* v235; memcpy(&v235, v6, sizeof(void*));
-    void* v236 = (void*)((char*)v235 + (intptr_t)((int64_t)752));
-    flang_0typer__env__pop_0scope__ref_flang_0typer__env__TypeEnv(v236, v4, ((void*)0));
-    void* v237; memcpy(&v237, v6, sizeof(void*));
-    void* v238 = (void*)((char*)v237 + (intptr_t)((int64_t)3632));
-    void* v239 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__checker__LambdaFrame__ret_ref_std__collections__list__UnmanagedList_flang_0typer__checker__LambdaFrame(v238, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot240[72];
-    void* v240 = (void*)__slot240;
-    std__collections__list__pop__ref_std__collections__list__UnmanagedList_flang_0typer__checker__LambdaFrame__ret_core__option__Option_flang_0typer__checker__LambdaFrame(v239, v240, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot241[64];
-    void* v241 = (void*)__slot241;
-    std__option__unwrap__core__option__Option_flang_0typer__checker__LambdaFrame__ret_flang_0typer__checker__LambdaFrame(v240, v241, v4, ((void*)0));
-    void* v242; memcpy(&v242, v6, sizeof(void*));
-    void* v243; memcpy(&v243, v7, sizeof(void*));
-    void* v244 = (void*)((char*)v243 + (intptr_t)((int64_t)0));
-    int64_t v245 = flang_0typer__checker__node_0of__ref_flang_0typer__checker__Checker__flang_0core__span__SourceSpan__r_u64(v242, v244, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot246[8];
-    void* v246 = (void*)__slot246;
-    { int64_t __sv = ((int64_t)v245); memcpy(v246, &__sv, sizeof(int64_t)); }
-    void* v247; memcpy(&v247, v6, sizeof(void*));
-    void* v248 = (void*)((char*)v247 + (intptr_t)((int64_t)4240));
-    int32_t v249; memcpy(&v249, v248, sizeof(int32_t));
-    _Alignas(4) unsigned char __slot250[4];
-    void* v250 = (void*)__slot250;
-    { int32_t __sv = ((int32_t)v249); memcpy(v250, &__sv, sizeof(int32_t)); }
-    void* v251; memcpy(&v251, v6, sizeof(void*));
-    void* v252 = (void*)((char*)v251 + (intptr_t)((int64_t)4240));
-    int32_t v253; memcpy(&v253, v250, sizeof(int32_t));
-    int32_t v254 = (int32_t)(((uint32_t)v253) + ((uint32_t)1));
-    { int32_t __sv = ((int32_t)v254); memcpy(v252, &__sv, sizeof(int32_t)); }
-    int8_t v255 = std__option__is_0some__ref_core__option__Option_flang_0typer__interner__NFuncNode__ret_bool(v9, v4, ((void*)0));
-    if (v255) {
-        goto then256;
-    } else {
-        goto else257;
-    }
-
-then206:;
-    void* v209; memcpy(&v209, v6, sizeof(void*));
-    void* v210 = (void*)((char*)v209 + (intptr_t)((int64_t)0));
-    int32_t v211; memcpy(&v211, v174, sizeof(int32_t));
-    int32_t v212; memcpy(&v212, ((void*)g___fconst_flang_0typer__type__TY_0VOID), sizeof(int32_t));
-    _Alignas(8) unsigned char __slot213[32];
-    void* v213 = (void*)__slot213;
-    flang_0typer__inference_0engine__unify__ref_flang_0typer__inference_0engine__Engine__u32__u32__r_flang_0typer__inference_0engine__UnifyOutcome(v210, v211, v212, v213, v4, ((void*)0));
-    goto join208;
-
-else207:;
-    goto join208;
-
-join208:;
-    goto join198;
-
-then223:;
-    void* v226; memcpy(&v226, v6, sizeof(void*));
-    int32_t v227; memcpy(&v227, v192, sizeof(int32_t));
-    int32_t v228; memcpy(&v228, v174, sizeof(int32_t));
-    void* v229; memcpy(&v229, v7, sizeof(void*));
-    void* v230 = (void*)((char*)v229 + (intptr_t)((int64_t)0));
-    flang_0typer__checker__unify_0expected__ref_flang_0typer__checker__Checker__u32__u32__core__string__String__flang_0core__span__SourceSpan(v226, v227, v228, ((void*)g___fconst_flang_0typer__error_0codes__E_0RETURN_0MISMATCH), v230, v4, ((void*)0));
-    goto join225;
-
-else224:;
-    goto join225;
-
-join225:;
-    goto join198;
-
-then256:;
-    _Alignas(8) unsigned char __slot260[32];
-    void* v260 = (void*)__slot260;
-    std__option__unwrap__core__option__Option_flang_0typer__interner__NFuncNode__ret_flang_0typer__interner__NFuncNode(v9, v260, v4, ((void*)0));
-    void* v261 = (void*)((char*)v260 + (intptr_t)((int64_t)28));
-    {
-        void* __mv0 = ((void*)v261);
-        v259 = __mv0;
-    }
-    goto join258;
-
-else257:;
-    _Alignas(4) unsigned char __slot262[4];
-    void* v262 = (void*)__slot262;
-    memset(v262, (int)0, (size_t)((uint64_t)4));
-    {
-        void* __mv0 = ((void*)v262);
-        v259 = __mv0;
-    }
-    goto join258;
-
-join258:;
-    _Alignas(4) unsigned char __slot263[4];
-    void* v263 = (void*)__slot263;
-    memcpy(v263, v259, (size_t)((uint64_t)4));
-    _Alignas(4) unsigned char __slot264[4];
-    void* v264 = (void*)__slot264;
-    memset(v264, (int)0, (size_t)((uint64_t)4));
-    { int32_t __sv = ((int32_t)1); memcpy(v264, &__sv, sizeof(int32_t)); }
-    int32_t v265; memcpy(&v265, v263, sizeof(int32_t));
-    int32_t v266; memcpy(&v266, v264, sizeof(int32_t));
-    int8_t v267 = (int8_t)(((int32_t)v265) == ((int32_t)v266));
-    if (v267) {
-        goto sc_rhs268;
+sc_join102:;
+    if (v103) {
+        goto sc_rhs105;
     } else {
         {
             int8_t __mv0 = ((int8_t)0);
-            v270 = __mv0;
+            v107 = __mv0;
         }
-        goto sc_join269;
+        goto sc_join106;
     }
 
-sc_rhs268:;
-    void* v271 = (void*)((char*)v241 + (intptr_t)((int64_t)32));
-    void* v272 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v271, v4, ((void*)0));
-    void* v273 = (void*)((char*)v272 + (intptr_t)((int64_t)8));
-    int64_t v274; memcpy(&v274, v273, sizeof(int64_t));
-    int8_t v275 = (int8_t)(((uint64_t)v274) > ((uint64_t)0));
+sc_rhs105:;
+    _Alignas(8) unsigned char __slot108[32];
+    void* v108 = (void*)__slot108;
+    std__option__unwrap__core__option__Option_flang_0typer__interner__NFuncNode__ret_flang_0typer__interner__NFuncNode(v9, v108, v4, ((void*)0));
+    void* v109 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v35, v4, ((void*)0));
+    void* v110 = (void*)((char*)v109 + (intptr_t)((int64_t)8));
+    int64_t v111; memcpy(&v111, v110, sizeof(int64_t));
+    int8_t v112 = flang_0typer__interner__moves_0at__ref_flang_0typer__interner__NFuncNode__usize__r_bool(v108, v111, v4, ((void*)0));
     {
-        int8_t __mv0 = ((int8_t)v275);
-        v270 = __mv0;
+        int8_t __mv0 = ((int8_t)v112);
+        v107 = __mv0;
     }
-    goto sc_join269;
+    goto sc_join106;
 
-sc_join269:;
-    if (v270) {
-        goto then276;
+sc_join106:;
+    _Alignas(1) unsigned char __slot113[1];
+    void* v113 = (void*)__slot113;
+    { int8_t __sv = ((int8_t)v107); memcpy(v113, &__sv, sizeof(int8_t)); }
+    int64_t v114; memcpy(&v114, v36, sizeof(int64_t));
+    void* v115; memcpy(&v115, v6, sizeof(void*));
+    void* v116 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v35, v4, ((void*)0));
+    void* v117 = (void*)((char*)v116 + (intptr_t)((int64_t)8));
+    int64_t v118; memcpy(&v118, v117, sizeof(int64_t));
+    void* v119; memcpy(&v119, v46, sizeof(void*));
+    void* v120 = (void*)((char*)v119 + (intptr_t)((int64_t)57));
+    int8_t v121; memcpy(&v121, v120, sizeof(int8_t));
+    if (v121) {
+        {
+            int8_t __mv0 = ((int8_t)1);
+            v124 = __mv0;
+        }
+        goto sc_join123;
     } else {
-        goto else277;
+        goto sc_rhs122;
     }
 
-then276:;
-    void* v279; memcpy(&v279, v6, sizeof(void*));
-    void* v280; memcpy(&v280, v7, sizeof(void*));
-    void* v281 = (void*)((char*)v280 + (intptr_t)((int64_t)0));
-    void* v282 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
-    void* v283; memcpy(&v283, v282, sizeof(void*));
-    _Alignas(8) unsigned char __slot284[32];
-    void* v284 = (void*)__slot284;
-    std__string_0builder__string_0builder__usize__ref_std__allocator__Allocator__r_std__string_0builder__StringBuilder(((int64_t)0), v283, v284, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot285[16];
-    void* v285 = (void*)__slot285;
-    void* v286 = (void*)((char*)v285 + (intptr_t)((int64_t)0));
-    { void* __sv = ((void*)((void*)g_str_1166)); memcpy(v286, &__sv, sizeof(void*)); }
-    void* v287 = (void*)((char*)v285 + (intptr_t)((int64_t)8));
-    { int64_t __sv = ((int64_t)85); memcpy(v287, &__sv, sizeof(int64_t)); }
-    std__string_0builder__append__ref_std__string_0builder__StringBuilder__core__string__String__ret_void(v284, v285, v4, ((void*)0));
-    void* v288 = (void*)((char*)v241 + (intptr_t)((int64_t)32));
-    void* v289 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v288, v4, ((void*)0));
-    void* v290 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec__usize__ret_ref_flang_0typer__inference_0results__CaptureRec(v289, ((int64_t)0), v4, ((void*)0));
-    void* v291 = (void*)((char*)v290 + (intptr_t)((int64_t)0));
-    _Alignas(8) unsigned char __slot292[16];
-    void* v292 = (void*)__slot292;
-    std__string_0builder__writer__ref_std__string_0builder__StringBuilder__r_std__io__writer__Writer(v284, v292, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot293[16];
-    void* v293 = (void*)__slot293;
-    void* v294 = (void*)((char*)v293 + (intptr_t)((int64_t)0));
-    { void* __sv = ((void*)((void*)g_str_154)); memcpy(v294, &__sv, sizeof(void*)); }
-    void* v295 = (void*)((char*)v293 + (intptr_t)((int64_t)8));
-    { int64_t __sv = ((int64_t)0); memcpy(v295, &__sv, sizeof(int64_t)); }
-    std__format__format__core__string__String__std__io__writer__Writer__core__string__String(v291, v292, v293, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot296[16];
-    void* v296 = (void*)__slot296;
-    void* v297 = (void*)((char*)v296 + (intptr_t)((int64_t)0));
-    { void* __sv = ((void*)((void*)g_str_164)); memcpy(v297, &__sv, sizeof(void*)); }
-    void* v298 = (void*)((char*)v296 + (intptr_t)((int64_t)8));
-    { int64_t __sv = ((int64_t)1); memcpy(v298, &__sv, sizeof(int64_t)); }
-    std__string_0builder__append__ref_std__string_0builder__StringBuilder__core__string__String__ret_void(v284, v296, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot299[24];
-    void* v299 = (void*)__slot299;
-    std__string_0builder__to_0string__ref_std__string_0builder__StringBuilder__r_std__string__OwnedString(v284, v299, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot300[24];
-    void* v300 = (void*)__slot300;
-    memcpy(v300, v299, (size_t)((uint64_t)24));
-    std__string_0builder__deinit__std__string_0builder__StringBuilder(v284, v4, ((void*)0));
-    flang_0typer__checker__push_0diag_0e__ref_flang_0typer__checker__Checker__flang_0core__span__SourceSpan__core__string__String__std__string__OwnedString(v279, v281, ((void*)g___fconst_flang_0typer__error_0codes__E_0CLOSURE_0TO_0FN), v300, v4, ((void*)0));
-    goto join278;
+sc_rhs122:;
+    int8_t v125; memcpy(&v125, v113, sizeof(int8_t));
+    {
+        int8_t __mv0 = ((int8_t)v125);
+        v124 = __mv0;
+    }
+    goto sc_join123;
 
-else277:;
-    goto join278;
+sc_join123:;
+    int32_t v126; memcpy(&v126, v99, sizeof(int32_t));
+    void* v127; memcpy(&v127, v46, sizeof(void*));
+    void* v128 = (void*)((char*)v127 + (intptr_t)((int64_t)0));
+    int64_t v129 = flang_0typer__checker__move_0bit_0of__ref_flang_0typer__checker__Checker__usize__bool__u32__flang_0core__span__SourceSpan__r_usize(v115, v118, v124, v126, v128, v4, ((void*)0));
+    int64_t v130 = v114 | v129;
+    { int64_t __sv = ((int64_t)v130); memcpy(v36, &__sv, sizeof(int64_t)); }
+    void* v131; memcpy(&v131, v6, sizeof(void*));
+    void* v132; memcpy(&v132, v46, sizeof(void*));
+    void* v133 = (void*)((char*)v132 + (intptr_t)((int64_t)0));
+    int64_t v134 = flang_0typer__checker__node_0of__ref_flang_0typer__checker__Checker__flang_0core__span__SourceSpan__r_u64(v131, v133, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot135[8];
+    void* v135 = (void*)__slot135;
+    { int64_t __sv = ((int64_t)v134); memcpy(v135, &__sv, sizeof(int64_t)); }
+    void* v136; memcpy(&v136, v6, sizeof(void*));
+    void* v137 = (void*)((char*)v136 + (intptr_t)((int64_t)1456));
+    int64_t v138; memcpy(&v138, v135, sizeof(int64_t));
+    int32_t v139; memcpy(&v139, v99, sizeof(int32_t));
+    flang_0typer__inference_0results__record_0type__ref_flang_0typer__inference_0results__InferenceResults__u64__u32(v137, v138, v139, v4, ((void*)0));
+    void* v140; memcpy(&v140, v6, sizeof(void*));
+    void* v141 = (void*)((char*)v140 + (intptr_t)((int64_t)752));
+    void* v142; memcpy(&v142, v46, sizeof(void*));
+    void* v143 = (void*)((char*)v142 + (intptr_t)((int64_t)24));
+    _Alignas(8) unsigned char __slot144[64];
+    void* v144 = (void*)__slot144;
+    memset(v144, (int)0, (size_t)((uint64_t)64));
+    int32_t v145; memcpy(&v145, v99, sizeof(int32_t));
+    _Alignas(8) unsigned char __slot146[48];
+    void* v146 = (void*)__slot146;
+    flang_0typer__scheme__mono__u32__r_flang_0typer__scheme__Scheme(v145, v146, v4, ((void*)0));
+    void* v147 = (void*)((char*)v144 + (intptr_t)((int64_t)0));
+    memcpy(v147, v146, (size_t)((uint64_t)48));
+    int64_t v148; memcpy(&v148, v135, sizeof(int64_t));
+    void* v149 = (void*)((char*)v144 + (intptr_t)((int64_t)48));
+    { int64_t __sv = ((int64_t)v148); memcpy(v149, &__sv, sizeof(int64_t)); }
+    void* v150 = (void*)((char*)v144 + (intptr_t)((int64_t)56));
+    { int8_t __sv = ((int8_t)0); memcpy(v150, &__sv, sizeof(int8_t)); }
+    void* v151 = (void*)((char*)v144 + (intptr_t)((int64_t)57));
+    { int8_t __sv = ((int8_t)0); memcpy(v151, &__sv, sizeof(int8_t)); }
+    flang_0typer__env__bind__ref_flang_0typer__env__TypeEnv__core__string__String__flang_0typer__env__Binding(v141, v143, v144, v4, ((void*)0));
+    int32_t v152; memcpy(&v152, v99, sizeof(int32_t));
+    std__collections__list__push__ref_std__collections__list__List_u32__u32__ret_void(v35, v152, v4, ((void*)0));
+    goto fit_head41;
 
-join278:;
-    void* v301 = (void*)((char*)v241 + (intptr_t)((int64_t)32));
-    void* v302 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v301, v4, ((void*)0));
-    void* v303 = (void*)((char*)v302 + (intptr_t)((int64_t)8));
-    int64_t v304; memcpy(&v304, v303, sizeof(int64_t));
-    int8_t v305 = (int8_t)(((int64_t)v304) == ((int64_t)0));
-    if (v305) {
-        goto then306;
+sc_rhs154:;
+    void* v157; memcpy(&v157, v6, sizeof(void*));
+    void* v158 = (void*)((char*)v157 + (intptr_t)((int64_t)0));
+    _Alignas(8) unsigned char __slot159[32];
+    void* v159 = (void*)__slot159;
+    std__option__unwrap__core__option__Option_flang_0typer__interner__NFuncNode__ret_flang_0typer__interner__NFuncNode(v9, v159, v4, ((void*)0));
+    void* v160 = (void*)((char*)v159 + (intptr_t)((int64_t)24));
+    int32_t v161; memcpy(&v161, v160, sizeof(int32_t));
+    int32_t v162 = flang_0typer__inference_0engine__resolve__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v158, v161, v4, ((void*)0));
+    int32_t v163; memcpy(&v163, ((void*)g___fconst_flang_0typer__type__TY_0VOID), sizeof(int32_t));
+    int8_t v164 = (int8_t)(((int32_t)v162) == ((int32_t)v163));
+    {
+        int8_t __mv0 = ((int8_t)v164);
+        v156 = __mv0;
+    }
+    goto sc_join155;
+
+sc_join155:;
+    _Alignas(1) unsigned char __slot165[1];
+    void* v165 = (void*)__slot165;
+    { int8_t __sv = ((int8_t)v156); memcpy(v165, &__sv, sizeof(int8_t)); }
+    void* v166; memcpy(&v166, v7, sizeof(void*));
+    void* v167 = (void*)((char*)v166 + (intptr_t)((int64_t)40));
+    void* v168; memcpy(&v168, v167, sizeof(void*));
+    int8_t v173 = (int8_t)(((void*)v168) != ((void*)((void*)0)));
+    int8_t v174 = v173 & 1;
+    if (v174) {
+        goto m_arm171;
     } else {
-        goto else307;
+        goto m_next172;
     }
 
-then306:;
-    void* v309 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v35, v4, ((void*)0));
-    void* v310 = (void*)((char*)v309 + (intptr_t)((int64_t)8));
-    int64_t v311; memcpy(&v311, v310, sizeof(int64_t));
-    void* v312 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
-    void* v313; memcpy(&v313, v312, sizeof(void*));
-    _Alignas(8) unsigned char __slot314[32];
+m_join169:;
+    _Alignas(4) unsigned char __slot192[4];
+    void* v192 = (void*)__slot192;
+    { int32_t __sv = ((int32_t)v170); memcpy(v192, &__sv, sizeof(int32_t)); }
+    void* v193; memcpy(&v193, v6, sizeof(void*));
+    void* v194 = (void*)((char*)v193 + (intptr_t)((int64_t)2416));
+    _Alignas(8) unsigned char __slot195[48];
+    void* v195 = (void*)__slot195;
+    memset(v195, (int)0, (size_t)((uint64_t)48));
+    _Alignas(8) unsigned char __slot196[16];
+    void* v196 = (void*)__slot196;
+    void* v197 = (void*)((char*)v196 + (intptr_t)((int64_t)0));
+    { void* __sv = ((void*)((void*)g_str_1165)); memcpy(v197, &__sv, sizeof(void*)); }
+    void* v198 = (void*)((char*)v196 + (intptr_t)((int64_t)8));
+    { int64_t __sv = ((int64_t)8); memcpy(v198, &__sv, sizeof(int64_t)); }
+    void* v199 = (void*)((char*)v195 + (intptr_t)((int64_t)0));
+    memcpy(v199, v196, (size_t)((uint64_t)16));
+    int32_t v200; memcpy(&v200, v192, sizeof(int32_t));
+    void* v201 = (void*)((char*)v195 + (intptr_t)((int64_t)40));
+    { int32_t __sv = ((int32_t)v200); memcpy(v201, &__sv, sizeof(int32_t)); }
+    void* v202; memcpy(&v202, v7, sizeof(void*));
+    void* v203 = (void*)((char*)v202 + (intptr_t)((int64_t)0));
+    void* v204 = (void*)((char*)v195 + (intptr_t)((int64_t)16));
+    memcpy(v204, v203, (size_t)((uint64_t)24));
+    std__collections__list__push__ref_std__collections__list__List_flang_0typer__checker__FnFrame__flang_0typer__checker__FnFrame__ret_void(v194, v195, v4, ((void*)0));
+    void* v205; memcpy(&v205, v6, sizeof(void*));
+    void* v206; memcpy(&v206, v7, sizeof(void*));
+    void* v207 = (void*)((char*)v206 + (intptr_t)((int64_t)48));
+    void* v208; memcpy(&v208, v207, sizeof(void*));
+    int32_t v209 = flang_0typer__checker__check_0block__ref_flang_0typer__checker__Checker__ref_flang_0parser__ast__BlockExpr__r_u32(v205, v208, v4, ((void*)0));
+    _Alignas(4) unsigned char __slot210[4];
+    void* v210 = (void*)__slot210;
+    { int32_t __sv = ((int32_t)v209); memcpy(v210, &__sv, sizeof(int32_t)); }
+    int32_t v211; memcpy(&v211, v210, sizeof(int32_t));
+    int32_t v212; memcpy(&v212, ((void*)g___fconst_flang_0typer__type__TY_0VOID), sizeof(int32_t));
+    int8_t v213 = (int8_t)(((int32_t)v211) == ((int32_t)v212));
+    if (v213) {
+        goto then214;
+    } else {
+        goto else215;
+    }
+
+m_arm171:;
+    _Alignas(8) unsigned char __slot175[8];
+    void* v175 = (void*)__slot175;
+    { void* __sv = ((void*)v168); memcpy(v175, &__sv, sizeof(void*)); }
+    void* v176; memcpy(&v176, v6, sizeof(void*));
+    void* v177; memcpy(&v177, v175, sizeof(void*));
+    int32_t v178 = flang_0typer__checker__resolve_0type_0expr__ref_flang_0typer__checker__Checker__ref_flang_0parser__ast__TypeExpr__r_u32(v176, v177, v4, ((void*)0));
+    {
+        int32_t __mv0 = ((int32_t)v178);
+        v170 = __mv0;
+    }
+    goto m_join169;
+
+m_next172:;
+    int8_t v181 = (int8_t)(((void*)v168) == ((void*)((void*)0)));
+    if (v181) {
+        goto m_arm179;
+    } else {
+        goto m_next180;
+    }
+
+m_arm179:;
+    _Alignas(8) unsigned char __slot182[8];
+    void* v182 = (void*)__slot182;
+    { void* __sv = ((void*)v168); memcpy(v182, &__sv, sizeof(void*)); }
+    int8_t v183; memcpy(&v183, v165, sizeof(int8_t));
+    if (v183) {
+        goto then184;
+    } else {
+        goto else185;
+    }
+
+m_next180:;
+    abort(); /* unreachable */
+
+then184:;
+    int32_t v188; memcpy(&v188, ((void*)g___fconst_flang_0typer__type__TY_0VOID), sizeof(int32_t));
+    {
+        int32_t __mv0 = ((int32_t)v188);
+        v187 = __mv0;
+    }
+    goto join186;
+
+else185:;
+    void* v189; memcpy(&v189, v6, sizeof(void*));
+    void* v190 = (void*)((char*)v189 + (intptr_t)((int64_t)0));
+    int32_t v191 = flang_0typer__inference_0engine__fresh_0var__ref_flang_0typer__inference_0engine__Engine__r_u32(v190, v4, ((void*)0));
+    {
+        int32_t __mv0 = ((int32_t)v191);
+        v187 = __mv0;
+    }
+    goto join186;
+
+join186:;
+    {
+        int32_t __mv0 = ((int32_t)v187);
+        v170 = __mv0;
+    }
+    goto m_join169;
+
+then214:;
+    void* v217; memcpy(&v217, v6, sizeof(void*));
+    void* v218 = (void*)((char*)v217 + (intptr_t)((int64_t)0));
+    void* v219; memcpy(&v219, v6, sizeof(void*));
+    void* v220 = (void*)((char*)v219 + (intptr_t)((int64_t)0));
+    int32_t v221; memcpy(&v221, v192, sizeof(int32_t));
+    int32_t v222 = flang_0typer__inference_0engine__resolve__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v220, v221, v4, ((void*)0));
+    int8_t v223 = flang_0typer__inference_0engine__is_0var__ref_flang_0typer__inference_0engine__Engine__u32__r_bool(v218, v222, v4, ((void*)0));
+    if (v223) {
+        goto then224;
+    } else {
+        goto else225;
+    }
+
+else215:;
+    void* v232; memcpy(&v232, v6, sizeof(void*));
+    void* v233 = (void*)((char*)v232 + (intptr_t)((int64_t)0));
+    int32_t v234; memcpy(&v234, v192, sizeof(int32_t));
+    int32_t v235 = flang_0typer__inference_0engine__resolve__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v233, v234, v4, ((void*)0));
+    int32_t v236; memcpy(&v236, ((void*)g___fconst_flang_0typer__type__TY_0VOID), sizeof(int32_t));
+    int8_t v237 = (int8_t)(((int32_t)v235) == ((int32_t)v236));
+    _Alignas(1) unsigned char __slot238[1];
+    void* v238 = (void*)__slot238;
+    { int8_t __sv = ((int8_t)v237); memcpy(v238, &__sv, sizeof(int8_t)); }
+    int8_t v239; memcpy(&v239, v238, sizeof(int8_t));
+    int8_t v240 = (int8_t)(((int8_t)v239) == ((int8_t)0));
+    if (v240) {
+        goto then241;
+    } else {
+        goto else242;
+    }
+
+join216:;
+    void* v249; memcpy(&v249, v6, sizeof(void*));
+    void* v250 = (void*)((char*)v249 + (intptr_t)((int64_t)2416));
+    void* v251 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__checker__FnFrame__ret_ref_std__collections__list__UnmanagedList_flang_0typer__checker__FnFrame(v250, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot252[56];
+    void* v252 = (void*)__slot252;
+    std__collections__list__pop__ref_std__collections__list__UnmanagedList_flang_0typer__checker__FnFrame__ret_core__option__Option_flang_0typer__checker__FnFrame(v251, v252, v4, ((void*)0));
+    void* v253; memcpy(&v253, v6, sizeof(void*));
+    void* v254 = (void*)((char*)v253 + (intptr_t)((int64_t)752));
+    flang_0typer__env__pop_0scope__ref_flang_0typer__env__TypeEnv(v254, v4, ((void*)0));
+    void* v255; memcpy(&v255, v6, sizeof(void*));
+    void* v256 = (void*)((char*)v255 + (intptr_t)((int64_t)3632));
+    void* v257 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__checker__LambdaFrame__ret_ref_std__collections__list__UnmanagedList_flang_0typer__checker__LambdaFrame(v256, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot258[72];
+    void* v258 = (void*)__slot258;
+    std__collections__list__pop__ref_std__collections__list__UnmanagedList_flang_0typer__checker__LambdaFrame__ret_core__option__Option_flang_0typer__checker__LambdaFrame(v257, v258, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot259[64];
+    void* v259 = (void*)__slot259;
+    std__option__unwrap__core__option__Option_flang_0typer__checker__LambdaFrame__ret_flang_0typer__checker__LambdaFrame(v258, v259, v4, ((void*)0));
+    void* v260; memcpy(&v260, v6, sizeof(void*));
+    void* v261; memcpy(&v261, v7, sizeof(void*));
+    void* v262 = (void*)((char*)v261 + (intptr_t)((int64_t)0));
+    int64_t v263 = flang_0typer__checker__node_0of__ref_flang_0typer__checker__Checker__flang_0core__span__SourceSpan__r_u64(v260, v262, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot264[8];
+    void* v264 = (void*)__slot264;
+    { int64_t __sv = ((int64_t)v263); memcpy(v264, &__sv, sizeof(int64_t)); }
+    void* v265; memcpy(&v265, v6, sizeof(void*));
+    void* v266 = (void*)((char*)v265 + (intptr_t)((int64_t)4240));
+    int32_t v267; memcpy(&v267, v266, sizeof(int32_t));
+    _Alignas(4) unsigned char __slot268[4];
+    void* v268 = (void*)__slot268;
+    { int32_t __sv = ((int32_t)v267); memcpy(v268, &__sv, sizeof(int32_t)); }
+    void* v269; memcpy(&v269, v6, sizeof(void*));
+    void* v270 = (void*)((char*)v269 + (intptr_t)((int64_t)4240));
+    int32_t v271; memcpy(&v271, v268, sizeof(int32_t));
+    int32_t v272 = (int32_t)(((uint32_t)v271) + ((uint32_t)1));
+    { int32_t __sv = ((int32_t)v272); memcpy(v270, &__sv, sizeof(int32_t)); }
+    int8_t v273 = std__option__is_0some__ref_core__option__Option_flang_0typer__interner__NFuncNode__ret_bool(v9, v4, ((void*)0));
+    if (v273) {
+        goto then274;
+    } else {
+        goto else275;
+    }
+
+then224:;
+    void* v227; memcpy(&v227, v6, sizeof(void*));
+    void* v228 = (void*)((char*)v227 + (intptr_t)((int64_t)0));
+    int32_t v229; memcpy(&v229, v192, sizeof(int32_t));
+    int32_t v230; memcpy(&v230, ((void*)g___fconst_flang_0typer__type__TY_0VOID), sizeof(int32_t));
+    _Alignas(8) unsigned char __slot231[32];
+    void* v231 = (void*)__slot231;
+    flang_0typer__inference_0engine__unify__ref_flang_0typer__inference_0engine__Engine__u32__u32__r_flang_0typer__inference_0engine__UnifyOutcome(v228, v229, v230, v231, v4, ((void*)0));
+    goto join226;
+
+else225:;
+    goto join226;
+
+join226:;
+    goto join216;
+
+then241:;
+    void* v244; memcpy(&v244, v6, sizeof(void*));
+    int32_t v245; memcpy(&v245, v210, sizeof(int32_t));
+    int32_t v246; memcpy(&v246, v192, sizeof(int32_t));
+    void* v247; memcpy(&v247, v7, sizeof(void*));
+    void* v248 = (void*)((char*)v247 + (intptr_t)((int64_t)0));
+    flang_0typer__checker__unify_0expected__ref_flang_0typer__checker__Checker__u32__u32__core__string__String__flang_0core__span__SourceSpan(v244, v245, v246, ((void*)g___fconst_flang_0typer__error_0codes__E_0RETURN_0MISMATCH), v248, v4, ((void*)0));
+    goto join243;
+
+else242:;
+    goto join243;
+
+join243:;
+    goto join216;
+
+then274:;
+    _Alignas(8) unsigned char __slot278[32];
+    void* v278 = (void*)__slot278;
+    std__option__unwrap__core__option__Option_flang_0typer__interner__NFuncNode__ret_flang_0typer__interner__NFuncNode(v9, v278, v4, ((void*)0));
+    void* v279 = (void*)((char*)v278 + (intptr_t)((int64_t)28));
+    {
+        void* __mv0 = ((void*)v279);
+        v277 = __mv0;
+    }
+    goto join276;
+
+else275:;
+    _Alignas(4) unsigned char __slot280[4];
+    void* v280 = (void*)__slot280;
+    memset(v280, (int)0, (size_t)((uint64_t)4));
+    {
+        void* __mv0 = ((void*)v280);
+        v277 = __mv0;
+    }
+    goto join276;
+
+join276:;
+    _Alignas(4) unsigned char __slot281[4];
+    void* v281 = (void*)__slot281;
+    memcpy(v281, v277, (size_t)((uint64_t)4));
+    _Alignas(4) unsigned char __slot282[4];
+    void* v282 = (void*)__slot282;
+    memset(v282, (int)0, (size_t)((uint64_t)4));
+    { int32_t __sv = ((int32_t)1); memcpy(v282, &__sv, sizeof(int32_t)); }
+    int32_t v283; memcpy(&v283, v281, sizeof(int32_t));
+    int32_t v284; memcpy(&v284, v282, sizeof(int32_t));
+    int8_t v285 = (int8_t)(((int32_t)v283) == ((int32_t)v284));
+    if (v285) {
+        goto sc_rhs286;
+    } else {
+        {
+            int8_t __mv0 = ((int8_t)0);
+            v288 = __mv0;
+        }
+        goto sc_join287;
+    }
+
+sc_rhs286:;
+    void* v289 = (void*)((char*)v259 + (intptr_t)((int64_t)32));
+    void* v290 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v289, v4, ((void*)0));
+    void* v291 = (void*)((char*)v290 + (intptr_t)((int64_t)8));
+    int64_t v292; memcpy(&v292, v291, sizeof(int64_t));
+    int8_t v293 = (int8_t)(((uint64_t)v292) > ((uint64_t)0));
+    {
+        int8_t __mv0 = ((int8_t)v293);
+        v288 = __mv0;
+    }
+    goto sc_join287;
+
+sc_join287:;
+    if (v288) {
+        goto then294;
+    } else {
+        goto else295;
+    }
+
+then294:;
+    void* v297; memcpy(&v297, v6, sizeof(void*));
+    void* v298; memcpy(&v298, v7, sizeof(void*));
+    void* v299 = (void*)((char*)v298 + (intptr_t)((int64_t)0));
+    void* v300 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
+    void* v301; memcpy(&v301, v300, sizeof(void*));
+    _Alignas(8) unsigned char __slot302[32];
+    void* v302 = (void*)__slot302;
+    std__string_0builder__string_0builder__usize__ref_std__allocator__Allocator__r_std__string_0builder__StringBuilder(((int64_t)0), v301, v302, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot303[16];
+    void* v303 = (void*)__slot303;
+    void* v304 = (void*)((char*)v303 + (intptr_t)((int64_t)0));
+    { void* __sv = ((void*)((void*)g_str_1166)); memcpy(v304, &__sv, sizeof(void*)); }
+    void* v305 = (void*)((char*)v303 + (intptr_t)((int64_t)8));
+    { int64_t __sv = ((int64_t)85); memcpy(v305, &__sv, sizeof(int64_t)); }
+    std__string_0builder__append__ref_std__string_0builder__StringBuilder__core__string__String__ret_void(v302, v303, v4, ((void*)0));
+    void* v306 = (void*)((char*)v259 + (intptr_t)((int64_t)32));
+    void* v307 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v306, v4, ((void*)0));
+    void* v308 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec__usize__ret_ref_flang_0typer__inference_0results__CaptureRec(v307, ((int64_t)0), v4, ((void*)0));
+    void* v309 = (void*)((char*)v308 + (intptr_t)((int64_t)0));
+    _Alignas(8) unsigned char __slot310[16];
+    void* v310 = (void*)__slot310;
+    std__string_0builder__writer__ref_std__string_0builder__StringBuilder__r_std__io__writer__Writer(v302, v310, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot311[16];
+    void* v311 = (void*)__slot311;
+    void* v312 = (void*)((char*)v311 + (intptr_t)((int64_t)0));
+    { void* __sv = ((void*)((void*)g_str_154)); memcpy(v312, &__sv, sizeof(void*)); }
+    void* v313 = (void*)((char*)v311 + (intptr_t)((int64_t)8));
+    { int64_t __sv = ((int64_t)0); memcpy(v313, &__sv, sizeof(int64_t)); }
+    std__format__format__core__string__String__std__io__writer__Writer__core__string__String(v309, v310, v311, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot314[16];
     void* v314 = (void*)__slot314;
-    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(v311, v313, v314, v4, ((void*)0));
-    void* v315 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v35, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot316[16];
-    void* v316 = (void*)__slot316;
-    std__collections__list__as_0slice__ref_std__collections__list__UnmanagedList_u32__ret_core__slice__Slice_u32(v315, v316, v4, ((void*)0));
-    std__collections__list__push_0all__ref_std__collections__list__List_u32__core__slice__Slice_u32__ret_void(v314, v316, v4, ((void*)0));
-    void* v317; memcpy(&v317, v6, sizeof(void*));
-    void* v318 = (void*)((char*)v317 + (intptr_t)((int64_t)1456));
-    int64_t v319; memcpy(&v319, v246, sizeof(int64_t));
-    _Alignas(8) unsigned char __slot320[128];
-    void* v320 = (void*)__slot320;
-    memset(v320, (int)0, (size_t)((uint64_t)128));
-    void* v321; memcpy(&v321, v7, sizeof(void*));
-    void* v322 = (void*)((char*)v321 + (intptr_t)((int64_t)0));
-    void* v323 = (void*)((char*)v320 + (intptr_t)((int64_t)0));
-    memcpy(v323, v322, (size_t)((uint64_t)24));
-    void* v324 = (void*)((char*)v320 + (intptr_t)((int64_t)24));
-    memcpy(v324, v35, (size_t)((uint64_t)32));
-    int32_t v325; memcpy(&v325, v174, sizeof(int32_t));
-    void* v326 = (void*)((char*)v320 + (intptr_t)((int64_t)112));
-    { int32_t __sv = ((int32_t)v325); memcpy(v326, &__sv, sizeof(int32_t)); }
-    void* v327 = (void*)((char*)v241 + (intptr_t)((int64_t)32));
-    void* v328 = (void*)((char*)v320 + (intptr_t)((int64_t)56));
-    memcpy(v328, v327, (size_t)((uint64_t)32));
-    _Alignas(4) unsigned char __slot329[8];
-    void* v329 = (void*)__slot329;
-    memset(v329, (int)0, (size_t)((uint64_t)8));
-    void* v330 = (void*)((char*)v320 + (intptr_t)((int64_t)116));
-    memcpy(v330, v329, (size_t)((uint64_t)8));
-    void* v331 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
-    void* v332; memcpy(&v332, v331, sizeof(void*));
-    _Alignas(8) unsigned char __slot333[32];
-    void* v333 = (void*)__slot333;
-    std__string_0builder__string_0builder__usize__ref_std__allocator__Allocator__r_std__string_0builder__StringBuilder(((int64_t)0), v332, v333, v4, ((void*)0));
+    void* v315 = (void*)((char*)v314 + (intptr_t)((int64_t)0));
+    { void* __sv = ((void*)((void*)g_str_164)); memcpy(v315, &__sv, sizeof(void*)); }
+    void* v316 = (void*)((char*)v314 + (intptr_t)((int64_t)8));
+    { int64_t __sv = ((int64_t)1); memcpy(v316, &__sv, sizeof(int64_t)); }
+    std__string_0builder__append__ref_std__string_0builder__StringBuilder__core__string__String__ret_void(v302, v314, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot317[24];
+    void* v317 = (void*)__slot317;
+    std__string_0builder__to_0string__ref_std__string_0builder__StringBuilder__r_std__string__OwnedString(v302, v317, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot318[24];
+    void* v318 = (void*)__slot318;
+    memcpy(v318, v317, (size_t)((uint64_t)24));
+    std__string_0builder__deinit__std__string_0builder__StringBuilder(v302, v4, ((void*)0));
+    flang_0typer__checker__push_0diag_0e__ref_flang_0typer__checker__Checker__flang_0core__span__SourceSpan__core__string__String__std__string__OwnedString(v297, v299, ((void*)g___fconst_flang_0typer__error_0codes__E_0CLOSURE_0TO_0FN), v318, v4, ((void*)0));
+    goto join296;
+
+else295:;
+    goto join296;
+
+join296:;
+    void* v319 = (void*)((char*)v259 + (intptr_t)((int64_t)32));
+    void* v320 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v319, v4, ((void*)0));
+    void* v321 = (void*)((char*)v320 + (intptr_t)((int64_t)8));
+    int64_t v322; memcpy(&v322, v321, sizeof(int64_t));
+    int8_t v323 = (int8_t)(((int64_t)v322) == ((int64_t)0));
+    if (v323) {
+        goto then324;
+    } else {
+        goto else325;
+    }
+
+then324:;
+    void* v327 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v35, v4, ((void*)0));
+    void* v328 = (void*)((char*)v327 + (intptr_t)((int64_t)8));
+    int64_t v329; memcpy(&v329, v328, sizeof(int64_t));
+    void* v330 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
+    void* v331; memcpy(&v331, v330, sizeof(void*));
+    _Alignas(8) unsigned char __slot332[32];
+    void* v332 = (void*)__slot332;
+    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(v329, v331, v332, v4, ((void*)0));
+    void* v333 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v35, v4, ((void*)0));
     _Alignas(8) unsigned char __slot334[16];
     void* v334 = (void*)__slot334;
-    void* v335 = (void*)((char*)v334 + (intptr_t)((int64_t)0));
-    { void* __sv = ((void*)((void*)g_str_1167)); memcpy(v335, &__sv, sizeof(void*)); }
-    void* v336 = (void*)((char*)v334 + (intptr_t)((int64_t)8));
-    { int64_t __sv = ((int64_t)15); memcpy(v336, &__sv, sizeof(int64_t)); }
-    std__string_0builder__append__ref_std__string_0builder__StringBuilder__core__string__String__ret_void(v333, v334, v4, ((void*)0));
-    int32_t v337; memcpy(&v337, v250, sizeof(int32_t));
-    _Alignas(8) unsigned char __slot338[16];
+    std__collections__list__as_0slice__ref_std__collections__list__UnmanagedList_u32__ret_core__slice__Slice_u32(v333, v334, v4, ((void*)0));
+    std__collections__list__push_0all__ref_std__collections__list__List_u32__core__slice__Slice_u32__ret_void(v332, v334, v4, ((void*)0));
+    void* v335; memcpy(&v335, v6, sizeof(void*));
+    void* v336 = (void*)((char*)v335 + (intptr_t)((int64_t)1456));
+    int64_t v337; memcpy(&v337, v264, sizeof(int64_t));
+    _Alignas(8) unsigned char __slot338[136];
     void* v338 = (void*)__slot338;
-    std__string_0builder__writer__ref_std__string_0builder__StringBuilder__r_std__io__writer__Writer(v333, v338, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot339[16];
-    void* v339 = (void*)__slot339;
+    memset(v338, (int)0, (size_t)((uint64_t)136));
+    void* v339; memcpy(&v339, v7, sizeof(void*));
     void* v340 = (void*)((char*)v339 + (intptr_t)((int64_t)0));
-    { void* __sv = ((void*)((void*)g_str_154)); memcpy(v340, &__sv, sizeof(void*)); }
-    void* v341 = (void*)((char*)v339 + (intptr_t)((int64_t)8));
-    { int64_t __sv = ((int64_t)0); memcpy(v341, &__sv, sizeof(int64_t)); }
-    std__format__format__u32__std__io__writer__Writer__core__string__String(v337, v338, v339, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot342[24];
-    void* v342 = (void*)__slot342;
-    std__string_0builder__to_0string__ref_std__string_0builder__StringBuilder__r_std__string__OwnedString(v333, v342, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot343[24];
-    void* v343 = (void*)__slot343;
-    memcpy(v343, v342, (size_t)((uint64_t)24));
-    std__string_0builder__deinit__std__string_0builder__StringBuilder(v333, v4, ((void*)0));
-    void* v344 = (void*)((char*)v320 + (intptr_t)((int64_t)88));
-    memcpy(v344, v343, (size_t)((uint64_t)24));
-    void* v345 = (void*)((char*)v320 + (intptr_t)((int64_t)124));
-    memcpy(v345, v263, (size_t)((uint64_t)4));
-    flang_0typer__inference_0results__record_0lambda__ref_flang_0typer__inference_0results__InferenceResults__u64__flang_0typer__inference_0results__LambdaInfo(v318, v319, v320, v4, ((void*)0));
-    void* v346; memcpy(&v346, v6, sizeof(void*));
-    void* v347 = (void*)((char*)v346 + (intptr_t)((int64_t)0));
-    int32_t v348; memcpy(&v348, v174, sizeof(int32_t));
-    int64_t v349; memcpy(&v349, v36, sizeof(int64_t));
-    int32_t v350 = flang_0typer__inference_0engine__mk_0func__ref_flang_0typer__inference_0engine__Engine__std__collections__list__List_u32__u32__usize__flang_0typer__type__FnConv__r_u32(v347, v314, v348, v349, v263, v4, ((void*)0));
-    return v350;
-
-else307:;
-    goto join308;
-
-join308:;
-    void* v351; memcpy(&v351, v6, sizeof(void*));
-    void* v352 = (void*)((char*)v351 + (intptr_t)((int64_t)2392));
-    _Alignas(8) unsigned char __slot353[16];
+    void* v341 = (void*)((char*)v338 + (intptr_t)((int64_t)0));
+    memcpy(v341, v340, (size_t)((uint64_t)24));
+    void* v342 = (void*)((char*)v338 + (intptr_t)((int64_t)24));
+    memcpy(v342, v35, (size_t)((uint64_t)32));
+    int64_t v343; memcpy(&v343, v36, sizeof(int64_t));
+    void* v344 = (void*)((char*)v338 + (intptr_t)((int64_t)56));
+    { int64_t __sv = ((int64_t)v343); memcpy(v344, &__sv, sizeof(int64_t)); }
+    int32_t v345; memcpy(&v345, v192, sizeof(int32_t));
+    void* v346 = (void*)((char*)v338 + (intptr_t)((int64_t)120));
+    { int32_t __sv = ((int32_t)v345); memcpy(v346, &__sv, sizeof(int32_t)); }
+    void* v347 = (void*)((char*)v259 + (intptr_t)((int64_t)32));
+    void* v348 = (void*)((char*)v338 + (intptr_t)((int64_t)64));
+    memcpy(v348, v347, (size_t)((uint64_t)32));
+    _Alignas(4) unsigned char __slot349[8];
+    void* v349 = (void*)__slot349;
+    memset(v349, (int)0, (size_t)((uint64_t)8));
+    void* v350 = (void*)((char*)v338 + (intptr_t)((int64_t)124));
+    memcpy(v350, v349, (size_t)((uint64_t)8));
+    void* v351 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
+    void* v352; memcpy(&v352, v351, sizeof(void*));
+    _Alignas(8) unsigned char __slot353[32];
     void* v353 = (void*)__slot353;
-    void* v354 = (void*)((char*)v353 + (intptr_t)((int64_t)0));
-    { void* __sv = ((void*)((void*)g_str_1168)); memcpy(v354, &__sv, sizeof(void*)); }
-    void* v355 = (void*)((char*)v353 + (intptr_t)((int64_t)8));
-    { int64_t __sv = ((int64_t)11); memcpy(v355, &__sv, sizeof(int64_t)); }
-    _Alignas(8) unsigned char __slot356[16];
-    void* v356 = (void*)__slot356;
-    std__option__unwrap_0or__core__option__Option_core__string__String__core__string__String__ret_core__string__String(v352, v353, v356, v4, ((void*)0));
-    void* v357 = (void*)((char*)v241 + (intptr_t)((int64_t)32));
-    void* v358 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v357, v4, ((void*)0));
-    void* v359 = (void*)((char*)v358 + (intptr_t)((int64_t)8));
-    int64_t v360; memcpy(&v360, v359, sizeof(int64_t));
-    void* v361 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
-    void* v362; memcpy(&v362, v361, sizeof(void*));
-    _Alignas(8) unsigned char __slot363[32];
+    std__string_0builder__string_0builder__usize__ref_std__allocator__Allocator__r_std__string_0builder__StringBuilder(((int64_t)0), v352, v353, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot354[16];
+    void* v354 = (void*)__slot354;
+    void* v355 = (void*)((char*)v354 + (intptr_t)((int64_t)0));
+    { void* __sv = ((void*)((void*)g_str_1167)); memcpy(v355, &__sv, sizeof(void*)); }
+    void* v356 = (void*)((char*)v354 + (intptr_t)((int64_t)8));
+    { int64_t __sv = ((int64_t)15); memcpy(v356, &__sv, sizeof(int64_t)); }
+    std__string_0builder__append__ref_std__string_0builder__StringBuilder__core__string__String__ret_void(v353, v354, v4, ((void*)0));
+    int32_t v357; memcpy(&v357, v268, sizeof(int32_t));
+    _Alignas(8) unsigned char __slot358[16];
+    void* v358 = (void*)__slot358;
+    std__string_0builder__writer__ref_std__string_0builder__StringBuilder__r_std__io__writer__Writer(v353, v358, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot359[16];
+    void* v359 = (void*)__slot359;
+    void* v360 = (void*)((char*)v359 + (intptr_t)((int64_t)0));
+    { void* __sv = ((void*)((void*)g_str_154)); memcpy(v360, &__sv, sizeof(void*)); }
+    void* v361 = (void*)((char*)v359 + (intptr_t)((int64_t)8));
+    { int64_t __sv = ((int64_t)0); memcpy(v361, &__sv, sizeof(int64_t)); }
+    std__format__format__u32__std__io__writer__Writer__core__string__String(v357, v358, v359, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot362[24];
+    void* v362 = (void*)__slot362;
+    std__string_0builder__to_0string__ref_std__string_0builder__StringBuilder__r_std__string__OwnedString(v353, v362, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot363[24];
     void* v363 = (void*)__slot363;
-    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_flang_0typer__type__Field(v360, v362, v363, v4, ((void*)0));
-    void* v364 = (void*)((char*)v241 + (intptr_t)((int64_t)32));
-    void* v365 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v364, v4, ((void*)0));
-    void* v366 = (void*)((char*)v365 + (intptr_t)((int64_t)8));
-    int64_t v367; memcpy(&v367, v366, sizeof(int64_t));
+    memcpy(v363, v362, (size_t)((uint64_t)24));
+    std__string_0builder__deinit__std__string_0builder__StringBuilder(v353, v4, ((void*)0));
+    void* v364 = (void*)((char*)v338 + (intptr_t)((int64_t)96));
+    memcpy(v364, v363, (size_t)((uint64_t)24));
+    void* v365 = (void*)((char*)v338 + (intptr_t)((int64_t)132));
+    memcpy(v365, v281, (size_t)((uint64_t)4));
+    flang_0typer__inference_0results__record_0lambda__ref_flang_0typer__inference_0results__InferenceResults__u64__flang_0typer__inference_0results__LambdaInfo(v336, v337, v338, v4, ((void*)0));
+    void* v366; memcpy(&v366, v6, sizeof(void*));
+    void* v367 = (void*)((char*)v366 + (intptr_t)((int64_t)0));
+    int32_t v368; memcpy(&v368, v192, sizeof(int32_t));
+    int64_t v369; memcpy(&v369, v36, sizeof(int64_t));
+    int32_t v370 = flang_0typer__inference_0engine__mk_0func__ref_flang_0typer__inference_0engine__Engine__std__collections__list__List_u32__u32__usize__flang_0typer__type__FnConv__r_u32(v367, v332, v368, v369, v281, v4, ((void*)0));
+    return v370;
+
+else325:;
+    goto join326;
+
+join326:;
+    void* v371; memcpy(&v371, v6, sizeof(void*));
+    void* v372 = (void*)((char*)v371 + (intptr_t)((int64_t)2392));
+    _Alignas(8) unsigned char __slot373[16];
+    void* v373 = (void*)__slot373;
+    void* v374 = (void*)((char*)v373 + (intptr_t)((int64_t)0));
+    { void* __sv = ((void*)((void*)g_str_1168)); memcpy(v374, &__sv, sizeof(void*)); }
+    void* v375 = (void*)((char*)v373 + (intptr_t)((int64_t)8));
+    { int64_t __sv = ((int64_t)11); memcpy(v375, &__sv, sizeof(int64_t)); }
+    _Alignas(8) unsigned char __slot376[16];
+    void* v376 = (void*)__slot376;
+    std__option__unwrap_0or__core__option__Option_core__string__String__core__string__String__ret_core__string__String(v372, v373, v376, v4, ((void*)0));
+    void* v377 = (void*)((char*)v259 + (intptr_t)((int64_t)32));
+    void* v378 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v377, v4, ((void*)0));
+    void* v379 = (void*)((char*)v378 + (intptr_t)((int64_t)8));
+    int64_t v380; memcpy(&v380, v379, sizeof(int64_t));
+    void* v381 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
+    void* v382; memcpy(&v382, v381, sizeof(void*));
+    _Alignas(8) unsigned char __slot383[32];
+    void* v383 = (void*)__slot383;
+    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_flang_0typer__type__Field(v380, v382, v383, v4, ((void*)0));
+    void* v384 = (void*)((char*)v259 + (intptr_t)((int64_t)32));
+    void* v385 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v384, v4, ((void*)0));
+    void* v386 = (void*)((char*)v385 + (intptr_t)((int64_t)8));
+    int64_t v387; memcpy(&v387, v386, sizeof(int64_t));
     {
         int64_t __mv0 = ((int64_t)0);
-        v369 = __mv0;
+        v389 = __mv0;
     }
-    goto for_head368;
+    goto for_head388;
 
-for_head368:;
-    int8_t v373 = (int8_t)(((uint64_t)v369) < ((uint64_t)v367));
-    if (v373) {
-        goto for_body370;
+for_head388:;
+    int8_t v393 = (int8_t)(((uint64_t)v389) < ((uint64_t)v387));
+    if (v393) {
+        goto for_body390;
     } else {
-        goto for_exit372;
+        goto for_exit392;
     }
 
-for_body370:;
-    _Alignas(8) unsigned char __slot374[8];
-    void* v374 = (void*)__slot374;
-    { int64_t __sv = ((int64_t)v369); memcpy(v374, &__sv, sizeof(int64_t)); }
-    _Alignas(8) unsigned char __slot375[48];
-    void* v375 = (void*)__slot375;
-    memset(v375, (int)0, (size_t)((uint64_t)48));
-    void* v376 = (void*)((char*)v241 + (intptr_t)((int64_t)32));
-    void* v377 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v376, v4, ((void*)0));
-    int64_t v378; memcpy(&v378, v374, sizeof(int64_t));
-    void* v379 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec__usize__ret_ref_flang_0typer__inference_0results__CaptureRec(v377, v378, v4, ((void*)0));
-    void* v380 = (void*)((char*)v379 + (intptr_t)((int64_t)0));
-    void* v381 = (void*)((char*)v375 + (intptr_t)((int64_t)0));
-    memcpy(v381, v380, (size_t)((uint64_t)16));
-    void* v382; memcpy(&v382, v6, sizeof(void*));
-    void* v383 = (void*)((char*)v382 + (intptr_t)((int64_t)0));
-    void* v384 = (void*)((char*)v241 + (intptr_t)((int64_t)32));
-    void* v385 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v384, v4, ((void*)0));
-    int64_t v386; memcpy(&v386, v374, sizeof(int64_t));
-    void* v387 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec__usize__ret_ref_flang_0typer__inference_0results__CaptureRec(v385, v386, v4, ((void*)0));
-    void* v388 = (void*)((char*)v387 + (intptr_t)((int64_t)24));
-    int32_t v389; memcpy(&v389, v388, sizeof(int32_t));
-    int32_t v390 = flang_0typer__inference_0engine__mk_0ref__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v383, v389, v4, ((void*)0));
-    void* v391 = (void*)((char*)v375 + (intptr_t)((int64_t)40));
-    { int32_t __sv = ((int32_t)v390); memcpy(v391, &__sv, sizeof(int32_t)); }
-    _Alignas(8) unsigned char __slot392[24];
-    void* v392 = (void*)__slot392;
-    flang_0core__span__none_0span__r_flang_0core__span__SourceSpan(v392, v4, ((void*)0));
-    void* v393 = (void*)((char*)v375 + (intptr_t)((int64_t)16));
-    memcpy(v393, v392, (size_t)((uint64_t)24));
-    void* v394 = (void*)((char*)v375 + (intptr_t)((int64_t)44));
-    { int8_t __sv = ((int8_t)0); memcpy(v394, &__sv, sizeof(int8_t)); }
-    std__collections__list__push__ref_std__collections__list__List_flang_0typer__type__Field__flang_0typer__type__Field__ret_void(v363, v375, v4, ((void*)0));
-    goto for_latch371;
+for_body390:;
+    _Alignas(8) unsigned char __slot394[8];
+    void* v394 = (void*)__slot394;
+    { int64_t __sv = ((int64_t)v389); memcpy(v394, &__sv, sizeof(int64_t)); }
+    _Alignas(8) unsigned char __slot395[48];
+    void* v395 = (void*)__slot395;
+    memset(v395, (int)0, (size_t)((uint64_t)48));
+    void* v396 = (void*)((char*)v259 + (intptr_t)((int64_t)32));
+    void* v397 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v396, v4, ((void*)0));
+    int64_t v398; memcpy(&v398, v394, sizeof(int64_t));
+    void* v399 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec__usize__ret_ref_flang_0typer__inference_0results__CaptureRec(v397, v398, v4, ((void*)0));
+    void* v400 = (void*)((char*)v399 + (intptr_t)((int64_t)0));
+    void* v401 = (void*)((char*)v395 + (intptr_t)((int64_t)0));
+    memcpy(v401, v400, (size_t)((uint64_t)16));
+    void* v402; memcpy(&v402, v6, sizeof(void*));
+    void* v403 = (void*)((char*)v402 + (intptr_t)((int64_t)0));
+    void* v404 = (void*)((char*)v259 + (intptr_t)((int64_t)32));
+    void* v405 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v404, v4, ((void*)0));
+    int64_t v406; memcpy(&v406, v394, sizeof(int64_t));
+    void* v407 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec__usize__ret_ref_flang_0typer__inference_0results__CaptureRec(v405, v406, v4, ((void*)0));
+    void* v408 = (void*)((char*)v407 + (intptr_t)((int64_t)24));
+    int32_t v409; memcpy(&v409, v408, sizeof(int32_t));
+    int32_t v410 = flang_0typer__inference_0engine__mk_0ref__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v403, v409, v4, ((void*)0));
+    void* v411 = (void*)((char*)v395 + (intptr_t)((int64_t)40));
+    { int32_t __sv = ((int32_t)v410); memcpy(v411, &__sv, sizeof(int32_t)); }
+    _Alignas(8) unsigned char __slot412[24];
+    void* v412 = (void*)__slot412;
+    flang_0core__span__none_0span__r_flang_0core__span__SourceSpan(v412, v4, ((void*)0));
+    void* v413 = (void*)((char*)v395 + (intptr_t)((int64_t)16));
+    memcpy(v413, v412, (size_t)((uint64_t)24));
+    void* v414 = (void*)((char*)v395 + (intptr_t)((int64_t)44));
+    { int8_t __sv = ((int8_t)0); memcpy(v414, &__sv, sizeof(int8_t)); }
+    std__collections__list__push__ref_std__collections__list__List_flang_0typer__type__Field__flang_0typer__type__Field__ret_void(v383, v395, v4, ((void*)0));
+    goto for_latch391;
 
-for_latch371:;
-    int64_t v395 = (int64_t)(((uint64_t)v369) + ((uint64_t)1));
+for_latch391:;
+    int64_t v415 = (int64_t)(((uint64_t)v389) + ((uint64_t)1));
     {
-        int64_t __mv0 = ((int64_t)v395);
-        v369 = __mv0;
+        int64_t __mv0 = ((int64_t)v415);
+        v389 = __mv0;
     }
-    goto for_head368;
+    goto for_head388;
 
-for_exit372:;
-    void* v396 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
-    void* v397; memcpy(&v397, v396, sizeof(void*));
-    _Alignas(8) unsigned char __slot398[32];
-    void* v398 = (void*)__slot398;
-    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(((int64_t)0), v397, v398, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot399[184];
-    void* v399 = (void*)__slot399;
-    memset(v399, (int)0, (size_t)((uint64_t)184));
-    _Alignas(8) unsigned char __slot400[16];
-    void* v400 = (void*)__slot400;
-    void* v401 = (void*)((char*)v400 + (intptr_t)((int64_t)0));
-    { void* __sv = ((void*)((void*)g_str_154)); memcpy(v401, &__sv, sizeof(void*)); }
-    void* v402 = (void*)((char*)v400 + (intptr_t)((int64_t)8));
-    { int64_t __sv = ((int64_t)0); memcpy(v402, &__sv, sizeof(int64_t)); }
-    void* v403 = (void*)((char*)v399 + (intptr_t)((int64_t)0));
-    memcpy(v403, v400, (size_t)((uint64_t)16));
-    void* v404 = (void*)((char*)v399 + (intptr_t)((int64_t)16));
-    memcpy(v404, v356, (size_t)((uint64_t)16));
-    void* v405 = (void*)((char*)v399 + (intptr_t)((int64_t)176));
-    { int8_t __sv = ((int8_t)1); memcpy(v405, &__sv, sizeof(int8_t)); }
-    void* v406 = (void*)((char*)v399 + (intptr_t)((int64_t)32));
-    memcpy(v406, v398, (size_t)((uint64_t)32));
-    void* v407 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
-    void* v408; memcpy(&v408, v407, sizeof(void*));
-    _Alignas(8) unsigned char __slot409[32];
-    void* v409 = (void*)__slot409;
-    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(((int64_t)0), v408, v409, v4, ((void*)0));
-    void* v410 = (void*)((char*)v399 + (intptr_t)((int64_t)64));
-    memcpy(v410, v409, (size_t)((uint64_t)32));
-    void* v411 = (void*)((char*)v399 + (intptr_t)((int64_t)96));
-    memcpy(v411, v363, (size_t)((uint64_t)32));
-    void* v412; memcpy(&v412, v7, sizeof(void*));
-    void* v413 = (void*)((char*)v412 + (intptr_t)((int64_t)0));
-    void* v414 = (void*)((char*)v399 + (intptr_t)((int64_t)128));
-    memcpy(v414, v413, (size_t)((uint64_t)24));
-    _Alignas(8) unsigned char __slot415[24];
-    void* v415 = (void*)__slot415;
-    memset(v415, (int)0, (size_t)((uint64_t)24));
-    void* v416 = (void*)((char*)v399 + (intptr_t)((int64_t)152));
-    memcpy(v416, v415, (size_t)((uint64_t)24));
-    void* v417 = (void*)((char*)v399 + (intptr_t)((int64_t)177));
-    { int8_t __sv = ((int8_t)0); memcpy(v417, &__sv, sizeof(int8_t)); }
-    void* v418 = (void*)((char*)v399 + (intptr_t)((int64_t)178));
-    { int8_t __sv = ((int8_t)0); memcpy(v418, &__sv, sizeof(int8_t)); }
-    void* v419; memcpy(&v419, v6, sizeof(void*));
-    _Alignas(8) unsigned char __slot420[240];
+for_exit392:;
+    void* v416 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
+    void* v417; memcpy(&v417, v416, sizeof(void*));
+    _Alignas(8) unsigned char __slot418[32];
+    void* v418 = (void*)__slot418;
+    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(((int64_t)0), v417, v418, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot419[184];
+    void* v419 = (void*)__slot419;
+    memset(v419, (int)0, (size_t)((uint64_t)184));
+    _Alignas(8) unsigned char __slot420[16];
     void* v420 = (void*)__slot420;
-    memset(v420, (int)0, (size_t)((uint64_t)240));
-    { int32_t __sv = ((int32_t)0); memcpy(v420, &__sv, sizeof(int32_t)); }
-    void* v421 = (void*)((char*)v420 + (intptr_t)((int64_t)8));
-    memcpy(v421, v399, (size_t)((uint64_t)184));
-    void* v422 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
-    void* v423; memcpy(&v423, v422, sizeof(void*));
-    _Alignas(8) unsigned char __slot424[32];
-    void* v424 = (void*)__slot424;
-    std__string_0builder__string_0builder__usize__ref_std__allocator__Allocator__r_std__string_0builder__StringBuilder(((int64_t)0), v423, v424, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot425[16];
-    void* v425 = (void*)__slot425;
-    std__string_0builder__writer__ref_std__string_0builder__StringBuilder__r_std__io__writer__Writer(v424, v425, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot426[16];
-    void* v426 = (void*)__slot426;
-    void* v427 = (void*)((char*)v426 + (intptr_t)((int64_t)0));
-    { void* __sv = ((void*)((void*)g_str_154)); memcpy(v427, &__sv, sizeof(void*)); }
-    void* v428 = (void*)((char*)v426 + (intptr_t)((int64_t)8));
-    { int64_t __sv = ((int64_t)0); memcpy(v428, &__sv, sizeof(int64_t)); }
-    std__format__format__core__string__String__std__io__writer__Writer__core__string__String(v356, v425, v426, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot429[16];
+    void* v421 = (void*)((char*)v420 + (intptr_t)((int64_t)0));
+    { void* __sv = ((void*)((void*)g_str_154)); memcpy(v421, &__sv, sizeof(void*)); }
+    void* v422 = (void*)((char*)v420 + (intptr_t)((int64_t)8));
+    { int64_t __sv = ((int64_t)0); memcpy(v422, &__sv, sizeof(int64_t)); }
+    void* v423 = (void*)((char*)v419 + (intptr_t)((int64_t)0));
+    memcpy(v423, v420, (size_t)((uint64_t)16));
+    void* v424 = (void*)((char*)v419 + (intptr_t)((int64_t)16));
+    memcpy(v424, v376, (size_t)((uint64_t)16));
+    void* v425 = (void*)((char*)v419 + (intptr_t)((int64_t)176));
+    { int8_t __sv = ((int8_t)1); memcpy(v425, &__sv, sizeof(int8_t)); }
+    void* v426 = (void*)((char*)v419 + (intptr_t)((int64_t)32));
+    memcpy(v426, v418, (size_t)((uint64_t)32));
+    void* v427 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
+    void* v428; memcpy(&v428, v427, sizeof(void*));
+    _Alignas(8) unsigned char __slot429[32];
     void* v429 = (void*)__slot429;
-    void* v430 = (void*)((char*)v429 + (intptr_t)((int64_t)0));
-    { void* __sv = ((void*)((void*)g_str_1169)); memcpy(v430, &__sv, sizeof(void*)); }
-    void* v431 = (void*)((char*)v429 + (intptr_t)((int64_t)8));
-    { int64_t __sv = ((int64_t)11); memcpy(v431, &__sv, sizeof(int64_t)); }
-    std__string_0builder__append__ref_std__string_0builder__StringBuilder__core__string__String__ret_void(v424, v429, v4, ((void*)0));
-    int32_t v432; memcpy(&v432, v250, sizeof(int32_t));
-    _Alignas(8) unsigned char __slot433[16];
-    void* v433 = (void*)__slot433;
-    std__string_0builder__writer__ref_std__string_0builder__StringBuilder__r_std__io__writer__Writer(v424, v433, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot434[16];
-    void* v434 = (void*)__slot434;
-    void* v435 = (void*)((char*)v434 + (intptr_t)((int64_t)0));
-    { void* __sv = ((void*)((void*)g_str_154)); memcpy(v435, &__sv, sizeof(void*)); }
-    void* v436 = (void*)((char*)v434 + (intptr_t)((int64_t)8));
-    { int64_t __sv = ((int64_t)0); memcpy(v436, &__sv, sizeof(int64_t)); }
-    std__format__format__u32__std__io__writer__Writer__core__string__String(v432, v433, v434, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot437[24];
-    void* v437 = (void*)__slot437;
-    std__string_0builder__to_0string__ref_std__string_0builder__StringBuilder__r_std__string__OwnedString(v424, v437, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot438[24];
-    void* v438 = (void*)__slot438;
-    memcpy(v438, v437, (size_t)((uint64_t)24));
-    std__string_0builder__deinit__std__string_0builder__StringBuilder(v424, v4, ((void*)0));
-    int32_t v439 = flang_0typer__checker__register_0collected__ref_flang_0typer__checker__Checker__flang_0typer__nominal_0registry__NominalDef__std__string__OwnedString__r_u32(v419, v420, v438, v4, ((void*)0));
-    _Alignas(4) unsigned char __slot440[4];
+    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(((int64_t)0), v428, v429, v4, ((void*)0));
+    void* v430 = (void*)((char*)v419 + (intptr_t)((int64_t)64));
+    memcpy(v430, v429, (size_t)((uint64_t)32));
+    void* v431 = (void*)((char*)v419 + (intptr_t)((int64_t)96));
+    memcpy(v431, v383, (size_t)((uint64_t)32));
+    void* v432; memcpy(&v432, v7, sizeof(void*));
+    void* v433 = (void*)((char*)v432 + (intptr_t)((int64_t)0));
+    void* v434 = (void*)((char*)v419 + (intptr_t)((int64_t)128));
+    memcpy(v434, v433, (size_t)((uint64_t)24));
+    _Alignas(8) unsigned char __slot435[24];
+    void* v435 = (void*)__slot435;
+    memset(v435, (int)0, (size_t)((uint64_t)24));
+    void* v436 = (void*)((char*)v419 + (intptr_t)((int64_t)152));
+    memcpy(v436, v435, (size_t)((uint64_t)24));
+    void* v437 = (void*)((char*)v419 + (intptr_t)((int64_t)177));
+    { int8_t __sv = ((int8_t)0); memcpy(v437, &__sv, sizeof(int8_t)); }
+    void* v438 = (void*)((char*)v419 + (intptr_t)((int64_t)178));
+    { int8_t __sv = ((int8_t)0); memcpy(v438, &__sv, sizeof(int8_t)); }
+    void* v439; memcpy(&v439, v6, sizeof(void*));
+    _Alignas(8) unsigned char __slot440[240];
     void* v440 = (void*)__slot440;
-    { int32_t __sv = ((int32_t)v439); memcpy(v440, &__sv, sizeof(int32_t)); }
-    void* v441 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
-    void* v442; memcpy(&v442, v441, sizeof(void*));
-    _Alignas(8) unsigned char __slot443[32];
-    void* v443 = (void*)__slot443;
-    std__string_0builder__string_0builder__usize__ref_std__allocator__Allocator__r_std__string_0builder__StringBuilder(((int64_t)0), v442, v443, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot444[16];
+    memset(v440, (int)0, (size_t)((uint64_t)240));
+    { int32_t __sv = ((int32_t)0); memcpy(v440, &__sv, sizeof(int32_t)); }
+    void* v441 = (void*)((char*)v440 + (intptr_t)((int64_t)8));
+    memcpy(v441, v419, (size_t)((uint64_t)184));
+    void* v442 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
+    void* v443; memcpy(&v443, v442, sizeof(void*));
+    _Alignas(8) unsigned char __slot444[32];
     void* v444 = (void*)__slot444;
-    void* v445 = (void*)((char*)v444 + (intptr_t)((int64_t)0));
-    { void* __sv = ((void*)((void*)g_str_1170)); memcpy(v445, &__sv, sizeof(void*)); }
-    void* v446 = (void*)((char*)v444 + (intptr_t)((int64_t)8));
-    { int64_t __sv = ((int64_t)21); memcpy(v446, &__sv, sizeof(int64_t)); }
-    std__string_0builder__append__ref_std__string_0builder__StringBuilder__core__string__String__ret_void(v443, v444, v4, ((void*)0));
-    int32_t v447; memcpy(&v447, v250, sizeof(int32_t));
-    _Alignas(8) unsigned char __slot448[16];
-    void* v448 = (void*)__slot448;
-    std__string_0builder__writer__ref_std__string_0builder__StringBuilder__r_std__io__writer__Writer(v443, v448, v4, ((void*)0));
+    std__string_0builder__string_0builder__usize__ref_std__allocator__Allocator__r_std__string_0builder__StringBuilder(((int64_t)0), v443, v444, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot445[16];
+    void* v445 = (void*)__slot445;
+    std__string_0builder__writer__ref_std__string_0builder__StringBuilder__r_std__io__writer__Writer(v444, v445, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot446[16];
+    void* v446 = (void*)__slot446;
+    void* v447 = (void*)((char*)v446 + (intptr_t)((int64_t)0));
+    { void* __sv = ((void*)((void*)g_str_154)); memcpy(v447, &__sv, sizeof(void*)); }
+    void* v448 = (void*)((char*)v446 + (intptr_t)((int64_t)8));
+    { int64_t __sv = ((int64_t)0); memcpy(v448, &__sv, sizeof(int64_t)); }
+    std__format__format__core__string__String__std__io__writer__Writer__core__string__String(v376, v445, v446, v4, ((void*)0));
     _Alignas(8) unsigned char __slot449[16];
     void* v449 = (void*)__slot449;
     void* v450 = (void*)((char*)v449 + (intptr_t)((int64_t)0));
-    { void* __sv = ((void*)((void*)g_str_154)); memcpy(v450, &__sv, sizeof(void*)); }
+    { void* __sv = ((void*)((void*)g_str_1169)); memcpy(v450, &__sv, sizeof(void*)); }
     void* v451 = (void*)((char*)v449 + (intptr_t)((int64_t)8));
-    { int64_t __sv = ((int64_t)0); memcpy(v451, &__sv, sizeof(int64_t)); }
-    std__format__format__u32__std__io__writer__Writer__core__string__String(v447, v448, v449, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot452[24];
-    void* v452 = (void*)__slot452;
-    std__string_0builder__to_0string__ref_std__string_0builder__StringBuilder__r_std__string__OwnedString(v443, v452, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot453[24];
+    { int64_t __sv = ((int64_t)11); memcpy(v451, &__sv, sizeof(int64_t)); }
+    std__string_0builder__append__ref_std__string_0builder__StringBuilder__core__string__String__ret_void(v444, v449, v4, ((void*)0));
+    int32_t v452; memcpy(&v452, v268, sizeof(int32_t));
+    _Alignas(8) unsigned char __slot453[16];
     void* v453 = (void*)__slot453;
-    memcpy(v453, v452, (size_t)((uint64_t)24));
-    std__string_0builder__deinit__std__string_0builder__StringBuilder(v443, v4, ((void*)0));
-    void* v454 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v35, v4, ((void*)0));
-    void* v455 = (void*)((char*)v454 + (intptr_t)((int64_t)8));
-    int64_t v456; memcpy(&v456, v455, sizeof(int64_t));
-    void* v457 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
-    void* v458; memcpy(&v458, v457, sizeof(void*));
-    _Alignas(8) unsigned char __slot459[32];
-    void* v459 = (void*)__slot459;
-    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(v456, v458, v459, v4, ((void*)0));
-    void* v460 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v35, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot461[16];
-    void* v461 = (void*)__slot461;
-    std__collections__list__as_0slice__ref_std__collections__list__UnmanagedList_u32__ret_core__slice__Slice_u32(v460, v461, v4, ((void*)0));
-    std__collections__list__push_0all__ref_std__collections__list__List_u32__core__slice__Slice_u32__ret_void(v459, v461, v4, ((void*)0));
-    void* v462; memcpy(&v462, v6, sizeof(void*));
-    void* v463 = (void*)((char*)v462 + (intptr_t)((int64_t)3664));
-    int32_t v464; memcpy(&v464, v440, sizeof(int32_t));
-    _Alignas(8) unsigned char __slot465[72];
-    void* v465 = (void*)__slot465;
-    memset(v465, (int)0, (size_t)((uint64_t)72));
-    void* v466 = (void*)((char*)v465 + (intptr_t)((int64_t)0));
-    memcpy(v466, v459, (size_t)((uint64_t)32));
-    int32_t v467; memcpy(&v467, v174, sizeof(int32_t));
-    void* v468 = (void*)((char*)v465 + (intptr_t)((int64_t)64));
-    { int32_t __sv = ((int32_t)v467); memcpy(v468, &__sv, sizeof(int32_t)); }
-    void* v469 = (void*)((char*)v453 + (intptr_t)((int64_t)0));
-    void* v470 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
-    void* v471; memcpy(&v471, v470, sizeof(void*));
+    std__string_0builder__writer__ref_std__string_0builder__StringBuilder__r_std__io__writer__Writer(v444, v453, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot454[16];
+    void* v454 = (void*)__slot454;
+    void* v455 = (void*)((char*)v454 + (intptr_t)((int64_t)0));
+    { void* __sv = ((void*)((void*)g_str_154)); memcpy(v455, &__sv, sizeof(void*)); }
+    void* v456 = (void*)((char*)v454 + (intptr_t)((int64_t)8));
+    { int64_t __sv = ((int64_t)0); memcpy(v456, &__sv, sizeof(int64_t)); }
+    std__format__format__u32__std__io__writer__Writer__core__string__String(v452, v453, v454, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot457[24];
+    void* v457 = (void*)__slot457;
+    std__string_0builder__to_0string__ref_std__string_0builder__StringBuilder__r_std__string__OwnedString(v444, v457, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot458[24];
+    void* v458 = (void*)__slot458;
+    memcpy(v458, v457, (size_t)((uint64_t)24));
+    std__string_0builder__deinit__std__string_0builder__StringBuilder(v444, v4, ((void*)0));
+    int32_t v459 = flang_0typer__checker__register_0collected__ref_flang_0typer__checker__Checker__flang_0typer__nominal_0registry__NominalDef__std__string__OwnedString__r_u32(v439, v440, v458, v4, ((void*)0));
+    _Alignas(4) unsigned char __slot460[4];
+    void* v460 = (void*)__slot460;
+    { int32_t __sv = ((int32_t)v459); memcpy(v460, &__sv, sizeof(int32_t)); }
+    void* v461 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
+    void* v462; memcpy(&v462, v461, sizeof(void*));
+    _Alignas(8) unsigned char __slot463[32];
+    void* v463 = (void*)__slot463;
+    std__string_0builder__string_0builder__usize__ref_std__allocator__Allocator__r_std__string_0builder__StringBuilder(((int64_t)0), v462, v463, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot464[16];
+    void* v464 = (void*)__slot464;
+    void* v465 = (void*)((char*)v464 + (intptr_t)((int64_t)0));
+    { void* __sv = ((void*)((void*)g_str_1170)); memcpy(v465, &__sv, sizeof(void*)); }
+    void* v466 = (void*)((char*)v464 + (intptr_t)((int64_t)8));
+    { int64_t __sv = ((int64_t)21); memcpy(v466, &__sv, sizeof(int64_t)); }
+    std__string_0builder__append__ref_std__string_0builder__StringBuilder__core__string__String__ret_void(v463, v464, v4, ((void*)0));
+    int32_t v467; memcpy(&v467, v268, sizeof(int32_t));
+    _Alignas(8) unsigned char __slot468[16];
+    void* v468 = (void*)__slot468;
+    std__string_0builder__writer__ref_std__string_0builder__StringBuilder__r_std__io__writer__Writer(v463, v468, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot469[16];
+    void* v469 = (void*)__slot469;
+    void* v470 = (void*)((char*)v469 + (intptr_t)((int64_t)0));
+    { void* __sv = ((void*)((void*)g_str_154)); memcpy(v470, &__sv, sizeof(void*)); }
+    void* v471 = (void*)((char*)v469 + (intptr_t)((int64_t)8));
+    { int64_t __sv = ((int64_t)0); memcpy(v471, &__sv, sizeof(int64_t)); }
+    std__format__format__u32__std__io__writer__Writer__core__string__String(v467, v468, v469, v4, ((void*)0));
     _Alignas(8) unsigned char __slot472[24];
     void* v472 = (void*)__slot472;
-    std__string__from_0view__core__string__String__ref_std__allocator__Allocator__r_std__string__OwnedString(v469, v471, v472, v4, ((void*)0));
-    void* v473 = (void*)((char*)v465 + (intptr_t)((int64_t)32));
+    std__string_0builder__to_0string__ref_std__string_0builder__StringBuilder__r_std__string__OwnedString(v463, v472, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot473[24];
+    void* v473 = (void*)__slot473;
     memcpy(v473, v472, (size_t)((uint64_t)24));
-    int64_t v474; memcpy(&v474, v246, sizeof(int64_t));
-    void* v475 = (void*)((char*)v465 + (intptr_t)((int64_t)56));
-    { int64_t __sv = ((int64_t)v474); memcpy(v475, &__sv, sizeof(int64_t)); }
-    std__collections__dict__set__ref_std__collections__dict__Dict_u32_flang_0typer__inference_0results__ClosureSig__u32__flang_0typer__inference_0results__ClosureSig__ret_void(v463, v464, v465, v4, ((void*)0));
-    void* v476; memcpy(&v476, v6, sizeof(void*));
-    void* v477 = (void*)((char*)v476 + (intptr_t)((int64_t)1456));
-    int64_t v478; memcpy(&v478, v246, sizeof(int64_t));
-    _Alignas(8) unsigned char __slot479[128];
+    std__string_0builder__deinit__std__string_0builder__StringBuilder(v463, v4, ((void*)0));
+    void* v474 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v35, v4, ((void*)0));
+    void* v475 = (void*)((char*)v474 + (intptr_t)((int64_t)8));
+    int64_t v476; memcpy(&v476, v475, sizeof(int64_t));
+    void* v477 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
+    void* v478; memcpy(&v478, v477, sizeof(void*));
+    _Alignas(8) unsigned char __slot479[32];
     void* v479 = (void*)__slot479;
-    memset(v479, (int)0, (size_t)((uint64_t)128));
-    void* v480; memcpy(&v480, v7, sizeof(void*));
-    void* v481 = (void*)((char*)v480 + (intptr_t)((int64_t)0));
-    void* v482 = (void*)((char*)v479 + (intptr_t)((int64_t)0));
-    memcpy(v482, v481, (size_t)((uint64_t)24));
-    void* v483 = (void*)((char*)v479 + (intptr_t)((int64_t)24));
-    memcpy(v483, v35, (size_t)((uint64_t)32));
-    int32_t v484; memcpy(&v484, v174, sizeof(int32_t));
-    void* v485 = (void*)((char*)v479 + (intptr_t)((int64_t)112));
-    { int32_t __sv = ((int32_t)v484); memcpy(v485, &__sv, sizeof(int32_t)); }
-    void* v486 = (void*)((char*)v241 + (intptr_t)((int64_t)32));
-    void* v487 = (void*)((char*)v479 + (intptr_t)((int64_t)56));
-    memcpy(v487, v486, (size_t)((uint64_t)32));
-    _Alignas(4) unsigned char __slot488[8];
-    void* v488 = (void*)__slot488;
-    memset(v488, (int)0, (size_t)((uint64_t)8));
-    { int32_t __sv = ((int32_t)1); memcpy(v488, &__sv, sizeof(int32_t)); }
-    int32_t v489; memcpy(&v489, v440, sizeof(int32_t));
-    void* v490 = (void*)((char*)v488 + (intptr_t)((int64_t)4));
+    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(v476, v478, v479, v4, ((void*)0));
+    void* v480 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v35, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot481[16];
+    void* v481 = (void*)__slot481;
+    std__collections__list__as_0slice__ref_std__collections__list__UnmanagedList_u32__ret_core__slice__Slice_u32(v480, v481, v4, ((void*)0));
+    std__collections__list__push_0all__ref_std__collections__list__List_u32__core__slice__Slice_u32__ret_void(v479, v481, v4, ((void*)0));
+    void* v482; memcpy(&v482, v6, sizeof(void*));
+    void* v483 = (void*)((char*)v482 + (intptr_t)((int64_t)3664));
+    int32_t v484; memcpy(&v484, v460, sizeof(int32_t));
+    _Alignas(8) unsigned char __slot485[80];
+    void* v485 = (void*)__slot485;
+    memset(v485, (int)0, (size_t)((uint64_t)80));
+    void* v486 = (void*)((char*)v485 + (intptr_t)((int64_t)0));
+    memcpy(v486, v479, (size_t)((uint64_t)32));
+    int64_t v487; memcpy(&v487, v36, sizeof(int64_t));
+    void* v488 = (void*)((char*)v485 + (intptr_t)((int64_t)32));
+    { int64_t __sv = ((int64_t)v487); memcpy(v488, &__sv, sizeof(int64_t)); }
+    int32_t v489; memcpy(&v489, v192, sizeof(int32_t));
+    void* v490 = (void*)((char*)v485 + (intptr_t)((int64_t)72));
     { int32_t __sv = ((int32_t)v489); memcpy(v490, &__sv, sizeof(int32_t)); }
-    void* v491 = (void*)((char*)v479 + (intptr_t)((int64_t)116));
-    memcpy(v491, v488, (size_t)((uint64_t)8));
-    void* v492 = (void*)((char*)v479 + (intptr_t)((int64_t)88));
-    memcpy(v492, v453, (size_t)((uint64_t)24));
-    _Alignas(4) unsigned char __slot493[4];
-    void* v493 = (void*)__slot493;
-    memset(v493, (int)0, (size_t)((uint64_t)4));
-    void* v494 = (void*)((char*)v479 + (intptr_t)((int64_t)124));
-    memcpy(v494, v493, (size_t)((uint64_t)4));
-    flang_0typer__inference_0results__record_0lambda__ref_flang_0typer__inference_0results__InferenceResults__u64__flang_0typer__inference_0results__LambdaInfo(v477, v478, v479, v4, ((void*)0));
-    _Alignas(4) unsigned char __slot495[4];
-    void* v495 = (void*)__slot495;
-    memset(v495, (int)0, (size_t)((uint64_t)4));
-    { int32_t __sv = ((int32_t)1); memcpy(v495, &__sv, sizeof(int32_t)); }
-    int32_t v496; memcpy(&v496, v263, sizeof(int32_t));
-    int32_t v497; memcpy(&v497, v495, sizeof(int32_t));
-    int8_t v498 = (int8_t)(((int32_t)v496) == ((int32_t)v497));
-    if (v498) {
-        goto then499;
+    void* v491 = (void*)((char*)v473 + (intptr_t)((int64_t)0));
+    void* v492 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
+    void* v493; memcpy(&v493, v492, sizeof(void*));
+    _Alignas(8) unsigned char __slot494[24];
+    void* v494 = (void*)__slot494;
+    std__string__from_0view__core__string__String__ref_std__allocator__Allocator__r_std__string__OwnedString(v491, v493, v494, v4, ((void*)0));
+    void* v495 = (void*)((char*)v485 + (intptr_t)((int64_t)40));
+    memcpy(v495, v494, (size_t)((uint64_t)24));
+    int64_t v496; memcpy(&v496, v264, sizeof(int64_t));
+    void* v497 = (void*)((char*)v485 + (intptr_t)((int64_t)64));
+    { int64_t __sv = ((int64_t)v496); memcpy(v497, &__sv, sizeof(int64_t)); }
+    std__collections__dict__set__ref_std__collections__dict__Dict_u32_flang_0typer__inference_0results__ClosureSig__u32__flang_0typer__inference_0results__ClosureSig__ret_void(v483, v484, v485, v4, ((void*)0));
+    void* v498; memcpy(&v498, v6, sizeof(void*));
+    void* v499 = (void*)((char*)v498 + (intptr_t)((int64_t)1456));
+    int64_t v500; memcpy(&v500, v264, sizeof(int64_t));
+    _Alignas(8) unsigned char __slot501[136];
+    void* v501 = (void*)__slot501;
+    memset(v501, (int)0, (size_t)((uint64_t)136));
+    void* v502; memcpy(&v502, v7, sizeof(void*));
+    void* v503 = (void*)((char*)v502 + (intptr_t)((int64_t)0));
+    void* v504 = (void*)((char*)v501 + (intptr_t)((int64_t)0));
+    memcpy(v504, v503, (size_t)((uint64_t)24));
+    void* v505 = (void*)((char*)v501 + (intptr_t)((int64_t)24));
+    memcpy(v505, v35, (size_t)((uint64_t)32));
+    int64_t v506; memcpy(&v506, v36, sizeof(int64_t));
+    void* v507 = (void*)((char*)v501 + (intptr_t)((int64_t)56));
+    { int64_t __sv = ((int64_t)v506); memcpy(v507, &__sv, sizeof(int64_t)); }
+    int32_t v508; memcpy(&v508, v192, sizeof(int32_t));
+    void* v509 = (void*)((char*)v501 + (intptr_t)((int64_t)120));
+    { int32_t __sv = ((int32_t)v508); memcpy(v509, &__sv, sizeof(int32_t)); }
+    void* v510 = (void*)((char*)v259 + (intptr_t)((int64_t)32));
+    void* v511 = (void*)((char*)v501 + (intptr_t)((int64_t)64));
+    memcpy(v511, v510, (size_t)((uint64_t)32));
+    _Alignas(4) unsigned char __slot512[8];
+    void* v512 = (void*)__slot512;
+    memset(v512, (int)0, (size_t)((uint64_t)8));
+    { int32_t __sv = ((int32_t)1); memcpy(v512, &__sv, sizeof(int32_t)); }
+    int32_t v513; memcpy(&v513, v460, sizeof(int32_t));
+    void* v514 = (void*)((char*)v512 + (intptr_t)((int64_t)4));
+    { int32_t __sv = ((int32_t)v513); memcpy(v514, &__sv, sizeof(int32_t)); }
+    void* v515 = (void*)((char*)v501 + (intptr_t)((int64_t)124));
+    memcpy(v515, v512, (size_t)((uint64_t)8));
+    void* v516 = (void*)((char*)v501 + (intptr_t)((int64_t)96));
+    memcpy(v516, v473, (size_t)((uint64_t)24));
+    _Alignas(4) unsigned char __slot517[4];
+    void* v517 = (void*)__slot517;
+    memset(v517, (int)0, (size_t)((uint64_t)4));
+    void* v518 = (void*)((char*)v501 + (intptr_t)((int64_t)132));
+    memcpy(v518, v517, (size_t)((uint64_t)4));
+    flang_0typer__inference_0results__record_0lambda__ref_flang_0typer__inference_0results__InferenceResults__u64__flang_0typer__inference_0results__LambdaInfo(v499, v500, v501, v4, ((void*)0));
+    _Alignas(4) unsigned char __slot519[4];
+    void* v519 = (void*)__slot519;
+    memset(v519, (int)0, (size_t)((uint64_t)4));
+    { int32_t __sv = ((int32_t)1); memcpy(v519, &__sv, sizeof(int32_t)); }
+    int32_t v520; memcpy(&v520, v281, sizeof(int32_t));
+    int32_t v521; memcpy(&v521, v519, sizeof(int32_t));
+    int8_t v522 = (int8_t)(((int32_t)v520) == ((int32_t)v521));
+    if (v522) {
+        goto then523;
     } else {
-        goto else500;
+        goto else524;
     }
 
-then499:;
-    int32_t v502; memcpy(&v502, ((void*)g___fconst_flang_0typer__type__TY_0ERROR), sizeof(int32_t));
-    return v502;
+then523:;
+    int32_t v526; memcpy(&v526, ((void*)g___fconst_flang_0typer__type__TY_0ERROR), sizeof(int32_t));
+    return v526;
 
-else500:;
-    goto join501;
+else524:;
+    goto join525;
 
-join501:;
-    void* v503 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
-    void* v504; memcpy(&v504, v503, sizeof(void*));
-    _Alignas(8) unsigned char __slot505[32];
-    void* v505 = (void*)__slot505;
-    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(((int64_t)0), v504, v505, v4, ((void*)0));
-    void* v506; memcpy(&v506, v6, sizeof(void*));
-    int32_t v507; memcpy(&v507, v440, sizeof(int32_t));
-    int32_t v508 = flang_0typer__checker__mk_0nominal__ref_flang_0typer__checker__Checker__u32__std__collections__list__List_u32__r_u32(v506, v507, v505, v4, ((void*)0));
-    return v508;
+join525:;
+    void* v527 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
+    void* v528; memcpy(&v528, v527, sizeof(void*));
+    _Alignas(8) unsigned char __slot529[32];
+    void* v529 = (void*)__slot529;
+    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(((int64_t)0), v528, v529, v4, ((void*)0));
+    void* v530; memcpy(&v530, v6, sizeof(void*));
+    int32_t v531; memcpy(&v531, v460, sizeof(int32_t));
+    int32_t v532 = flang_0typer__checker__mk_0nominal__ref_flang_0typer__checker__Checker__u32__std__collections__list__List_u32__r_u32(v530, v531, v529, v4, ((void*)0));
+    return v532;
 }
 
 static int32_t flang_0typer__checker__check_0block__ref_flang_0typer__checker__Checker__ref_flang_0parser__ast__BlockExpr__r_u32(void* v0, void* v1, void* v2, void* v3) {
@@ -291484,7 +291564,7 @@ for_latch68:;
 
 for_exit69:;
     void* v88; memcpy(&v88, v24, sizeof(void*));
-    void* v89 = (void*)((char*)v88 + (intptr_t)((int64_t)64));
+    void* v89 = (void*)((char*)v88 + (intptr_t)((int64_t)72));
     int32_t v90; memcpy(&v90, v89, sizeof(int32_t));
     return v90;
 
@@ -303355,14 +303435,14 @@ for_exit24:;
     void* v37; memcpy(&v37, v5, sizeof(void*));
     void* v38 = (void*)((char*)v37 + (intptr_t)((int64_t)0));
     void* v39; memcpy(&v39, v6, sizeof(void*));
-    void* v40 = (void*)((char*)v39 + (intptr_t)((int64_t)112));
+    void* v40 = (void*)((char*)v39 + (intptr_t)((int64_t)120));
     int32_t v41; memcpy(&v41, v40, sizeof(int32_t));
     int32_t v42 = flang_0typer__inference_0engine__zonk__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v38, v41, v3, ((void*)0));
     _Alignas(4) unsigned char __slot43[4];
     void* v43 = (void*)__slot43;
     { int32_t __sv = ((int32_t)v42); memcpy(v43, &__sv, sizeof(int32_t)); }
     void* v44; memcpy(&v44, v6, sizeof(void*));
-    void* v45 = (void*)((char*)v44 + (intptr_t)((int64_t)56));
+    void* v45 = (void*)((char*)v44 + (intptr_t)((int64_t)64));
     void* v46 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v45, v3, ((void*)0));
     void* v47 = (void*)((char*)v46 + (intptr_t)((int64_t)8));
     int64_t v48; memcpy(&v48, v47, sizeof(int64_t));
@@ -303372,7 +303452,7 @@ for_exit24:;
     void* v51 = (void*)__slot51;
     std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_flang_0typer__inference_0results__CaptureRec(v48, v50, v51, v3, ((void*)0));
     void* v52; memcpy(&v52, v6, sizeof(void*));
-    void* v53 = (void*)((char*)v52 + (intptr_t)((int64_t)56));
+    void* v53 = (void*)((char*)v52 + (intptr_t)((int64_t)64));
     void* v54 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v53, v3, ((void*)0));
     void* v55 = (void*)((char*)v54 + (intptr_t)((int64_t)8));
     int64_t v56; memcpy(&v56, v55, sizeof(int64_t));
@@ -303398,7 +303478,7 @@ for_body59:;
     void* v64 = (void*)__slot64;
     memset(v64, (int)0, (size_t)((uint64_t)32));
     void* v65; memcpy(&v65, v6, sizeof(void*));
-    void* v66 = (void*)((char*)v65 + (intptr_t)((int64_t)56));
+    void* v66 = (void*)((char*)v65 + (intptr_t)((int64_t)64));
     void* v67 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v66, v3, ((void*)0));
     int64_t v68; memcpy(&v68, v63, sizeof(int64_t));
     void* v69 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec__usize__ret_ref_flang_0typer__inference_0results__CaptureRec(v67, v68, v3, ((void*)0));
@@ -303406,7 +303486,7 @@ for_body59:;
     void* v71 = (void*)((char*)v64 + (intptr_t)((int64_t)0));
     memcpy(v71, v70, (size_t)((uint64_t)16));
     void* v72; memcpy(&v72, v6, sizeof(void*));
-    void* v73 = (void*)((char*)v72 + (intptr_t)((int64_t)56));
+    void* v73 = (void*)((char*)v72 + (intptr_t)((int64_t)64));
     void* v74 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v73, v3, ((void*)0));
     int64_t v75; memcpy(&v75, v63, sizeof(int64_t));
     void* v76 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec__usize__ret_ref_flang_0typer__inference_0results__CaptureRec(v74, v75, v3, ((void*)0));
@@ -303417,7 +303497,7 @@ for_body59:;
     void* v80; memcpy(&v80, v5, sizeof(void*));
     void* v81 = (void*)((char*)v80 + (intptr_t)((int64_t)0));
     void* v82; memcpy(&v82, v6, sizeof(void*));
-    void* v83 = (void*)((char*)v82 + (intptr_t)((int64_t)56));
+    void* v83 = (void*)((char*)v82 + (intptr_t)((int64_t)64));
     void* v84 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v83, v3, ((void*)0));
     int64_t v85; memcpy(&v85, v63, sizeof(int64_t));
     void* v86 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec__usize__ret_ref_flang_0typer__inference_0results__CaptureRec(v84, v85, v3, ((void*)0));
@@ -303470,39 +303550,44 @@ else97:;
     goto join98;
 
 join98:;
-    _Alignas(8) unsigned char __slot108[128];
+    _Alignas(8) unsigned char __slot108[136];
     void* v108 = (void*)__slot108;
-    memset(v108, (int)0, (size_t)((uint64_t)128));
+    memset(v108, (int)0, (size_t)((uint64_t)136));
     void* v109; memcpy(&v109, v6, sizeof(void*));
     void* v110 = (void*)((char*)v109 + (intptr_t)((int64_t)0));
     void* v111 = (void*)((char*)v108 + (intptr_t)((int64_t)0));
     memcpy(v111, v110, (size_t)((uint64_t)24));
     void* v112 = (void*)((char*)v108 + (intptr_t)((int64_t)24));
     memcpy(v112, v14, (size_t)((uint64_t)32));
-    int32_t v113; memcpy(&v113, v43, sizeof(int32_t));
-    void* v114 = (void*)((char*)v108 + (intptr_t)((int64_t)112));
-    { int32_t __sv = ((int32_t)v113); memcpy(v114, &__sv, sizeof(int32_t)); }
-    void* v115 = (void*)((char*)v108 + (intptr_t)((int64_t)56));
-    memcpy(v115, v51, (size_t)((uint64_t)32));
-    void* v116; memcpy(&v116, v6, sizeof(void*));
-    void* v117 = (void*)((char*)v116 + (intptr_t)((int64_t)116));
-    void* v118 = (void*)((char*)v108 + (intptr_t)((int64_t)116));
-    memcpy(v118, v117, (size_t)((uint64_t)8));
-    void* v119; memcpy(&v119, v6, sizeof(void*));
-    void* v120 = (void*)((char*)v119 + (intptr_t)((int64_t)88));
-    void* v121 = (void*)((char*)v120 + (intptr_t)((int64_t)0));
-    void* v122 = (void*)((char*)v3 + (intptr_t)((int64_t)0));
-    void* v123; memcpy(&v123, v122, sizeof(void*));
-    _Alignas(8) unsigned char __slot124[24];
-    void* v124 = (void*)__slot124;
-    std__string__from_0view__core__string__String__ref_std__allocator__Allocator__r_std__string__OwnedString(v121, v123, v124, v3, ((void*)0));
-    void* v125 = (void*)((char*)v108 + (intptr_t)((int64_t)88));
-    memcpy(v125, v124, (size_t)((uint64_t)24));
-    void* v126; memcpy(&v126, v6, sizeof(void*));
-    void* v127 = (void*)((char*)v126 + (intptr_t)((int64_t)124));
-    void* v128 = (void*)((char*)v108 + (intptr_t)((int64_t)124));
-    memcpy(v128, v127, (size_t)((uint64_t)4));
-    memcpy(v2, v108, (size_t)((uint64_t)128));
+    void* v113; memcpy(&v113, v6, sizeof(void*));
+    void* v114 = (void*)((char*)v113 + (intptr_t)((int64_t)56));
+    int64_t v115; memcpy(&v115, v114, sizeof(int64_t));
+    void* v116 = (void*)((char*)v108 + (intptr_t)((int64_t)56));
+    { int64_t __sv = ((int64_t)v115); memcpy(v116, &__sv, sizeof(int64_t)); }
+    int32_t v117; memcpy(&v117, v43, sizeof(int32_t));
+    void* v118 = (void*)((char*)v108 + (intptr_t)((int64_t)120));
+    { int32_t __sv = ((int32_t)v117); memcpy(v118, &__sv, sizeof(int32_t)); }
+    void* v119 = (void*)((char*)v108 + (intptr_t)((int64_t)64));
+    memcpy(v119, v51, (size_t)((uint64_t)32));
+    void* v120; memcpy(&v120, v6, sizeof(void*));
+    void* v121 = (void*)((char*)v120 + (intptr_t)((int64_t)124));
+    void* v122 = (void*)((char*)v108 + (intptr_t)((int64_t)124));
+    memcpy(v122, v121, (size_t)((uint64_t)8));
+    void* v123; memcpy(&v123, v6, sizeof(void*));
+    void* v124 = (void*)((char*)v123 + (intptr_t)((int64_t)96));
+    void* v125 = (void*)((char*)v124 + (intptr_t)((int64_t)0));
+    void* v126 = (void*)((char*)v3 + (intptr_t)((int64_t)0));
+    void* v127; memcpy(&v127, v126, sizeof(void*));
+    _Alignas(8) unsigned char __slot128[24];
+    void* v128 = (void*)__slot128;
+    std__string__from_0view__core__string__String__ref_std__allocator__Allocator__r_std__string__OwnedString(v125, v127, v128, v3, ((void*)0));
+    void* v129 = (void*)((char*)v108 + (intptr_t)((int64_t)96));
+    memcpy(v129, v128, (size_t)((uint64_t)24));
+    void* v130; memcpy(&v130, v6, sizeof(void*));
+    void* v131 = (void*)((char*)v130 + (intptr_t)((int64_t)132));
+    void* v132 = (void*)((char*)v108 + (intptr_t)((int64_t)132));
+    memcpy(v132, v131, (size_t)((uint64_t)4));
+    memcpy(v2, v108, (size_t)((uint64_t)136));
     return;
 }
 
@@ -303562,7 +303647,7 @@ fit_body22:;
     void* v30; memcpy(&v30, v3, sizeof(void*));
     void* v31; memcpy(&v31, v26, sizeof(void*));
     void* v32 = (void*)((char*)v31 + (intptr_t)((int64_t)16));
-    _Alignas(8) unsigned char __slot33[128];
+    _Alignas(8) unsigned char __slot33[136];
     void* v33 = (void*)__slot33;
     flang_0typer__checker__zonk_0lambda_0info__ref_flang_0typer__checker__Checker__ref_flang_0typer__inference_0results__LambdaInfo__r_flang_0typer__inference_0results__LambdaInfo(v30, v32, v33, v1, ((void*)0));
     std__collections__dict__set__ref_std__collections__dict__Dict_u64_flang_0typer__inference_0results__LambdaInfo__u64__flang_0typer__inference_0results__LambdaInfo__ret_void(v15, v29, v33, v1, ((void*)0));
@@ -303577,7 +303662,7 @@ fit_exit23:;
 
 static void flang_0typer__checker__zonk_0closures__ref_flang_0typer__checker__Checker(void* v0, void* v1, void* v2) {
     int64_t v46 = 0;
-    int64_t v107 = 0;
+    int64_t v111 = 0;
     _Alignas(8) unsigned char __slot3[8];
     void* v3 = (void*)__slot3;
     { void* __sv = ((void*)v0); memcpy(v3, &__sv, sizeof(void*)); }
@@ -303626,7 +303711,7 @@ fit_body20:;
     void* v24 = (void*)__slot24;
     { void* __sv = ((void*)v22); memcpy(v24, &__sv, sizeof(void*)); }
     void* v25; memcpy(&v25, v24, sizeof(void*));
-    void* v26 = (void*)((char*)v25 + (intptr_t)((int64_t)80));
+    void* v26 = (void*)((char*)v25 + (intptr_t)((int64_t)88));
     int32_t v27; memcpy(&v27, v26, sizeof(int32_t));
     _Alignas(4) unsigned char __slot28[4];
     void* v28 = (void*)__slot28;
@@ -303658,9 +303743,9 @@ fit_body20:;
     goto for_head45;
 
 fit_exit21:;
-    void* v192; memcpy(&v192, v3, sizeof(void*));
-    void* v193 = (void*)((char*)v192 + (intptr_t)((int64_t)3664));
-    memcpy(v193, v14, (size_t)((uint64_t)40));
+    void* v196; memcpy(&v196, v3, sizeof(void*));
+    void* v197 = (void*)((char*)v196 + (intptr_t)((int64_t)3664));
+    memcpy(v197, v14, (size_t)((uint64_t)40));
     return;
 
 for_head45:;
@@ -303697,221 +303782,226 @@ for_latch48:;
 
 for_exit49:;
     int32_t v62; memcpy(&v62, v28, sizeof(int32_t));
-    _Alignas(8) unsigned char __slot63[72];
+    _Alignas(8) unsigned char __slot63[80];
     void* v63 = (void*)__slot63;
-    memset(v63, (int)0, (size_t)((uint64_t)72));
+    memset(v63, (int)0, (size_t)((uint64_t)80));
     void* v64 = (void*)((char*)v63 + (intptr_t)((int64_t)0));
     memcpy(v64, v39, (size_t)((uint64_t)32));
-    void* v65; memcpy(&v65, v3, sizeof(void*));
-    void* v66 = (void*)((char*)v65 + (intptr_t)((int64_t)0));
-    void* v67; memcpy(&v67, v31, sizeof(void*));
-    void* v68 = (void*)((char*)v67 + (intptr_t)((int64_t)64));
-    int32_t v69; memcpy(&v69, v68, sizeof(int32_t));
-    int32_t v70 = flang_0typer__inference_0engine__zonk__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v66, v69, v1, ((void*)0));
-    void* v71 = (void*)((char*)v63 + (intptr_t)((int64_t)64));
-    { int32_t __sv = ((int32_t)v70); memcpy(v71, &__sv, sizeof(int32_t)); }
-    void* v72; memcpy(&v72, v31, sizeof(void*));
-    void* v73 = (void*)((char*)v72 + (intptr_t)((int64_t)32));
-    void* v74 = (void*)((char*)v73 + (intptr_t)((int64_t)0));
-    void* v75 = (void*)((char*)v1 + (intptr_t)((int64_t)0));
-    void* v76; memcpy(&v76, v75, sizeof(void*));
-    _Alignas(8) unsigned char __slot77[24];
-    void* v77 = (void*)__slot77;
-    std__string__from_0view__core__string__String__ref_std__allocator__Allocator__r_std__string__OwnedString(v74, v76, v77, v1, ((void*)0));
-    void* v78 = (void*)((char*)v63 + (intptr_t)((int64_t)32));
-    memcpy(v78, v77, (size_t)((uint64_t)24));
-    void* v79; memcpy(&v79, v31, sizeof(void*));
-    void* v80 = (void*)((char*)v79 + (intptr_t)((int64_t)56));
-    int64_t v81; memcpy(&v81, v80, sizeof(int64_t));
-    void* v82 = (void*)((char*)v63 + (intptr_t)((int64_t)56));
-    { int64_t __sv = ((int64_t)v81); memcpy(v82, &__sv, sizeof(int64_t)); }
+    void* v65; memcpy(&v65, v31, sizeof(void*));
+    void* v66 = (void*)((char*)v65 + (intptr_t)((int64_t)32));
+    int64_t v67; memcpy(&v67, v66, sizeof(int64_t));
+    void* v68 = (void*)((char*)v63 + (intptr_t)((int64_t)32));
+    { int64_t __sv = ((int64_t)v67); memcpy(v68, &__sv, sizeof(int64_t)); }
+    void* v69; memcpy(&v69, v3, sizeof(void*));
+    void* v70 = (void*)((char*)v69 + (intptr_t)((int64_t)0));
+    void* v71; memcpy(&v71, v31, sizeof(void*));
+    void* v72 = (void*)((char*)v71 + (intptr_t)((int64_t)72));
+    int32_t v73; memcpy(&v73, v72, sizeof(int32_t));
+    int32_t v74 = flang_0typer__inference_0engine__zonk__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v70, v73, v1, ((void*)0));
+    void* v75 = (void*)((char*)v63 + (intptr_t)((int64_t)72));
+    { int32_t __sv = ((int32_t)v74); memcpy(v75, &__sv, sizeof(int32_t)); }
+    void* v76; memcpy(&v76, v31, sizeof(void*));
+    void* v77 = (void*)((char*)v76 + (intptr_t)((int64_t)40));
+    void* v78 = (void*)((char*)v77 + (intptr_t)((int64_t)0));
+    void* v79 = (void*)((char*)v1 + (intptr_t)((int64_t)0));
+    void* v80; memcpy(&v80, v79, sizeof(void*));
+    _Alignas(8) unsigned char __slot81[24];
+    void* v81 = (void*)__slot81;
+    std__string__from_0view__core__string__String__ref_std__allocator__Allocator__r_std__string__OwnedString(v78, v80, v81, v1, ((void*)0));
+    void* v82 = (void*)((char*)v63 + (intptr_t)((int64_t)40));
+    memcpy(v82, v81, (size_t)((uint64_t)24));
+    void* v83; memcpy(&v83, v31, sizeof(void*));
+    void* v84 = (void*)((char*)v83 + (intptr_t)((int64_t)64));
+    int64_t v85; memcpy(&v85, v84, sizeof(int64_t));
+    void* v86 = (void*)((char*)v63 + (intptr_t)((int64_t)64));
+    { int64_t __sv = ((int64_t)v85); memcpy(v86, &__sv, sizeof(int64_t)); }
     std__collections__dict__set__ref_std__collections__dict__Dict_u32_flang_0typer__inference_0results__ClosureSig__u32__flang_0typer__inference_0results__ClosureSig__ret_void(v14, v62, v63, v1, ((void*)0));
-    void* v83; memcpy(&v83, v3, sizeof(void*));
-    void* v84 = (void*)((char*)v83 + (intptr_t)((int64_t)792));
-    int32_t v85; memcpy(&v85, v28, sizeof(int32_t));
-    void* v86 = flang_0typer__nominal_0registry__get__ref_flang_0typer__nominal_0registry__NominalRegistry__u32__r_ref_flang_0typer__nominal_0registry__NominalDef(v84, v85, v1, ((void*)0));
-    _Alignas(8) unsigned char __slot87[8];
-    void* v87 = (void*)__slot87;
-    { void* __sv = ((void*)v86); memcpy(v87, &__sv, sizeof(void*)); }
-    void* v88; memcpy(&v88, v87, sizeof(void*));
-    int32_t v92; memcpy(&v92, v88, sizeof(int32_t));
-    int8_t v93 = (int8_t)(((int32_t)v92) == ((int32_t)0));
-    if (v93) {
-        goto m_arm90;
+    void* v87; memcpy(&v87, v3, sizeof(void*));
+    void* v88 = (void*)((char*)v87 + (intptr_t)((int64_t)792));
+    int32_t v89; memcpy(&v89, v28, sizeof(int32_t));
+    void* v90 = flang_0typer__nominal_0registry__get__ref_flang_0typer__nominal_0registry__NominalRegistry__u32__r_ref_flang_0typer__nominal_0registry__NominalDef(v88, v89, v1, ((void*)0));
+    _Alignas(8) unsigned char __slot91[8];
+    void* v91 = (void*)__slot91;
+    { void* __sv = ((void*)v90); memcpy(v91, &__sv, sizeof(void*)); }
+    void* v92; memcpy(&v92, v91, sizeof(void*));
+    int32_t v96; memcpy(&v96, v92, sizeof(int32_t));
+    int8_t v97 = (int8_t)(((int32_t)v96) == ((int32_t)0));
+    if (v97) {
+        goto m_arm94;
     } else {
-        goto m_next91;
+        goto m_next95;
     }
 
-m_join89:;
+m_join93:;
     goto fit_head19;
 
-m_arm90:;
-    void* v94 = (void*)((char*)v88 + (intptr_t)((int64_t)8));
-    void* v95 = (void*)((char*)v94 + (intptr_t)((int64_t)96));
-    void* v96 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__type__Field__ret_ref_std__collections__list__UnmanagedList_flang_0typer__type__Field(v95, v1, ((void*)0));
-    void* v97 = (void*)((char*)v96 + (intptr_t)((int64_t)8));
-    int64_t v98; memcpy(&v98, v97, sizeof(int64_t));
-    void* v99 = (void*)((char*)v1 + (intptr_t)((int64_t)0));
-    void* v100; memcpy(&v100, v99, sizeof(void*));
-    _Alignas(8) unsigned char __slot101[32];
-    void* v101 = (void*)__slot101;
-    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_flang_0typer__type__Field(v98, v100, v101, v1, ((void*)0));
-    void* v102 = (void*)((char*)v94 + (intptr_t)((int64_t)96));
-    void* v103 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__type__Field__ret_ref_std__collections__list__UnmanagedList_flang_0typer__type__Field(v102, v1, ((void*)0));
-    void* v104 = (void*)((char*)v103 + (intptr_t)((int64_t)8));
-    int64_t v105; memcpy(&v105, v104, sizeof(int64_t));
+m_arm94:;
+    void* v98 = (void*)((char*)v92 + (intptr_t)((int64_t)8));
+    void* v99 = (void*)((char*)v98 + (intptr_t)((int64_t)96));
+    void* v100 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__type__Field__ret_ref_std__collections__list__UnmanagedList_flang_0typer__type__Field(v99, v1, ((void*)0));
+    void* v101 = (void*)((char*)v100 + (intptr_t)((int64_t)8));
+    int64_t v102; memcpy(&v102, v101, sizeof(int64_t));
+    void* v103 = (void*)((char*)v1 + (intptr_t)((int64_t)0));
+    void* v104; memcpy(&v104, v103, sizeof(void*));
+    _Alignas(8) unsigned char __slot105[32];
+    void* v105 = (void*)__slot105;
+    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_flang_0typer__type__Field(v102, v104, v105, v1, ((void*)0));
+    void* v106 = (void*)((char*)v98 + (intptr_t)((int64_t)96));
+    void* v107 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__type__Field__ret_ref_std__collections__list__UnmanagedList_flang_0typer__type__Field(v106, v1, ((void*)0));
+    void* v108 = (void*)((char*)v107 + (intptr_t)((int64_t)8));
+    int64_t v109; memcpy(&v109, v108, sizeof(int64_t));
     {
         int64_t __mv0 = ((int64_t)0);
-        v107 = __mv0;
+        v111 = __mv0;
     }
-    goto for_head106;
+    goto for_head110;
 
-m_next91:;
+m_next95:;
     if (1) {
-        goto m_arm190;
+        goto m_arm194;
     } else {
-        goto m_next191;
+        goto m_next195;
     }
 
-for_head106:;
-    int8_t v111 = (int8_t)(((uint64_t)v107) < ((uint64_t)v105));
-    if (v111) {
-        goto for_body108;
+for_head110:;
+    int8_t v115 = (int8_t)(((uint64_t)v111) < ((uint64_t)v109));
+    if (v115) {
+        goto for_body112;
     } else {
-        goto for_exit110;
+        goto for_exit114;
     }
 
-for_body108:;
-    _Alignas(8) unsigned char __slot112[8];
-    void* v112 = (void*)__slot112;
-    { int64_t __sv = ((int64_t)v107); memcpy(v112, &__sv, sizeof(int64_t)); }
-    _Alignas(8) unsigned char __slot113[48];
-    void* v113 = (void*)__slot113;
-    memset(v113, (int)0, (size_t)((uint64_t)48));
-    void* v114 = (void*)((char*)v94 + (intptr_t)((int64_t)96));
-    void* v115 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__type__Field__ret_ref_std__collections__list__UnmanagedList_flang_0typer__type__Field(v114, v1, ((void*)0));
-    int64_t v116; memcpy(&v116, v112, sizeof(int64_t));
-    void* v117 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__type__Field__usize__ret_ref_flang_0typer__type__Field(v115, v116, v1, ((void*)0));
-    void* v118 = (void*)((char*)v117 + (intptr_t)((int64_t)0));
-    void* v119 = (void*)((char*)v113 + (intptr_t)((int64_t)0));
-    memcpy(v119, v118, (size_t)((uint64_t)16));
-    void* v120; memcpy(&v120, v3, sizeof(void*));
-    void* v121 = (void*)((char*)v120 + (intptr_t)((int64_t)0));
-    void* v122 = (void*)((char*)v94 + (intptr_t)((int64_t)96));
-    void* v123 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__type__Field__ret_ref_std__collections__list__UnmanagedList_flang_0typer__type__Field(v122, v1, ((void*)0));
-    int64_t v124; memcpy(&v124, v112, sizeof(int64_t));
-    void* v125 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__type__Field__usize__ret_ref_flang_0typer__type__Field(v123, v124, v1, ((void*)0));
-    void* v126 = (void*)((char*)v125 + (intptr_t)((int64_t)40));
-    int32_t v127; memcpy(&v127, v126, sizeof(int32_t));
-    int32_t v128 = flang_0typer__inference_0engine__zonk__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v121, v127, v1, ((void*)0));
-    void* v129 = (void*)((char*)v113 + (intptr_t)((int64_t)40));
-    { int32_t __sv = ((int32_t)v128); memcpy(v129, &__sv, sizeof(int32_t)); }
-    void* v130 = (void*)((char*)v94 + (intptr_t)((int64_t)96));
-    void* v131 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__type__Field__ret_ref_std__collections__list__UnmanagedList_flang_0typer__type__Field(v130, v1, ((void*)0));
-    int64_t v132; memcpy(&v132, v112, sizeof(int64_t));
-    void* v133 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__type__Field__usize__ret_ref_flang_0typer__type__Field(v131, v132, v1, ((void*)0));
-    void* v134 = (void*)((char*)v133 + (intptr_t)((int64_t)16));
-    void* v135 = (void*)((char*)v113 + (intptr_t)((int64_t)16));
-    memcpy(v135, v134, (size_t)((uint64_t)24));
-    void* v136 = (void*)((char*)v94 + (intptr_t)((int64_t)96));
-    void* v137 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__type__Field__ret_ref_std__collections__list__UnmanagedList_flang_0typer__type__Field(v136, v1, ((void*)0));
-    int64_t v138; memcpy(&v138, v112, sizeof(int64_t));
-    void* v139 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__type__Field__usize__ret_ref_flang_0typer__type__Field(v137, v138, v1, ((void*)0));
-    void* v140 = (void*)((char*)v139 + (intptr_t)((int64_t)44));
-    int8_t v141; memcpy(&v141, v140, sizeof(int8_t));
-    void* v142 = (void*)((char*)v113 + (intptr_t)((int64_t)44));
-    { int8_t __sv = ((int8_t)v141); memcpy(v142, &__sv, sizeof(int8_t)); }
-    std__collections__list__push__ref_std__collections__list__List_flang_0typer__type__Field__flang_0typer__type__Field__ret_void(v101, v113, v1, ((void*)0));
-    goto for_latch109;
+for_body112:;
+    _Alignas(8) unsigned char __slot116[8];
+    void* v116 = (void*)__slot116;
+    { int64_t __sv = ((int64_t)v111); memcpy(v116, &__sv, sizeof(int64_t)); }
+    _Alignas(8) unsigned char __slot117[48];
+    void* v117 = (void*)__slot117;
+    memset(v117, (int)0, (size_t)((uint64_t)48));
+    void* v118 = (void*)((char*)v98 + (intptr_t)((int64_t)96));
+    void* v119 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__type__Field__ret_ref_std__collections__list__UnmanagedList_flang_0typer__type__Field(v118, v1, ((void*)0));
+    int64_t v120; memcpy(&v120, v116, sizeof(int64_t));
+    void* v121 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__type__Field__usize__ret_ref_flang_0typer__type__Field(v119, v120, v1, ((void*)0));
+    void* v122 = (void*)((char*)v121 + (intptr_t)((int64_t)0));
+    void* v123 = (void*)((char*)v117 + (intptr_t)((int64_t)0));
+    memcpy(v123, v122, (size_t)((uint64_t)16));
+    void* v124; memcpy(&v124, v3, sizeof(void*));
+    void* v125 = (void*)((char*)v124 + (intptr_t)((int64_t)0));
+    void* v126 = (void*)((char*)v98 + (intptr_t)((int64_t)96));
+    void* v127 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__type__Field__ret_ref_std__collections__list__UnmanagedList_flang_0typer__type__Field(v126, v1, ((void*)0));
+    int64_t v128; memcpy(&v128, v116, sizeof(int64_t));
+    void* v129 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__type__Field__usize__ret_ref_flang_0typer__type__Field(v127, v128, v1, ((void*)0));
+    void* v130 = (void*)((char*)v129 + (intptr_t)((int64_t)40));
+    int32_t v131; memcpy(&v131, v130, sizeof(int32_t));
+    int32_t v132 = flang_0typer__inference_0engine__zonk__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v125, v131, v1, ((void*)0));
+    void* v133 = (void*)((char*)v117 + (intptr_t)((int64_t)40));
+    { int32_t __sv = ((int32_t)v132); memcpy(v133, &__sv, sizeof(int32_t)); }
+    void* v134 = (void*)((char*)v98 + (intptr_t)((int64_t)96));
+    void* v135 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__type__Field__ret_ref_std__collections__list__UnmanagedList_flang_0typer__type__Field(v134, v1, ((void*)0));
+    int64_t v136; memcpy(&v136, v116, sizeof(int64_t));
+    void* v137 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__type__Field__usize__ret_ref_flang_0typer__type__Field(v135, v136, v1, ((void*)0));
+    void* v138 = (void*)((char*)v137 + (intptr_t)((int64_t)16));
+    void* v139 = (void*)((char*)v117 + (intptr_t)((int64_t)16));
+    memcpy(v139, v138, (size_t)((uint64_t)24));
+    void* v140 = (void*)((char*)v98 + (intptr_t)((int64_t)96));
+    void* v141 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__type__Field__ret_ref_std__collections__list__UnmanagedList_flang_0typer__type__Field(v140, v1, ((void*)0));
+    int64_t v142; memcpy(&v142, v116, sizeof(int64_t));
+    void* v143 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__type__Field__usize__ret_ref_flang_0typer__type__Field(v141, v142, v1, ((void*)0));
+    void* v144 = (void*)((char*)v143 + (intptr_t)((int64_t)44));
+    int8_t v145; memcpy(&v145, v144, sizeof(int8_t));
+    void* v146 = (void*)((char*)v117 + (intptr_t)((int64_t)44));
+    { int8_t __sv = ((int8_t)v145); memcpy(v146, &__sv, sizeof(int8_t)); }
+    std__collections__list__push__ref_std__collections__list__List_flang_0typer__type__Field__flang_0typer__type__Field__ret_void(v105, v117, v1, ((void*)0));
+    goto for_latch113;
 
-for_latch109:;
-    int64_t v143 = (int64_t)(((uint64_t)v107) + ((uint64_t)1));
+for_latch113:;
+    int64_t v147 = (int64_t)(((uint64_t)v111) + ((uint64_t)1));
     {
-        int64_t __mv0 = ((int64_t)v143);
-        v107 = __mv0;
+        int64_t __mv0 = ((int64_t)v147);
+        v111 = __mv0;
     }
-    goto for_head106;
+    goto for_head110;
 
-for_exit110:;
-    void* v144 = (void*)((char*)v94 + (intptr_t)((int64_t)32));
-    void* v145 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v144, v1, ((void*)0));
-    void* v146 = (void*)((char*)v145 + (intptr_t)((int64_t)8));
-    int64_t v147; memcpy(&v147, v146, sizeof(int64_t));
-    void* v148 = (void*)((char*)v1 + (intptr_t)((int64_t)0));
-    void* v149; memcpy(&v149, v148, sizeof(void*));
-    _Alignas(8) unsigned char __slot150[32];
-    void* v150 = (void*)__slot150;
-    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(v147, v149, v150, v1, ((void*)0));
-    void* v151 = (void*)((char*)v94 + (intptr_t)((int64_t)32));
-    void* v152 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v151, v1, ((void*)0));
-    _Alignas(8) unsigned char __slot153[16];
-    void* v153 = (void*)__slot153;
-    std__collections__list__as_0slice__ref_std__collections__list__UnmanagedList_u32__ret_core__slice__Slice_u32(v152, v153, v1, ((void*)0));
-    std__collections__list__push_0all__ref_std__collections__list__List_u32__core__slice__Slice_u32__ret_void(v150, v153, v1, ((void*)0));
-    void* v154 = (void*)((char*)v94 + (intptr_t)((int64_t)64));
-    void* v155 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v154, v1, ((void*)0));
-    void* v156 = (void*)((char*)v155 + (intptr_t)((int64_t)8));
-    int64_t v157; memcpy(&v157, v156, sizeof(int64_t));
-    void* v158 = (void*)((char*)v1 + (intptr_t)((int64_t)0));
-    void* v159; memcpy(&v159, v158, sizeof(void*));
-    _Alignas(8) unsigned char __slot160[32];
-    void* v160 = (void*)__slot160;
-    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(v157, v159, v160, v1, ((void*)0));
-    void* v161 = (void*)((char*)v94 + (intptr_t)((int64_t)64));
-    void* v162 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v161, v1, ((void*)0));
-    _Alignas(8) unsigned char __slot163[16];
-    void* v163 = (void*)__slot163;
-    std__collections__list__as_0slice__ref_std__collections__list__UnmanagedList_u32__ret_core__slice__Slice_u32(v162, v163, v1, ((void*)0));
-    std__collections__list__push_0all__ref_std__collections__list__List_u32__core__slice__Slice_u32__ret_void(v160, v163, v1, ((void*)0));
-    _Alignas(8) unsigned char __slot164[184];
+for_exit114:;
+    void* v148 = (void*)((char*)v98 + (intptr_t)((int64_t)32));
+    void* v149 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v148, v1, ((void*)0));
+    void* v150 = (void*)((char*)v149 + (intptr_t)((int64_t)8));
+    int64_t v151; memcpy(&v151, v150, sizeof(int64_t));
+    void* v152 = (void*)((char*)v1 + (intptr_t)((int64_t)0));
+    void* v153; memcpy(&v153, v152, sizeof(void*));
+    _Alignas(8) unsigned char __slot154[32];
+    void* v154 = (void*)__slot154;
+    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(v151, v153, v154, v1, ((void*)0));
+    void* v155 = (void*)((char*)v98 + (intptr_t)((int64_t)32));
+    void* v156 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v155, v1, ((void*)0));
+    _Alignas(8) unsigned char __slot157[16];
+    void* v157 = (void*)__slot157;
+    std__collections__list__as_0slice__ref_std__collections__list__UnmanagedList_u32__ret_core__slice__Slice_u32(v156, v157, v1, ((void*)0));
+    std__collections__list__push_0all__ref_std__collections__list__List_u32__core__slice__Slice_u32__ret_void(v154, v157, v1, ((void*)0));
+    void* v158 = (void*)((char*)v98 + (intptr_t)((int64_t)64));
+    void* v159 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v158, v1, ((void*)0));
+    void* v160 = (void*)((char*)v159 + (intptr_t)((int64_t)8));
+    int64_t v161; memcpy(&v161, v160, sizeof(int64_t));
+    void* v162 = (void*)((char*)v1 + (intptr_t)((int64_t)0));
+    void* v163; memcpy(&v163, v162, sizeof(void*));
+    _Alignas(8) unsigned char __slot164[32];
     void* v164 = (void*)__slot164;
-    memset(v164, (int)0, (size_t)((uint64_t)184));
-    void* v165 = (void*)((char*)v94 + (intptr_t)((int64_t)0));
-    void* v166 = (void*)((char*)v164 + (intptr_t)((int64_t)0));
-    memcpy(v166, v165, (size_t)((uint64_t)16));
-    void* v167 = (void*)((char*)v94 + (intptr_t)((int64_t)16));
-    void* v168 = (void*)((char*)v164 + (intptr_t)((int64_t)16));
-    memcpy(v168, v167, (size_t)((uint64_t)16));
-    void* v169 = (void*)((char*)v94 + (intptr_t)((int64_t)176));
-    int8_t v170; memcpy(&v170, v169, sizeof(int8_t));
-    void* v171 = (void*)((char*)v164 + (intptr_t)((int64_t)176));
-    { int8_t __sv = ((int8_t)v170); memcpy(v171, &__sv, sizeof(int8_t)); }
-    void* v172 = (void*)((char*)v164 + (intptr_t)((int64_t)32));
-    memcpy(v172, v150, (size_t)((uint64_t)32));
-    void* v173 = (void*)((char*)v164 + (intptr_t)((int64_t)64));
-    memcpy(v173, v160, (size_t)((uint64_t)32));
-    void* v174 = (void*)((char*)v164 + (intptr_t)((int64_t)96));
-    memcpy(v174, v101, (size_t)((uint64_t)32));
-    void* v175 = (void*)((char*)v94 + (intptr_t)((int64_t)128));
-    void* v176 = (void*)((char*)v164 + (intptr_t)((int64_t)128));
-    memcpy(v176, v175, (size_t)((uint64_t)24));
-    void* v177 = (void*)((char*)v94 + (intptr_t)((int64_t)152));
-    void* v178 = (void*)((char*)v164 + (intptr_t)((int64_t)152));
-    memcpy(v178, v177, (size_t)((uint64_t)24));
-    void* v179 = (void*)((char*)v94 + (intptr_t)((int64_t)177));
-    int8_t v180; memcpy(&v180, v179, sizeof(int8_t));
-    void* v181 = (void*)((char*)v164 + (intptr_t)((int64_t)177));
-    { int8_t __sv = ((int8_t)v180); memcpy(v181, &__sv, sizeof(int8_t)); }
-    void* v182 = (void*)((char*)v94 + (intptr_t)((int64_t)178));
-    int8_t v183; memcpy(&v183, v182, sizeof(int8_t));
-    void* v184 = (void*)((char*)v164 + (intptr_t)((int64_t)178));
-    { int8_t __sv = ((int8_t)v183); memcpy(v184, &__sv, sizeof(int8_t)); }
-    void* v185; memcpy(&v185, v3, sizeof(void*));
-    void* v186 = (void*)((char*)v185 + (intptr_t)((int64_t)792));
-    int32_t v187; memcpy(&v187, v28, sizeof(int32_t));
-    _Alignas(8) unsigned char __slot188[240];
-    void* v188 = (void*)__slot188;
-    memset(v188, (int)0, (size_t)((uint64_t)240));
-    { int32_t __sv = ((int32_t)0); memcpy(v188, &__sv, sizeof(int32_t)); }
-    void* v189 = (void*)((char*)v188 + (intptr_t)((int64_t)8));
-    memcpy(v189, v164, (size_t)((uint64_t)184));
-    flang_0typer__nominal_0registry__put__ref_flang_0typer__nominal_0registry__NominalRegistry__u32__flang_0typer__nominal_0registry__NominalDef(v186, v187, v188, v1, ((void*)0));
-    goto m_join89;
+    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(v161, v163, v164, v1, ((void*)0));
+    void* v165 = (void*)((char*)v98 + (intptr_t)((int64_t)64));
+    void* v166 = std__collections__list__op_0deref__ref_std__collections__list__List_u32__ret_ref_std__collections__list__UnmanagedList_u32(v165, v1, ((void*)0));
+    _Alignas(8) unsigned char __slot167[16];
+    void* v167 = (void*)__slot167;
+    std__collections__list__as_0slice__ref_std__collections__list__UnmanagedList_u32__ret_core__slice__Slice_u32(v166, v167, v1, ((void*)0));
+    std__collections__list__push_0all__ref_std__collections__list__List_u32__core__slice__Slice_u32__ret_void(v164, v167, v1, ((void*)0));
+    _Alignas(8) unsigned char __slot168[184];
+    void* v168 = (void*)__slot168;
+    memset(v168, (int)0, (size_t)((uint64_t)184));
+    void* v169 = (void*)((char*)v98 + (intptr_t)((int64_t)0));
+    void* v170 = (void*)((char*)v168 + (intptr_t)((int64_t)0));
+    memcpy(v170, v169, (size_t)((uint64_t)16));
+    void* v171 = (void*)((char*)v98 + (intptr_t)((int64_t)16));
+    void* v172 = (void*)((char*)v168 + (intptr_t)((int64_t)16));
+    memcpy(v172, v171, (size_t)((uint64_t)16));
+    void* v173 = (void*)((char*)v98 + (intptr_t)((int64_t)176));
+    int8_t v174; memcpy(&v174, v173, sizeof(int8_t));
+    void* v175 = (void*)((char*)v168 + (intptr_t)((int64_t)176));
+    { int8_t __sv = ((int8_t)v174); memcpy(v175, &__sv, sizeof(int8_t)); }
+    void* v176 = (void*)((char*)v168 + (intptr_t)((int64_t)32));
+    memcpy(v176, v154, (size_t)((uint64_t)32));
+    void* v177 = (void*)((char*)v168 + (intptr_t)((int64_t)64));
+    memcpy(v177, v164, (size_t)((uint64_t)32));
+    void* v178 = (void*)((char*)v168 + (intptr_t)((int64_t)96));
+    memcpy(v178, v105, (size_t)((uint64_t)32));
+    void* v179 = (void*)((char*)v98 + (intptr_t)((int64_t)128));
+    void* v180 = (void*)((char*)v168 + (intptr_t)((int64_t)128));
+    memcpy(v180, v179, (size_t)((uint64_t)24));
+    void* v181 = (void*)((char*)v98 + (intptr_t)((int64_t)152));
+    void* v182 = (void*)((char*)v168 + (intptr_t)((int64_t)152));
+    memcpy(v182, v181, (size_t)((uint64_t)24));
+    void* v183 = (void*)((char*)v98 + (intptr_t)((int64_t)177));
+    int8_t v184; memcpy(&v184, v183, sizeof(int8_t));
+    void* v185 = (void*)((char*)v168 + (intptr_t)((int64_t)177));
+    { int8_t __sv = ((int8_t)v184); memcpy(v185, &__sv, sizeof(int8_t)); }
+    void* v186 = (void*)((char*)v98 + (intptr_t)((int64_t)178));
+    int8_t v187; memcpy(&v187, v186, sizeof(int8_t));
+    void* v188 = (void*)((char*)v168 + (intptr_t)((int64_t)178));
+    { int8_t __sv = ((int8_t)v187); memcpy(v188, &__sv, sizeof(int8_t)); }
+    void* v189; memcpy(&v189, v3, sizeof(void*));
+    void* v190 = (void*)((char*)v189 + (intptr_t)((int64_t)792));
+    int32_t v191; memcpy(&v191, v28, sizeof(int32_t));
+    _Alignas(8) unsigned char __slot192[240];
+    void* v192 = (void*)__slot192;
+    memset(v192, (int)0, (size_t)((uint64_t)240));
+    { int32_t __sv = ((int32_t)0); memcpy(v192, &__sv, sizeof(int32_t)); }
+    void* v193 = (void*)((char*)v192 + (intptr_t)((int64_t)8));
+    memcpy(v193, v168, (size_t)((uint64_t)184));
+    flang_0typer__nominal_0registry__put__ref_flang_0typer__nominal_0registry__NominalRegistry__u32__flang_0typer__nominal_0registry__NominalDef(v190, v191, v192, v1, ((void*)0));
+    goto m_join93;
 
-m_arm190:;
-    goto m_join89;
+m_arm194:;
+    goto m_join93;
 
-m_next191:;
+m_next195:;
     abort(); /* unreachable */
 }
 
@@ -305595,7 +305685,7 @@ m_join15:;
 m_arm16:;
     void* v20 = (void*)((char*)v2 + (intptr_t)((int64_t)8));
     void* v21; memcpy(&v21, v6, sizeof(void*));
-    flang_0typer__checker__own_0collect_0lent__ref_flang_0typer__checker__Checker__ref_std__collections__list__List_u64__core__slice__Slice_flang_0parser__ast__FunctionParam(v21, v11, v20, v4, ((void*)0));
+    flang_0typer__checker__own_0collect_0lent__ref_flang_0typer__checker__Checker__ref_std__collections__list__List_u64__core__slice__Slice_flang_0parser__ast__FunctionParam__usize(v21, v11, v20, ((int64_t)0), v4, ((void*)0));
     void* v22; memcpy(&v22, v6, sizeof(void*));
     flang_0typer__checker__own_0collect_0slots__ref_flang_0typer__checker__Checker__ref_std__collections__list__List_u64__core__slice__Slice_flang_0parser__ast__FunctionParam(v22, v14, v20, v4, ((void*)0));
     goto m_join15;
@@ -305976,86 +306066,161 @@ join71:;
     return;
 }
 
-static void flang_0typer__checker__own_0collect_0lent__ref_flang_0typer__checker__Checker__ref_std__collections__list__List_u64__core__slice__Slice_flang_0parser__ast__FunctionParam(void* v0, void* v1, void* v2, void* v3, void* v4) {
-    int8_t v20 = 0;
-    _Alignas(8) unsigned char __slot5[8];
-    void* v5 = (void*)__slot5;
-    { void* __sv = ((void*)v0); memcpy(v5, &__sv, sizeof(void*)); }
+static void flang_0typer__checker__own_0collect_0lent__ref_flang_0typer__checker__Checker__ref_std__collections__list__List_u64__core__slice__Slice_flang_0parser__ast__FunctionParam__usize(void* v0, void* v1, void* v2, int64_t v3, void* v4, void* v5) {
+    int64_t v13 = 0;
+    int8_t v30 = 0;
+    int8_t v36 = 0;
+    int8_t v47 = 0;
     _Alignas(8) unsigned char __slot6[8];
     void* v6 = (void*)__slot6;
-    { void* __sv = ((void*)v1); memcpy(v6, &__sv, sizeof(void*)); }
-    _Alignas(8) unsigned char __slot7[24];
+    { void* __sv = ((void*)v0); memcpy(v6, &__sv, sizeof(void*)); }
+    _Alignas(8) unsigned char __slot7[8];
     void* v7 = (void*)__slot7;
-    core__slice__iter_0ref__ref_core__slice__Slice_flang_0parser__ast__FunctionParam__ret_core__slice__SliceRefIterator_flang_0parser__ast__FunctionParam(v2, v7, v3, ((void*)0));
-    goto fit_head8;
+    { void* __sv = ((void*)v1); memcpy(v7, &__sv, sizeof(void*)); }
+    _Alignas(8) unsigned char __slot8[16];
+    void* v8 = (void*)__slot8;
+    memcpy(v8, v2, (size_t)((uint64_t)16));
+    _Alignas(8) unsigned char __slot9[8];
+    void* v9 = (void*)__slot9;
+    { int64_t __sv = ((int64_t)v3); memcpy(v9, &__sv, sizeof(int64_t)); }
+    void* v10 = (void*)((char*)v8 + (intptr_t)((int64_t)8));
+    int64_t v11; memcpy(&v11, v10, sizeof(int64_t));
+    {
+        int64_t __mv0 = ((int64_t)0);
+        v13 = __mv0;
+    }
+    goto for_head12;
 
-fit_head8:;
-    void* v11 = core__slice__next__ref_core__slice__SliceRefIterator_flang_0parser__ast__FunctionParam__ret_core__option__Option_ref_flang_0parser__ast__FunctionParam(v7, v3, ((void*)0));
-    int8_t v12 = (int8_t)(((void*)v11) != ((void*)((void*)0)));
-    if (v12) {
-        goto fit_body9;
+for_head12:;
+    int8_t v17 = (int8_t)(((uint64_t)v13) < ((uint64_t)v11));
+    if (v17) {
+        goto for_body14;
     } else {
-        goto fit_exit10;
+        goto for_exit16;
     }
 
-fit_body9:;
-    _Alignas(8) unsigned char __slot13[8];
-    void* v13 = (void*)__slot13;
-    { void* __sv = ((void*)v11); memcpy(v13, &__sv, sizeof(void*)); }
-    void* v14; memcpy(&v14, v13, sizeof(void*));
-    void* v15 = (void*)((char*)v14 + (intptr_t)((int64_t)57));
-    int8_t v16; memcpy(&v16, v15, sizeof(int8_t));
-    int8_t v17 = (int8_t)(((int8_t)v16) == ((int8_t)0));
-    if (v17) {
-        goto sc_rhs18;
+for_body14:;
+    _Alignas(8) unsigned char __slot18[8];
+    void* v18 = (void*)__slot18;
+    { int64_t __sv = ((int64_t)v13); memcpy(v18, &__sv, sizeof(int64_t)); }
+    void* v19 = (void*)((char*)v8 + (intptr_t)((int64_t)0));
+    void* v20; memcpy(&v20, v19, sizeof(void*));
+    int64_t v21; memcpy(&v21, v18, sizeof(int64_t));
+    int64_t v22 = (int64_t)(((uint64_t)v21) * ((uint64_t)64));
+    void* v23 = (void*)((char*)v20 + (intptr_t)((int64_t)v22));
+    _Alignas(8) unsigned char __slot24[8];
+    void* v24 = (void*)__slot24;
+    { void* __sv = ((void*)v23); memcpy(v24, &__sv, sizeof(void*)); }
+    void* v25; memcpy(&v25, v24, sizeof(void*));
+    void* v26 = (void*)((char*)v25 + (intptr_t)((int64_t)57));
+    int8_t v27; memcpy(&v27, v26, sizeof(int8_t));
+    if (v27) {
+        {
+            int8_t __mv0 = ((int8_t)1);
+            v30 = __mv0;
+        }
+        goto sc_join29;
+    } else {
+        goto sc_rhs28;
+    }
+
+for_latch15:;
+    int64_t v60 = (int64_t)(((uint64_t)v13) + ((uint64_t)1));
+    {
+        int64_t __mv0 = ((int64_t)v60);
+        v13 = __mv0;
+    }
+    goto for_head12;
+
+for_exit16:;
+    return;
+
+sc_rhs28:;
+    int64_t v31; memcpy(&v31, v18, sizeof(int64_t));
+    int64_t v32; memcpy(&v32, ((void*)g___fconst_flang_0typer__interner__MAX_0MOVE_0PARAMS), sizeof(int64_t));
+    int8_t v33 = (int8_t)(((uint64_t)v31) < ((uint64_t)v32));
+    if (v33) {
+        goto sc_rhs34;
     } else {
         {
             int8_t __mv0 = ((int8_t)0);
-            v20 = __mv0;
+            v36 = __mv0;
         }
-        goto sc_join19;
+        goto sc_join35;
     }
 
-fit_exit10:;
-    return;
-
-sc_rhs18:;
-    void* v21; memcpy(&v21, v13, sizeof(void*));
-    void* v22 = (void*)((char*)v21 + (intptr_t)((int64_t)56));
-    int8_t v23; memcpy(&v23, v22, sizeof(int8_t));
-    int8_t v24 = (int8_t)(((int8_t)v23) == ((int8_t)0));
-    {
-        int8_t __mv0 = ((int8_t)v24);
-        v20 = __mv0;
-    }
-    goto sc_join19;
-
-sc_join19:;
-    if (v20) {
-        goto then25;
+sc_join29:;
+    _Alignas(1) unsigned char __slot42[1];
+    void* v42 = (void*)__slot42;
+    { int8_t __sv = ((int8_t)v30); memcpy(v42, &__sv, sizeof(int8_t)); }
+    int8_t v43; memcpy(&v43, v42, sizeof(int8_t));
+    int8_t v44 = (int8_t)(((int8_t)v43) == ((int8_t)0));
+    if (v44) {
+        goto sc_rhs45;
     } else {
-        goto else26;
+        {
+            int8_t __mv0 = ((int8_t)0);
+            v47 = __mv0;
+        }
+        goto sc_join46;
     }
 
-then25:;
-    void* v28; memcpy(&v28, v6, sizeof(void*));
-    void* v29; memcpy(&v29, v5, sizeof(void*));
-    void* v30; memcpy(&v30, v13, sizeof(void*));
-    void* v31 = (void*)((char*)v30 + (intptr_t)((int64_t)0));
-    int64_t v32 = flang_0typer__checker__node_0of__ref_flang_0typer__checker__Checker__flang_0core__span__SourceSpan__r_u64(v29, v31, v3, ((void*)0));
-    std__collections__list__push__ref_std__collections__list__List_u64__u64__ret_void(v28, v32, v3, ((void*)0));
-    goto join27;
+sc_rhs34:;
+    int64_t v37; memcpy(&v37, v9, sizeof(int64_t));
+    int64_t v38; memcpy(&v38, v18, sizeof(int64_t));
+    int64_t v39 = flang_0typer__interner__move_0bit__usize__r_usize(v38, v4, ((void*)0));
+    int64_t v40 = v37 & v39;
+    int8_t v41 = (int8_t)(((int64_t)v40) != ((int64_t)0));
+    {
+        int8_t __mv0 = ((int8_t)v41);
+        v36 = __mv0;
+    }
+    goto sc_join35;
 
-else26:;
-    goto join27;
+sc_join35:;
+    {
+        int8_t __mv0 = ((int8_t)v36);
+        v30 = __mv0;
+    }
+    goto sc_join29;
 
-join27:;
-    goto fit_head8;
+sc_rhs45:;
+    void* v48; memcpy(&v48, v24, sizeof(void*));
+    void* v49 = (void*)((char*)v48 + (intptr_t)((int64_t)56));
+    int8_t v50; memcpy(&v50, v49, sizeof(int8_t));
+    int8_t v51 = (int8_t)(((int8_t)v50) == ((int8_t)0));
+    {
+        int8_t __mv0 = ((int8_t)v51);
+        v47 = __mv0;
+    }
+    goto sc_join46;
+
+sc_join46:;
+    if (v47) {
+        goto then52;
+    } else {
+        goto else53;
+    }
+
+then52:;
+    void* v55; memcpy(&v55, v7, sizeof(void*));
+    void* v56; memcpy(&v56, v6, sizeof(void*));
+    void* v57; memcpy(&v57, v24, sizeof(void*));
+    void* v58 = (void*)((char*)v57 + (intptr_t)((int64_t)0));
+    int64_t v59 = flang_0typer__checker__node_0of__ref_flang_0typer__checker__Checker__flang_0core__span__SourceSpan__r_u64(v56, v58, v4, ((void*)0));
+    std__collections__list__push__ref_std__collections__list__List_u64__u64__ret_void(v55, v59, v4, ((void*)0));
+    goto join54;
+
+else53:;
+    goto join54;
+
+join54:;
+    goto for_latch15;
 }
 
 static void flang_0typer__checker__own_0lambda__ref_flang_0typer__checker__Checker__ref_flang_0typer__checker__OwnPass__ref_flang_0parser__ast__LambdaExpr(void* v0, void* v1, void* v2, void* v3, void* v4) {
     int8_t v42 = 0;
-    int8_t v147 = 0;
+    int8_t v151 = 0;
     _Alignas(8) unsigned char __slot5[8];
     void* v5 = (void*)__slot5;
     { void* __sv = ((void*)v0); memcpy(v5, &__sv, sizeof(void*)); }
@@ -306093,7 +306258,7 @@ else20:;
 join21:;
     void* v22; memcpy(&v22, v17, sizeof(void*));
     void* v23 = std__option__unwrap__core__option__Option_ref_flang_0typer__inference_0results__LambdaInfo__ret_ref_flang_0typer__inference_0results__LambdaInfo(v22, v3, ((void*)0));
-    void* v24 = (void*)((char*)v23 + (intptr_t)((int64_t)56));
+    void* v24 = (void*)((char*)v23 + (intptr_t)((int64_t)64));
     _Alignas(8) unsigned char __slot25[8];
     void* v25 = (void*)__slot25;
     { void* __sv = ((void*)v24); memcpy(v25, &__sv, sizeof(void*)); }
@@ -306255,100 +306420,104 @@ join83:;
     _Alignas(8) unsigned char __slot106[16];
     void* v106 = (void*)__slot106;
     flang_0parser__ast__params_0at__ref_flang_0parser__ast__LambdaExpr__usize__r_core__slice__Slice_flang_0parser__ast__FunctionParam(v99, v105, v106, v3, ((void*)0));
-    flang_0typer__checker__own_0collect_0lent__ref_flang_0typer__checker__Checker__ref_std__collections__list__List_u64__core__slice__Slice_flang_0parser__ast__FunctionParam(v98, v90, v106, v3, ((void*)0));
-    void* v107; memcpy(&v107, v25, sizeof(void*));
-    void* v108 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v107, v3, ((void*)0));
-    _Alignas(8) unsigned char __slot109[24];
-    void* v109 = (void*)__slot109;
-    std__collections__list__iter_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec__ret_core__slice__SliceRefIterator_flang_0typer__inference_0results__CaptureRec(v108, v109, v3, ((void*)0));
-    goto fit_head110;
+    void* v107; memcpy(&v107, v17, sizeof(void*));
+    void* v108 = std__option__unwrap__core__option__Option_ref_flang_0typer__inference_0results__LambdaInfo__ret_ref_flang_0typer__inference_0results__LambdaInfo(v107, v3, ((void*)0));
+    void* v109 = (void*)((char*)v108 + (intptr_t)((int64_t)56));
+    int64_t v110; memcpy(&v110, v109, sizeof(int64_t));
+    flang_0typer__checker__own_0collect_0lent__ref_flang_0typer__checker__Checker__ref_std__collections__list__List_u64__core__slice__Slice_flang_0parser__ast__FunctionParam__usize(v98, v90, v106, v110, v3, ((void*)0));
+    void* v111; memcpy(&v111, v25, sizeof(void*));
+    void* v112 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v111, v3, ((void*)0));
+    _Alignas(8) unsigned char __slot113[24];
+    void* v113 = (void*)__slot113;
+    std__collections__list__iter_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec__ret_core__slice__SliceRefIterator_flang_0typer__inference_0results__CaptureRec(v112, v113, v3, ((void*)0));
+    goto fit_head114;
 
-fit_head110:;
-    void* v113 = core__slice__next__ref_core__slice__SliceRefIterator_flang_0typer__inference_0results__CaptureRec__ret_core__option__Option_ref_flang_0typer__inference_0results__CaptureRec(v109, v3, ((void*)0));
-    int8_t v114 = (int8_t)(((void*)v113) != ((void*)((void*)0)));
-    if (v114) {
-        goto fit_body111;
+fit_head114:;
+    void* v117 = core__slice__next__ref_core__slice__SliceRefIterator_flang_0typer__inference_0results__CaptureRec__ret_core__option__Option_ref_flang_0typer__inference_0results__CaptureRec(v113, v3, ((void*)0));
+    int8_t v118 = (int8_t)(((void*)v117) != ((void*)((void*)0)));
+    if (v118) {
+        goto fit_body115;
     } else {
-        goto fit_exit112;
+        goto fit_exit116;
     }
 
-fit_body111:;
-    _Alignas(8) unsigned char __slot115[8];
-    void* v115 = (void*)__slot115;
-    { void* __sv = ((void*)v113); memcpy(v115, &__sv, sizeof(void*)); }
-    void* v116; memcpy(&v116, v6, sizeof(void*));
-    void* v117; memcpy(&v117, v115, sizeof(void*));
-    void* v118 = (void*)((char*)v117 + (intptr_t)((int64_t)16));
-    int64_t v119; memcpy(&v119, v118, sizeof(int64_t));
-    int8_t v120 = flang_0typer__checker__own_0is_0lent__ref_flang_0typer__checker__OwnPass__u64__r_bool(v116, v119, v3, ((void*)0));
-    if (v120) {
-        goto then121;
+fit_body115:;
+    _Alignas(8) unsigned char __slot119[8];
+    void* v119 = (void*)__slot119;
+    { void* __sv = ((void*)v117); memcpy(v119, &__sv, sizeof(void*)); }
+    void* v120; memcpy(&v120, v6, sizeof(void*));
+    void* v121; memcpy(&v121, v119, sizeof(void*));
+    void* v122 = (void*)((char*)v121 + (intptr_t)((int64_t)16));
+    int64_t v123; memcpy(&v123, v122, sizeof(int64_t));
+    int8_t v124 = flang_0typer__checker__own_0is_0lent__ref_flang_0typer__checker__OwnPass__u64__r_bool(v120, v123, v3, ((void*)0));
+    if (v124) {
+        goto then125;
     } else {
-        goto else122;
+        goto else126;
     }
 
-fit_exit112:;
-    void* v130; memcpy(&v130, v5, sizeof(void*));
-    void* v131 = (void*)((char*)v130 + (intptr_t)((int64_t)0));
-    void* v132; memcpy(&v132, v17, sizeof(void*));
-    void* v133 = std__option__unwrap__core__option__Option_ref_flang_0typer__inference_0results__LambdaInfo__ret_ref_flang_0typer__inference_0results__LambdaInfo(v132, v3, ((void*)0));
-    void* v134 = (void*)((char*)v133 + (intptr_t)((int64_t)112));
-    int32_t v135; memcpy(&v135, v134, sizeof(int32_t));
-    int32_t v136 = flang_0typer__inference_0engine__resolve__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v131, v135, v3, ((void*)0));
-    _Alignas(4) unsigned char __slot137[4];
-    void* v137 = (void*)__slot137;
-    { int32_t __sv = ((int32_t)v136); memcpy(v137, &__sv, sizeof(int32_t)); }
-    void* v138; memcpy(&v138, v5, sizeof(void*));
-    void* v139; memcpy(&v139, v7, sizeof(void*));
-    void* v140 = (void*)((char*)v139 + (intptr_t)((int64_t)48));
-    void* v141; memcpy(&v141, v140, sizeof(void*));
-    int32_t v142; memcpy(&v142, v137, sizeof(int32_t));
-    int32_t v143; memcpy(&v143, ((void*)g___fconst_flang_0typer__type__TY_0VOID), sizeof(int32_t));
-    int8_t v144 = (int8_t)(((int32_t)v142) != ((int32_t)v143));
-    if (v144) {
-        goto sc_rhs145;
+fit_exit116:;
+    void* v134; memcpy(&v134, v5, sizeof(void*));
+    void* v135 = (void*)((char*)v134 + (intptr_t)((int64_t)0));
+    void* v136; memcpy(&v136, v17, sizeof(void*));
+    void* v137 = std__option__unwrap__core__option__Option_ref_flang_0typer__inference_0results__LambdaInfo__ret_ref_flang_0typer__inference_0results__LambdaInfo(v136, v3, ((void*)0));
+    void* v138 = (void*)((char*)v137 + (intptr_t)((int64_t)120));
+    int32_t v139; memcpy(&v139, v138, sizeof(int32_t));
+    int32_t v140 = flang_0typer__inference_0engine__resolve__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v135, v139, v3, ((void*)0));
+    _Alignas(4) unsigned char __slot141[4];
+    void* v141 = (void*)__slot141;
+    { int32_t __sv = ((int32_t)v140); memcpy(v141, &__sv, sizeof(int32_t)); }
+    void* v142; memcpy(&v142, v5, sizeof(void*));
+    void* v143; memcpy(&v143, v7, sizeof(void*));
+    void* v144 = (void*)((char*)v143 + (intptr_t)((int64_t)48));
+    void* v145; memcpy(&v145, v144, sizeof(void*));
+    int32_t v146; memcpy(&v146, v141, sizeof(int32_t));
+    int32_t v147; memcpy(&v147, ((void*)g___fconst_flang_0typer__type__TY_0VOID), sizeof(int32_t));
+    int8_t v148 = (int8_t)(((int32_t)v146) != ((int32_t)v147));
+    if (v148) {
+        goto sc_rhs149;
     } else {
         {
             int8_t __mv0 = ((int8_t)0);
-            v147 = __mv0;
+            v151 = __mv0;
         }
-        goto sc_join146;
+        goto sc_join150;
     }
 
-then121:;
-    void* v124; memcpy(&v124, v115, sizeof(void*));
-    void* v125 = (void*)((char*)v124 + (intptr_t)((int64_t)16));
-    int64_t v126; memcpy(&v126, v125, sizeof(int64_t));
-    std__collections__list__push__ref_std__collections__list__List_u64__u64__ret_void(v90, v126, v3, ((void*)0));
-    goto join123;
+then125:;
+    void* v128; memcpy(&v128, v119, sizeof(void*));
+    void* v129 = (void*)((char*)v128 + (intptr_t)((int64_t)16));
+    int64_t v130; memcpy(&v130, v129, sizeof(int64_t));
+    std__collections__list__push__ref_std__collections__list__List_u64__u64__ret_void(v90, v130, v3, ((void*)0));
+    goto join127;
 
-else122:;
-    void* v127; memcpy(&v127, v115, sizeof(void*));
-    void* v128 = (void*)((char*)v127 + (intptr_t)((int64_t)16));
-    int64_t v129; memcpy(&v129, v128, sizeof(int64_t));
-    std__collections__list__push__ref_std__collections__list__List_u64__u64__ret_void(v97, v129, v3, ((void*)0));
-    goto join123;
+else126:;
+    void* v131; memcpy(&v131, v119, sizeof(void*));
+    void* v132 = (void*)((char*)v131 + (intptr_t)((int64_t)16));
+    int64_t v133; memcpy(&v133, v132, sizeof(int64_t));
+    std__collections__list__push__ref_std__collections__list__List_u64__u64__ret_void(v97, v133, v3, ((void*)0));
+    goto join127;
 
-join123:;
-    goto fit_head110;
+join127:;
+    goto fit_head114;
 
-sc_rhs145:;
-    int32_t v148; memcpy(&v148, v137, sizeof(int32_t));
-    int32_t v149; memcpy(&v149, ((void*)g___fconst_flang_0typer__type__TY_0NEVER), sizeof(int32_t));
-    int8_t v150 = (int8_t)(((int32_t)v148) != ((int32_t)v149));
+sc_rhs149:;
+    int32_t v152; memcpy(&v152, v141, sizeof(int32_t));
+    int32_t v153; memcpy(&v153, ((void*)g___fconst_flang_0typer__type__TY_0NEVER), sizeof(int32_t));
+    int8_t v154 = (int8_t)(((int32_t)v152) != ((int32_t)v153));
     {
-        int8_t __mv0 = ((int8_t)v150);
-        v147 = __mv0;
+        int8_t __mv0 = ((int8_t)v154);
+        v151 = __mv0;
     }
-    goto sc_join146;
+    goto sc_join150;
 
-sc_join146:;
-    void* v151 = (void*)((char*)v3 + (intptr_t)((int64_t)0));
-    void* v152; memcpy(&v152, v151, sizeof(void*));
-    _Alignas(8) unsigned char __slot153[32];
-    void* v153 = (void*)__slot153;
-    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u64(((int64_t)0), v152, v153, v3, ((void*)0));
-    flang_0typer__checker__own_0run__ref_flang_0typer__checker__Checker__ref_flang_0parser__ast__BlockExpr__std__collections__list__List_u64__std__collections__list__List_u64__bool__std__collections__list__List_u64(v138, v141, v90, v97, v147, v153, v3, ((void*)0));
+sc_join150:;
+    void* v155 = (void*)((char*)v3 + (intptr_t)((int64_t)0));
+    void* v156; memcpy(&v156, v155, sizeof(void*));
+    _Alignas(8) unsigned char __slot157[32];
+    void* v157 = (void*)__slot157;
+    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u64(((int64_t)0), v156, v157, v3, ((void*)0));
+    flang_0typer__checker__own_0run__ref_flang_0typer__checker__Checker__ref_flang_0parser__ast__BlockExpr__std__collections__list__List_u64__std__collections__list__List_u64__bool__std__collections__list__List_u64(v142, v145, v90, v97, v151, v157, v3, ((void*)0));
     return;
 }
 
@@ -322358,7 +322527,7 @@ fit_body10:;
     void* v15; memcpy(&v15, v4, sizeof(void*));
     void* v16 = (void*)((char*)v15 + (intptr_t)((int64_t)792));
     void* v17; memcpy(&v17, v14, sizeof(void*));
-    void* v18 = (void*)((char*)v17 + (intptr_t)((int64_t)80));
+    void* v18 = (void*)((char*)v17 + (intptr_t)((int64_t)88));
     int32_t v19; memcpy(&v19, v18, sizeof(int32_t));
     void* v20 = flang_0typer__nominal_0registry__find__ref_flang_0typer__nominal_0registry__NominalRegistry__u32__r_core__option__Option_ref_flang_0typer__nominal_0registry__NominalDef(v16, v19, v2, ((void*)0));
     _Alignas(8) unsigned char __slot21[8];
@@ -322392,7 +322561,7 @@ join25:;
     void* v31 = (void*)__slot31;
     memset(v31, (int)0, (size_t)((uint64_t)24));
     void* v32; memcpy(&v32, v14, sizeof(void*));
-    void* v33 = (void*)((char*)v32 + (intptr_t)((int64_t)80));
+    void* v33 = (void*)((char*)v32 + (intptr_t)((int64_t)88));
     int32_t v34; memcpy(&v34, v33, sizeof(int32_t));
     void* v35 = (void*)((char*)v31 + (intptr_t)((int64_t)16));
     { int32_t __sv = ((int32_t)v34); memcpy(v35, &__sv, sizeof(int32_t)); }
@@ -322404,7 +322573,7 @@ join25:;
     void* v38; memcpy(&v38, v4, sizeof(void*));
     void* v39 = (void*)((char*)v38 + (intptr_t)((int64_t)792));
     void* v40; memcpy(&v40, v14, sizeof(void*));
-    void* v41 = (void*)((char*)v40 + (intptr_t)((int64_t)80));
+    void* v41 = (void*)((char*)v40 + (intptr_t)((int64_t)88));
     int32_t v42; memcpy(&v42, v41, sizeof(int32_t));
     flang_0typer__nominal_0registry__evict__ref_flang_0typer__nominal_0registry__NominalRegistry__u32(v39, v42, v2, ((void*)0));
     goto fit_head9;
@@ -325626,7 +325795,7 @@ fit_body124:;
     int64_t v133; memcpy(&v133, v132, sizeof(int64_t));
     void* v134; memcpy(&v134, v128, sizeof(void*));
     void* v135 = (void*)((char*)v134 + (intptr_t)((int64_t)8));
-    _Alignas(8) unsigned char __slot136[128];
+    _Alignas(8) unsigned char __slot136[136];
     void* v136 = (void*)__slot136;
     flang_0typer__inference_0results__copy_0lambda__ref_flang_0typer__inference_0results__LambdaInfo__r_flang_0typer__inference_0results__LambdaInfo(v135, v136, v3, ((void*)0));
     flang_0typer__inference_0results__record_0lambda__ref_flang_0typer__inference_0results__InferenceResults__u64__flang_0typer__inference_0results__LambdaInfo(v130, v133, v136, v3, ((void*)0));
@@ -326842,7 +327011,7 @@ static void flang_0typer__checker__replay_0closure__ref_flang_0typer__checker__C
     int32_t v56; memcpy(&v56, v53, sizeof(int32_t));
     void* v57; memcpy(&v57, v5, sizeof(void*));
     void* v58 = (void*)((char*)v57 + (intptr_t)((int64_t)96));
-    _Alignas(8) unsigned char __slot59[72];
+    _Alignas(8) unsigned char __slot59[80];
     void* v59 = (void*)__slot59;
     flang_0typer__inference_0results__copy_0sig__ref_flang_0typer__inference_0results__ClosureSig__r_flang_0typer__inference_0results__ClosureSig(v58, v59, v2, ((void*)0));
     std__collections__dict__set__ref_std__collections__dict__Dict_u32_flang_0typer__inference_0results__ClosureSig__u32__flang_0typer__inference_0results__ClosureSig__ret_void(v55, v56, v59, v2, ((void*)0));
@@ -327521,21 +327690,21 @@ join241:;
     { void* __sv = ((void*)v243); memcpy(v244, &__sv, sizeof(void*)); }
     void* v245; memcpy(&v245, v6, sizeof(void*));
     void* v246 = (void*)((char*)v245 + (intptr_t)((int64_t)520));
-    _Alignas(8) unsigned char __slot247[136];
+    _Alignas(8) unsigned char __slot247[144];
     void* v247 = (void*)__slot247;
-    memset(v247, (int)0, (size_t)((uint64_t)136));
+    memset(v247, (int)0, (size_t)((uint64_t)144));
     int64_t v248; memcpy(&v248, v222, sizeof(int64_t));
     void* v249 = (void*)((char*)v247 + (intptr_t)((int64_t)0));
     { int64_t __sv = ((int64_t)v248); memcpy(v249, &__sv, sizeof(int64_t)); }
     void* v250; memcpy(&v250, v244, sizeof(void*));
-    _Alignas(8) unsigned char __slot251[128];
+    _Alignas(8) unsigned char __slot251[136];
     void* v251 = (void*)__slot251;
     flang_0typer__inference_0results__copy_0lambda__ref_flang_0typer__inference_0results__LambdaInfo__r_flang_0typer__inference_0results__LambdaInfo(v250, v251, v3, ((void*)0));
     void* v252 = (void*)((char*)v247 + (intptr_t)((int64_t)8));
-    memcpy(v252, v251, (size_t)((uint64_t)128));
+    memcpy(v252, v251, (size_t)((uint64_t)136));
     std__collections__list__push__ref_std__collections__list__List_flang_0typer__checker__NodeLambdaFact__flang_0typer__checker__NodeLambdaFact__ret_void(v246, v247, v3, ((void*)0));
     void* v253; memcpy(&v253, v244, sizeof(void*));
-    void* v254 = (void*)((char*)v253 + (intptr_t)((int64_t)116));
+    void* v254 = (void*)((char*)v253 + (intptr_t)((int64_t)124));
     int32_t v258; memcpy(&v258, v254, sizeof(int32_t));
     int8_t v259 = (int8_t)(((int32_t)v258) == ((int32_t)1));
     if (v259) {
@@ -328075,7 +328244,7 @@ static void flang_0typer__checker__harvest_0closure__ref_flang_0typer__checker__
     { int32_t __sv = ((int32_t)v2); memcpy(v7, &__sv, sizeof(int32_t)); }
     void* v8; memcpy(&v8, v5, sizeof(void*));
     int32_t v9; memcpy(&v9, v7, sizeof(int32_t));
-    _Alignas(8) unsigned char __slot10[184];
+    _Alignas(8) unsigned char __slot10[192];
     void* v10 = (void*)__slot10;
     flang_0typer__checker__closure_0fact_0of__ref_flang_0typer__checker__Checker__u32__r_core__option__Option_flang_0typer__specialization__ClosureFact(v8, v9, v10, v3, ((void*)0));
     int8_t v11 = std__option__is_0some__ref_core__option__Option_flang_0typer__specialization__ClosureFact__ret_bool(v10, v3, ((void*)0));
@@ -328088,7 +328257,7 @@ static void flang_0typer__checker__harvest_0closure__ref_flang_0typer__checker__
 then12:;
     void* v15; memcpy(&v15, v6, sizeof(void*));
     void* v16 = (void*)((char*)v15 + (intptr_t)((int64_t)552));
-    _Alignas(8) unsigned char __slot17[176];
+    _Alignas(8) unsigned char __slot17[184];
     void* v17 = (void*)__slot17;
     std__option__unwrap__core__option__Option_flang_0typer__specialization__ClosureFact__ret_flang_0typer__specialization__ClosureFact(v10, v17, v3, ((void*)0));
     std__collections__list__push__ref_std__collections__list__List_flang_0typer__specialization__ClosureFact__flang_0typer__specialization__ClosureFact__ret_void(v16, v17, v3, ((void*)0));
@@ -328125,10 +328294,10 @@ static void flang_0typer__checker__closure_0fact_0of__ref_flang_0typer__checker_
     }
 
 then14:;
-    _Alignas(8) unsigned char __slot17[184];
+    _Alignas(8) unsigned char __slot17[192];
     void* v17 = (void*)__slot17;
-    memset(v17, (int)0, (size_t)((uint64_t)184));
-    memcpy(v2, v17, (size_t)((uint64_t)184));
+    memset(v17, (int)0, (size_t)((uint64_t)192));
+    memcpy(v2, v17, (size_t)((uint64_t)192));
     return;
 
 else15:;
@@ -328150,10 +328319,10 @@ join16:;
     }
 
 then24:;
-    _Alignas(8) unsigned char __slot27[184];
+    _Alignas(8) unsigned char __slot27[192];
     void* v27 = (void*)__slot27;
-    memset(v27, (int)0, (size_t)((uint64_t)184));
-    memcpy(v2, v27, (size_t)((uint64_t)184));
+    memset(v27, (int)0, (size_t)((uint64_t)192));
+    memcpy(v2, v27, (size_t)((uint64_t)192));
     return;
 
 else25:;
@@ -328193,15 +328362,15 @@ m_join32:;
     void* v52 = (void*)__slot52;
     std__collections__list__as_0slice__ref_std__collections__list__UnmanagedList_flang_0typer__type__Field__ret_core__slice__Slice_flang_0typer__type__Field(v51, v52, v3, ((void*)0));
     std__collections__list__push_0all__ref_std__collections__list__List_flang_0typer__type__Field__core__slice__Slice_flang_0typer__type__Field__ret_void(v49, v52, v3, ((void*)0));
-    _Alignas(8) unsigned char __slot53[184];
+    _Alignas(8) unsigned char __slot53[192];
     void* v53 = (void*)__slot53;
-    memset(v53, (int)0, (size_t)((uint64_t)184));
+    memset(v53, (int)0, (size_t)((uint64_t)192));
     { int32_t __sv = ((int32_t)1); memcpy(v53, &__sv, sizeof(int32_t)); }
-    _Alignas(8) unsigned char __slot54[176];
+    _Alignas(8) unsigned char __slot54[184];
     void* v54 = (void*)__slot54;
-    memset(v54, (int)0, (size_t)((uint64_t)176));
+    memset(v54, (int)0, (size_t)((uint64_t)184));
     int32_t v55; memcpy(&v55, v6, sizeof(int32_t));
-    void* v56 = (void*)((char*)v54 + (intptr_t)((int64_t)168));
+    void* v56 = (void*)((char*)v54 + (intptr_t)((int64_t)176));
     { int32_t __sv = ((int32_t)v55); memcpy(v56, &__sv, sizeof(int32_t)); }
     void* v57; memcpy(&v57, v30, sizeof(void*));
     _Alignas(8) unsigned char __slot58[16];
@@ -328224,14 +328393,14 @@ m_join32:;
     memcpy(v67, v66, (size_t)((uint64_t)24));
     void* v68; memcpy(&v68, v12, sizeof(void*));
     void* v69 = std__option__unwrap__core__option__Option_ref_flang_0typer__inference_0results__ClosureSig__ret_ref_flang_0typer__inference_0results__ClosureSig(v68, v3, ((void*)0));
-    _Alignas(8) unsigned char __slot70[72];
+    _Alignas(8) unsigned char __slot70[80];
     void* v70 = (void*)__slot70;
     flang_0typer__inference_0results__copy_0sig__ref_flang_0typer__inference_0results__ClosureSig__r_flang_0typer__inference_0results__ClosureSig(v69, v70, v3, ((void*)0));
     void* v71 = (void*)((char*)v54 + (intptr_t)((int64_t)96));
-    memcpy(v71, v70, (size_t)((uint64_t)72));
+    memcpy(v71, v70, (size_t)((uint64_t)80));
     void* v72 = (void*)((char*)v53 + (intptr_t)((int64_t)8));
-    memcpy(v72, v54, (size_t)((uint64_t)176));
-    memcpy(v2, v53, (size_t)((uint64_t)184));
+    memcpy(v72, v54, (size_t)((uint64_t)184));
+    memcpy(v2, v53, (size_t)((uint64_t)192));
     return;
 
 m_arm34:;
@@ -328250,10 +328419,10 @@ m_next35:;
     }
 
 m_arm39:;
-    _Alignas(8) unsigned char __slot41[184];
+    _Alignas(8) unsigned char __slot41[192];
     void* v41 = (void*)__slot41;
-    memset(v41, (int)0, (size_t)((uint64_t)184));
-    memcpy(v2, v41, (size_t)((uint64_t)184));
+    memset(v41, (int)0, (size_t)((uint64_t)192));
+    memcpy(v2, v41, (size_t)((uint64_t)192));
     return;
 
 m_next40:;
@@ -328479,7 +328648,7 @@ fit_body44:;
     { void* __sv = ((void*)v46); memcpy(v48, &__sv, sizeof(void*)); }
     void* v49; memcpy(&v49, v48, sizeof(void*));
     void* v50 = (void*)((char*)v49 + (intptr_t)((int64_t)16));
-    void* v51 = (void*)((char*)v50 + (intptr_t)((int64_t)116));
+    void* v51 = (void*)((char*)v50 + (intptr_t)((int64_t)124));
     int32_t v55; memcpy(&v55, v51, sizeof(int32_t));
     int8_t v56 = (int8_t)(((int32_t)v55) == ((int32_t)1));
     if (v56) {
@@ -328514,7 +328683,7 @@ m_arm53:;
     { int32_t __sv = ((int32_t)v58); memcpy(v59, &__sv, sizeof(int32_t)); }
     void* v60; memcpy(&v60, v3, sizeof(void*));
     int32_t v61; memcpy(&v61, v59, sizeof(int32_t));
-    _Alignas(8) unsigned char __slot62[184];
+    _Alignas(8) unsigned char __slot62[192];
     void* v62 = (void*)__slot62;
     flang_0typer__checker__closure_0fact_0of__ref_flang_0typer__checker__Checker__u32__r_core__option__Option_flang_0typer__specialization__ClosureFact(v60, v61, v62, v1, ((void*)0));
     int8_t v63 = std__option__is_0some__ref_core__option__Option_flang_0typer__specialization__ClosureFact__ret_bool(v62, v1, ((void*)0));
@@ -328534,7 +328703,7 @@ m_next54:;
     }
 
 then64:;
-    _Alignas(8) unsigned char __slot67[176];
+    _Alignas(8) unsigned char __slot67[184];
     void* v67 = (void*)__slot67;
     std__option__unwrap__core__option__Option_flang_0typer__specialization__ClosureFact__ret_flang_0typer__specialization__ClosureFact(v62, v67, v1, ((void*)0));
     std__collections__list__push__ref_std__collections__list__List_flang_0typer__specialization__ClosureFact__flang_0typer__specialization__ClosureFact__ret_void(v37, v67, v1, ((void*)0));
@@ -371668,7 +371837,7 @@ static void flang_0driver__lower__emit_0lambda_0fn__ref_flang_0codegen__fir__IrM
     void* v18; memcpy(&v18, v7, sizeof(void*));
     void* v19 = (void*)((char*)v18 + (intptr_t)((int64_t)8));
     void* v20; memcpy(&v20, v19, sizeof(void*));
-    void* v21 = (void*)((char*)v20 + (intptr_t)((int64_t)88));
+    void* v21 = (void*)((char*)v20 + (intptr_t)((int64_t)96));
     void* v22 = (void*)((char*)v21 + (intptr_t)((int64_t)0));
     void* v23 = (void*)((char*)v10 + (intptr_t)((int64_t)40));
     memcpy(v23, v22, (size_t)((uint64_t)16));
@@ -371732,14 +371901,14 @@ static void flang_0driver__lower__emit_0lambda_0fn__ref_flang_0codegen__fir__IrM
     void* v67; memcpy(&v67, v7, sizeof(void*));
     void* v68 = (void*)((char*)v67 + (intptr_t)((int64_t)8));
     void* v69; memcpy(&v69, v68, sizeof(void*));
-    void* v70 = (void*)((char*)v69 + (intptr_t)((int64_t)112));
+    void* v70 = (void*)((char*)v69 + (intptr_t)((int64_t)120));
     int32_t v71; memcpy(&v71, v70, sizeof(int32_t));
     void* v72 = (void*)((char*)v65 + (intptr_t)((int64_t)32));
     { int32_t __sv = ((int32_t)v71); memcpy(v72, &__sv, sizeof(int32_t)); }
     void* v73; memcpy(&v73, v7, sizeof(void*));
     void* v74 = (void*)((char*)v73 + (intptr_t)((int64_t)8));
     void* v75; memcpy(&v75, v74, sizeof(void*));
-    void* v76 = (void*)((char*)v75 + (intptr_t)((int64_t)56));
+    void* v76 = (void*)((char*)v75 + (intptr_t)((int64_t)64));
     void* v77 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v76, v3, ((void*)0));
     void* v78 = (void*)((char*)v77 + (intptr_t)((int64_t)8));
     int64_t v79; memcpy(&v79, v78, sizeof(int64_t));
@@ -371756,12 +371925,12 @@ then81:;
     void* v86; memcpy(&v86, v7, sizeof(void*));
     void* v87 = (void*)((char*)v86 + (intptr_t)((int64_t)8));
     void* v88; memcpy(&v88, v87, sizeof(void*));
-    void* v89 = (void*)((char*)v88 + (intptr_t)((int64_t)88));
+    void* v89 = (void*)((char*)v88 + (intptr_t)((int64_t)96));
     void* v90 = (void*)((char*)v89 + (intptr_t)((int64_t)0));
     void* v91; memcpy(&v91, v7, sizeof(void*));
     void* v92 = (void*)((char*)v91 + (intptr_t)((int64_t)8));
     void* v93; memcpy(&v93, v92, sizeof(void*));
-    void* v94 = (void*)((char*)v93 + (intptr_t)((int64_t)124));
+    void* v94 = (void*)((char*)v93 + (intptr_t)((int64_t)132));
     _Alignas(8) unsigned char __slot95[24];
     void* v95 = (void*)__slot95;
     memset(v95, (int)0, (size_t)((uint64_t)24));
@@ -371775,7 +371944,7 @@ join83:;
     void* v96; memcpy(&v96, v7, sizeof(void*));
     void* v97 = (void*)((char*)v96 + (intptr_t)((int64_t)8));
     void* v98; memcpy(&v98, v97, sizeof(void*));
-    void* v99 = (void*)((char*)v98 + (intptr_t)((int64_t)116));
+    void* v99 = (void*)((char*)v98 + (intptr_t)((int64_t)124));
     int32_t v100 = std__option__unwrap__core__option__Option_u32__ret_u32(v99, v3, ((void*)0));
     _Alignas(4) unsigned char __slot101[4];
     void* v101 = (void*)__slot101;
@@ -371799,7 +371968,7 @@ join83:;
     void* v113; memcpy(&v113, v7, sizeof(void*));
     void* v114 = (void*)((char*)v113 + (intptr_t)((int64_t)8));
     void* v115; memcpy(&v115, v114, sizeof(void*));
-    void* v116 = (void*)((char*)v115 + (intptr_t)((int64_t)88));
+    void* v116 = (void*)((char*)v115 + (intptr_t)((int64_t)96));
     void* v117 = (void*)((char*)v116 + (intptr_t)((int64_t)0));
     _Alignas(4) unsigned char __slot118[4];
     void* v118 = (void*)__slot118;
@@ -371817,7 +371986,7 @@ join83:;
     void* v123; memcpy(&v123, v7, sizeof(void*));
     void* v124 = (void*)((char*)v123 + (intptr_t)((int64_t)8));
     void* v125; memcpy(&v125, v124, sizeof(void*));
-    void* v126 = (void*)((char*)v125 + (intptr_t)((int64_t)56));
+    void* v126 = (void*)((char*)v125 + (intptr_t)((int64_t)64));
     void* v127 = (void*)((char*)v120 + (intptr_t)((int64_t)0));
     { void* __sv = ((void*)v126); memcpy(v127, &__sv, sizeof(void*)); }
     void* v128 = (void*)((char*)v119 + (intptr_t)((int64_t)8));
@@ -378492,7 +378661,7 @@ join20:;
     { void* __sv = ((void*)v35); memcpy(v36, &__sv, sizeof(void*)); }
     std__collections__list__push__ref_std__collections__list__List_flang_0driver__lower__PendingLambda__flang_0driver__lower__PendingLambda__ret_void(v27, v28, v5, ((void*)0));
     void* v37; memcpy(&v37, v25, sizeof(void*));
-    void* v38 = (void*)((char*)v37 + (intptr_t)((int64_t)124));
+    void* v38 = (void*)((char*)v37 + (intptr_t)((int64_t)132));
     _Alignas(4) unsigned char __slot39[4];
     void* v39 = (void*)__slot39;
     memset(v39, (int)0, (size_t)((uint64_t)4));
@@ -378512,7 +378681,7 @@ then43:;
     memset(v46, (int)0, (size_t)((uint64_t)24));
     { int32_t __sv = ((int32_t)5); memcpy(v46, &__sv, sizeof(int32_t)); }
     void* v47; memcpy(&v47, v25, sizeof(void*));
-    void* v48 = (void*)((char*)v47 + (intptr_t)((int64_t)88));
+    void* v48 = (void*)((char*)v47 + (intptr_t)((int64_t)96));
     void* v49 = (void*)((char*)v48 + (intptr_t)((int64_t)0));
     void* v50 = (void*)((char*)v46 + (intptr_t)((int64_t)8));
     memcpy(v50, v49, (size_t)((uint64_t)16));
@@ -378524,7 +378693,7 @@ else44:;
 
 join45:;
     void* v51; memcpy(&v51, v25, sizeof(void*));
-    void* v52 = (void*)((char*)v51 + (intptr_t)((int64_t)56));
+    void* v52 = (void*)((char*)v51 + (intptr_t)((int64_t)64));
     void* v53 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v52, v5, ((void*)0));
     void* v54 = (void*)((char*)v53 + (intptr_t)((int64_t)8));
     int64_t v55; memcpy(&v55, v54, sizeof(int64_t));
@@ -378542,7 +378711,7 @@ then57:;
     memset(v61, (int)0, (size_t)((uint64_t)24));
     { int32_t __sv = ((int32_t)5); memcpy(v61, &__sv, sizeof(int32_t)); }
     void* v62; memcpy(&v62, v25, sizeof(void*));
-    void* v63 = (void*)((char*)v62 + (intptr_t)((int64_t)88));
+    void* v63 = (void*)((char*)v62 + (intptr_t)((int64_t)96));
     void* v64 = (void*)((char*)v63 + (intptr_t)((int64_t)0));
     void* v65 = (void*)((char*)v61 + (intptr_t)((int64_t)8));
     memcpy(v65, v64, (size_t)((uint64_t)16));
@@ -378561,7 +378730,7 @@ else58:;
 
 join59:;
     void* v68; memcpy(&v68, v25, sizeof(void*));
-    void* v69 = (void*)((char*)v68 + (intptr_t)((int64_t)116));
+    void* v69 = (void*)((char*)v68 + (intptr_t)((int64_t)124));
     int32_t v70 = std__option__unwrap__core__option__Option_u32__ret_u32(v69, v5, ((void*)0));
     _Alignas(4) unsigned char __slot71[4];
     void* v71 = (void*)__slot71;
@@ -378638,7 +378807,7 @@ join90:;
     { int64_t __sv = ((int64_t)v108); memcpy(v109, &__sv, sizeof(int64_t)); }
     flang_0codegen__builder__memset__ref_flang_0codegen__builder__BlockBuilder__flang_0codegen__fir__Operand__flang_0codegen__fir__Operand__flang_0codegen__fir__Operand(v102, v101, v103, v105, v5, ((void*)0));
     void* v110; memcpy(&v110, v25, sizeof(void*));
-    void* v111 = (void*)((char*)v110 + (intptr_t)((int64_t)56));
+    void* v111 = (void*)((char*)v110 + (intptr_t)((int64_t)64));
     void* v112 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v111, v5, ((void*)0));
     void* v113 = (void*)((char*)v112 + (intptr_t)((int64_t)8));
     int64_t v114; memcpy(&v114, v113, sizeof(int64_t));
@@ -378661,7 +378830,7 @@ for_body117:;
     void* v121 = (void*)__slot121;
     { int64_t __sv = ((int64_t)v116); memcpy(v121, &__sv, sizeof(int64_t)); }
     void* v122; memcpy(&v122, v25, sizeof(void*));
-    void* v123 = (void*)((char*)v122 + (intptr_t)((int64_t)56));
+    void* v123 = (void*)((char*)v122 + (intptr_t)((int64_t)64));
     void* v124 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v123, v5, ((void*)0));
     int64_t v125; memcpy(&v125, v121, sizeof(int64_t));
     void* v126 = std__collections__list__op_0index_0ref__ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec__usize__ret_ref_flang_0typer__inference_0results__CaptureRec(v124, v125, v5, ((void*)0));
@@ -386690,7 +386859,7 @@ join65:;
     { int32_t __sv = ((int32_t)5); memcpy(v74, &__sv, sizeof(int32_t)); }
     void* v75; memcpy(&v75, v61, sizeof(void*));
     void* v76 = std__option__unwrap__core__option__Option_ref_flang_0typer__inference_0results__ClosureSig__ret_ref_flang_0typer__inference_0results__ClosureSig(v75, v7, ((void*)0));
-    void* v77 = (void*)((char*)v76 + (intptr_t)((int64_t)32));
+    void* v77 = (void*)((char*)v76 + (intptr_t)((int64_t)40));
     void* v78 = (void*)((char*)v77 + (intptr_t)((int64_t)0));
     void* v79 = (void*)((char*)v74 + (intptr_t)((int64_t)8));
     memcpy(v79, v78, (size_t)((uint64_t)16));
@@ -387018,7 +387187,7 @@ join118:;
     { int32_t __sv = ((int32_t)v124); memcpy(v125, &__sv, sizeof(int32_t)); }
     void* v126; memcpy(&v126, v7, sizeof(void*));
     void* v127; memcpy(&v127, v54, sizeof(void*));
-    void* v128 = (void*)((char*)v127 + (intptr_t)((int64_t)64));
+    void* v128 = (void*)((char*)v127 + (intptr_t)((int64_t)72));
     int8_t v129 = flang_0driver__lower__repr_0compatible__ref_flang_0driver__lower__LowerCtx__ref_u32__ref_u32__r_bool(v126, v128, v125, v5, ((void*)0));
     int8_t v130 = (int8_t)(((int8_t)v129) == ((int8_t)0));
     if (v130) {
@@ -387051,14 +387220,14 @@ join133:;
     void* v140 = (void*)((char*)v139 + (intptr_t)((int64_t)0));
     memcpy(v140, v138, (size_t)((uint64_t)32));
     void* v141; memcpy(&v141, v54, sizeof(void*));
-    void* v142 = (void*)((char*)v141 + (intptr_t)((int64_t)64));
+    void* v142 = (void*)((char*)v141 + (intptr_t)((int64_t)72));
     int32_t v143; memcpy(&v143, v142, sizeof(int32_t));
     void* v144 = (void*)((char*)v139 + (intptr_t)((int64_t)32));
     { int32_t __sv = ((int32_t)v143); memcpy(v144, &__sv, sizeof(int32_t)); }
     void* v145; memcpy(&v145, v7, sizeof(void*));
     void* v146; memcpy(&v146, v8, sizeof(void*));
     void* v147; memcpy(&v147, v54, sizeof(void*));
-    void* v148 = (void*)((char*)v147 + (intptr_t)((int64_t)32));
+    void* v148 = (void*)((char*)v147 + (intptr_t)((int64_t)40));
     void* v149 = (void*)((char*)v148 + (intptr_t)((int64_t)0));
     _Alignas(8) unsigned char __slot150[24];
     void* v150 = (void*)__slot150;
@@ -426675,9 +426844,9 @@ static void flang_0typer__function_0registry__probe_0scheme__core__string__Strin
 static void flang_0typer__inference_0results__deinit__flang_0typer__inference_0results__LambdaInfo(void* v0, void* v1, void* v2) {
     void* v3 = (void*)((char*)v0 + (intptr_t)((int64_t)24));
     std__collections__list__deinit__std__collections__list__List_u32__ret_void(v3, v1, ((void*)0));
-    void* v4 = (void*)((char*)v0 + (intptr_t)((int64_t)56));
+    void* v4 = (void*)((char*)v0 + (intptr_t)((int64_t)64));
     std__collections__list__deinit__std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_void(v4, v1, ((void*)0));
-    void* v5 = (void*)((char*)v0 + (intptr_t)((int64_t)88));
+    void* v5 = (void*)((char*)v0 + (intptr_t)((int64_t)96));
     std__string__deinit__std__string__OwnedString(v5, v1, ((void*)0));
     return;
 }
@@ -426685,7 +426854,7 @@ static void flang_0typer__inference_0results__deinit__flang_0typer__inference_0r
 static void flang_0typer__inference_0results__deinit__flang_0typer__inference_0results__ClosureSig(void* v0, void* v1, void* v2) {
     void* v3 = (void*)((char*)v0 + (intptr_t)((int64_t)0));
     std__collections__list__deinit__std__collections__list__List_u32__ret_void(v3, v1, ((void*)0));
-    void* v4 = (void*)((char*)v0 + (intptr_t)((int64_t)32));
+    void* v4 = (void*)((char*)v0 + (intptr_t)((int64_t)40));
     std__string__deinit__std__string__OwnedString(v4, v1, ((void*)0));
     return;
 }
@@ -428006,7 +428175,7 @@ static void flang_0typer__inference_0results__copy_0lambda__ref_flang_0typer__in
     std__collections__list__as_0slice__ref_std__collections__list__UnmanagedList_u32__ret_core__slice__Slice_u32(v15, v16, v2, ((void*)0));
     std__collections__list__push_0all__ref_std__collections__list__List_u32__core__slice__Slice_u32__ret_void(v12, v16, v2, ((void*)0));
     void* v17; memcpy(&v17, v4, sizeof(void*));
-    void* v18 = (void*)((char*)v17 + (intptr_t)((int64_t)56));
+    void* v18 = (void*)((char*)v17 + (intptr_t)((int64_t)64));
     void* v19 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v18, v2, ((void*)0));
     void* v20 = (void*)((char*)v19 + (intptr_t)((int64_t)8));
     int64_t v21; memcpy(&v21, v20, sizeof(int64_t));
@@ -428016,15 +428185,15 @@ static void flang_0typer__inference_0results__copy_0lambda__ref_flang_0typer__in
     void* v24 = (void*)__slot24;
     std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_flang_0typer__inference_0results__CaptureRec(v21, v23, v24, v2, ((void*)0));
     void* v25; memcpy(&v25, v4, sizeof(void*));
-    void* v26 = (void*)((char*)v25 + (intptr_t)((int64_t)56));
+    void* v26 = (void*)((char*)v25 + (intptr_t)((int64_t)64));
     void* v27 = std__collections__list__op_0deref__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__ret_ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec(v26, v2, ((void*)0));
     _Alignas(8) unsigned char __slot28[16];
     void* v28 = (void*)__slot28;
     std__collections__list__as_0slice__ref_std__collections__list__UnmanagedList_flang_0typer__inference_0results__CaptureRec__ret_core__slice__Slice_flang_0typer__inference_0results__CaptureRec(v27, v28, v2, ((void*)0));
     std__collections__list__push_0all__ref_std__collections__list__List_flang_0typer__inference_0results__CaptureRec__core__slice__Slice_flang_0typer__inference_0results__CaptureRec__ret_void(v24, v28, v2, ((void*)0));
-    _Alignas(8) unsigned char __slot29[128];
+    _Alignas(8) unsigned char __slot29[136];
     void* v29 = (void*)__slot29;
-    memset(v29, (int)0, (size_t)((uint64_t)128));
+    memset(v29, (int)0, (size_t)((uint64_t)136));
     void* v30; memcpy(&v30, v4, sizeof(void*));
     void* v31 = (void*)((char*)v30 + (intptr_t)((int64_t)0));
     void* v32 = (void*)((char*)v29 + (intptr_t)((int64_t)0));
@@ -428032,31 +428201,36 @@ static void flang_0typer__inference_0results__copy_0lambda__ref_flang_0typer__in
     void* v33 = (void*)((char*)v29 + (intptr_t)((int64_t)24));
     memcpy(v33, v12, (size_t)((uint64_t)32));
     void* v34; memcpy(&v34, v4, sizeof(void*));
-    void* v35 = (void*)((char*)v34 + (intptr_t)((int64_t)112));
-    int32_t v36; memcpy(&v36, v35, sizeof(int32_t));
-    void* v37 = (void*)((char*)v29 + (intptr_t)((int64_t)112));
-    { int32_t __sv = ((int32_t)v36); memcpy(v37, &__sv, sizeof(int32_t)); }
-    void* v38 = (void*)((char*)v29 + (intptr_t)((int64_t)56));
-    memcpy(v38, v24, (size_t)((uint64_t)32));
-    void* v39; memcpy(&v39, v4, sizeof(void*));
-    void* v40 = (void*)((char*)v39 + (intptr_t)((int64_t)116));
-    void* v41 = (void*)((char*)v29 + (intptr_t)((int64_t)116));
-    memcpy(v41, v40, (size_t)((uint64_t)8));
-    void* v42; memcpy(&v42, v4, sizeof(void*));
-    void* v43 = (void*)((char*)v42 + (intptr_t)((int64_t)88));
-    void* v44 = (void*)((char*)v43 + (intptr_t)((int64_t)0));
-    void* v45 = (void*)((char*)v2 + (intptr_t)((int64_t)0));
-    void* v46; memcpy(&v46, v45, sizeof(void*));
-    _Alignas(8) unsigned char __slot47[24];
-    void* v47 = (void*)__slot47;
-    std__string__from_0view__core__string__String__ref_std__allocator__Allocator__r_std__string__OwnedString(v44, v46, v47, v2, ((void*)0));
-    void* v48 = (void*)((char*)v29 + (intptr_t)((int64_t)88));
-    memcpy(v48, v47, (size_t)((uint64_t)24));
-    void* v49; memcpy(&v49, v4, sizeof(void*));
-    void* v50 = (void*)((char*)v49 + (intptr_t)((int64_t)124));
-    void* v51 = (void*)((char*)v29 + (intptr_t)((int64_t)124));
-    memcpy(v51, v50, (size_t)((uint64_t)4));
-    memcpy(v1, v29, (size_t)((uint64_t)128));
+    void* v35 = (void*)((char*)v34 + (intptr_t)((int64_t)56));
+    int64_t v36; memcpy(&v36, v35, sizeof(int64_t));
+    void* v37 = (void*)((char*)v29 + (intptr_t)((int64_t)56));
+    { int64_t __sv = ((int64_t)v36); memcpy(v37, &__sv, sizeof(int64_t)); }
+    void* v38; memcpy(&v38, v4, sizeof(void*));
+    void* v39 = (void*)((char*)v38 + (intptr_t)((int64_t)120));
+    int32_t v40; memcpy(&v40, v39, sizeof(int32_t));
+    void* v41 = (void*)((char*)v29 + (intptr_t)((int64_t)120));
+    { int32_t __sv = ((int32_t)v40); memcpy(v41, &__sv, sizeof(int32_t)); }
+    void* v42 = (void*)((char*)v29 + (intptr_t)((int64_t)64));
+    memcpy(v42, v24, (size_t)((uint64_t)32));
+    void* v43; memcpy(&v43, v4, sizeof(void*));
+    void* v44 = (void*)((char*)v43 + (intptr_t)((int64_t)124));
+    void* v45 = (void*)((char*)v29 + (intptr_t)((int64_t)124));
+    memcpy(v45, v44, (size_t)((uint64_t)8));
+    void* v46; memcpy(&v46, v4, sizeof(void*));
+    void* v47 = (void*)((char*)v46 + (intptr_t)((int64_t)96));
+    void* v48 = (void*)((char*)v47 + (intptr_t)((int64_t)0));
+    void* v49 = (void*)((char*)v2 + (intptr_t)((int64_t)0));
+    void* v50; memcpy(&v50, v49, sizeof(void*));
+    _Alignas(8) unsigned char __slot51[24];
+    void* v51 = (void*)__slot51;
+    std__string__from_0view__core__string__String__ref_std__allocator__Allocator__r_std__string__OwnedString(v48, v50, v51, v2, ((void*)0));
+    void* v52 = (void*)((char*)v29 + (intptr_t)((int64_t)96));
+    memcpy(v52, v51, (size_t)((uint64_t)24));
+    void* v53; memcpy(&v53, v4, sizeof(void*));
+    void* v54 = (void*)((char*)v53 + (intptr_t)((int64_t)132));
+    void* v55 = (void*)((char*)v29 + (intptr_t)((int64_t)132));
+    memcpy(v55, v54, (size_t)((uint64_t)4));
+    memcpy(v1, v29, (size_t)((uint64_t)136));
     return;
 }
 
@@ -428081,32 +428255,37 @@ static void flang_0typer__inference_0results__copy_0sig__ref_flang_0typer__infer
     void* v16 = (void*)__slot16;
     std__collections__list__as_0slice__ref_std__collections__list__UnmanagedList_u32__ret_core__slice__Slice_u32(v15, v16, v2, ((void*)0));
     std__collections__list__push_0all__ref_std__collections__list__List_u32__core__slice__Slice_u32__ret_void(v12, v16, v2, ((void*)0));
-    _Alignas(8) unsigned char __slot17[72];
+    _Alignas(8) unsigned char __slot17[80];
     void* v17 = (void*)__slot17;
-    memset(v17, (int)0, (size_t)((uint64_t)72));
+    memset(v17, (int)0, (size_t)((uint64_t)80));
     void* v18 = (void*)((char*)v17 + (intptr_t)((int64_t)0));
     memcpy(v18, v12, (size_t)((uint64_t)32));
     void* v19; memcpy(&v19, v4, sizeof(void*));
-    void* v20 = (void*)((char*)v19 + (intptr_t)((int64_t)64));
-    int32_t v21; memcpy(&v21, v20, sizeof(int32_t));
-    void* v22 = (void*)((char*)v17 + (intptr_t)((int64_t)64));
-    { int32_t __sv = ((int32_t)v21); memcpy(v22, &__sv, sizeof(int32_t)); }
+    void* v20 = (void*)((char*)v19 + (intptr_t)((int64_t)32));
+    int64_t v21; memcpy(&v21, v20, sizeof(int64_t));
+    void* v22 = (void*)((char*)v17 + (intptr_t)((int64_t)32));
+    { int64_t __sv = ((int64_t)v21); memcpy(v22, &__sv, sizeof(int64_t)); }
     void* v23; memcpy(&v23, v4, sizeof(void*));
-    void* v24 = (void*)((char*)v23 + (intptr_t)((int64_t)32));
-    void* v25 = (void*)((char*)v24 + (intptr_t)((int64_t)0));
-    void* v26 = (void*)((char*)v2 + (intptr_t)((int64_t)0));
-    void* v27; memcpy(&v27, v26, sizeof(void*));
-    _Alignas(8) unsigned char __slot28[24];
-    void* v28 = (void*)__slot28;
-    std__string__from_0view__core__string__String__ref_std__allocator__Allocator__r_std__string__OwnedString(v25, v27, v28, v2, ((void*)0));
-    void* v29 = (void*)((char*)v17 + (intptr_t)((int64_t)32));
-    memcpy(v29, v28, (size_t)((uint64_t)24));
-    void* v30; memcpy(&v30, v4, sizeof(void*));
-    void* v31 = (void*)((char*)v30 + (intptr_t)((int64_t)56));
-    int64_t v32; memcpy(&v32, v31, sizeof(int64_t));
-    void* v33 = (void*)((char*)v17 + (intptr_t)((int64_t)56));
-    { int64_t __sv = ((int64_t)v32); memcpy(v33, &__sv, sizeof(int64_t)); }
-    memcpy(v1, v17, (size_t)((uint64_t)72));
+    void* v24 = (void*)((char*)v23 + (intptr_t)((int64_t)72));
+    int32_t v25; memcpy(&v25, v24, sizeof(int32_t));
+    void* v26 = (void*)((char*)v17 + (intptr_t)((int64_t)72));
+    { int32_t __sv = ((int32_t)v25); memcpy(v26, &__sv, sizeof(int32_t)); }
+    void* v27; memcpy(&v27, v4, sizeof(void*));
+    void* v28 = (void*)((char*)v27 + (intptr_t)((int64_t)40));
+    void* v29 = (void*)((char*)v28 + (intptr_t)((int64_t)0));
+    void* v30 = (void*)((char*)v2 + (intptr_t)((int64_t)0));
+    void* v31; memcpy(&v31, v30, sizeof(void*));
+    _Alignas(8) unsigned char __slot32[24];
+    void* v32 = (void*)__slot32;
+    std__string__from_0view__core__string__String__ref_std__allocator__Allocator__r_std__string__OwnedString(v29, v31, v32, v2, ((void*)0));
+    void* v33 = (void*)((char*)v17 + (intptr_t)((int64_t)40));
+    memcpy(v33, v32, (size_t)((uint64_t)24));
+    void* v34; memcpy(&v34, v4, sizeof(void*));
+    void* v35 = (void*)((char*)v34 + (intptr_t)((int64_t)64));
+    int64_t v36; memcpy(&v36, v35, sizeof(int64_t));
+    void* v37 = (void*)((char*)v17 + (intptr_t)((int64_t)64));
+    { int64_t __sv = ((int64_t)v36); memcpy(v37, &__sv, sizeof(int64_t)); }
+    memcpy(v1, v17, (size_t)((uint64_t)80));
     return;
 }
 
@@ -428308,7 +428487,7 @@ fit_body103:;
     int64_t v110; memcpy(&v110, v109, sizeof(int64_t));
     void* v111; memcpy(&v111, v107, sizeof(void*));
     void* v112 = (void*)((char*)v111 + (intptr_t)((int64_t)16));
-    _Alignas(8) unsigned char __slot113[128];
+    _Alignas(8) unsigned char __slot113[136];
     void* v113 = (void*)__slot113;
     flang_0typer__inference_0results__copy_0lambda__ref_flang_0typer__inference_0results__LambdaInfo__r_flang_0typer__inference_0results__LambdaInfo(v112, v113, v2, ((void*)0));
     std__collections__dict__set__ref_std__collections__dict__Dict_u64_flang_0typer__inference_0results__LambdaInfo__u64__flang_0typer__inference_0results__LambdaInfo__ret_void(v97, v110, v113, v2, ((void*)0));
@@ -450888,13 +451067,13 @@ static void flang_0typer__specialization__clone_0fact__ref_flang_0typer__special
     void* v16 = (void*)__slot16;
     std__collections__list__as_0slice__ref_std__collections__list__UnmanagedList_flang_0typer__type__Field__ret_core__slice__Slice_flang_0typer__type__Field(v15, v16, v2, ((void*)0));
     std__collections__list__push_0all__ref_std__collections__list__List_flang_0typer__type__Field__core__slice__Slice_flang_0typer__type__Field__ret_void(v12, v16, v2, ((void*)0));
-    _Alignas(8) unsigned char __slot17[176];
+    _Alignas(8) unsigned char __slot17[184];
     void* v17 = (void*)__slot17;
-    memset(v17, (int)0, (size_t)((uint64_t)176));
+    memset(v17, (int)0, (size_t)((uint64_t)184));
     void* v18; memcpy(&v18, v4, sizeof(void*));
-    void* v19 = (void*)((char*)v18 + (intptr_t)((int64_t)168));
+    void* v19 = (void*)((char*)v18 + (intptr_t)((int64_t)176));
     int32_t v20; memcpy(&v20, v19, sizeof(int32_t));
-    void* v21 = (void*)((char*)v17 + (intptr_t)((int64_t)168));
+    void* v21 = (void*)((char*)v17 + (intptr_t)((int64_t)176));
     { int32_t __sv = ((int32_t)v20); memcpy(v21, &__sv, sizeof(int32_t)); }
     void* v22; memcpy(&v22, v4, sizeof(void*));
     void* v23 = (void*)((char*)v22 + (intptr_t)((int64_t)0));
@@ -450918,12 +451097,12 @@ static void flang_0typer__specialization__clone_0fact__ref_flang_0typer__special
     memcpy(v35, v34, (size_t)((uint64_t)24));
     void* v36; memcpy(&v36, v4, sizeof(void*));
     void* v37 = (void*)((char*)v36 + (intptr_t)((int64_t)96));
-    _Alignas(8) unsigned char __slot38[72];
+    _Alignas(8) unsigned char __slot38[80];
     void* v38 = (void*)__slot38;
     flang_0typer__inference_0results__copy_0sig__ref_flang_0typer__inference_0results__ClosureSig__r_flang_0typer__inference_0results__ClosureSig(v37, v38, v2, ((void*)0));
     void* v39 = (void*)((char*)v17 + (intptr_t)((int64_t)96));
-    memcpy(v39, v38, (size_t)((uint64_t)72));
-    memcpy(v1, v17, (size_t)((uint64_t)176));
+    memcpy(v39, v38, (size_t)((uint64_t)80));
+    memcpy(v1, v17, (size_t)((uint64_t)184));
     return;
 }
 
@@ -451994,7 +452173,7 @@ fit_body73:;
     void* v77 = (void*)__slot77;
     { void* __sv = ((void*)v75); memcpy(v77, &__sv, sizeof(void*)); }
     void* v78; memcpy(&v78, v77, sizeof(void*));
-    _Alignas(8) unsigned char __slot79[176];
+    _Alignas(8) unsigned char __slot79[184];
     void* v79 = (void*)__slot79;
     flang_0typer__specialization__clone_0fact__ref_flang_0typer__specialization__ClosureFact__r_flang_0typer__specialization__ClosureFact(v78, v79, v2, ((void*)0));
     std__collections__list__push__ref_std__collections__list__List_flang_0typer__specialization__ClosureFact__flang_0typer__specialization__ClosureFact__ret_void(v67, v79, v2, ((void*)0));
@@ -455953,10 +456132,10 @@ join35:;
     }
 
 m_join39:;
-    _Alignas(8) unsigned char __slot110[48];
-    void* v110 = (void*)__slot110;
-    memset(v110, (int)0, (size_t)((uint64_t)48));
-    memcpy(v3, v110, (size_t)((uint64_t)48));
+    _Alignas(8) unsigned char __slot119[48];
+    void* v119 = (void*)__slot119;
+    memset(v119, (int)0, (size_t)((uint64_t)48));
+    memcpy(v3, v119, (size_t)((uint64_t)48));
     return;
 
 m_arm40:;
@@ -455990,11 +456169,11 @@ m_arm40:;
     }
 
 m_next41:;
-    int8_t v108 = (int8_t)(((void*)v38) == ((void*)((void*)0)));
-    if (v108) {
-        goto m_arm106;
+    int8_t v117 = (int8_t)(((void*)v38) == ((void*)((void*)0)));
+    if (v117) {
+        goto m_arm115;
     } else {
-        goto m_next107;
+        goto m_next116;
     }
 
 then59:;
@@ -456114,15 +456293,37 @@ else104:;
     goto join105;
 
 join105:;
+    void* v106; memcpy(&v106, v6, sizeof(void*));
+    int32_t v107; memcpy(&v107, v48, sizeof(int32_t));
+    int32_t v108; memcpy(&v108, v52, sizeof(int32_t));
+    void* v109; memcpy(&v109, v44, sizeof(void*));
+    _Alignas(8) unsigned char __slot110[48];
+    void* v110 = (void*)__slot110;
+    flang_0typer__inference_0engine__try_0fn_0subsume__ref_flang_0typer__inference_0engine__Engine__u32__u32__ref_flang_0typer__nominal_0registry__NominalRegistry__r_core__option__Option_flang_0typer__coercion__Coercion(v106, v107, v108, v109, v110, v4, ((void*)0));
+    int8_t v111 = std__option__is_0some__ref_core__option__Option_flang_0typer__coercion__Coercion__ret_bool(v110, v4, ((void*)0));
+    if (v111) {
+        goto then112;
+    } else {
+        goto else113;
+    }
+
+then112:;
+    memcpy(v3, v110, (size_t)((uint64_t)48));
+    return;
+
+else113:;
+    goto join114;
+
+join114:;
     goto m_join39;
 
-m_arm106:;
-    _Alignas(8) unsigned char __slot109[8];
-    void* v109 = (void*)__slot109;
-    { void* __sv = ((void*)v38); memcpy(v109, &__sv, sizeof(void*)); }
+m_arm115:;
+    _Alignas(8) unsigned char __slot118[8];
+    void* v118 = (void*)__slot118;
+    { void* __sv = ((void*)v38); memcpy(v118, &__sv, sizeof(void*)); }
     goto m_join39;
 
-m_next107:;
+m_next116:;
     abort(); /* unreachable */
 }
 
@@ -456392,49 +456593,487 @@ join96:;
     std__collections__list__push_0all__ref_std__collections__list__List_u32__core__slice__Slice_u32__ret_void(v105, v109, v4, ((void*)0));
     void* v110; memcpy(&v110, v6, sizeof(void*));
     void* v111; memcpy(&v111, v84, sizeof(void*));
-    void* v112 = (void*)((char*)v111 + (intptr_t)((int64_t)64));
+    void* v112 = (void*)((char*)v111 + (intptr_t)((int64_t)72));
     int32_t v113; memcpy(&v113, v112, sizeof(int32_t));
-    void* v114 = (void*)((char*)v57 + (intptr_t)((int64_t)16));
-    int64_t v115; memcpy(&v115, v114, sizeof(int64_t));
-    _Alignas(4) unsigned char __slot116[4];
-    void* v116 = (void*)__slot116;
-    memset(v116, (int)0, (size_t)((uint64_t)4));
-    int32_t v117 = flang_0typer__inference_0engine__mk_0func__ref_flang_0typer__inference_0engine__Engine__std__collections__list__List_u32__u32__usize__flang_0typer__type__FnConv__r_u32(v110, v105, v113, v115, v116, v4, ((void*)0));
-    _Alignas(4) unsigned char __slot118[4];
-    void* v118 = (void*)__slot118;
-    { int32_t __sv = ((int32_t)v117); memcpy(v118, &__sv, sizeof(int32_t)); }
-    void* v119 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
-    void* v120; memcpy(&v120, v119, sizeof(void*));
-    _Alignas(8) unsigned char __slot121[32];
-    void* v121 = (void*)__slot121;
-    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_flang_0typer__coercion__Constraint(((int64_t)1), v120, v121, v4, ((void*)0));
-    _Alignas(4) unsigned char __slot122[8];
+    void* v114; memcpy(&v114, v84, sizeof(void*));
+    void* v115 = (void*)((char*)v114 + (intptr_t)((int64_t)32));
+    int64_t v116; memcpy(&v116, v115, sizeof(int64_t));
+    _Alignas(4) unsigned char __slot117[4];
+    void* v117 = (void*)__slot117;
+    memset(v117, (int)0, (size_t)((uint64_t)4));
+    int32_t v118 = flang_0typer__inference_0engine__mk_0func__ref_flang_0typer__inference_0engine__Engine__std__collections__list__List_u32__u32__usize__flang_0typer__type__FnConv__r_u32(v110, v105, v113, v116, v117, v4, ((void*)0));
+    _Alignas(4) unsigned char __slot119[4];
+    void* v119 = (void*)__slot119;
+    { int32_t __sv = ((int32_t)v118); memcpy(v119, &__sv, sizeof(int32_t)); }
+    void* v120 = (void*)((char*)v4 + (intptr_t)((int64_t)0));
+    void* v121; memcpy(&v121, v120, sizeof(void*));
+    _Alignas(8) unsigned char __slot122[32];
     void* v122 = (void*)__slot122;
-    memset(v122, (int)0, (size_t)((uint64_t)8));
-    int32_t v123; memcpy(&v123, v118, sizeof(int32_t));
-    void* v124 = (void*)((char*)v122 + (intptr_t)((int64_t)0));
-    { int32_t __sv = ((int32_t)v123); memcpy(v124, &__sv, sizeof(int32_t)); }
-    int32_t v125; memcpy(&v125, v8, sizeof(int32_t));
-    void* v126 = (void*)((char*)v122 + (intptr_t)((int64_t)4));
-    { int32_t __sv = ((int32_t)v125); memcpy(v126, &__sv, sizeof(int32_t)); }
-    std__collections__list__push__ref_std__collections__list__List_flang_0typer__coercion__Constraint__flang_0typer__coercion__Constraint__ret_void(v121, v122, v4, ((void*)0));
-    _Alignas(8) unsigned char __slot127[48];
-    void* v127 = (void*)__slot127;
-    memset(v127, (int)0, (size_t)((uint64_t)48));
-    { int32_t __sv = ((int32_t)1); memcpy(v127, &__sv, sizeof(int32_t)); }
-    _Alignas(8) unsigned char __slot128[40];
+    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_flang_0typer__coercion__Constraint(((int64_t)1), v121, v122, v4, ((void*)0));
+    _Alignas(4) unsigned char __slot123[8];
+    void* v123 = (void*)__slot123;
+    memset(v123, (int)0, (size_t)((uint64_t)8));
+    int32_t v124; memcpy(&v124, v119, sizeof(int32_t));
+    void* v125 = (void*)((char*)v123 + (intptr_t)((int64_t)0));
+    { int32_t __sv = ((int32_t)v124); memcpy(v125, &__sv, sizeof(int32_t)); }
+    int32_t v126; memcpy(&v126, v8, sizeof(int32_t));
+    void* v127 = (void*)((char*)v123 + (intptr_t)((int64_t)4));
+    { int32_t __sv = ((int32_t)v126); memcpy(v127, &__sv, sizeof(int32_t)); }
+    std__collections__list__push__ref_std__collections__list__List_flang_0typer__coercion__Constraint__flang_0typer__coercion__Constraint__ret_void(v122, v123, v4, ((void*)0));
+    _Alignas(8) unsigned char __slot128[48];
     void* v128 = (void*)__slot128;
-    memset(v128, (int)0, (size_t)((uint64_t)40));
-    int32_t v129; memcpy(&v129, v8, sizeof(int32_t));
-    void* v130 = (void*)((char*)v128 + (intptr_t)((int64_t)32));
-    { int32_t __sv = ((int32_t)v129); memcpy(v130, &__sv, sizeof(int32_t)); }
-    void* v131 = (void*)((char*)v128 + (intptr_t)((int64_t)36));
-    { int32_t __sv = ((int32_t)1); memcpy(v131, &__sv, sizeof(int32_t)); }
-    void* v132 = (void*)((char*)v128 + (intptr_t)((int64_t)0));
-    memcpy(v132, v121, (size_t)((uint64_t)32));
-    void* v133 = (void*)((char*)v127 + (intptr_t)((int64_t)8));
-    memcpy(v133, v128, (size_t)((uint64_t)40));
-    memcpy(v3, v127, (size_t)((uint64_t)48));
+    memset(v128, (int)0, (size_t)((uint64_t)48));
+    { int32_t __sv = ((int32_t)1); memcpy(v128, &__sv, sizeof(int32_t)); }
+    _Alignas(8) unsigned char __slot129[40];
+    void* v129 = (void*)__slot129;
+    memset(v129, (int)0, (size_t)((uint64_t)40));
+    int32_t v130; memcpy(&v130, v8, sizeof(int32_t));
+    void* v131 = (void*)((char*)v129 + (intptr_t)((int64_t)32));
+    { int32_t __sv = ((int32_t)v130); memcpy(v131, &__sv, sizeof(int32_t)); }
+    void* v132 = (void*)((char*)v129 + (intptr_t)((int64_t)36));
+    { int32_t __sv = ((int32_t)1); memcpy(v132, &__sv, sizeof(int32_t)); }
+    void* v133 = (void*)((char*)v129 + (intptr_t)((int64_t)0));
+    memcpy(v133, v122, (size_t)((uint64_t)32));
+    void* v134 = (void*)((char*)v128 + (intptr_t)((int64_t)8));
+    memcpy(v134, v129, (size_t)((uint64_t)40));
+    memcpy(v3, v128, (size_t)((uint64_t)48));
+    return;
+}
+
+static void flang_0typer__inference_0engine__try_0fn_0subsume__ref_flang_0typer__inference_0engine__Engine__u32__u32__ref_flang_0typer__nominal_0registry__NominalRegistry__r_core__option__Option_flang_0typer__coercion__Coercion(void* v0, int32_t v1, int32_t v2, void* v3, void* v4, void* v5, void* v6) {
+    void* v16 = 0;
+    void* v31 = 0;
+    int8_t v48 = 0;
+    int8_t v70 = 0;
+    int8_t v78 = 0;
+    int64_t v89 = 0;
+    int8_t v99 = 0;
+    int8_t v115 = 0;
+    int8_t v121 = 0;
+    int64_t v143 = 0;
+    _Alignas(8) unsigned char __slot7[8];
+    void* v7 = (void*)__slot7;
+    { void* __sv = ((void*)v0); memcpy(v7, &__sv, sizeof(void*)); }
+    _Alignas(4) unsigned char __slot8[4];
+    void* v8 = (void*)__slot8;
+    { int32_t __sv = ((int32_t)v1); memcpy(v8, &__sv, sizeof(int32_t)); }
+    _Alignas(4) unsigned char __slot9[4];
+    void* v9 = (void*)__slot9;
+    { int32_t __sv = ((int32_t)v2); memcpy(v9, &__sv, sizeof(int32_t)); }
+    _Alignas(8) unsigned char __slot10[8];
+    void* v10 = (void*)__slot10;
+    { void* __sv = ((void*)v3); memcpy(v10, &__sv, sizeof(void*)); }
+    void* v11; memcpy(&v11, v7, sizeof(void*));
+    void* v12 = (void*)((char*)v11 + (intptr_t)((int64_t)96));
+    int32_t v13; memcpy(&v13, v8, sizeof(int32_t));
+    _Alignas(8) unsigned char __slot14[40];
+    void* v14 = (void*)__slot14;
+    flang_0typer__interner__node__ref_flang_0typer__interner__TypeInterner__u32__r_flang_0typer__interner__TyNode(v12, v13, v14, v5, ((void*)0));
+    int32_t v19; memcpy(&v19, v14, sizeof(int32_t));
+    int8_t v20 = (int8_t)(((int32_t)v19) == ((int32_t)4));
+    if (v20) {
+        goto m_arm17;
+    } else {
+        goto m_next18;
+    }
+
+m_join15:;
+    _Alignas(8) unsigned char __slot25[32];
+    void* v25 = (void*)__slot25;
+    memcpy(v25, v16, (size_t)((uint64_t)32));
+    void* v26; memcpy(&v26, v7, sizeof(void*));
+    void* v27 = (void*)((char*)v26 + (intptr_t)((int64_t)96));
+    int32_t v28; memcpy(&v28, v9, sizeof(int32_t));
+    _Alignas(8) unsigned char __slot29[40];
+    void* v29 = (void*)__slot29;
+    flang_0typer__interner__node__ref_flang_0typer__interner__TypeInterner__u32__r_flang_0typer__interner__TyNode(v27, v28, v29, v5, ((void*)0));
+    int32_t v34; memcpy(&v34, v29, sizeof(int32_t));
+    int8_t v35 = (int8_t)(((int32_t)v34) == ((int32_t)4));
+    if (v35) {
+        goto m_arm32;
+    } else {
+        goto m_next33;
+    }
+
+m_arm17:;
+    void* v21 = (void*)((char*)v14 + (intptr_t)((int64_t)8));
+    {
+        void* __mv0 = ((void*)v21);
+        v16 = __mv0;
+    }
+    goto m_join15;
+
+m_next18:;
+    if (1) {
+        goto m_arm22;
+    } else {
+        goto m_next23;
+    }
+
+m_arm22:;
+    _Alignas(8) unsigned char __slot24[48];
+    void* v24 = (void*)__slot24;
+    memset(v24, (int)0, (size_t)((uint64_t)48));
+    memcpy(v4, v24, (size_t)((uint64_t)48));
+    return;
+
+m_next23:;
+    abort(); /* unreachable */
+
+m_join30:;
+    _Alignas(8) unsigned char __slot40[32];
+    void* v40 = (void*)__slot40;
+    memcpy(v40, v31, (size_t)((uint64_t)32));
+    void* v41 = (void*)((char*)v25 + (intptr_t)((int64_t)28));
+    void* v42 = (void*)((char*)v40 + (intptr_t)((int64_t)28));
+    int32_t v43; memcpy(&v43, v41, sizeof(int32_t));
+    int32_t v44; memcpy(&v44, v42, sizeof(int32_t));
+    int8_t v45 = (int8_t)(((int32_t)v43) == ((int32_t)v44));
+    if (v45) {
+        goto sc_rhs46;
+    } else {
+        {
+            int8_t __mv0 = ((int8_t)0);
+            v48 = __mv0;
+        }
+        goto sc_join47;
+    }
+
+m_arm32:;
+    void* v36 = (void*)((char*)v29 + (intptr_t)((int64_t)8));
+    {
+        void* __mv0 = ((void*)v36);
+        v31 = __mv0;
+    }
+    goto m_join30;
+
+m_next33:;
+    if (1) {
+        goto m_arm37;
+    } else {
+        goto m_next38;
+    }
+
+m_arm37:;
+    _Alignas(8) unsigned char __slot39[48];
+    void* v39 = (void*)__slot39;
+    memset(v39, (int)0, (size_t)((uint64_t)48));
+    memcpy(v4, v39, (size_t)((uint64_t)48));
+    return;
+
+m_next38:;
+    abort(); /* unreachable */
+
+sc_rhs46:;
+    void* v49 = (void*)((char*)v25 + (intptr_t)((int64_t)0));
+    void* v50 = (void*)((char*)v49 + (intptr_t)((int64_t)8));
+    int64_t v51; memcpy(&v51, v50, sizeof(int64_t));
+    void* v52 = (void*)((char*)v40 + (intptr_t)((int64_t)0));
+    void* v53 = (void*)((char*)v52 + (intptr_t)((int64_t)8));
+    int64_t v54; memcpy(&v54, v53, sizeof(int64_t));
+    int8_t v55 = (int8_t)(((int64_t)v51) == ((int64_t)v54));
+    {
+        int8_t __mv0 = ((int8_t)v55);
+        v48 = __mv0;
+    }
+    goto sc_join47;
+
+sc_join47:;
+    _Alignas(1) unsigned char __slot56[1];
+    void* v56 = (void*)__slot56;
+    { int8_t __sv = ((int8_t)v48); memcpy(v56, &__sv, sizeof(int8_t)); }
+    void* v57 = (void*)((char*)v25 + (intptr_t)((int64_t)16));
+    int64_t v58; memcpy(&v58, v57, sizeof(int64_t));
+    void* v59 = (void*)((char*)v40 + (intptr_t)((int64_t)16));
+    int64_t v60; memcpy(&v60, v59, sizeof(int64_t));
+    int64_t v61 = v58 & v60;
+    void* v62 = (void*)((char*)v25 + (intptr_t)((int64_t)16));
+    int64_t v63; memcpy(&v63, v62, sizeof(int64_t));
+    int8_t v64 = (int8_t)(((int64_t)v61) == ((int64_t)v63));
+    _Alignas(1) unsigned char __slot65[1];
+    void* v65 = (void*)__slot65;
+    { int8_t __sv = ((int8_t)v64); memcpy(v65, &__sv, sizeof(int8_t)); }
+    int8_t v66; memcpy(&v66, v56, sizeof(int8_t));
+    int8_t v67 = (int8_t)(((int8_t)v66) == ((int8_t)0));
+    if (v67) {
+        {
+            int8_t __mv0 = ((int8_t)1);
+            v70 = __mv0;
+        }
+        goto sc_join69;
+    } else {
+        goto sc_rhs68;
+    }
+
+sc_rhs68:;
+    void* v71 = (void*)((char*)v25 + (intptr_t)((int64_t)16));
+    int64_t v72; memcpy(&v72, v71, sizeof(int64_t));
+    void* v73 = (void*)((char*)v40 + (intptr_t)((int64_t)16));
+    int64_t v74; memcpy(&v74, v73, sizeof(int64_t));
+    int8_t v75 = (int8_t)(((int64_t)v72) == ((int64_t)v74));
+    {
+        int8_t __mv0 = ((int8_t)v75);
+        v70 = __mv0;
+    }
+    goto sc_join69;
+
+sc_join69:;
+    if (v70) {
+        {
+            int8_t __mv0 = ((int8_t)1);
+            v78 = __mv0;
+        }
+        goto sc_join77;
+    } else {
+        goto sc_rhs76;
+    }
+
+sc_rhs76:;
+    int8_t v79; memcpy(&v79, v65, sizeof(int8_t));
+    int8_t v80 = (int8_t)(((int8_t)v79) == ((int8_t)0));
+    {
+        int8_t __mv0 = ((int8_t)v80);
+        v78 = __mv0;
+    }
+    goto sc_join77;
+
+sc_join77:;
+    if (v78) {
+        goto then81;
+    } else {
+        goto else82;
+    }
+
+then81:;
+    _Alignas(8) unsigned char __slot84[48];
+    void* v84 = (void*)__slot84;
+    memset(v84, (int)0, (size_t)((uint64_t)48));
+    memcpy(v4, v84, (size_t)((uint64_t)48));
+    return;
+
+else82:;
+    goto join83;
+
+join83:;
+    void* v85 = (void*)((char*)v25 + (intptr_t)((int64_t)0));
+    void* v86 = (void*)((char*)v85 + (intptr_t)((int64_t)8));
+    int64_t v87; memcpy(&v87, v86, sizeof(int64_t));
+    {
+        int64_t __mv0 = ((int64_t)0);
+        v89 = __mv0;
+    }
+    goto for_head88;
+
+for_head88:;
+    int8_t v93 = (int8_t)(((uint64_t)v89) < ((uint64_t)v87));
+    if (v93) {
+        goto for_body90;
+    } else {
+        goto for_exit92;
+    }
+
+for_body90:;
+    _Alignas(8) unsigned char __slot94[8];
+    void* v94 = (void*)__slot94;
+    { int64_t __sv = ((int64_t)v89); memcpy(v94, &__sv, sizeof(int64_t)); }
+    int64_t v95; memcpy(&v95, v94, sizeof(int64_t));
+    int8_t v96 = flang_0typer__interner__moves_0at__ref_flang_0typer__interner__NFuncNode__usize__r_bool(v40, v95, v5, ((void*)0));
+    if (v96) {
+        goto sc_rhs97;
+    } else {
+        {
+            int8_t __mv0 = ((int8_t)0);
+            v99 = __mv0;
+        }
+        goto sc_join98;
+    }
+
+for_latch91:;
+    int64_t v132 = (int64_t)(((uint64_t)v89) + ((uint64_t)1));
+    {
+        int64_t __mv0 = ((int64_t)v132);
+        v89 = __mv0;
+    }
+    goto for_head88;
+
+for_exit92:;
+    void* v133 = (void*)((char*)v25 + (intptr_t)((int64_t)0));
+    void* v134 = (void*)((char*)v133 + (intptr_t)((int64_t)8));
+    int64_t v135; memcpy(&v135, v134, sizeof(int64_t));
+    void* v136 = (void*)((char*)v5 + (intptr_t)((int64_t)0));
+    void* v137; memcpy(&v137, v136, sizeof(void*));
+    _Alignas(8) unsigned char __slot138[32];
+    void* v138 = (void*)__slot138;
+    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_u32(v135, v137, v138, v5, ((void*)0));
+    void* v139 = (void*)((char*)v25 + (intptr_t)((int64_t)0));
+    void* v140 = (void*)((char*)v139 + (intptr_t)((int64_t)8));
+    int64_t v141; memcpy(&v141, v140, sizeof(int64_t));
+    {
+        int64_t __mv0 = ((int64_t)0);
+        v143 = __mv0;
+    }
+    goto for_head142;
+
+sc_rhs97:;
+    int64_t v100; memcpy(&v100, v94, sizeof(int64_t));
+    int8_t v101 = flang_0typer__interner__moves_0at__ref_flang_0typer__interner__NFuncNode__usize__r_bool(v25, v100, v5, ((void*)0));
+    int8_t v102 = (int8_t)(((int8_t)v101) == ((int8_t)0));
+    {
+        int8_t __mv0 = ((int8_t)v102);
+        v99 = __mv0;
+    }
+    goto sc_join98;
+
+sc_join98:;
+    _Alignas(1) unsigned char __slot103[1];
+    void* v103 = (void*)__slot103;
+    { int8_t __sv = ((int8_t)v99); memcpy(v103, &__sv, sizeof(int8_t)); }
+    void* v104; memcpy(&v104, v7, sizeof(void*));
+    void* v105; memcpy(&v105, v7, sizeof(void*));
+    void* v106 = (void*)((char*)v105 + (intptr_t)((int64_t)96));
+    void* v107 = (void*)((char*)v25 + (intptr_t)((int64_t)0));
+    int64_t v108; memcpy(&v108, v94, sizeof(int64_t));
+    int32_t v109 = flang_0typer__interner__child_0at__ref_flang_0typer__interner__TypeInterner__flang_0typer__interner__ChildSpan__usize__r_u32(v106, v107, v108, v5, ((void*)0));
+    int32_t v110 = flang_0typer__inference_0engine__zonk__ref_flang_0typer__inference_0engine__Engine__u32__r_u32(v104, v109, v5, ((void*)0));
+    _Alignas(4) unsigned char __slot111[4];
+    void* v111 = (void*)__slot111;
+    { int32_t __sv = ((int32_t)v110); memcpy(v111, &__sv, sizeof(int32_t)); }
+    int8_t v112; memcpy(&v112, v103, sizeof(int8_t));
+    if (v112) {
+        goto sc_rhs113;
+    } else {
+        {
+            int8_t __mv0 = ((int8_t)0);
+            v115 = __mv0;
+        }
+        goto sc_join114;
+    }
+
+sc_rhs113:;
+    void* v116; memcpy(&v116, v7, sizeof(void*));
+    int32_t v117; memcpy(&v117, v111, sizeof(int32_t));
+    int8_t v118 = flang_0typer__inference_0engine__is_0var__ref_flang_0typer__inference_0engine__Engine__u32__r_bool(v116, v117, v5, ((void*)0));
+    if (v118) {
+        {
+            int8_t __mv0 = ((int8_t)1);
+            v121 = __mv0;
+        }
+        goto sc_join120;
+    } else {
+        goto sc_rhs119;
+    }
+
+sc_join114:;
+    if (v115) {
+        goto then128;
+    } else {
+        goto else129;
+    }
+
+sc_rhs119:;
+    void* v122; memcpy(&v122, v7, sizeof(void*));
+    void* v123 = (void*)((char*)v122 + (intptr_t)((int64_t)96));
+    void* v124; memcpy(&v124, v10, sizeof(void*));
+    int32_t v125; memcpy(&v125, v111, sizeof(int32_t));
+    int8_t v126 = flang_0typer__copyable__is_0copyable_0ty__ref_flang_0typer__interner__TypeInterner__ref_flang_0typer__nominal_0registry__NominalRegistry__u32__core__option__Option_ref_std__collections__dict__Dict_u32_bool__r_bool(v123, v124, v125, ((void*)0), v5, ((void*)0));
+    int8_t v127 = (int8_t)(((int8_t)v126) == ((int8_t)0));
+    {
+        int8_t __mv0 = ((int8_t)v127);
+        v121 = __mv0;
+    }
+    goto sc_join120;
+
+sc_join120:;
+    {
+        int8_t __mv0 = ((int8_t)v121);
+        v115 = __mv0;
+    }
+    goto sc_join114;
+
+then128:;
+    _Alignas(8) unsigned char __slot131[48];
+    void* v131 = (void*)__slot131;
+    memset(v131, (int)0, (size_t)((uint64_t)48));
+    memcpy(v4, v131, (size_t)((uint64_t)48));
+    return;
+
+else129:;
+    goto join130;
+
+join130:;
+    goto for_latch91;
+
+for_head142:;
+    int8_t v147 = (int8_t)(((uint64_t)v143) < ((uint64_t)v141));
+    if (v147) {
+        goto for_body144;
+    } else {
+        goto for_exit146;
+    }
+
+for_body144:;
+    _Alignas(8) unsigned char __slot148[8];
+    void* v148 = (void*)__slot148;
+    { int64_t __sv = ((int64_t)v143); memcpy(v148, &__sv, sizeof(int64_t)); }
+    void* v149; memcpy(&v149, v7, sizeof(void*));
+    void* v150 = (void*)((char*)v149 + (intptr_t)((int64_t)96));
+    void* v151 = (void*)((char*)v25 + (intptr_t)((int64_t)0));
+    int64_t v152; memcpy(&v152, v148, sizeof(int64_t));
+    int32_t v153 = flang_0typer__interner__child_0at__ref_flang_0typer__interner__TypeInterner__flang_0typer__interner__ChildSpan__usize__r_u32(v150, v151, v152, v5, ((void*)0));
+    std__collections__list__push__ref_std__collections__list__List_u32__u32__ret_void(v138, v153, v5, ((void*)0));
+    goto for_latch145;
+
+for_latch145:;
+    int64_t v154 = (int64_t)(((uint64_t)v143) + ((uint64_t)1));
+    {
+        int64_t __mv0 = ((int64_t)v154);
+        v143 = __mv0;
+    }
+    goto for_head142;
+
+for_exit146:;
+    void* v155; memcpy(&v155, v7, sizeof(void*));
+    void* v156 = (void*)((char*)v25 + (intptr_t)((int64_t)24));
+    int32_t v157; memcpy(&v157, v156, sizeof(int32_t));
+    void* v158 = (void*)((char*)v40 + (intptr_t)((int64_t)16));
+    int64_t v159; memcpy(&v159, v158, sizeof(int64_t));
+    void* v160 = (void*)((char*)v25 + (intptr_t)((int64_t)28));
+    int32_t v161 = flang_0typer__inference_0engine__mk_0func__ref_flang_0typer__inference_0engine__Engine__std__collections__list__List_u32__u32__usize__flang_0typer__type__FnConv__r_u32(v155, v138, v157, v159, v160, v5, ((void*)0));
+    _Alignas(4) unsigned char __slot162[4];
+    void* v162 = (void*)__slot162;
+    { int32_t __sv = ((int32_t)v161); memcpy(v162, &__sv, sizeof(int32_t)); }
+    void* v163 = (void*)((char*)v5 + (intptr_t)((int64_t)0));
+    void* v164; memcpy(&v164, v163, sizeof(void*));
+    _Alignas(8) unsigned char __slot165[32];
+    void* v165 = (void*)__slot165;
+    std__collections__list__list__usize__ref_std__allocator__Allocator__ret_std__collections__list__List_flang_0typer__coercion__Constraint(((int64_t)1), v164, v165, v5, ((void*)0));
+    _Alignas(4) unsigned char __slot166[8];
+    void* v166 = (void*)__slot166;
+    memset(v166, (int)0, (size_t)((uint64_t)8));
+    int32_t v167; memcpy(&v167, v162, sizeof(int32_t));
+    void* v168 = (void*)((char*)v166 + (intptr_t)((int64_t)0));
+    { int32_t __sv = ((int32_t)v167); memcpy(v168, &__sv, sizeof(int32_t)); }
+    int32_t v169; memcpy(&v169, v9, sizeof(int32_t));
+    void* v170 = (void*)((char*)v166 + (intptr_t)((int64_t)4));
+    { int32_t __sv = ((int32_t)v169); memcpy(v170, &__sv, sizeof(int32_t)); }
+    std__collections__list__push__ref_std__collections__list__List_flang_0typer__coercion__Constraint__flang_0typer__coercion__Constraint__ret_void(v165, v166, v5, ((void*)0));
+    _Alignas(8) unsigned char __slot171[48];
+    void* v171 = (void*)__slot171;
+    memset(v171, (int)0, (size_t)((uint64_t)48));
+    { int32_t __sv = ((int32_t)1); memcpy(v171, &__sv, sizeof(int32_t)); }
+    _Alignas(8) unsigned char __slot172[40];
+    void* v172 = (void*)__slot172;
+    memset(v172, (int)0, (size_t)((uint64_t)40));
+    int32_t v173; memcpy(&v173, v9, sizeof(int32_t));
+    void* v174 = (void*)((char*)v172 + (intptr_t)((int64_t)32));
+    { int32_t __sv = ((int32_t)v173); memcpy(v174, &__sv, sizeof(int32_t)); }
+    void* v175 = (void*)((char*)v172 + (intptr_t)((int64_t)36));
+    { int32_t __sv = ((int32_t)1); memcpy(v175, &__sv, sizeof(int32_t)); }
+    void* v176 = (void*)((char*)v172 + (intptr_t)((int64_t)0));
+    memcpy(v176, v165, (size_t)((uint64_t)32));
+    void* v177 = (void*)((char*)v171 + (intptr_t)((int64_t)8));
+    memcpy(v177, v172, (size_t)((uint64_t)40));
+    memcpy(v4, v171, (size_t)((uint64_t)48));
     return;
 }
 
@@ -528333,7 +528972,7 @@ static void std__collections__dict__alloc_0table__ref_std__collections__dict__Un
     void* v7 = (void*)__slot7;
     { void* __sv = ((void*)v2); memcpy(v7, &__sv, sizeof(void*)); }
     int64_t v8; memcpy(&v8, v6, sizeof(int64_t));
-    int64_t v9 = (int64_t)(((uint64_t)v8) * ((uint64_t)144));
+    int64_t v9 = (int64_t)(((uint64_t)v8) * ((uint64_t)152));
     _Alignas(8) unsigned char __slot10[8];
     void* v10 = (void*)__slot10;
     { int64_t __sv = ((int64_t)v9); memcpy(v10, &__sv, sizeof(int64_t)); }
@@ -528401,7 +529040,7 @@ for_body9:;
     void* v15 = (void*)((char*)v14 + (intptr_t)((int64_t)0));
     void* v16; memcpy(&v16, v15, sizeof(void*));
     int64_t v17; memcpy(&v17, v13, sizeof(int64_t));
-    int64_t v18 = (int64_t)(((uint64_t)v17) * ((uint64_t)144));
+    int64_t v18 = (int64_t)(((uint64_t)v17) * ((uint64_t)152));
     void* v19 = (void*)((char*)v16 + (intptr_t)((int64_t)v18));
     void* v20 = (void*)((char*)v19 + (intptr_t)((int64_t)0));
     int64_t v21; memcpy(&v21, ((void*)g___fconst_std__collections__dict__HASH_0EMPTY), sizeof(int64_t));
@@ -528531,7 +529170,7 @@ for_body9:;
     void* v15 = (void*)((char*)v14 + (intptr_t)((int64_t)0));
     void* v16; memcpy(&v16, v15, sizeof(void*));
     int64_t v17; memcpy(&v17, v13, sizeof(int64_t));
-    int64_t v18 = (int64_t)(((uint64_t)v17) * ((uint64_t)144));
+    int64_t v18 = (int64_t)(((uint64_t)v17) * ((uint64_t)152));
     void* v19 = (void*)((char*)v16 + (intptr_t)((int64_t)v18));
     void* v20 = (void*)((char*)v19 + (intptr_t)((int64_t)0));
     int64_t v21; memcpy(&v21, v20, sizeof(int64_t));
@@ -528566,11 +529205,11 @@ then23:;
     void* v27 = (void*)((char*)v26 + (intptr_t)((int64_t)0));
     void* v28; memcpy(&v28, v27, sizeof(void*));
     int64_t v29; memcpy(&v29, v13, sizeof(int64_t));
-    int64_t v30 = (int64_t)(((uint64_t)v29) * ((uint64_t)144));
+    int64_t v30 = (int64_t)(((uint64_t)v29) * ((uint64_t)152));
     void* v31 = (void*)((char*)v28 + (intptr_t)((int64_t)v30));
-    _Alignas(8) unsigned char __slot32[144];
+    _Alignas(8) unsigned char __slot32[152];
     void* v32 = (void*)__slot32;
-    memcpy(v32, v31, (size_t)((uint64_t)144));
+    memcpy(v32, v31, (size_t)((uint64_t)152));
     std__collections__dict__deinit__std__collections__dict__Entry_u64_flang_0typer__inference_0results__LambdaInfo__ret_void(v32, v1, ((void*)0));
     goto join25;
 
@@ -528623,7 +529262,7 @@ static void std__allocator__free__ref_std__allocator__Allocator__core__slice__Sl
     void* v6; memcpy(&v6, v5, sizeof(void*));
     void* v7 = (void*)((char*)v1 + (intptr_t)((int64_t)8));
     int64_t v8; memcpy(&v8, v7, sizeof(int64_t));
-    int64_t v9 = (int64_t)(((uint64_t)v8) * ((uint64_t)144));
+    int64_t v9 = (int64_t)(((uint64_t)v8) * ((uint64_t)152));
     _Alignas(8) unsigned char __slot10[16];
     void* v10 = (void*)__slot10;
     core__slice__slice_0from_0raw_0parts__ref_u8__usize__ret_core__slice__Slice_u8(v6, v9, v10, v2, ((void*)0));
@@ -534482,25 +535121,25 @@ then13:;
     void* v19 = (void*)((char*)v18 + (intptr_t)((int64_t)0));
     void* v20; memcpy(&v20, v19, sizeof(void*));
     int64_t v21; memcpy(&v21, v17, sizeof(int64_t));
-    int64_t v22 = (int64_t)(((uint64_t)v21) * ((uint64_t)144));
+    int64_t v22 = (int64_t)(((uint64_t)v21) * ((uint64_t)152));
     void* v23 = (void*)((char*)v20 + (intptr_t)((int64_t)v22));
     void* v24 = (void*)((char*)v23 + (intptr_t)((int64_t)16));
-    _Alignas(8) unsigned char __slot25[128];
+    _Alignas(8) unsigned char __slot25[136];
     void* v25 = (void*)__slot25;
-    memcpy(v25, v24, (size_t)((uint64_t)128));
+    memcpy(v25, v24, (size_t)((uint64_t)136));
     core__deinit__release__flang_0typer__inference_0results__LambdaInfo__ret_void(v25, v4, ((void*)0));
     void* v26; memcpy(&v26, v6, sizeof(void*));
     void* v27 = (void*)((char*)v26 + (intptr_t)((int64_t)0));
     void* v28; memcpy(&v28, v27, sizeof(void*));
     int64_t v29; memcpy(&v29, v17, sizeof(int64_t));
-    int64_t v30 = (int64_t)(((uint64_t)v29) * ((uint64_t)144));
+    int64_t v30 = (int64_t)(((uint64_t)v29) * ((uint64_t)152));
     void* v31 = (void*)((char*)v28 + (intptr_t)((int64_t)v30));
     _Alignas(8) unsigned char __slot32[8];
     void* v32 = (void*)__slot32;
     { void* __sv = ((void*)v31); memcpy(v32, &__sv, sizeof(void*)); }
     void* v33; memcpy(&v33, v32, sizeof(void*));
     void* v34 = (void*)((char*)v33 + (intptr_t)((int64_t)16));
-    memcpy(v34, v2, (size_t)((uint64_t)128));
+    memcpy(v34, v2, (size_t)((uint64_t)136));
     int64_t v35; memcpy(&v35, v7, sizeof(int64_t));
     core__deinit__release__u64__ret_void(v35, v4, ((void*)0));
     return;
@@ -534591,7 +535230,7 @@ for_body23:;
     void* v36 = (void*)((char*)v35 + (intptr_t)((int64_t)0));
     void* v37; memcpy(&v37, v36, sizeof(void*));
     int64_t v38; memcpy(&v38, v34, sizeof(int64_t));
-    int64_t v39 = (int64_t)(((uint64_t)v38) * ((uint64_t)144));
+    int64_t v39 = (int64_t)(((uint64_t)v38) * ((uint64_t)152));
     void* v40 = (void*)((char*)v37 + (intptr_t)((int64_t)v39));
     _Alignas(8) unsigned char __slot41[8];
     void* v41 = (void*)__slot41;
@@ -534831,7 +535470,7 @@ for_body67:;
     void* v73 = (void*)((char*)v72 + (intptr_t)((int64_t)0));
     void* v74; memcpy(&v74, v73, sizeof(void*));
     int64_t v75; memcpy(&v75, v71, sizeof(int64_t));
-    int64_t v76 = (int64_t)(((uint64_t)v75) * ((uint64_t)144));
+    int64_t v76 = (int64_t)(((uint64_t)v75) * ((uint64_t)152));
     void* v77 = (void*)((char*)v74 + (intptr_t)((int64_t)v76));
     void* v78 = (void*)((char*)v77 + (intptr_t)((int64_t)0));
     int64_t v79; memcpy(&v79, v78, sizeof(int64_t));
@@ -534878,7 +535517,7 @@ then83:;
     void* v92 = (void*)((char*)v91 + (intptr_t)((int64_t)0));
     void* v93; memcpy(&v93, v92, sizeof(void*));
     int64_t v94; memcpy(&v94, v71, sizeof(int64_t));
-    int64_t v95 = (int64_t)(((uint64_t)v94) * ((uint64_t)144));
+    int64_t v95 = (int64_t)(((uint64_t)v94) * ((uint64_t)152));
     void* v96 = (void*)((char*)v93 + (intptr_t)((int64_t)v95));
     void* v97 = (void*)((char*)v96 + (intptr_t)((int64_t)8));
     int64_t v98; memcpy(&v98, v97, sizeof(int64_t));
@@ -534889,10 +535528,10 @@ then83:;
     void* v102 = (void*)((char*)v101 + (intptr_t)((int64_t)0));
     void* v103; memcpy(&v103, v102, sizeof(void*));
     int64_t v104; memcpy(&v104, v71, sizeof(int64_t));
-    int64_t v105 = (int64_t)(((uint64_t)v104) * ((uint64_t)144));
+    int64_t v105 = (int64_t)(((uint64_t)v104) * ((uint64_t)152));
     void* v106 = (void*)((char*)v103 + (intptr_t)((int64_t)v105));
     void* v107 = (void*)((char*)v106 + (intptr_t)((int64_t)16));
-    memcpy(v100, v107, (size_t)((uint64_t)128));
+    memcpy(v100, v107, (size_t)((uint64_t)136));
     goto join85;
 
 else84:;
@@ -534959,7 +535598,7 @@ for_body11:;
     void* v22 = (void*)((char*)v21 + (intptr_t)((int64_t)24));
     int64_t v23; memcpy(&v23, v22, sizeof(int64_t));
     int64_t v24 = std__collections__dict__probe_0slot__usize__usize__usize__r_usize(v19, v20, v23, v2, ((void*)0));
-    int64_t v25 = (int64_t)(((uint64_t)v24) * ((uint64_t)144));
+    int64_t v25 = (int64_t)(((uint64_t)v24) * ((uint64_t)152));
     void* v26 = (void*)((char*)v18 + (intptr_t)((int64_t)v25));
     _Alignas(8) unsigned char __slot27[8];
     void* v27 = (void*)__slot27;
@@ -535104,7 +535743,7 @@ static void* std__collections__dict__place__ref_std__collections__dict__Unmanage
     { int64_t __sv = ((int64_t)v15); memcpy(v14, &__sv, sizeof(int64_t)); }
     void* v16; memcpy(&v16, v12, sizeof(void*));
     void* v17 = (void*)((char*)v16 + (intptr_t)((int64_t)16));
-    memcpy(v17, v3, (size_t)((uint64_t)128));
+    memcpy(v17, v3, (size_t)((uint64_t)136));
     void* v18; memcpy(&v18, v12, sizeof(void*));
     return v18;
 }
@@ -538561,7 +539200,7 @@ for_body14:;
     void* v22 = (void*)((char*)v21 + (intptr_t)((int64_t)0));
     void* v23; memcpy(&v23, v22, sizeof(void*));
     int64_t v24; memcpy(&v24, v18, sizeof(int64_t));
-    int64_t v25 = (int64_t)(((uint64_t)v24) * ((uint64_t)144));
+    int64_t v25 = (int64_t)(((uint64_t)v24) * ((uint64_t)152));
     void* v26 = (void*)((char*)v23 + (intptr_t)((int64_t)v25));
     _Alignas(8) unsigned char __slot27[8];
     void* v27 = (void*)__slot27;
@@ -547200,7 +547839,7 @@ else10:;
 join11:;
     void* v13; memcpy(&v13, v6, sizeof(void*));
     int64_t v14; memcpy(&v14, v5, sizeof(int64_t));
-    int64_t v15 = (int64_t)(((uint64_t)v14) * ((uint64_t)176));
+    int64_t v15 = (int64_t)(((uint64_t)v14) * ((uint64_t)184));
     _Alignas(8) unsigned char __slot16[24];
     void* v16 = (void*)__slot16;
     std__allocator__alloc__ref_std__allocator__Allocator__usize__usize__r_core__option__Option_core__slice__Slice_u8(v13, v15, ((int64_t)8), v16, v3, ((void*)0));
@@ -547432,11 +548071,11 @@ for_body15:;
     void* v20 = (void*)((char*)v0 + (intptr_t)((int64_t)0));
     void* v21; memcpy(&v21, v20, sizeof(void*));
     int64_t v22; memcpy(&v22, v19, sizeof(int64_t));
-    int64_t v23 = (int64_t)(((uint64_t)v22) * ((uint64_t)176));
+    int64_t v23 = (int64_t)(((uint64_t)v22) * ((uint64_t)184));
     void* v24 = (void*)((char*)v21 + (intptr_t)((int64_t)v23));
-    _Alignas(8) unsigned char __slot25[176];
+    _Alignas(8) unsigned char __slot25[184];
     void* v25 = (void*)__slot25;
-    memcpy(v25, v24, (size_t)((uint64_t)176));
+    memcpy(v25, v24, (size_t)((uint64_t)184));
     core__deinit__release__flang_0typer__specialization__ClosureFact__ret_void(v25, v2, ((void*)0));
     goto for_latch16;
 
@@ -547494,7 +548133,7 @@ static void std__allocator__free__ref_std__allocator__Allocator__core__slice__Sl
     void* v6; memcpy(&v6, v5, sizeof(void*));
     void* v7 = (void*)((char*)v1 + (intptr_t)((int64_t)8));
     int64_t v8; memcpy(&v8, v7, sizeof(int64_t));
-    int64_t v9 = (int64_t)(((uint64_t)v8) * ((uint64_t)176));
+    int64_t v9 = (int64_t)(((uint64_t)v8) * ((uint64_t)184));
     _Alignas(8) unsigned char __slot10[16];
     void* v10 = (void*)__slot10;
     core__slice__slice_0from_0raw_0parts__ref_u8__usize__ret_core__slice__Slice_u8(v6, v9, v10, v2, ((void*)0));
@@ -549627,7 +550266,7 @@ join14:;
     void* v19; memcpy(&v19, v3, sizeof(void*));
     void* v20 = (void*)((char*)v19 + (intptr_t)((int64_t)16));
     int64_t v21; memcpy(&v21, v20, sizeof(int64_t));
-    int64_t v22 = (int64_t)(((uint64_t)v21) * ((uint64_t)176));
+    int64_t v22 = (int64_t)(((uint64_t)v21) * ((uint64_t)184));
     void* v23 = (void*)((char*)v18 + (intptr_t)((int64_t)v22));
     _Alignas(8) unsigned char __slot24[8];
     void* v24 = (void*)__slot24;
@@ -549687,9 +550326,9 @@ static void std__collections__list__push__ref_std__collections__list__UnmanagedL
     void* v24 = (void*)((char*)v23 + (intptr_t)((int64_t)8));
     int64_t v25; memcpy(&v25, v24, sizeof(int64_t));
     int64_t v26 = (int64_t)(((uint64_t)v25) - ((uint64_t)1));
-    int64_t v27 = (int64_t)(((uint64_t)v26) * ((uint64_t)176));
+    int64_t v27 = (int64_t)(((uint64_t)v26) * ((uint64_t)184));
     void* v28 = (void*)((char*)v22 + (intptr_t)((int64_t)v27));
-    memcpy(v28, v1, (size_t)((uint64_t)176));
+    memcpy(v28, v1, (size_t)((uint64_t)184));
     return;
 }
 
@@ -549724,7 +550363,7 @@ else14:;
 join15:;
     _Alignas(8) unsigned char __slot16[8];
     void* v16 = (void*)__slot16;
-    { int64_t __sv = ((int64_t)176); memcpy(v16, &__sv, sizeof(int64_t)); }
+    { int64_t __sv = ((int64_t)184); memcpy(v16, &__sv, sizeof(int64_t)); }
     _Alignas(8) unsigned char __slot17[8];
     void* v17 = (void*)__slot17;
     { int64_t __sv = ((int64_t)8); memcpy(v17, &__sv, sizeof(int64_t)); }
@@ -549975,7 +550614,7 @@ join20:;
     void* v24; memcpy(&v24, v23, sizeof(void*));
     void* v25 = (void*)((char*)v0 + (intptr_t)((int64_t)8));
     int64_t v26; memcpy(&v26, v25, sizeof(int64_t));
-    int64_t v27 = (int64_t)(((uint64_t)v26) * ((uint64_t)176));
+    int64_t v27 = (int64_t)(((uint64_t)v26) * ((uint64_t)184));
     memmove(v22, v24, v27);
     return;
 }
@@ -550571,7 +551210,7 @@ for_body9:;
     void* v15 = (void*)((char*)v14 + (intptr_t)((int64_t)0));
     void* v16; memcpy(&v16, v15, sizeof(void*));
     int64_t v17; memcpy(&v17, v13, sizeof(int64_t));
-    int64_t v18 = (int64_t)(((uint64_t)v17) * ((uint64_t)88));
+    int64_t v18 = (int64_t)(((uint64_t)v17) * ((uint64_t)96));
     void* v19 = (void*)((char*)v16 + (intptr_t)((int64_t)v18));
     void* v20 = (void*)((char*)v19 + (intptr_t)((int64_t)0));
     int64_t v21; memcpy(&v21, v20, sizeof(int64_t));
@@ -550606,11 +551245,11 @@ then23:;
     void* v27 = (void*)((char*)v26 + (intptr_t)((int64_t)0));
     void* v28; memcpy(&v28, v27, sizeof(void*));
     int64_t v29; memcpy(&v29, v13, sizeof(int64_t));
-    int64_t v30 = (int64_t)(((uint64_t)v29) * ((uint64_t)88));
+    int64_t v30 = (int64_t)(((uint64_t)v29) * ((uint64_t)96));
     void* v31 = (void*)((char*)v28 + (intptr_t)((int64_t)v30));
-    _Alignas(8) unsigned char __slot32[88];
+    _Alignas(8) unsigned char __slot32[96];
     void* v32 = (void*)__slot32;
-    memcpy(v32, v31, (size_t)((uint64_t)88));
+    memcpy(v32, v31, (size_t)((uint64_t)96));
     std__collections__dict__deinit__std__collections__dict__Entry_u32_flang_0typer__inference_0results__ClosureSig__ret_void(v32, v1, ((void*)0));
     goto join25;
 
@@ -550622,7 +551261,7 @@ join25:;
 }
 
 static void std__collections__dict__deinit__std__collections__dict__Entry_u32_flang_0typer__inference_0results__ClosureSig__ret_void(void* v0, void* v1, void* v2) {
-    void* v3 = (void*)((char*)v0 + (intptr_t)((int64_t)80));
+    void* v3 = (void*)((char*)v0 + (intptr_t)((int64_t)88));
     int32_t v4; memcpy(&v4, v3, sizeof(int32_t));
     core__deinit__release__u32__ret_void(v4, v1, ((void*)0));
     void* v5 = (void*)((char*)v0 + (intptr_t)((int64_t)8));
@@ -550665,7 +551304,7 @@ for_body9:;
     void* v15 = (void*)((char*)v14 + (intptr_t)((int64_t)0));
     void* v16; memcpy(&v16, v15, sizeof(void*));
     int64_t v17; memcpy(&v17, v13, sizeof(int64_t));
-    int64_t v18 = (int64_t)(((uint64_t)v17) * ((uint64_t)88));
+    int64_t v18 = (int64_t)(((uint64_t)v17) * ((uint64_t)96));
     void* v19 = (void*)((char*)v16 + (intptr_t)((int64_t)v18));
     void* v20 = (void*)((char*)v19 + (intptr_t)((int64_t)0));
     int64_t v21; memcpy(&v21, ((void*)g___fconst_std__collections__dict__HASH_0EMPTY), sizeof(int64_t));
@@ -550712,7 +551351,7 @@ static void std__allocator__free__ref_std__allocator__Allocator__core__slice__Sl
     void* v6; memcpy(&v6, v5, sizeof(void*));
     void* v7 = (void*)((char*)v1 + (intptr_t)((int64_t)8));
     int64_t v8; memcpy(&v8, v7, sizeof(int64_t));
-    int64_t v9 = (int64_t)(((uint64_t)v8) * ((uint64_t)88));
+    int64_t v9 = (int64_t)(((uint64_t)v8) * ((uint64_t)96));
     _Alignas(8) unsigned char __slot10[16];
     void* v10 = (void*)__slot10;
     core__slice__slice_0from_0raw_0parts__ref_u8__usize__ret_core__slice__Slice_u8(v6, v9, v10, v2, ((void*)0));
@@ -551910,7 +552549,7 @@ m_arm11:;
     void* v19 = (void*)((char*)v18 + (intptr_t)((int64_t)0));
     void* v20; memcpy(&v20, v19, sizeof(void*));
     int64_t v21; memcpy(&v21, v17, sizeof(int64_t));
-    int64_t v22 = (int64_t)(((uint64_t)v21) * ((uint64_t)144));
+    int64_t v22 = (int64_t)(((uint64_t)v21) * ((uint64_t)152));
     void* v23 = (void*)((char*)v20 + (intptr_t)((int64_t)v22));
     {
         void* __mv0 = ((void*)v23);
@@ -552632,7 +553271,7 @@ m_arm11:;
     void* v19 = (void*)((char*)v18 + (intptr_t)((int64_t)0));
     void* v20; memcpy(&v20, v19, sizeof(void*));
     int64_t v21; memcpy(&v21, v17, sizeof(int64_t));
-    int64_t v22 = (int64_t)(((uint64_t)v21) * ((uint64_t)88));
+    int64_t v22 = (int64_t)(((uint64_t)v21) * ((uint64_t)96));
     void* v23 = (void*)((char*)v20 + (intptr_t)((int64_t)v22));
     {
         void* __mv0 = ((void*)v23);
@@ -552728,7 +553367,7 @@ for_body23:;
     void* v36 = (void*)((char*)v35 + (intptr_t)((int64_t)0));
     void* v37; memcpy(&v37, v36, sizeof(void*));
     int64_t v38; memcpy(&v38, v34, sizeof(int64_t));
-    int64_t v39 = (int64_t)(((uint64_t)v38) * ((uint64_t)88));
+    int64_t v39 = (int64_t)(((uint64_t)v38) * ((uint64_t)96));
     void* v40 = (void*)((char*)v37 + (intptr_t)((int64_t)v39));
     _Alignas(8) unsigned char __slot41[8];
     void* v41 = (void*)__slot41;
@@ -552783,7 +553422,7 @@ join49:;
 
 then56:;
     void* v59; memcpy(&v59, v41, sizeof(void*));
-    void* v60 = (void*)((char*)v59 + (intptr_t)((int64_t)80));
+    void* v60 = (void*)((char*)v59 + (intptr_t)((int64_t)88));
     int32_t v61; memcpy(&v61, v60, sizeof(int32_t));
     int32_t v62; memcpy(&v62, v6, sizeof(int32_t));
     int8_t v63 = (int8_t)(((int32_t)v61) == ((int32_t)v62));
@@ -580283,11 +580922,11 @@ for_body15:;
     void* v20 = (void*)((char*)v0 + (intptr_t)((int64_t)0));
     void* v21; memcpy(&v21, v20, sizeof(void*));
     int64_t v22; memcpy(&v22, v19, sizeof(int64_t));
-    int64_t v23 = (int64_t)(((uint64_t)v22) * ((uint64_t)136));
+    int64_t v23 = (int64_t)(((uint64_t)v22) * ((uint64_t)144));
     void* v24 = (void*)((char*)v21 + (intptr_t)((int64_t)v23));
-    _Alignas(8) unsigned char __slot25[136];
+    _Alignas(8) unsigned char __slot25[144];
     void* v25 = (void*)__slot25;
-    memcpy(v25, v24, (size_t)((uint64_t)136));
+    memcpy(v25, v24, (size_t)((uint64_t)144));
     core__deinit__release__flang_0typer__checker__NodeLambdaFact__ret_void(v25, v2, ((void*)0));
     goto for_latch16;
 
@@ -580345,7 +580984,7 @@ static void std__allocator__free__ref_std__allocator__Allocator__core__slice__Sl
     void* v6; memcpy(&v6, v5, sizeof(void*));
     void* v7 = (void*)((char*)v1 + (intptr_t)((int64_t)8));
     int64_t v8; memcpy(&v8, v7, sizeof(int64_t));
-    int64_t v9 = (int64_t)(((uint64_t)v8) * ((uint64_t)136));
+    int64_t v9 = (int64_t)(((uint64_t)v8) * ((uint64_t)144));
     _Alignas(8) unsigned char __slot10[16];
     void* v10 = (void*)__slot10;
     core__slice__slice_0from_0raw_0parts__ref_u8__usize__ret_core__slice__Slice_u8(v6, v9, v10, v2, ((void*)0));
@@ -620175,25 +620814,25 @@ then13:;
     void* v19 = (void*)((char*)v18 + (intptr_t)((int64_t)0));
     void* v20; memcpy(&v20, v19, sizeof(void*));
     int64_t v21; memcpy(&v21, v17, sizeof(int64_t));
-    int64_t v22 = (int64_t)(((uint64_t)v21) * ((uint64_t)88));
+    int64_t v22 = (int64_t)(((uint64_t)v21) * ((uint64_t)96));
     void* v23 = (void*)((char*)v20 + (intptr_t)((int64_t)v22));
     void* v24 = (void*)((char*)v23 + (intptr_t)((int64_t)8));
-    _Alignas(8) unsigned char __slot25[72];
+    _Alignas(8) unsigned char __slot25[80];
     void* v25 = (void*)__slot25;
-    memcpy(v25, v24, (size_t)((uint64_t)72));
+    memcpy(v25, v24, (size_t)((uint64_t)80));
     core__deinit__release__flang_0typer__inference_0results__ClosureSig__ret_void(v25, v4, ((void*)0));
     void* v26; memcpy(&v26, v6, sizeof(void*));
     void* v27 = (void*)((char*)v26 + (intptr_t)((int64_t)0));
     void* v28; memcpy(&v28, v27, sizeof(void*));
     int64_t v29; memcpy(&v29, v17, sizeof(int64_t));
-    int64_t v30 = (int64_t)(((uint64_t)v29) * ((uint64_t)88));
+    int64_t v30 = (int64_t)(((uint64_t)v29) * ((uint64_t)96));
     void* v31 = (void*)((char*)v28 + (intptr_t)((int64_t)v30));
     _Alignas(8) unsigned char __slot32[8];
     void* v32 = (void*)__slot32;
     { void* __sv = ((void*)v31); memcpy(v32, &__sv, sizeof(void*)); }
     void* v33; memcpy(&v33, v32, sizeof(void*));
     void* v34 = (void*)((char*)v33 + (intptr_t)((int64_t)8));
-    memcpy(v34, v2, (size_t)((uint64_t)72));
+    memcpy(v34, v2, (size_t)((uint64_t)80));
     int32_t v35; memcpy(&v35, v7, sizeof(int32_t));
     core__deinit__release__u32__ret_void(v35, v4, ((void*)0));
     return;
@@ -620367,7 +621006,7 @@ for_body67:;
     void* v73 = (void*)((char*)v72 + (intptr_t)((int64_t)0));
     void* v74; memcpy(&v74, v73, sizeof(void*));
     int64_t v75; memcpy(&v75, v71, sizeof(int64_t));
-    int64_t v76 = (int64_t)(((uint64_t)v75) * ((uint64_t)88));
+    int64_t v76 = (int64_t)(((uint64_t)v75) * ((uint64_t)96));
     void* v77 = (void*)((char*)v74 + (intptr_t)((int64_t)v76));
     void* v78 = (void*)((char*)v77 + (intptr_t)((int64_t)0));
     int64_t v79; memcpy(&v79, v78, sizeof(int64_t));
@@ -620409,14 +621048,14 @@ then83:;
     void* v88 = (void*)__slot88;
     { void* __sv = ((void*)v87); memcpy(v88, &__sv, sizeof(void*)); }
     void* v89; memcpy(&v89, v88, sizeof(void*));
-    void* v90 = (void*)((char*)v89 + (intptr_t)((int64_t)80));
+    void* v90 = (void*)((char*)v89 + (intptr_t)((int64_t)88));
     void* v91; memcpy(&v91, v4, sizeof(void*));
     void* v92 = (void*)((char*)v91 + (intptr_t)((int64_t)0));
     void* v93; memcpy(&v93, v92, sizeof(void*));
     int64_t v94; memcpy(&v94, v71, sizeof(int64_t));
-    int64_t v95 = (int64_t)(((uint64_t)v94) * ((uint64_t)88));
+    int64_t v95 = (int64_t)(((uint64_t)v94) * ((uint64_t)96));
     void* v96 = (void*)((char*)v93 + (intptr_t)((int64_t)v95));
-    void* v97 = (void*)((char*)v96 + (intptr_t)((int64_t)80));
+    void* v97 = (void*)((char*)v96 + (intptr_t)((int64_t)88));
     int32_t v98; memcpy(&v98, v97, sizeof(int32_t));
     { int32_t __sv = ((int32_t)v98); memcpy(v90, &__sv, sizeof(int32_t)); }
     void* v99; memcpy(&v99, v88, sizeof(void*));
@@ -620425,10 +621064,10 @@ then83:;
     void* v102 = (void*)((char*)v101 + (intptr_t)((int64_t)0));
     void* v103; memcpy(&v103, v102, sizeof(void*));
     int64_t v104; memcpy(&v104, v71, sizeof(int64_t));
-    int64_t v105 = (int64_t)(((uint64_t)v104) * ((uint64_t)88));
+    int64_t v105 = (int64_t)(((uint64_t)v104) * ((uint64_t)96));
     void* v106 = (void*)((char*)v103 + (intptr_t)((int64_t)v105));
     void* v107 = (void*)((char*)v106 + (intptr_t)((int64_t)8));
-    memcpy(v100, v107, (size_t)((uint64_t)72));
+    memcpy(v100, v107, (size_t)((uint64_t)80));
     goto join85;
 
 else84:;
@@ -620467,7 +621106,7 @@ static void std__collections__dict__alloc_0table__ref_std__collections__dict__Un
     void* v7 = (void*)__slot7;
     { void* __sv = ((void*)v2); memcpy(v7, &__sv, sizeof(void*)); }
     int64_t v8; memcpy(&v8, v6, sizeof(int64_t));
-    int64_t v9 = (int64_t)(((uint64_t)v8) * ((uint64_t)88));
+    int64_t v9 = (int64_t)(((uint64_t)v8) * ((uint64_t)96));
     _Alignas(8) unsigned char __slot10[8];
     void* v10 = (void*)__slot10;
     { int64_t __sv = ((int64_t)v9); memcpy(v10, &__sv, sizeof(int64_t)); }
@@ -620538,7 +621177,7 @@ for_body11:;
     void* v22 = (void*)((char*)v21 + (intptr_t)((int64_t)24));
     int64_t v23; memcpy(&v23, v22, sizeof(int64_t));
     int64_t v24 = std__collections__dict__probe_0slot__usize__usize__usize__r_usize(v19, v20, v23, v2, ((void*)0));
-    int64_t v25 = (int64_t)(((uint64_t)v24) * ((uint64_t)88));
+    int64_t v25 = (int64_t)(((uint64_t)v24) * ((uint64_t)96));
     void* v26 = (void*)((char*)v18 + (intptr_t)((int64_t)v25));
     _Alignas(8) unsigned char __slot27[8];
     void* v27 = (void*)__slot27;
@@ -620678,12 +621317,12 @@ static void* std__collections__dict__place__ref_std__collections__dict__Unmanage
     void* v12 = (void*)__slot12;
     { void* __sv = ((void*)v11); memcpy(v12, &__sv, sizeof(void*)); }
     void* v13; memcpy(&v13, v12, sizeof(void*));
-    void* v14 = (void*)((char*)v13 + (intptr_t)((int64_t)80));
+    void* v14 = (void*)((char*)v13 + (intptr_t)((int64_t)88));
     int32_t v15; memcpy(&v15, v8, sizeof(int32_t));
     { int32_t __sv = ((int32_t)v15); memcpy(v14, &__sv, sizeof(int32_t)); }
     void* v16; memcpy(&v16, v12, sizeof(void*));
     void* v17 = (void*)((char*)v16 + (intptr_t)((int64_t)8));
-    memcpy(v17, v3, (size_t)((uint64_t)72));
+    memcpy(v17, v3, (size_t)((uint64_t)80));
     void* v18; memcpy(&v18, v12, sizeof(void*));
     return v18;
 }
@@ -628114,7 +628753,7 @@ for_body14:;
     void* v22 = (void*)((char*)v21 + (intptr_t)((int64_t)0));
     void* v23; memcpy(&v23, v22, sizeof(void*));
     int64_t v24; memcpy(&v24, v18, sizeof(int64_t));
-    int64_t v25 = (int64_t)(((uint64_t)v24) * ((uint64_t)88));
+    int64_t v25 = (int64_t)(((uint64_t)v24) * ((uint64_t)96));
     void* v26 = (void*)((char*)v23 + (intptr_t)((int64_t)v25));
     _Alignas(8) unsigned char __slot27[8];
     void* v27 = (void*)__slot27;
@@ -637422,7 +638061,7 @@ else10:;
 join11:;
     void* v13; memcpy(&v13, v6, sizeof(void*));
     int64_t v14; memcpy(&v14, v5, sizeof(int64_t));
-    int64_t v15 = (int64_t)(((uint64_t)v14) * ((uint64_t)136));
+    int64_t v15 = (int64_t)(((uint64_t)v14) * ((uint64_t)144));
     _Alignas(8) unsigned char __slot16[24];
     void* v16 = (void*)__slot16;
     std__allocator__alloc__ref_std__allocator__Allocator__usize__usize__r_core__option__Option_core__slice__Slice_u8(v13, v15, ((int64_t)8), v16, v3, ((void*)0));
@@ -638782,7 +639421,7 @@ join14:;
     void* v19; memcpy(&v19, v3, sizeof(void*));
     void* v20 = (void*)((char*)v19 + (intptr_t)((int64_t)16));
     int64_t v21; memcpy(&v21, v20, sizeof(int64_t));
-    int64_t v22 = (int64_t)(((uint64_t)v21) * ((uint64_t)136));
+    int64_t v22 = (int64_t)(((uint64_t)v21) * ((uint64_t)144));
     void* v23 = (void*)((char*)v18 + (intptr_t)((int64_t)v22));
     _Alignas(8) unsigned char __slot24[8];
     void* v24 = (void*)__slot24;
@@ -642303,9 +642942,9 @@ static void std__collections__list__push__ref_std__collections__list__UnmanagedL
     void* v24 = (void*)((char*)v23 + (intptr_t)((int64_t)8));
     int64_t v25; memcpy(&v25, v24, sizeof(int64_t));
     int64_t v26 = (int64_t)(((uint64_t)v25) - ((uint64_t)1));
-    int64_t v27 = (int64_t)(((uint64_t)v26) * ((uint64_t)136));
+    int64_t v27 = (int64_t)(((uint64_t)v26) * ((uint64_t)144));
     void* v28 = (void*)((char*)v22 + (intptr_t)((int64_t)v27));
-    memcpy(v28, v1, (size_t)((uint64_t)136));
+    memcpy(v28, v1, (size_t)((uint64_t)144));
     return;
 }
 
@@ -642340,7 +642979,7 @@ else14:;
 join15:;
     _Alignas(8) unsigned char __slot16[8];
     void* v16 = (void*)__slot16;
-    { int64_t __sv = ((int64_t)136); memcpy(v16, &__sv, sizeof(int64_t)); }
+    { int64_t __sv = ((int64_t)144); memcpy(v16, &__sv, sizeof(int64_t)); }
     _Alignas(8) unsigned char __slot17[8];
     void* v17 = (void*)__slot17;
     { int64_t __sv = ((int64_t)8); memcpy(v17, &__sv, sizeof(int64_t)); }
@@ -642591,7 +643230,7 @@ join20:;
     void* v24; memcpy(&v24, v23, sizeof(void*));
     void* v25 = (void*)((char*)v0 + (intptr_t)((int64_t)8));
     int64_t v26; memcpy(&v26, v25, sizeof(int64_t));
-    int64_t v27 = (int64_t)(((uint64_t)v26) * ((uint64_t)136));
+    int64_t v27 = (int64_t)(((uint64_t)v26) * ((uint64_t)144));
     memmove(v22, v24, v27);
     return;
 }
@@ -643798,7 +644437,7 @@ static void std__option__unwrap__core__option__Option_flang_0typer__specializati
     }
 
 m_join4:;
-    memcpy(v1, v5, (size_t)((uint64_t)176));
+    memcpy(v1, v5, (size_t)((uint64_t)184));
     return;
 
 m_arm6:;
