@@ -751,14 +751,28 @@ pub type MatchArm = struct {
     body: &Expr
 }
 
-// `fn(params) ret? { body }` - anonymous function. May capture surrounding locals (RFC-014 Phase 2
-// by-value capture). Same shape as `FunctionDecl` minus name, directives, and visibility - none of
-// which apply to lambdas.
+// `fn(params) ret? { body }` or `{ params => body }` (RFC-039) - anonymous function. May capture
+// surrounding locals (RFC-014 Phase 2 by-value capture). Same shape as `FunctionDecl` minus name,
+// directives, and visibility - none of which apply to lambdas.
 pub type LambdaExpr = struct {
     span: SourceSpan
     params: FunctionParam[]
     return_type: &TypeExpr?
     body: &BlockExpr
+    // `{ body }` with no `=>`: `params` holds one unannotated `it`, spanning the `{`, which the
+    // expected callable's arity keeps (one) or drops (none).
+    arrowless: bool
+    // Written after the call's `)` or name; the last positional argument of its call.
+    trailing: bool
+}
+
+// The parameters the lambda takes when its call expects `arity`: an arrow-less lambda's `it` is
+// kept only at one.
+pub fn params_at(self: &LambdaExpr, arity: usize) FunctionParam[] {
+    if self.arrowless and arity == 0 {
+        return self.params[0..0]
+    }
+    return self.params
 }
 
 // Bare `context`: a copy of the current context, of type `Context`.

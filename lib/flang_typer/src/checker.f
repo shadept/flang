@@ -674,6 +674,8 @@ pub fn deinit(self: move ModuleBodyCache) {
 // list buffer lives in the module arena.
 type DeclParams = struct {
     params: List(FunctionParam)
+    // The parameter a trailing lambda fills (RFC-039), when the function has one.
+    trailing_slot: usize?
 }
 
 pub fn deinit(self: move DeclParams) {
@@ -1524,7 +1526,7 @@ fn resolve_generic_bind(self: &Checker, g: &GenericBindType) Ty {
     if existing.is_some() {
         return self.engine.specialize(&existing.unwrap().scheme)
     }
-    refuse_self_name(self, g.name, g.span)
+    check_type_name(self, g.name, g.span)
     let fresh = self.engine.fresh_var()
     let vid = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
     self.sig_tps.push(SigTypeParam { name = g.name, ty = fresh, decl = self.node_of(g.span) })
@@ -1857,7 +1859,7 @@ pub fn resolve_nominal_bodies(self: &Checker, module: &Module, module_path: Stri
 fn collect_one_name(self: &Checker, decl: &Decl, module_path: String) {
     decl.* match {
         Type(td) => {
-            refuse_self_name(self, td.name, td.span)
+            check_type_name(self, td.name, td.span)
             let fqn_owned = $"{module_path}.{td.name}"
             if self.nominals.contains(fqn_owned.view) or self.aliases.contains(fqn_owned.view) {
                 push_diag_e(
@@ -2030,7 +2032,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let type_params: List(VarId) = list(anon.generics.len)
     let self_args: List(Ty) = list(anon.generics.len)
     for &gp in anon.generics {
-        refuse_self_name(self, gp.name, gp.span)
+        check_type_name(self, gp.name, gp.span)
         let fresh = self.engine.fresh_var()
         let id = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
         type_params.push(id)
@@ -2337,7 +2339,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let type_params: List(VarId) = list(anon.generics.len)
     let self_args: List(Ty) = list(anon.generics.len)
     for &gp in anon.generics {
-        refuse_self_name(self, gp.name, gp.span)
+        check_type_name(self, gp.name, gp.span)
         let fresh = self.engine.fresh_var()
         let vid = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
         type_params.push(vid)
@@ -2570,6 +2572,7 @@ fn register_context_field(self: &Checker, cd: &ContextDecl) {
 }
 
 fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
+    check_function_name(self, fd)
     self.sig_tps.clear()
     self.sig_implied.clear()
     self.sig_declared.clear()
@@ -2620,6 +2623,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     implied.push_all(atoms.as_slice())
     atoms.deinit()
     atoms = move implied
+    const trailing = trailing_slot(self, fd, &params, &atoms)
     let fn_ty = self.engine.mk_func(params, ret, moves)
 
     self.engine.exit_level()
@@ -2675,7 +2679,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     // ones.
     let decl_params: List(FunctionParam) = list(fd.params.len)
     decl_params.push_all(fd.params)
-    self.fn_decl_params.set(id, DeclParams { params = move decl_params })
+    self.fn_decl_params.set(id, DeclParams { params = move decl_params, trailing_slot = trailing })
     deprecation_of(fd.directives) match {
         Some(msg) => self.fn_deprecations.set(id, msg)
         None => {}
@@ -2709,6 +2713,114 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
             },
         )
     }
+}
+
+// The parameter a trailing lambda fills (RFC-039): the last one typed by a function type or by a
+// type parameter bounded by one, with every parameter after it defaulted.
+fn trailing_slot(
+    self: &Checker,
+    fd: &FunctionDecl,
+    params: &List(Ty),
+    atoms: &List(BoundAtom),
+) usize? {
+    let i = params.len
+    while i > 0 {
+        i = i - 1
+        if is_callable_param(self, params[i], atoms) {
+            return Some(i)
+        }
+        if fd.params[i].default_value.is_none() {
+            return null
+        }
+    }
+    return null
+}
+
+fn is_callable_param(self: &Checker, t: Ty, atoms: &List(BoundAtom)) bool {
+    const r = self.engine.resolve(t)
+    ty_node(self, r) match {
+        NFunc(_) => return true
+        _ => {}
+    }
+    if !self.engine.is_var(r) {
+        return false
+    }
+    for &a in atoms {
+        const is_callable = a.kind match {
+            Callable => true
+            _ => false
+        }
+        if is_callable and self.engine.resolve(a.subject) == r {
+            return true
+        }
+    }
+    return false
+}
+
+fn any_trailing_slot(self: &Checker, candidates: &List(&FunctionScheme)) bool {
+    for c in candidates {
+        const dp = self.fn_decl_params.get_ref(c.id)
+        if dp.is_some() and dp.unwrap().trailing_slot.is_some() {
+            return true
+        }
+    }
+    return false
+}
+
+fn report_no_trailing_slot(self: &Checker, name: String, span: SourceSpan) Ty {
+    push_diag_e(
+        self,
+        span,
+        E_NO_TRAILING_SLOT,
+        $"`{name}` takes no trailing lambda: it needs a parameter of function type with only defaulted parameters after it",
+    )
+    return self.engine.fresh_var()
+}
+
+// Whether the call's last positional argument is a trailing lambda (RFC-039).
+fn ends_trailing(pos_exprs: &List(&Expr)) bool {
+    if pos_exprs.len == 0 {
+        return false
+    }
+    return pos_exprs[pos_exprs.len - 1].* match {
+        Lambda(lam) => lam.trailing
+        _ => false
+    }
+}
+
+// The parameter argument `i` of `n_args` binds in function `id`: its own position, except a
+// trailing lambda, which takes the function's trailing slot. Null when there is none.
+fn arg_slot(self: &Checker, id: u32, i: usize, n_args: usize, trailing: bool) usize? {
+    if !trailing or i + 1 != n_args {
+        return Some(i)
+    }
+    const dp = self.fn_decl_params.get_ref(id)
+    if dp.is_none() {
+        return null
+    }
+    return dp.unwrap().trailing_slot
+}
+
+// Whether candidate `c` takes a trailing lambda as the last of `n_args`: it has a trailing slot at
+// or past that position, no variadic tail, and a default for every parameter neither the arguments
+// nor `named_slots` fill.
+fn takes_trailing(self: &Checker, c: &FunctionScheme, n_args: usize, named_slots: usize[]) bool {
+    const dp = self.fn_decl_params.get_ref(c.id)
+    if dp.is_none() or c.has_variadic or n_args == 0 {
+        return false
+    }
+    const slot = dp.unwrap().trailing_slot
+    if slot.is_none() or slot.unwrap() + 1 < n_args {
+        return false
+    }
+    const decl = &dp.unwrap().params
+    for pi in (n_args - 1)..decl.len {
+        const filled = pi == slot.unwrap() or named_slots.contains(pi)
+        if !filled and decl[pi].default_value.is_none() {
+            return false
+        }
+    }
+    return true
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -4006,8 +4118,9 @@ fn lower_scoped(
     }
 }
 
-// E2140: `Self` names the type being declared and cannot be declared itself.
-fn refuse_self_name(self: &Checker, name: String, span: SourceSpan) {
+// E2140: `Self` names the type being declared and cannot be declared itself. E2155: a type's name
+// starts uppercase (RFC-039).
+fn check_type_name(self: &Checker, name: String, span: SourceSpan) {
     if name == SELF_NAME {
         push_diag_e(
             self,
@@ -4016,6 +4129,30 @@ fn refuse_self_name(self: &Checker, name: String, span: SourceSpan) {
             from_view("`Self` is reserved and cannot be declared"),
         )
     }
+    if !starts_uppercase(name) {
+        push_diag_e(
+            self,
+            span,
+            E_NAME_CASE,
+            $"type name `{name}` must start with an uppercase letter",
+        )
+    }
+}
+
+// E2155: a function's name starts lowercase or `_` (RFC-039); a `#foreign` one keeps its C name.
+fn check_function_name(self: &Checker, fd: &FunctionDecl) {
+    if starts_uppercase(fd.name) and !is_foreign_directive(fd.directives) {
+        push_diag_e(
+            self,
+            fd.span,
+            E_NAME_CASE,
+            $"function name `{fd.name}` must start with a lowercase letter or `_`",
+        )
+    }
+}
+
+fn starts_uppercase(name: String) bool {
+    return name.len > 0 and name[0] >= 'A' and name[0] <= 'Z'
 }
 
 fn bind_type_name(self: &Checker, name: String, ty: Ty, span: SourceSpan) {
@@ -4446,7 +4583,7 @@ fn validate_contract_decl(self: &Checker, td: &TypeDecl) {
             let args: List(Ty) = list(c.generics.len)
             for i in 0..c.generics.len {
                 const g = &c.generics[i]
-                refuse_self_name(self, g.name, g.span)
+                check_type_name(self, g.name, g.span)
                 if g.bound.is_some() and names_later_param(c.generics, i) {
                     push_diag_e(
                         self,
@@ -8332,7 +8469,9 @@ fn captures_contain(fr: &LambdaFrame, name: String) bool {
     return false
 }
 
-fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
+// `arity` is the parameter count an arrow-less lambda takes from its call (RFC-039): its `it`
+// parameter is kept at one and dropped at zero. A lambda with `=>` ignores it.
+fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1) Ty {
     // Frame first, then the parameter scope: a binding at or above `boundary` is lambda-local,
     // anything below it is a capture.
     self.env.push_scope()
@@ -8349,7 +8488,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     // re-check - pins.
     let params: List(Ty) = list(lam.params.len)
     let moves = 0usize
-    for &p in lam.params {
+    for &p in lam.params_at(arity) {
         let unannotated = p.type_expr match { Error(_) => true, _ => false }
         let ty = if unannotated { self.engine.fresh_var() }
         else { resolve_type_expr(self, p.type_expr) }
@@ -9383,6 +9522,124 @@ fn arith_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
 }
 
 fn check_call(self: &Checker, call: &CallExpr, expected: Ty? = null) Ty {
+    let deferred: List(DeferredLambda) = list(0)
+    const ty = check_call_site(self, call, expected, &deferred)
+    for &d in deferred {
+        check_deferred_lambda(self, d, call.span)
+    }
+    deferred.deinit()
+    return ty
+}
+
+// An arrow-less lambda argument (RFC-039): its arity comes from the parameter it fills, so the call
+// resolves with `slot` standing in for its type and the body is checked after.
+type DeferredLambda = struct {
+    lam: &LambdaExpr
+    slot: Ty
+}
+
+// The argument's type, or a placeholder for an arrow-less lambda whose check waits for the call.
+fn check_arg(self: &Checker, e: &Expr, deferred: &List(DeferredLambda)) Ty {
+    e.* match {
+        Lambda(lam) => if lam.arrowless {
+            const slot = self.engine.fresh_var()
+            deferred.push(DeferredLambda { lam = &lam, slot = slot })
+            return slot
+        }
+        _ => {}
+    }
+    return check_expr(self, e)
+}
+
+fn check_deferred_lambda(self: &Checker, d: &DeferredLambda, call_span: SourceSpan) {
+    const arity = slot_arity(self, d.slot, call_span)
+    if arity.is_none() or arity.unwrap() > 1 {
+        push_diag_e(
+            self,
+            d.lam.span,
+            E_ARROWLESS_ARITY,
+            from_view(
+                "a lambda without `=>` takes no parameter or one named `it`; name the parameters: `{ a, b => ... }`",
+            ),
+        )
+    }
+    const t = check_lambda(self, d.lam, arity ?? 1)
+    if closure_of(self, self.engine.resolve(t)).is_some() and slot_is_fn(self, d.slot) {
+        push_diag_e(
+            self,
+            d.lam.span,
+            E_CLOSURE_TO_FN,
+            from_view(
+                "a capturing closure cannot coerce to a bare `fn` parameter (it has no environment slot); pass it through a generic `$F` parameter instead",
+            ),
+        )
+        return
+    }
+    unify_expected(self, t, d.slot, E_TYPE_MISMATCH, d.lam.span)
+}
+
+fn slot_is_fn(self: &Checker, slot: Ty) bool {
+    return ty_node(self, self.engine.resolve(slot)) match {
+        NFunc(_) => true
+        _ => false
+    }
+}
+
+// The parameter count of the callable a call expects in `slot`: a function type, or a type
+// parameter the picked overload bounds by one. Null when nothing says.
+fn slot_arity(self: &Checker, slot: Ty, call_span: SourceSpan) usize? {
+    const r = self.engine.resolve(slot)
+    ty_node(self, r) match {
+        NFunc(f) => return Some(f.params.len)
+        _ => {}
+    }
+    if !self.engine.is_var(r) {
+        return null
+    }
+    let i = self.pending_specs.len
+    while i > 0 {
+        i = i - 1
+        const p = &self.pending_specs[i]
+        const same_call = p.span.start == call_span.start and p.span.length == call_span.length
+            and p.span.file_id == call_span.file_id
+        if same_call {
+            return bound_arity(self, p, r)
+        }
+    }
+    return null
+}
+
+// The arity of the callable bound `p`'s function places on the variable `v`.
+fn bound_arity(self: &Checker, p: &PendingSpec, v: Ty) usize? {
+    const atoms = self.fn_bounds.get_ref(p.function_id)
+    if atoms.is_none() {
+        return null
+    }
+    for &a in atoms.unwrap() {
+        const is_callable = a.kind match {
+            Callable => true
+            _ => false
+        }
+        if !is_callable {
+            continue
+        }
+        if self.engine.resolve(atom_inst(self, a.subject, Some(&p.tp_binds))) != v {
+            continue
+        }
+        ty_node(self, self.engine.resolve(atom_inst(self, a.shape, Some(&p.tp_binds)))) match {
+            NFunc(f) => return Some(f.params.len)
+            _ => {}
+        }
+    }
+    return null
+}
+
+fn check_call_site(
+    self: &Checker,
+    call: &CallExpr,
+    expected: Ty?,
+    deferred: &List(DeferredLambda),
+) Ty {
     let pos_tys = list(call.args.len)
     let pos_exprs: List(&Expr) = list(call.args.len)
     // Filled as locals, then moved into the bundle: growing a list THROUGH a struct field of a
@@ -9393,11 +9650,11 @@ fn check_call(self: &Checker, call: &CallExpr, expected: Ty? = null) Ty {
     for &a in call.args {
         a.* match {
             Positional(e) => {
-                pos_tys.push(check_expr(self, e))
+                pos_tys.push(check_arg(self, e, deferred))
                 pos_exprs.push(e)
             }
             Named(n) => {
-                ntys.push(check_expr(self, n.value))
+                ntys.push(check_arg(self, n.value, deferred))
                 nnames.push(n.name)
                 nvalues.push(n.value)
             }
@@ -9585,11 +9842,16 @@ fn resolve_direct_call(
             Some(&ctx),
             Some(&spans),
             expected,
+            ends_trailing(pos_exprs),
         )
+        const no_slot = ends_trailing(pos_exprs) and !any_trailing_slot(self, &candidates)
         candidates.deinit()
         if pick.is_none() and self.overload_deferred {
             self.overload_deferred = false
             return Some(park_call(self, call, ide.name, arg_tys, pos_exprs, 0usize, null))
+        }
+        if pick.is_none() and no_slot {
+            return Some(report_no_trailing_slot(self, ide.name, call.span))
         }
         if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
             return Some(self.engine.fresh_var())
@@ -9706,11 +9968,16 @@ fn resolve_method_call(
         named,
         Some(&ctx),
         Some(&spans),
+        ends_trailing(pos_exprs),
     )
     if pick.is_some() {
         commit_deref_chain(self, &chain, pick_hops(&pick), call.span)
     }
+    const no_slot = ends_trailing(pos_exprs) and !any_trailing_slot(self, &candidates)
     candidates.deinit()
+    if pick.is_none() and no_slot {
+        return Some(report_no_trailing_slot(self, ma.member, call.span))
+    }
     if pick.is_none() and self.overload_deferred {
         self.overload_deferred = false
         let full: List(Ty) = list(arg_tys.len + 1)
@@ -9746,6 +10013,7 @@ fn receiver_overload(
     named: &NamedArgs? = null,
     peel: &PeelCtx? = null,
     arg_spans: &List(SourceSpan)? = null,
+    trailing: bool = false,
 ) OverloadPick? {
     let full = list(arg_tys.len + 1)
     full.push(recv)
@@ -9761,6 +10029,8 @@ fn receiver_overload(
         false,
         peel,
         arg_spans,
+        null,
+        trailing,
     )
     full.deinit()
     return pick
@@ -9946,7 +10216,7 @@ fn commit_pick(
             note_pending(self, span, false, &p)
             // The AST's argument order is the call's argument order except when names select
             // parameters or a variadic tail packs; those two record a complete list instead.
-            if named.is_some() or pick_is_variadic(self, &p) {
+            if named.is_some() or pick_is_variadic(self, &p) or ends_trailing(pos_exprs) {
                 materialize_arg_list(self, &p, pos_exprs, named, recv_extra, span)
             } else {
                 materialize_default_args(self, &p, n_args + recv_extra, span)
@@ -10105,6 +10375,8 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
                 true,
                 Some(&pctx),
                 Some(&pspans),
+                null,
+                ends_trailing(&pc.pos_exprs),
             )
             candidates.deinit()
             if pick.is_none() and self.overload_deferred {
@@ -10218,9 +10490,22 @@ fn materialize_arg_list(
     let n_named = named match { Some(n) => n.names.len, None => 0usize }
     let used_named = 0usize
     let next_pos = 0usize
+    // A trailing lambda fills its slot; the other positional arguments fill in order before it.
+    let n_pos = pos_exprs.len
+    let slot: usize? = null
+    if ends_trailing(pos_exprs) {
+        slot = dp.unwrap().trailing_slot
+    }
+    if slot.is_some() {
+        n_pos = n_pos - 1
+    }
     let ok = true
     for pi in recv_extra..decl_params.len {
         if !ok {
+            continue
+        }
+        if slot.is_some() and pi == slot.unwrap() {
+            exprs.push(pos_exprs[n_pos])
             continue
         }
         // The variadic tail swallows every remaining positional argument as one synthesized array
@@ -10252,7 +10537,7 @@ fn materialize_arg_list(
             used_named = used_named + 1
             continue
         }
-        if next_pos < pos_exprs.len {
+        if next_pos < n_pos {
             exprs.push(pos_exprs[next_pos])
             next_pos = next_pos + 1
             continue
@@ -10272,7 +10557,7 @@ fn materialize_arg_list(
     }
     self.default_depth = self.default_depth - 1
 
-    if ok and next_pos == pos_exprs.len and used_named == n_named {
+    if ok and next_pos == n_pos and used_named == n_named {
         self.results.record_arg_list(self.node_of(span), exprs)
     } else {
         exprs.deinit()
@@ -10777,6 +11062,7 @@ fn resolve_overload(
     peel: &PeelCtx? = null,
     arg_spans: &List(SourceSpan)? = null,
     expected: Ty? = null,
+    trailing: bool = false,
 ) OverloadPick? {
     // The receiver shapes, tried in tiers across all candidates (spec 7.2): as written (`arg_tys`
     // itself); when no candidate accepts that, `alt_recv` - the UFCS receiver adapted value <-> &T;
@@ -10801,7 +11087,7 @@ fn resolve_overload(
     // than the call reporting no overload at all. `.1` is the shape, as `CandProbe.used` counts it.
     let bound_refused: (usize, usize)? = null
     for c in candidates {
-        const probed = probe_candidate(self, c, arg_tys, named, ufcs_offset, peel, span)
+        const probed = probe_candidate(self, c, arg_tys, named, ufcs_offset, peel, span, trailing)
         if self.probe_bound_failed and bound_refused.is_none() {
             bound_refused = Some((st.len, 0usize))
         }
@@ -10822,6 +11108,7 @@ fn resolve_overload(
                 ufcs_offset,
                 peel,
                 span,
+                trailing,
             )
             if self.probe_bound_failed and bound_refused.is_none() {
                 bound_refused = Some((ci, 1usize))
@@ -10858,6 +11145,7 @@ fn resolve_overload(
                     ufcs_offset,
                     peel,
                     span,
+                    trailing,
                 )
                 if self.probe_bound_failed and bound_refused.is_none() {
                     bound_refused = Some((ci, ai + 1))
@@ -10993,10 +11281,10 @@ fn resolve_overload(
     for i in 0..checked {
         // Commit with the receiver shape the winner actually matched.
         let arg = if i == 0 and best_used > 0 { alts[best_used - 1].ty } else { arg_tys[i] }
-        const o = self.engine.unify(arg, fparams[i])
+        const param = fparams[arg_slot(self, w.id, i, arg_tys.len, trailing).unwrap()]
+        const o = self.engine.unify(arg, param)
         const fitted = o match { Unified(_) => true, _ => false }
-        if fitted
-            or !commit_arg_peel(self, arg, fparams[i], i, ufcs_offset, span, arg_spans, peel) {
+        if fitted or !commit_arg_peel(self, arg, param, i, ufcs_offset, span, arg_spans, peel) {
             report_unify(self, &o, E_TYPE_MISMATCH, span)
         }
     }
@@ -11381,6 +11669,7 @@ fn probe_candidate(
     ufcs_offset: usize = 0usize,
     peel: &PeelCtx? = null,
     span: SourceSpan = none_span(),
+    trailing: bool = false,
 ) ProbeCost? {
     self.probe_bound_failed = false
     // A bounded candidate keeps its instantiation, to test its bounds against what the arguments
@@ -11409,7 +11698,12 @@ fn probe_candidate(
         }
     }
     let supplied = arg_tys.len + n_named
-    if !arity_accepts(c, n_params, supplied) {
+    let no_slots: usize[]
+    const named_slots = if slots.is_some() { slots.unwrap_ref().as_slice() } else { no_slots }
+    const fits = if trailing { takes_trailing(self, c, arg_tys.len, named_slots) } else {
+        arity_accepts(c, n_params, supplied)
+    }
+    if !fits {
         if slots.is_some() {
             let dead = slots.unwrap()
             dead.deinit()
@@ -11432,12 +11726,13 @@ fn probe_candidate(
         // The literal candidate-set constraint: a bare `10`'s open var would unify with ANY param -
         // `String` included, and declaration order would commit it. A pending numeric literal may
         // only meet a primitive, an open var (generics), or Option (wrap coercion).
+        const pi = arg_slot(self, c.id, i, arg_tys.len, trailing).unwrap()
         if is_literal_var(self, arg_tys[i])
-            and !literal_can_take(self, self.engine.interner.child_at(f.params, i)) {
+            and !literal_can_take(self, self.engine.interner.child_at(f.params, pi)) {
             ok = false
         }
         if ok {
-            const param = self.engine.interner.child_at(f.params, i)
+            const param = self.engine.interner.child_at(f.params, pi)
             self.engine.unify(arg_tys[i], param) match {
                 Unified(u) => cost = cost + u.cost
                 // The argument does not fit as written: RFC-020 retries it through `op_deref`.
@@ -12882,7 +13177,7 @@ fn own_lambda(self: &Checker, p: &OwnPass, lam: &LambdaExpr) {
     }
     let lent: List(NodeId) = list(captures.len)
     let captured: List(NodeId) = list(captures.len)
-    own_collect_lent(self, &lent, lam.params)
+    own_collect_lent(self, &lent, lam.params_at(info.unwrap().params.len))
     for &cap in captures {
         if own_is_lent(p, cap.decl) {
             lent.push(cap.decl)
@@ -13957,7 +14252,7 @@ fn own_call(self: &Checker, p: &OwnPass, c: &CallExpr) {
     for &arg in c.args {
         arg.* match {
             Positional(e) => {
-                own_arg(self, p, &callee, e, i, "", &uses)
+                own_arg(self, p, &callee, e, own_slot(&callee, e, i), "", &uses)
                 i = i + 1
             }
             Named(n) => own_arg(self, p, &callee, n.value, 0usize, n.name, &uses)
@@ -13971,6 +14266,19 @@ fn own_call(self: &Checker, p: &OwnPass, c: &CallExpr) {
     if self.rigid_mode and unresolved {
         own_mark_uncertain(self, p, c)
     }
+}
+
+// The parameter a positional argument at `i` fills: its position, or the callee's trailing slot for
+// a trailing lambda (RFC-039).
+fn own_slot(callee: &OwnCallee, e: &Expr, i: usize) usize {
+    const trailing = e.* match {
+        Lambda(lam) => lam.trailing
+        _ => false
+    }
+    if !trailing or callee.decl.is_none() {
+        return i
+    }
+    return callee.decl.unwrap().trailing_slot ?? i
 }
 
 fn own_mark_uncertain(self: &Checker, p: &OwnPass, c: &CallExpr) {

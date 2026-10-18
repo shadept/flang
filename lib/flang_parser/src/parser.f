@@ -1071,7 +1071,11 @@ fn parse_statement(self: &Parser) CstNodeId {
         Loop => self.parse_loop_expr()
         While => self.parse_while_loop()
         If => self.parse_if_expr()
-        OpenBrace => self.parse_block_expr()
+        OpenBrace => if self.at_lambda_brace() {
+            self.parse_expression_stmt()
+        } else {
+            self.parse_block_expr()
+        }
         // `#if cond { ... } else { ... }` directive-driven branch; any other directive is
         // free-floating - a directive node, and parsing continues.
         Hash => if self.peek_kind(1) == TokenKind.If {
@@ -1398,7 +1402,11 @@ fn parse_arm_body(self: &Parser) CstNodeId {
         Return => self.parse_return_stmt()
         Break => self.parse_single_keyword_stmt(NodeKind.BreakStmt)
         Continue => self.parse_single_keyword_stmt(NodeKind.ContinueStmt)
-        OpenBrace => self.parse_block_expr()
+        OpenBrace => if self.at_lambda_brace() {
+            self.parse_expression()
+        } else {
+            self.parse_block_expr()
+        }
         _ => self.parse_expression()
     }
 }
@@ -1588,11 +1596,17 @@ fn parse_member_or_call_or_deref(self: &Parser, recv: CstNodeId) CstNodeId {
         Identifier => {
             let b = self.open_around(NodeKind.MemberAccessExpr, recv)
             self.eat_into(&b) // `.`
+            const name = self.current().text
             self.eat_into(&b) // identifier
             if self.current_kind() == TokenKind.OpenParenthesis {
                 // Promote to UFCS call.
                 b.kind = NodeKind.CallExpr
                 self.parse_call_args_into(&b)
+            }
+            if !starts_uppercase(name) and self.at_trailing_lambda() {
+                b.kind = NodeKind.CallExpr
+                const lam = self.parse_brace_lambda()
+                self.push_node_into(&b, lam)
             }
             self.finish(b)
         }
@@ -1631,16 +1645,24 @@ fn eat_list_comma(self: &Parser, b: &NodeBuilder, closer: TokenKind) bool {
     return k == closer
 }
 
-// `name = value` becomes a NamedArgumentExpr; otherwise just an expression.
+// `name = value` becomes a NamedArgumentExpr; otherwise just an expression. In argument position a
+// `{` always opens a lambda (RFC-039).
 fn parse_call_arg(self: &Parser) CstNodeId {
     if self.current_kind() == TokenKind.Identifier and self.peek_kind(1) == TokenKind.Equals
         and self.peek_kind(2) != TokenKind.Equals {
         let b = self.open(NodeKind.NamedArgumentExpr)
         self.eat_into(&b) // name
         self.eat_into(&b) // `=`
-        const value = self.parse_expression()
+        const value = self.parse_arg_value()
         self.push_node_into(&b, value)
         return self.finish(b)
+    }
+    return self.parse_arg_value()
+}
+
+fn parse_arg_value(self: &Parser) CstNodeId {
+    if self.current_kind() == TokenKind.OpenBrace {
+        return self.parse_brace_lambda()
     }
     return self.parse_expression()
 }
@@ -1657,7 +1679,9 @@ fn parse_primary_expression(self: &Parser) CstNodeId {
         Identifier => self.parse_identifier_primary()
         OpenParenthesis => self.parse_paren_expression()
         OpenBracket => self.parse_array_literal()
-        OpenBrace => if self.stop_at_brace {
+        OpenBrace => if self.at_lambda_brace() and !self.stop_at_brace {
+            self.parse_brace_lambda()
+        } else if self.stop_at_brace {
             self.error_token_node(
                 "E1001",
                 $"unexpected `{{` (block here would shadow control-flow body)",
@@ -1721,28 +1745,64 @@ fn error_token_node(self: &Parser, code: String, message: move OwnedString) CstN
 
 // Identifier-starting primaries: bare name, function call, generic call, nominal struct
 // construction (`Type { x = 1 }`), or generic struct construction (`Type(T) { x = 1 }`).
+//
+// A `{` after the name or its `(args)` is construction when the name starts uppercase, and a
+// trailing lambda (RFC-039) when it starts lowercase and the `{` sits on the same line.
 fn parse_identifier_primary(self: &Parser) CstNodeId {
     let b = self.open(NodeKind.IdentifierExpr)
+    const name = self.current().text
+    const is_type = starts_uppercase(name) or is_primitive_name(name)
     self.eat_into(&b) // identifier
 
-    if self.current_kind() == TokenKind.OpenBrace and !self.stop_at_brace {
-        // `Type { ... }` struct construction.
+    if self.current_kind() == TokenKind.OpenParenthesis {
+        b.kind = NodeKind.CallExpr
+        self.parse_call_args_into(&b)
+    }
+    const brace_opens = self.current_kind() == TokenKind.OpenBrace and !self.stop_at_brace
+    if brace_opens and is_type {
+        // `Type { ... }` / `Type(T) { ... }` construction; a generic one's first children are the
+        // type name and its arguments.
         b.kind = NodeKind.StructConstructionExpr
         self.parse_struct_construction_body(&b)
         return self.finish(b)
     }
-    if self.current_kind() == TokenKind.OpenParenthesis {
+    if !is_type and self.at_trailing_lambda() {
         b.kind = NodeKind.CallExpr
-        self.parse_call_args_into(&b)
-        if self.current_kind() == TokenKind.OpenBrace and !self.stop_at_brace {
-            // Generic struct construction: rewrite as StructConstructionExpr (its first children
-            // are the type name and its generic args).
-            b.kind = NodeKind.StructConstructionExpr
-            self.parse_struct_construction_body(&b)
-        }
-        return self.finish(b)
+        const lam = self.parse_brace_lambda()
+        self.push_node_into(&b, lam)
     }
     return self.finish(b)
+}
+
+// The case rule (RFC-039): a type's name starts uppercase, a function's lowercase or `_`.
+fn starts_uppercase(name: String) bool {
+    return name.len > 0 and name[0] >= 'A' and name[0] <= 'Z'
+}
+
+// A `{` opening a trailing lambda: on the line of what it follows, outside a control-flow header.
+fn at_trailing_lambda(self: &Parser) bool {
+    if self.current_kind() != TokenKind.OpenBrace or self.stop_at_brace {
+        return false
+    }
+    return !self.at_line_start()
+}
+
+// Whether the `{` here opens a lambda outside argument and trailing position: the two tokens after
+// it are `=>`, `ident =>`, `ident ,` or `ident :`, none of which can start a block.
+fn at_lambda_brace(self: &Parser) bool {
+    if self.current_kind() != TokenKind.OpenBrace {
+        return false
+    }
+    if self.peek_kind(1) == TokenKind.FatArrow {
+        return true
+    }
+    if self.peek_kind(1) != TokenKind.Identifier {
+        return false
+    }
+    return self.peek_kind(2) match {
+        FatArrow | Comma | Colon => true
+        _ => false
+    }
 }
 
 fn parse_struct_construction_body(self: &Parser, b: &NodeBuilder) {
@@ -1875,6 +1935,61 @@ fn parse_lambda_expression(self: &Parser) CstNodeId {
         const body = self.parse_block_expr()
         self.push_node_into(&b, body)
     }
+    return self.finish(b)
+}
+
+// `{ params => body }` or the arrow-less `{ body }` (RFC-039). Parameters are `name` or `name:
+// [move] Type`, comma-separated. The body is a `BlockExpr` without an opening brace that takes the
+// lambda's closing `}`.
+fn parse_brace_lambda(self: &Parser) CstNodeId {
+    let b = self.open(NodeKind.LambdaExpr)
+    const has_arrow = self.at_lambda_brace()
+    self.eat_into(&b) // `{`
+    if has_arrow {
+        self.parse_brace_lambda_params(&b)
+    }
+    const body = self.parse_lambda_body()
+    self.push_node_into(&b, body)
+    return self.finish(b)
+}
+
+fn parse_brace_lambda_params(self: &Parser, b: &NodeBuilder) {
+    loop {
+        self.current_kind() match {
+            Eof | FatArrow | CloseBrace => break
+            _ => {}
+        }
+        if self.current_kind() == TokenKind.Identifier {
+            self.eat_into(b)
+        } else {
+            self.record_expected(TokenKind.Identifier, "E1002")
+            self.eat_into(b)
+            continue
+        }
+        if self.current_kind() == TokenKind.Colon {
+            self.eat_into(b)
+            if self.current_kind() == TokenKind.Move {
+                self.eat_into(b)
+            }
+            const t = self.parse_type()
+            self.push_node_into(b, t)
+        }
+        if self.current_kind() == TokenKind.Comma {
+            self.eat_into(b)
+        }
+    }
+    self.expect_into(b, TokenKind.FatArrow, "E1002")
+}
+
+fn parse_lambda_body(self: &Parser) CstNodeId {
+    const saved_brace = self.suspend_brace_stop()
+    defer self.restore_brace_stop(saved_brace)
+    let b = self.open(NodeKind.BlockExpr)
+    while !self.at_eof() and self.current_kind() != TokenKind.CloseBrace {
+        const stmt = self.parse_statement()
+        self.push_node_into(&b, stmt)
+    }
+    self.expect_into(&b, TokenKind.CloseBrace, "E1002")
     return self.finish(b)
 }
 

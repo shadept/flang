@@ -31,6 +31,7 @@ import flang_core.diagnostic
 import flang_core.span
 
 import flang_parser.ast
+import flang_parser.token
 
 pub type ComptimeCtx = struct {
     os: String
@@ -904,13 +905,6 @@ fn type_params(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
         None => {}
     }
     return out
-}
-
-pub fn is_primitive_name(name: String) bool {
-    return name == "i8" or name == "i16" or name == "i32" or name == "i64" or name == "u8"
-        or name == "u16" or name == "u32" or name == "u64" or name == "isize" or name == "usize"
-        or name == "f32" or name == "f64" or name == "bool" or name == "char" or name == "void"
-        or name == "never"
 }
 
 // The spelled type, re-parseable as a type expression.

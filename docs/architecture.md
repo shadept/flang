@@ -156,6 +156,24 @@ touching a disk. The two functions that did read the world, `cwd` and
   `Expr`'s floor is now `InterpolatedStringExpr` (96) and `Stmt`'s is
   `IfDirectiveStmt` (96); both are `List`-shaped, so the next move on either is
   the list header, not another box.
+- **Brace lambdas (RFC-039).** The parser decides `{` with fixed lookahead:
+  in call-argument position it is always a lambda; after a lowercase name,
+  a call through one, or a `.name` member on the same line (and outside an
+  `if`/`while`/`for` header, `Parser.stop_at_brace`) it is a trailing lambda;
+  elsewhere it is a lambda only when `=>`, `ident =>`, `ident ,` or
+  `ident :` follows. An uppercase name or a primitive before `{` is
+  construction. In the CST a brace lambda is a `LambdaExpr` opening with `{`
+  whose body is a `BlockExpr` without its own opening brace that holds the
+  lambda's `}`, so the body's span (a node id) never equals its trailing
+  expression's. The projector appends a trailing lambda as the call's last
+  positional argument (`LambdaExpr.trailing`); overload resolution maps it
+  to each candidate's `DeclParams.trailing_slot` (its last callable
+  parameter with only defaulted ones after it), and the call records a
+  parameter-ordered argument list for lowering. An arrow-less lambda projects
+  with one `it` parameter spanning its `{`; the checker types it after the
+  call resolves (`DeferredLambda`), from the function type or `fn` bound of
+  the slot it fills, and `LambdaExpr.params_at` drops `it` at arity zero for
+  every pass after it.
 - **Child collections are `T[]` slices into the module arena.** The projector
   builds each list in the arena and freezes it (`frozen`), so a node holds no
   owning container and every AST type is copyable: the module, its chunk
@@ -700,8 +718,22 @@ Design:
       }))
 
   A brace body inside a flat group (a lambda argument) keeps the group flat
-  on its opening line: `g(fn() {`. With `join-lines` off, an authored break
+  on its opening line: `g({ x =>`. A brace lambda keeps `{ params =>` on its
+  opening line; a body the semicolon policy splits starts on the next line. With `join-lines` off, an authored break
   after an opener keeps its group broken.
+- **Lambda chains.** A call chain where a trailing lambda's `}` is followed
+  by another link, standing as a statement or as the value of a binding, an
+  assignment or a `return`, breaks before every `.call` from the first
+  lambda call on, one step deeper; the head before it (`xs.iter()`) stays
+  on the first line (`mark_chains` marks the dots once per file). A brace
+  body holding such a chain goes multiline. A chain inside call arguments is
+  left to the width rule. `xs.iter().map { it }` ends in its lambda and
+  stays on one line.
+
+      const d = xs.iter()
+          .filter { it > 0 }
+          .map { it * 2 }
+          .to_list()
 - **Signatures.** A `where` clause is a group the body's `{` closes, and a
   signature holding one is a group around both lists: an overflowing
   signature first moves `where` to a line of its own at the declaration's

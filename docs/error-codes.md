@@ -3047,6 +3047,9 @@ Report the issue with sample code that reproduces the error.
 | **E2151** | Type Checking     | A rebind naming one field twice              |
 | **E2152** | Name Resolution   | An ambiguous context field                   |
 | **E2153** | Type Checking     | A misplaced rebind base, or a `Context` literal |
+| **E2154** | Type Checking     | A lambda without `=>` where the expected callable takes more than one parameter, or none is known |
+| **E2155** | Semantic Analysis | A type named lowercase, or a function named uppercase |
+| **E2156** | Type Checking     | A trailing lambda on a call with no parameter it can fill |
 
 ### E2115: Unsupported Pattern Form
 
@@ -3910,6 +3913,83 @@ const c = Context {}                    // error[E2153]
 #### Solution
 
 Write `context(saved, level = 1) { run() }`; copy the current context with `let c = context`.
+
+---
+
+### E2154: Arrow-less Lambda Arity
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A lambda written without `=>` takes its parameters from the callable it is passed to: none, or one
+named `it` (RFC-039). It is an error when that callable takes more than one parameter, or when
+nothing says how many it takes (an unbounded generic parameter).
+
+#### Example
+
+```flang
+fn combine(a: i32, b: i32, f: fn(i32, i32) i32) i32 { return f(a, b) }
+
+combine(1, 2) { it }                    // error[E2154]
+```
+
+#### Solution
+
+Name the parameters: `combine(1, 2) { a, b => a + b }`; or bound the callee's parameter by a
+function type (`where F: fn(T) bool`).
+
+---
+
+### E2155: Name Case
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+Types (structs, enums, aliases, contracts) and type parameters start with an uppercase letter;
+functions start with a lowercase letter or `_` (RFC-039). The parser tells construction
+(`Point { x = 1 }`) from a trailing lambda (`spawn { work() }`) by that first letter. `#foreign`
+functions keep their C names.
+
+#### Example
+
+```flang
+type point = struct { x: i32 }          // error[E2155]
+fn Compute() i32 { return 1 }           // error[E2155]
+```
+
+#### Solution
+
+Rename: `type Point = ...`, `fn compute() ...`.
+
+---
+
+### E2156: No Parameter Takes the Trailing Lambda
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A trailing lambda fills the callee's last callable parameter (a `fn(...)` type, or a type
+parameter bounded by one), and every parameter after it must have a default (RFC-039). The
+callee has no such parameter: none is callable, or a required one follows the last callable one.
+
+#### Example
+
+```flang
+fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }
+
+apply(3) { x => x }                     // error[E2156]: `x` follows `f` without a default
+```
+
+#### Solution
+
+Pass the lambda inside the parentheses (`apply({ x => x }, 3)`), or move the callable parameter
+last.
 
 ---
 

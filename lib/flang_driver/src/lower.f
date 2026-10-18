@@ -1808,7 +1808,7 @@ fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
         is_pub = false,
         directives = empty_dirs,
         name = pl.info.symbol.view,
-        params = pl.lam.params,
+        params = pl.lam.params_at(pl.info.params.len),
         return_type = pl.lam.return_type,
         bounds = no_bounds,
         body = Some(pl.lam.body),

@@ -394,6 +394,10 @@ type Renderer = struct {
     breaks: &List(bool)
     // Per token index: where an overflow of the group opened there goes first.
     hugs: &List(Hug)
+    // Per token index: a `.` of a call chain the layout breaks before (`mark_chains`).
+    chain_dots: &List(bool)
+    // The current line opens with a chain's `.`: a brace on it indents from the line.
+    line_chain: bool
     // Groups this pass newly broke. A pass that breaks any is stale and reruns.
     new_breaks: usize
     // The pending line break is the layout's and is never joined.
@@ -437,8 +441,11 @@ fn render_module(cst: &CstNode, cfg: &FmtConfig, eol: String) OwnedString {
     defer breaks.deinit()
     let hugs: List(Hug) = filled_list(cst.cst.tokens.len, Hug.Nothing)
     defer hugs.deinit()
+    let chain_dots: List(bool) = filled_list(cst.cst.tokens.len, false)
+    defer chain_dots.deinit()
+    mark_chains(cst, NodeKind.Module, &cst.cst.tokens, &chain_dots)
     loop {
-        let pass = render_pass(cst, cfg, eol, &breaks, &hugs)
+        let pass = render_pass(cst, cfg, eol, &breaks, &hugs, &chain_dots)
         if pass.is_some() {
             return pass.unwrap()
         }
@@ -452,6 +459,7 @@ fn render_pass(
     eol: String,
     breaks: &List(bool),
     hugs: &List(Hug),
+    chain_dots: &List(bool),
 ) OwnedString? {
     let r = Renderer {
         out = string_builder(cst.end + 16),
@@ -468,6 +476,8 @@ fn render_pass(
         line_cand = null,
         breaks = breaks,
         hugs = hugs,
+        chain_dots = chain_dots,
+        line_chain = false,
         new_breaks = 0,
         force_break = false,
         gen_depth = 0,
@@ -494,6 +504,150 @@ fn render_pass(
         return null
     }
     return Some(r.out.to_string())
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Call chains
+//
+// A chain where a lambda's `}` is followed by another link lays out one call per line, Kotlin
+// style, when it is a whole statement or the value of a binding, an assignment or a `return`: the
+// head up to the first lambda call stays, and every `.call` from there on starts a line one step
+// deeper. A brace body holding one goes multiline.
+//
+//     const d = self.items.as_slice()
+//         .filter { it > 0 }
+//         .map { it * 2 }
+//         .to_list()
+// ─────────────────────────────────────────────────────────────────────────
+
+// Marks the `.` of every call link of each chain that breaks, for the chains directly under
+// `parent`.
+fn mark_chains(node: &CstNode, parent: NodeKind, tokens: &List(Token), dots: &List(bool)) {
+    if is_link(node) and holds_chain(parent) and continues_after_lambda(node) {
+        mark_links(node, tokens, dots)
+    }
+    for i in 0..node.child_count() {
+        node.child(i) match {
+            NodeChild(inner) => {
+                const receiver = i == 0 and is_link(node)
+                mark_chains(&inner, if receiver { NodeKind.Error } else { node.kind }, tokens, dots)
+            }
+            TokenChild(_) => {}
+        }
+    }
+}
+
+// Where a chain is a value of its own: a statement, a binding's initializer, an assignment's side,
+// a `return`.
+fn holds_chain(kind: NodeKind) bool {
+    return kind match {
+        ExpressionStmt | VariableDecl | AssignmentExpr | ReturnStmt => true
+        _ => false
+    }
+}
+
+// A `.name` link: a member access or method call whose receiver is its first child.
+fn is_link(node: &CstNode) bool {
+    const kind_fits = node.kind == NodeKind.CallExpr or node.kind == NodeKind.MemberAccessExpr
+    if !kind_fits or node.child_count() < 3 {
+        return false
+    }
+    const recv_first = node.child(0) match {
+        NodeChild(_) => true
+        TokenChild(_) => false
+    }
+    const dot_second = node.child(1) match {
+        TokenChild(t) => t.kind == TokenKind.Dot
+        NodeChild(_) => false
+    }
+    return recv_first and dot_second
+}
+
+// How many links down from `node` the chain's innermost lambda call sits.
+fn links_to_first_lambda(node: &CstNode) usize {
+    let first = 0usize
+    let depth = 0usize
+    let cur = node.*
+    while is_link(&cur) {
+        if takes_lambda(&cur) {
+            first = depth
+        }
+        depth = depth + 1
+        cur = cur.child(0) match {
+            NodeChild(inner) => inner
+            TokenChild(_) => break
+        }
+    }
+    return first
+}
+
+// Whether a chain inside `node` breaks: a marked `.` among its tokens.
+fn has_chain_dot(r: &Renderer, node: &CstNode) bool {
+    let i = token_index(r.tokens, node.start)
+    while i < r.tokens.len and r.tokens[i].offset < node.end {
+        if r.chain_dots[i] {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// Whether a link of the chain ending at `node` follows a trailing lambda's `}`: a link below the
+// outermost one ends in a brace lambda.
+fn continues_after_lambda(node: &CstNode) bool {
+    let cur = node.*
+    while is_link(&cur) {
+        cur = cur.child(0) match {
+            NodeChild(inner) => inner
+            TokenChild(_) => return false
+        }
+        if is_link(&cur) and ends_with_lambda(&cur) {
+            return true
+        }
+    }
+    return false
+}
+
+fn ends_with_lambda(link: &CstNode) bool {
+    return link.child(link.child_count() - 1) match {
+        NodeChild(n) => n.kind == NodeKind.LambdaExpr
+        TokenChild(_) => false
+    }
+}
+
+fn takes_lambda(link: &CstNode) bool {
+    for i in 1..link.child_count() {
+        const is_lambda = link.child(i) match {
+            NodeChild(n) => n.kind == NodeKind.LambdaExpr
+            TokenChild(_) => false
+        }
+        if is_lambda {
+            return true
+        }
+    }
+    return false
+}
+
+// The chain's head - its receiver and every link before the first lambda call - stays on one line;
+// each call from that first lambda call on starts a line.
+fn mark_links(node: &CstNode, tokens: &List(Token), dots: &List(bool)) {
+    const head = links_to_first_lambda(node)
+    let cur = node.*
+    let depth = 0usize
+    while is_link(&cur) and depth <= head {
+        depth = depth + 1
+        cur.child(1) match {
+            TokenChild(t) => if cur.kind == NodeKind.CallExpr {
+                dots[token_index(tokens, t.offset)] = true
+            }
+            NodeChild(_) => {}
+        }
+        cur = cur.child(0) match {
+            NodeChild(inner) => inner
+            TokenChild(_) => break
+        }
+    }
 }
 
 fn flush_line(r: &Renderer) {
@@ -568,6 +722,10 @@ fn render_node(r: &Renderer, node: &CstNode, parent: NodeKind) {
     }
     if node.kind == NodeKind.FunctionDecl {
         render_fn(r, node)
+        return
+    }
+    if node.kind == NodeKind.LambdaExpr and opens_with(node, TokenKind.OpenBrace) {
+        render_brace_lambda(r, node)
         return
     }
     if is_comma_list(node.kind) {
@@ -1068,6 +1226,7 @@ fn render_if(r: &Renderer, node: &CstNode, stmt_pos: bool) {
 // semicolons the config removes forces itself.
 fn render_block(r: &Renderer, node: &CstNode, force: bool) {
     let f = force or (r.cfg.remove_semicolons and block_has_semicolon(node))
+        or has_chain_dot(r, node)
     if element_count(node) == 0 {
         f = false
     }
@@ -1086,6 +1245,38 @@ fn render_block(r: &Renderer, node: &CstNode, force: bool) {
                 }
             }
         }
+    }
+}
+
+// `{ params => body }` (RFC-039): the body is a `BlockExpr` holding the closing `}`. A body the
+// semicolon policy splits starts on the line after the `{` or `=>`.
+fn render_brace_lambda(r: &Renderer, node: &CstNode) {
+    const last = node.child_count() - 1
+    const body = node.child(last) match {
+        NodeChild(n) => n
+        TokenChild(_) => {
+            render_children(r, node)
+            return
+        }
+    }
+    const splits = r.cfg.remove_semicolons and block_has_semicolon(&body)
+    const force = (splits or has_chain_dot(r, &body)) and element_count(&body) > 0
+    for i in 0..last {
+        render_child(r, node, i)
+    }
+    if force and r.pending_newlines == 0 {
+        r.pending_newlines = 1
+    }
+    render_block(r, &body, force)
+}
+
+fn opens_with(node: &CstNode, kind: TokenKind) bool {
+    if node.child_count() == 0 {
+        return false
+    }
+    return node.child(0) match {
+        TokenChild(t) => t.kind == kind
+        NodeChild(_) => false
     }
 }
 
@@ -1416,6 +1607,14 @@ fn render_token(r: &Renderer, tok: &Token, parent: NodeKind) {
     if tok.kind == TokenKind.Eof {
         return
     }
+    const breaks_chain = tok.kind == TokenKind.Dot
+        and r.chain_dots[token_index(r.tokens, tok.offset)]
+    if breaks_chain and r.started {
+        if r.pending_newlines == 0 {
+            r.pending_newlines = 1
+        }
+        r.force_break = true
+    }
 
     if r.pending_newlines > 0 and r.started and !joinable(r, tok.kind, parent) {
         emit_line_break(r, tok.kind)
@@ -1624,6 +1823,7 @@ fn emit_line_break(r: &Renderer, next: TokenKind) {
     const extra = continuation_extra(r, next)
     r.line_indent = line_base(r, next) + extra
     r.line_extra = extra
+    r.line_chain = next == TokenKind.Dot and extra > 0
     for n in 0..r.line_indent {
         r.line.append_byte(' ' as u8)
     }
@@ -1699,7 +1899,7 @@ fn open_ctx(r: &Renderer, kind: TokenKind) {
         return
     }
     if kind == TokenKind.OpenBrace {
-        const base = r.line_indent - r.line_extra
+        const base = if r.line_chain { r.line_indent } else { r.line_indent - r.line_extra }
         push_ctx(
             r,
             Ctx {
@@ -1783,8 +1983,8 @@ fn needs_space(r: &Renderer, cur: TokenKind, parent: NodeKind) bool {
         return cur != TokenKind.CloseBrace
     }
     if cur == TokenKind.OpenBrace {
-        // `.{ ... }` anonymous struct literals glue to the dot.
-        return prev != TokenKind.Dot
+        // `.{ ... }` anonymous struct literals glue to the dot, a lambda argument to its `(`.
+        return prev != TokenKind.Dot and prev != TokenKind.OpenParenthesis
     }
     if cur == TokenKind.CloseBrace {
         return true
@@ -2833,6 +3033,69 @@ test "expression ifs may stay single-line" {
     let out = r.unwrap()
     defer out.deinit()
     assert_true(out.view == src, "expr ifs untouched")
+}
+
+test "brace lambdas space their parts and split on semicolons" {
+    const cfg = default_config()
+    const src = "fn f() {
+    const a = xs.map {it*2}
+    s.sort({a,b=>b.cmp(a)})
+    xs.each { a(); b() }
+}
+"
+    const want = "fn f() {
+    const a = xs.map { it * 2 }
+    s.sort({ a, b => b.cmp(a) })
+    xs.each {
+        a()
+        b()
+    }
+}
+"
+    let out = format_source(src, &cfg).unwrap()
+    defer out.deinit()
+    assert_true(out.view == want, "brace lambdas normalized")
+}
+
+test "a link after a lambda breaks the chain before each call from the first lambda on" {
+    const cfg = default_config()
+    const src = "fn f() {
+    const a = xs.map { it * 2 }.unwrap()
+    const b = self.items.as_slice().filter { it > 0 }.map { x =>
+        x * 2
+    }.unwrap()
+    const c = xs.iter().filter { it > 0 }.map { it }.to_list()
+    const d = xs.iter().map { it }
+    g(xs.filter { it > 0 }.map { it })
+    xs.each { it.parts.filter { it > 0 }.map { it } }
+}
+"
+    const want = "fn f() {
+    const a = xs
+        .map { it * 2 }
+        .unwrap()
+    const b = self.items.as_slice()
+        .filter { it > 0 }
+        .map { x =>
+            x * 2
+        }
+        .unwrap()
+    const c = xs.iter()
+        .filter { it > 0 }
+        .map { it }
+        .to_list()
+    const d = xs.iter().map { it }
+    g(xs.filter { it > 0 }.map { it })
+    xs.each {
+        it.parts
+            .filter { it > 0 }
+            .map { it }
+    }
+}
+"
+    let out = format_source(src, &cfg).unwrap()
+    defer out.deinit()
+    assert_true(out.view == want, "chain broken before each call")
 }
 
 test "if-stmt keep preserves one-line guards" {

@@ -27,6 +27,7 @@ import flang_parser.lexer
 import flang_parser.parser
 import flang_parser.projector
 import flang_parser.template
+import flang_parser.token
 
 import flang_typer.checker
 import flang_typer.error_codes

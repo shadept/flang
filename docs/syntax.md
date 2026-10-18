@@ -20,6 +20,8 @@ listed here, it does not exist in FLang.
 | No `mut` keyword | `let` is already mutable | `let mut` |
 | No `impl` blocks | UFCS resolves methods from free functions | `impl Type { }` |
 | No traits | `#interface` / `#implement` source generators | `trait Foo { }` |
+| Lambdas | `{ x => x * 2 }`, `xs.map { it * 2 }`, `f(a) { p => ... }` (trailing) | `\|x\| x * 2`, `move \|x\|` |
+| Case is syntax | Types start uppercase, functions lowercase: `Point { x = 1 }` constructs, `spawn { ... }` passes a lambda | free naming |
 | Closures capture by reference | Every captured name is a reference to the enclosing binding (RFC-033); no capture-list syntax | `move` closures, capture lists |
 | No `elif`/`else if` | Chain `else if` (two keywords) | `elif` |
 | Associated types | `I.Item`, `Iterator(Item = i32)` | `I::Item`, `<I as Iterator>::Item`, `Iterator<Item = i32>` |
@@ -119,7 +121,7 @@ fn close(h: move File) {}                   // takes ownership: `h.close()` move
 
 **Foreign:** `#foreign fn malloc(size: usize) &u8?` — no body, C calling convention, not mangled.
 
-**Lambda:** `fn(x: i32, y: i32) i32 { x + y }` — no name after `fn`. Captures enclosing names by reference (RFC-033): the body reads and writes the enclosing bindings. Capturing lambdas synthesise an anonymous callable type and cannot decay into a bare `fn(...) Ret` slot — pass them through a generic parameter (`fn apply(f: $F, ...)`) instead. Parameter types inferred when context available.
+**Lambda:** `{ x, y => x + y }`, `{ p: &u8 => ... }`, `{ => work() }`, arrow-less `{ it * 2 }` (RFC-039). No return-type slot. In a call's parentheses a `{` always opens a lambda; elsewhere only when `=>`, `ident =>`, `ident ,` or `ident :` follows it. A trailing lambda follows a call's `)` or a lowercase name on the same line (`xs.fold(0i32) { a, b => a + b }`, `run { 7 }`) and fills the last callable parameter, every later one defaulted; in an `if`/`while`/`for` header parenthesize it. Captures enclosing names by reference (RFC-033): the body reads and writes the enclosing bindings. Capturing lambdas synthesise an anonymous callable type and cannot decay into a bare `fn(...) Ret` slot — pass them through a generic parameter (`fn apply(f: $F, ...)`) instead. Parameter types inferred when context available. The legacy `fn(x: i32) i32 { ... }` expression is still accepted until migration.
 
 ## Type Aliases
 

@@ -796,6 +796,14 @@ Two names are exempt and keep their source spelling, because something outside t
 
 **Overloading and separate compilation.** Property 2 rules out schemes that number overloads in declaration order. A counter makes a symbol depend on how many same-named functions were seen first, so inserting a declaration renames later ones and independent compilation units cannot agree without sharing the counter. Encoding the parameter types instead makes each symbol self-contained. The return type is encoded too, since overloads may differ in it alone.
 
+### 7.1.2 Name Case
+
+Case is part of the language (RFC-039): a trailing lambda and named construction differ only in the name before `{` (`Point { x = 1 }` constructs, `spawn { work() }` passes a lambda), and the parser decides by the name's first character.
+
+- A user-declared type (struct, enum, alias, contract) and a type parameter start with an uppercase letter.
+- A function starts with a lowercase letter or `_`. `#foreign` functions keep their C names.
+- A violation is E2155 at the declaration. Values are not constrained, and primitives (`i32`, `bool`, ...) count as type names.
+
 ### 7.2 UFCS
 
 Any function with first parameter `T`, `move T` or `&T` can be called as `value.func(args)`. The dot is sugar for two rewrites, tried in order: `x.f(y)` is `f(x, y)`, and when that does not resolve, `f(&x, y)`. This is how methods work — no `impl` blocks.
@@ -806,7 +814,39 @@ Any function with first parameter `T`, `move T` or `&T` can be called as `value.
 
 ### 7.3 Lambdas
 
-`fn(x: i32, y: i32) i32 { x + y }` — anonymous. A lambda with no captured names desugars to a synthesised module-level function (effectively a bare function pointer). A lambda that references names from the enclosing scope is a **capturing closure** (RFC-014): the compiler synthesises an anonymous `__Closure_N` struct holding a reference to each captured binding and an `op_call(self: &__Closure_N, ...)` body that reads and writes each capture through `self`.
+A lambda is a brace block with its parameters before `=>` (RFC-039):
+
+```flang
+{ x => x * 2 }               // one parameter
+{ acc, x => acc + x }        // several
+{ p: &u8 => ... }            // annotated: x: T, x: &T, x: move T, x: $T
+{ => count = count + 1 }     // no parameters
+{ it * 2 }                   // arrow-less
+```
+
+- Parameters take the forms function parameters take, without defaults or variadics.
+- The body is a block: statements, then an optional trailing expression that is its value. `return` returns from the lambda.
+- There is no return-type slot. The return type comes from the expected function type or bound, else from the body; where nothing pins it, annotate the binding (`const f: fn(i32) i32 = { x => x + 1 }`).
+
+**Where a brace is a lambda.** Inside a call's parentheses (positional or named argument) and in trailing position, `{` always opens a lambda. Elsewhere it opens a lambda when the next tokens are `=>`, `ident =>`, `ident ,` or `ident :`, none of which can start a block; otherwise it is a block. The two tokens after the brace decide, with no backtracking and no name lookup.
+
+**Trailing lambdas.** A `{` on the same line as a lowercase name, the `)` of a call through one, or a `.name` / `.name(args)` member opens a trailing lambda. It fills the callee's last callable parameter (a `fn(...)` type, or a type parameter bounded by one), and every parameter after that one must have a default; the parenthesized arguments fill the others as usual. A callee with no such parameter is E2156. The parentheses may be omitted when the lambda is the only argument:
+
+```flang
+spawn { work() }
+with_c_path(path) { p => ... }
+xs.map { it * 2 }
+xs.fold(0i32) { a, b => a + b }
+self.on_event { log(it) }        // a callable field
+```
+
+In an `if`, `while` or `for` header the `{` at the header's level opens the body, so a trailing lambda there is parenthesized: `if (xs.any { it > 0 }) { ... }`.
+
+**Arrow-less lambdas and `it`.** A lambda with no `=>` takes its arity from the callable expected where it is passed: a function type, or a type parameter the callee bounds by one. At arity one its parameter is named `it`; at arity zero it has none, and an outer `it` stays visible. An expected arity above one, or none at all, is E2154. `it` is not a keyword: it names the parameter only inside an arrow-less lambda, shadowing any outer `it`, and a nested arrow-less lambda's `it` shadows the enclosing one's. An arrow-less lambda appears only in argument or trailing position.
+
+The legacy form `fn(x: i32) i32 { x + y }` is still accepted until the compiler and stdlib migrate; it will then be an error pointing at the brace form.
+
+A lambda with no captured names desugars to a synthesised module-level function (effectively a bare function pointer). A lambda that references names from the enclosing scope is a **capturing closure** (RFC-014): the compiler synthesises an anonymous `__Closure_N` struct holding a reference to each captured binding and an `op_call(self: &__Closure_N, ...)` body that reads and writes each capture through `self`.
 
 **Capture rules** (RFC-033):
 - Every capture is by reference. The closure sees the binding's current value when it runs, and an assignment inside the body (`c = c + 1`, `xs.push(v)`, `&c`) writes the enclosing binding.
@@ -817,14 +857,14 @@ Any function with first parameter `T`, `move T` or `&T` can be called as `value.
 
 **Parameter type inference** mirrors anonymous-struct rules. Each unannotated parameter must have its type inferable from one of:
 - the corresponding parameter type at the call site (typed callback parameter, e.g. passing the lambda to `map(fn(T) U)`),
-- **a generic `$F` slot** — the lambda's fresh parameter/return vars are pinned by the *instantiation's* body re-check at the point the callable is invoked (`xs.filter(fn(x) { x > floor })` needs no annotations even though `filter` is duck-typed),
+- **a generic `$F` slot** — the lambda's fresh parameter/return vars are pinned by the *instantiation's* body re-check at the point the callable is invoked (`xs.filter { it > floor }` needs no annotations),
 - the return type of the enclosing function when the lambda is `return`ed,
-- an explicit `let x: fn(T) U = fn(p) { ... }` binding annotation,
-- explicit annotations on the lambda parameters (`fn(p: T) { ... }`).
+- an explicit `let x: fn(T) U = { p => ... }` binding annotation,
+- explicit annotations on the lambda parameters (`{ p: T => ... }`).
 
-A no-context lambda is an error — diagnostic recommends adding annotations to the parameters or the binding site. One inference-order consequence of the `$F` path: a value whose type is pinned *only* through the instantiation (e.g. `fold`'s seed when `f` is duck-typed) cannot resolve a bare numeric literal — write `xs.fold(0i32, fn(a, x) { a + x })`, not `fold(0, …)`.
+A no-context lambda is an error — diagnostic recommends adding annotations to the parameters or the binding site. One inference-order consequence of the `$F` path: a value whose type is pinned *only* through the instantiation (e.g. `fold`'s seed when `f` is duck-typed) cannot resolve a bare numeric literal — write `xs.fold(0i32) { a, x => a + x }`, not `fold(0) { ... }`.
 
-**Stdlib callback convention.** Standard-library combinators (`List`/`Dict`/`Set` utilities, the `std.iter` adapters and consumers, `sort`'s comparator) type their callbacks as generic parameters (`f: $F`), never as concrete `fn(...)` types: any callable fits — bare functions, non-capturing lambdas, and capturing closures — and monomorphization makes the dispatch direct. Where a combinator states the callback's shape it does so as a bound (§2.3.2), `where F: fn(T) bool`, which also types an unannotated lambda's parameters from the element type; `std.iter` and the sorts do (`sort(s) where T: Ordered`, `sort(s, cmp) where F: fn(T, T) Ord`, `sort_by(s, key) where F: fn(T) $K, K: Ordered`), the other container utilities do not yet. Callbacks **read** the element: combinators invoke `f(s[i])`, and a callback parameter `x: T` takes it in read mode (§3.2) for every element type, copyable or not, with no copy. A callback that takes ownership (`fn(v: move T)`) fits only where elements are handed over, as from a drain; passed where the element is lent, it is E2125. `sort`'s comparator reads too, for every element type: a `fn(&T, &T) Ord` comparator is refused, since a `&T` parameter may write (E2134).
+**Stdlib callback convention.** Standard-library combinators (`List`/`Dict`/`Set` utilities, the `std.iter` adapters and consumers, `sort`'s comparator) type their callbacks as generic parameters (`f: $F`), never as concrete `fn(...)` types: any callable fits — bare functions, non-capturing lambdas, and capturing closures — and monomorphization makes the dispatch direct. Where a combinator states the callback's shape it does so as a bound (§2.3.2), `where F: fn(T) bool`, which also types an unannotated lambda's parameters from the element type; every combinator does (`sort(s, cmp) where F: fn(T, T) Ord`, `sort_by(s, key) where F: fn(T) $K, K: Ordered`), which is also what gives an arrow-less lambda its arity. Callbacks **read** the element: combinators invoke `f(s[i])`, and a callback parameter `x: T` takes it in read mode (§3.2) for every element type, copyable or not, with no copy. A callback that takes ownership (`fn(v: move T)`) fits only where elements are handed over, as from a drain; passed where the element is lent, it is E2125. `sort`'s comparator reads too, for every element type: a `fn(&T, &T) Ord` comparator is refused, since a `&T` parameter may write (E2134).
 
 **Lazy-fallback convention.** A function whose parameter is a fallback - a value used only when the primary one is absent - comes in two forms under two names: the plain name takes the value, an `_else` suffix takes something that produces it.
 

@@ -1723,6 +1723,15 @@ fn project_call(self: &Projector, cst: CstNode) Expr {
             NodeChild(_) => {}
         }
     }
+    // A trailing lambda (RFC-039) is the last child, after the `)` or straight after the name.
+    let end_idx = cst.child_count()
+    const trailing = trailing_lambda_of(cst)
+    if trailing.is_some() {
+        end_idx = end_idx - 1
+        if paren_idx > end_idx {
+            paren_idx = end_idx
+        }
+    }
     let callee: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
     let have_callee = false
     let pending_dot = false
@@ -1778,7 +1787,7 @@ fn project_call(self: &Projector, cst: CstNode) Expr {
         }
     }
     // Walk args (everything after the `(`).
-    for i in (paren_idx + 1)..cst.child_count() {
+    for i in (paren_idx + 1)..end_idx {
         cst.child(i) match {
             NodeChild(child) => {
                 if child.kind == NodeKind.NamedArgumentExpr {
@@ -1791,11 +1800,31 @@ fn project_call(self: &Projector, cst: CstNode) Expr {
             TokenChild(_) => {}
         }
     }
+    if trailing.is_some() {
+        const lam = self.project_brace_lambda(trailing.unwrap(), true)
+        args.push(CallArgument.Positional(box(self.alloc, Expr.Lambda(lam))))
+    }
     return Expr.Call(CallExpr {
         span = self.span_from(cst),
         callee = box(self.alloc, callee),
         args = frozen(args),
     })
+}
+
+// The call's trailing lambda: a last child that is a brace lambda.
+fn trailing_lambda_of(cst: CstNode) CstNode? {
+    const n = cst.child_count()
+    if n == 0 {
+        return null
+    }
+    return cst.child(n - 1) match {
+        NodeChild(child) => if child.kind == NodeKind.LambdaExpr and is_brace_lambda(child) {
+            Some(child)
+        } else {
+            null
+        }
+        TokenChild(_) => null
+    }
 }
 
 // `context(args) { body }`: the argument nodes in order, then the body block.
@@ -2568,6 +2597,9 @@ fn project_match_arm(self: &Projector, cst: CstNode) MatchArm {
 }
 
 fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
+    if is_brace_lambda(cst) {
+        return self.project_brace_lambda(cst, false)
+    }
     let params: List(FunctionParam) = list(cst.node_child_count(), self.alloc)
     let return_type: TypeExpr? = null
     let body: BlockExpr = .{
@@ -2664,6 +2696,93 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
         params = frozen(params),
         return_type = self.boxed_opt(return_type),
         body = self.boxed(body),
+        arrowless = false,
+        trailing = false,
+    }
+}
+
+// `{ params => body }` / `{ body }`: the parameter run is a token sequence up to `=>`, each name
+// optionally followed by `:`, `move` and a type node.
+fn project_brace_lambda(self: &Projector, cst: CstNode, trailing: bool) LambdaExpr {
+    let params: List(FunctionParam) = list(cst.node_child_count(), self.alloc)
+    let body: BlockExpr = .{
+        span = self.span_from(cst),
+        stmts = frozen(list(0, self.alloc)),
+        trailing = null,
+    }
+    let pending_name: String = ""
+    let pending_span = self.span_from(cst)
+    let pending_active = false
+    let pending_move = false
+    let arrowless = true
+    for i in 0..cst.child_count() {
+        cst.child(i) match {
+            TokenChild(tok) => tok.kind match {
+                Identifier => {
+                    if pending_active {
+                        params.push(self.make_lambda_param(pending_name, pending_span))
+                    }
+                    pending_name = tok.text
+                    pending_span = self.span_from_token(tok)
+                    pending_active = true
+                    pending_move = false
+                }
+                Move => {
+                    pending_move = true
+                }
+                FatArrow => {
+                    arrowless = false
+                    if pending_active {
+                        params.push(self.make_lambda_param(pending_name, pending_span))
+                        pending_active = false
+                    }
+                }
+                _ => {}
+            }
+            NodeChild(child) => {
+                if child.kind == NodeKind.BlockExpr {
+                    body = self.project_block_node(child).unwrap_or(body)
+                    continue
+                }
+                if is_type_kind(child.kind) and pending_active {
+                    const t = self.project_type_expr(child)
+                    params.push(FunctionParam {
+                        span = pending_span,
+                        name = pending_name,
+                        type_expr = self.boxed(t),
+                        default_value = null,
+                        is_variadic = false,
+                        is_move = pending_move,
+                        is_slot = false,
+                    })
+                    pending_active = false
+                    pending_move = false
+                }
+            }
+        }
+    }
+    if arrowless {
+        const brace: SourceSpan = .{ file_id = self.file_id, start = cst.start, length = 1 }
+        params.push(self.make_lambda_param("it", brace))
+    }
+    return .{
+        span = self.span_from(cst),
+        params = frozen(params),
+        return_type = null,
+        body = self.boxed(body),
+        arrowless = arrowless,
+        trailing = trailing,
+    }
+}
+
+// A LambdaExpr written `{ ... }` rather than `fn(...) { ... }`.
+fn is_brace_lambda(cst: CstNode) bool {
+    if cst.child_count() == 0 {
+        return false
+    }
+    return cst.child(0) match {
+        TokenChild(tok) => tok.kind == TokenKind.OpenBrace
+        NodeChild(_) => false
     }
 }
 

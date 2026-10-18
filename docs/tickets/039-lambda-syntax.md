@@ -1,5 +1,5 @@
 ---
-status: draft
+status: accepted
 type: language
 created: 2026-10-17
 relates: [RFC-014, RFC-033, RFC-035, RFC-037, RFC-038]
@@ -186,6 +186,14 @@ Each step lands with harness tests. The old form stays accepted until step 6.
 6. **Remove** the `fn(...) { }` expression; its error points at the brace form. Promote.
 7. **Docs.** `spec.md` §7.3 and the naming rule, `syntax.md` (lambda line, FLang-vs-Rust table),
    `architecture.md` (parser disambiguation).
+
+### Implementation status
+
+- Steps 1-3 and 7 landed: parser, projector, checker (`it` arity, case rule E2155, arity error
+  E2154, no trailing slot E2156), formatter, docs. One code covers both binding errors: a
+  required parameter after the last callable one leaves no slot.
+- Step 4 needed no change: every stdlib callback parameter already carries a `fn` bound.
+- Steps 5-6 (promote, migrate, remove the `fn(...) { }` expression) are next.
 
 ## Out of scope
 

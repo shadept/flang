@@ -182,6 +182,15 @@ pub const E_CONTEXT_TWICE: String = "E2151"
 pub const E_CONTEXT_AMBIGUOUS: String = "E2152"
 // A rebind's base context not first or not alone, or a `Context` built by a struct literal.
 pub const E_CONTEXT_BASE: String = "E2153"
+// A lambda without `=>` where the expected callable takes more than one parameter, or nothing says
+// how many (RFC-039).
+pub const E_ARROWLESS_ARITY: String = "E2154"
+// A type or type parameter whose name starts lowercase, or a function whose name starts uppercase
+// (RFC-039).
+pub const E_NAME_CASE: String = "E2155"
+// A trailing lambda on a call with no parameter it can fill: a callable one with only defaulted
+// parameters after it (RFC-039).
+pub const E_NO_TRAILING_SLOT: String = "E2156"
 
 // A `&move T` parameter outside `core`: the one mode that takes a value out of storage its caller
 // keeps is the core library's alone (RFC-033).
