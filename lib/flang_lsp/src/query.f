@@ -256,20 +256,23 @@ pub fn member_field(result: &TypeCheckResult, recv: Ty, name: String) FieldHit? 
     loop {
         result.interner.node(t) match {
             NRef(inner) => { t = inner }
-            NNominal(nn) => {
-                const def = result.nominals.find(nn.id)
-                if def.is_none() {
-                    return null
-                }
-                return def.unwrap().* match {
-                    NomStruct(sd) => field_by_name(&sd, name)
-                    NomEnum(_) => null
-                }
-            }
+            NNominal(nn) => { return nominal_field(result, nn.id, name) }
             else => { return null }
         }
     }
     return null
+}
+
+// The named field of struct `nom`, with its declared type.
+pub fn nominal_field(result: &TypeCheckResult, nom: NominalId, name: String) FieldHit? {
+    const def = result.nominals.find(nom)
+    if def.is_none() {
+        return null
+    }
+    return def.unwrap().* match {
+        NomStruct(sd) => field_by_name(&sd, name)
+        NomEnum(_) => null
+    }
 }
 
 // The field a cursor in member position names: `text[wstart..]` is the word, the receiver is
@@ -565,7 +568,8 @@ pub fn reference_spans(result: &TypeCheckResult, target: &ResolvedTarget) List(S
     return out
 }
 
-fn push_unique(out: &List(SourceSpan), span: SourceSpan) {
+// Append `span` to `out` unless an identical span is already there.
+pub fn push_unique(out: &List(SourceSpan), span: SourceSpan) {
     for &s in out {
         if s.file_id == span.file_id and s.start == span.start and s.length == span.length {
             return

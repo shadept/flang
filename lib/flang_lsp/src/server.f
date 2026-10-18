@@ -49,11 +49,14 @@ import flang_typer.nominal_registry
 import flang_typer.reporter
 import flang_typer.result
 import flang_typer.type
+import flang_typer.well_known
 
 import flang_lsp.documents
 import flang_lsp.handlers.document_symbol
 import flang_lsp.handlers.folding_range
+import flang_lsp.handlers.hover
 import flang_lsp.handlers.inlay_hint
+import flang_lsp.handlers.rename
 import flang_lsp.handlers.signature_help
 import flang_lsp.handlers.syntax_diagnostics
 import flang_lsp.index
@@ -172,6 +175,8 @@ fn dispatch(self: &LspServer, msg: &RpcMessage) {
         "textDocument/signatureHelp" => self.on_signature_help(msg)
         "textDocument/formatting" => self.on_formatting(msg)
         "textDocument/codeLens" => self.on_code_lens(msg)
+        "textDocument/prepareRename" => self.on_prepare_rename(msg)
+        "textDocument/rename" => self.on_rename(msg)
         "workspace/symbol" => self.on_workspace_symbol(msg)
         "workspace/didChangeWatchedFiles" => self.on_watched_files(msg)
         else => self.on_unknown(msg)
@@ -598,6 +603,7 @@ fn initialize_result(self: &LspServer, triggers: String[]) InitializeResult {
         document_formatting_provider = true,
         code_lens_provider = lens,
         signature_help_provider = SignatureHelpOptions { trigger_characters = triggers },
+        rename_provider = RenameOptions { prepare_provider = true },
     }, server_info = ServerInfo { name = "flang-lsp", version = self.version.view } }
 }
 
@@ -1291,12 +1297,33 @@ fn append_bound(result: &TypeCheckResult, ty: Ty, hit: &TemplateHit, rendered: &
 
 // Whether a type reference names a type parameter, which hovers as `typevar T`: neither `Self`,
 // whose declaration is the type it names, nor an associated type, declared `type Item`.
-fn is_type_param_ref(target: &ResolvedTarget, word: String, decl_text: String) bool {
+fn is_type_param_ref(
+    result: &TypeCheckResult,
+    target: &ResolvedTarget,
+    word: String,
+    decl_text: String,
+) bool {
     const is_type_ref = target.* match {
         RtType(_) => true
         _ => false
     }
     return is_type_ref and word != "Self" and !decl_text.starts_with("type ")
+        and !names_nominal(result, target)
+}
+
+// A variant reads `E.Some(T)`, a field `field x: i32`; any other declaration as written.
+fn target_label(result: &TypeCheckResult, target: &ResolvedTarget, slice: String) OwnedString {
+    return target.* match {
+        RtEnumVariant(nom, _) => result.nominals.find(nom) match {
+            Some(def) => def.* match {
+                NomEnum(ed) => $"{short_name(ed.fqn)}.{slice}"
+                NomStruct(_) => from_view(slice)
+            }
+            None => from_view(slice)
+        }
+        RtStructField(_, _) => $"field {slice}"
+        _ => from_view(slice)
+    }
 }
 
 // The docstring of the declaration at `span` - the comment run glued above its first token.
@@ -1367,6 +1394,36 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         return
     }
 
+    // The compile-time context in a `#if` head hovers as the `core.comptime` declaration it reads
+    // as: `const platform: Platform`, `field os: String`.
+    const ct = comptime_at(result, text, fid, offset)
+    if ct.is_some() {
+        const hit = ct.unwrap()
+        const doc = self.doc_for(pi, hit.decl)
+        const label = if hit.binding.is_some() {
+            $"const {hit.binding.unwrap()}"
+        } else {
+            $"field {self.decl_label(pi, hit.decl) ?? ""}"
+        }
+        self.respond_hover(msg, label, doc, text, hit.word)
+        return
+    }
+
+    // A generator's `#name` hovers as its `#define` and what the expansion declared.
+    const hashed = identifier_at(text, offset) match {
+        Some(w) => starts_with(w.name, "#") and w.name != "#if"
+        None => false
+    }
+    const extra = if hashed { generator_hover(unit, fid, offset) } else { null }
+    if extra.is_some() {
+        const x = extra.unwrap()
+        const span = x.span
+        const md = x.markdown()
+        x.deinit()
+        self.respond_markdown(msg, md, text, span)
+        return
+    }
+
     const word = identifier_at(text, offset)
     if word.is_none() {
         self.respond_null(msg)
@@ -1374,6 +1431,14 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     }
     const wstart = word.unwrap().start
     const wname = word.unwrap().name
+
+    // The `context` keyword as an expression (`context.f`, `context(..)`, a copy) is the current
+    // context; before a name it declares a field, which has nothing to show.
+    if wname == "context" and !declares_field(text, wstart + wname.len) {
+        const kw = SourceSpan { file_id = fid, start = wstart, length = wname.len }
+        self.respond_hover(msg, context_label(result), null, text, kw)
+        return
+    }
 
     const tg = target_at(result, fid, offset)
     // Inside a generic body, the types its rigid check gave (`cmp: F`) answer before one
@@ -1412,6 +1477,8 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
                     Some(sp) => sp.name == wname
                     None => false
                 }
+                // A payload variant's construction spans its arguments: `Dir.Up(1)`.
+                RtEnumVariant(_, _) => name_offset(text, tspan, wname, false) == Some(wstart)
                 _ => false
             }
         }
@@ -1424,10 +1491,10 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
             const dspan = cursor_decl_span(result, &tg.unwrap(), text, wstart, wend)
             if dspan.is_some() and self.location_span_ok(pi, dspan.unwrap()) {
                 const l = self.decl_label(pi, dspan.unwrap())
-                if l.is_some() and is_type_param_ref(&target, wname, l.unwrap()) {
+                if l.is_some() and is_type_param_ref(result, &target, wname, l.unwrap()) {
                     set_hover_label(&label, $"typevar {wname}")
                 } else if l.is_some() {
-                    set_hover_label(&label, from_view(l.unwrap()))
+                    set_hover_label(&label, target_label(result, &target, l.unwrap()))
                     doc_span = dspan
                 }
             }
@@ -1536,8 +1603,60 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     self.respond_hover(msg, label.unwrap(), doc, text, span)
 }
 
-// The hover response: `label` as a flang code block, `doc` (consumed) as markdown prose below it,
-// over `span` in `text`.
+// `context: Context`, then every field of the program's context with its type and declaring module.
+// The compiler assembles `Context` from the `context` declarations, so no source lists them.
+fn context_label(result: &TypeCheckResult) OwnedString {
+    let sb = string_builder(256)
+    sb.append("context: Context")
+    const id = result.nominals.by_fqn.get(FQN_CONTEXT)
+    const def = if id.is_some() { result.nominals.find(id.unwrap()) } else { null }
+    if def.is_some() {
+        def.unwrap().* match {
+            NomStruct(sd) => context_fields_into(&sb, result, &sd)
+            NomEnum(_) => {}
+        }
+    }
+    const out = sb.to_string()
+    sb.deinit()
+    return out
+}
+
+fn context_fields_into(sb: &StringBuilder, result: &TypeCheckResult, sd: &StructDef) {
+    if sd.fields.len == 0 {
+        return
+    }
+    sb.append("\n\ntype Context = struct {")
+    for i in 0..sd.fields.len {
+        const f = &sd.fields[i]
+        const ty = render_ty(result, f.ty)
+        sb.append("\n    ")
+        sb.append(f.name)
+        sb.append(": ")
+        sb.append(ty.view)
+        ty.deinit()
+        if i < result.context_fields.len {
+            const fqn = result.context_fields[i].view
+            const dot = rfind(fqn, '.')
+            if dot.is_some() {
+                sb.append(" // ")
+                sb.append(fqn[0..dot.unwrap()])
+            }
+        }
+    }
+    sb.append("\n}")
+}
+
+// Whether an identifier follows `at` past spaces: `context name: T` declares a context field.
+fn declares_field(text: String, at: usize) bool {
+    let i = at
+    while i < text.len and (text[i] == ' ' or text[i] == '\t') {
+        i = i + 1
+    }
+    return i < text.len and is_ident_char(text[i])
+}
+
+// The hover response: `label` as a flang code block, the docstring `doc` rendered as markdown below
+// it, over `span` in `text`. Consumes both.
 fn respond_hover(
     self: &LspServer,
     msg: &RpcMessage,
@@ -1546,27 +1665,29 @@ fn respond_hover(
     text: String,
     span: SourceSpan,
 ) {
-    let md = string_builder(label.view.len + 32)
-    md.append("```flang\n")
-    md.append(label.view)
-    md.append("\n```")
+    const none: OwnedString? = null
+    const md = hover_markdown(label.view, &doc, &none)
     label.deinit()
     if doc.is_some() {
-        const text_doc = doc.unwrap()
-        const prose = doc_markdown(text_doc.view)
-        md.append("\n\n")
-        md.append(prose.view)
-        prose.deinit()
-        text_doc.deinit()
+        doc.unwrap().deinit()
     }
+    self.respond_markdown(msg, md, text, span)
+}
+
+fn respond_markdown(
+    self: &LspServer,
+    msg: &RpcMessage,
+    md: move OwnedString,
+    text: String,
+    span: SourceSpan,
+) {
     let lidx = line_index(text)
     defer lidx.deinit()
     let hover = Hover {
-        contents = MarkupContent { kind = "markdown", value = md.to_string() },
+        contents = MarkupContent { kind = "markdown", value = move md },
         range = lsp_range(&lidx, text, span, self.encoding),
     }
     defer hover.deinit()
-    md.deinit()
     self.out.respond(msg.id().unwrap(), &hover)
 }
 
@@ -1691,6 +1812,16 @@ fn on_definition(self: &LspServer, msg: &RpcMessage) {
                 return
             }
             locs.push(self.span_location(pi, start))
+        }
+        self.out.respond(msg.id().unwrap(), &locs)
+        return
+    }
+
+    // The compile-time context in a `#if` head goes to the `core.comptime` declaration.
+    const ct = comptime_at(result, text, fid, offset)
+    if ct.is_some() {
+        if self.location_span_ok(pi, ct.unwrap().decl) {
+            locs.push(self.span_location(pi, ct.unwrap().decl))
         }
         self.out.respond(msg.id().unwrap(), &locs)
         return
@@ -2108,6 +2239,228 @@ fn apply_project_fmt(path: String, cfg: &FmtConfig) OwnedString {
         const _ok = set_option(cfg, e.key.view, e.value.view)
     }
     return from_view(proj.name.view)
+}
+
+// ---- textDocument/prepareRename, textDocument/rename ----
+
+// LSP's RequestFailed: the request was valid, the server refuses it. The client shows the message.
+const REQUEST_FAILED: i64 = -32803
+
+// The renameable symbol under a request's cursor: the project that resolved it, the symbol, and the
+// cursor's word in the analyzed source.
+type RenameSite = struct {
+    pi: ProjectId
+    sym: Symbol
+    word: SourceSpan
+    name: String
+}
+
+// Rename answers from the last analysis, so every buffer it touches must match the text analyzed; a
+// refusal is the reason, for the client to show.
+fn rename_site(self: &LspServer, msg: &RpcMessage) Result(RenameSite, String) {
+    const cur = self.cursor_at(msg)
+    if cur.is_none() {
+        return Err("rename needs the file to be part of an analyzed project")
+    }
+    const pi = cur.unwrap().pi
+    const fid = cur.unwrap().fid
+    const unit = &self.ws.projects[pi].unit
+    const text = unit.sources[fid as usize].view
+    if self.is_stale(unit.file_paths[fid as usize].view, text) {
+        return Err("save the file before renaming: the rename works on the last check")
+    }
+    const word = identifier_at(text, cur.unwrap().offset)
+    if word.is_none() {
+        return Err("no symbol under the cursor")
+    }
+    const wstart = word.unwrap().start
+    const wname = word.unwrap().name
+    if starts_with(wname, "#") {
+        return Err("a template name cannot be renamed")
+    }
+    const sym = symbol_at(unit, fid, wstart, wname)
+    if sym.is_none() {
+        return Err("no renameable symbol under the cursor")
+    }
+    const decl_path = unit.file_paths[sym.unwrap().decl.file_id as usize].view
+    if !self.workspace_origin(decl_path) {
+        return Err(
+            "the symbol is declared outside the workspace's projects (stdlib or a dependency)",
+        )
+    }
+    if is_foreign_symbol(&unit.result, &sym.unwrap()) {
+        return Err("a #foreign declaration keeps the C name it binds")
+    }
+    const span = SourceSpan { file_id = fid, start = wstart, length = wname.len }
+    return Ok(RenameSite { pi = pi, sym = sym.unwrap(), word = span, name = wname })
+}
+
+// Whether an open buffer of `path` holds anything but `analyzed`.
+fn is_stale(self: &LspServer, path: String, analyzed: String) bool {
+    for entry in self.docs.docs.iter() {
+        if entry.value.path.view == path {
+            return entry.value.text.view != analyzed
+        }
+    }
+    return false
+}
+
+// Whether some open project counts `path` among its own files.
+fn workspace_origin(self: &LspServer, path: String) bool {
+    for &p in self.ws.projects {
+        const fid = file_id_of(&p.unit, path)
+        if fid.is_none() {
+            continue
+        }
+        const i = fid.unwrap() as usize
+        if i < p.unit.project_origin.len and p.unit.project_origin[i] {
+            return true
+        }
+    }
+    return false
+}
+
+fn on_prepare_rename(self: &LspServer, msg: &RpcMessage) {
+    if !msg.is_request() {
+        return
+    }
+    const site = self.rename_site(msg)
+    if site.is_err() {
+        self.out.respond_error(msg.id().unwrap(), REQUEST_FAILED, site.unwrap_err())
+        return
+    }
+    const s = site.unwrap()
+    const text = self.ws.projects[s.pi].unit.sources[s.word.file_id as usize].view
+    let lidx = line_index(text)
+    defer lidx.deinit()
+    const result = PrepareRenameResult {
+        range = lsp_range(&lidx, text, s.word, self.encoding),
+        placeholder = s.name,
+    }
+    self.out.respond(msg.id().unwrap(), &result)
+}
+
+// Every open project that loads the declaring file resolves the symbol on its own and contributes
+// its edits; files shared between projects are merged by path and offset.
+fn on_rename(self: &LspServer, msg: &RpcMessage) {
+    if !msg.is_request() {
+        return
+    }
+    const p = msg.params()
+    const new_name = if p.is_some() { get_str(p.unwrap(), "newName") ?? "" } else { "" }
+    if !is_identifier(new_name) {
+        self.out.respond_error(
+            msg.id().unwrap(),
+            INVALID_PARAMS,
+            "the new name is not an identifier",
+        )
+        return
+    }
+    const site = self.rename_site(msg)
+    if site.is_err() {
+        self.out.respond_error(msg.id().unwrap(), REQUEST_FAILED, site.unwrap_err())
+        return
+    }
+    const s = site.unwrap()
+    let files: List(FileEdits) = list(4)
+    defer files.deinit()
+    self.collect_rename(&s, &files)
+    for &f in files {
+        if self.is_stale(f.path, f.text) {
+            self.out.respond_error(
+                msg.id().unwrap(),
+                REQUEST_FAILED,
+                "save every file the rename touches first: the rename works on the last check",
+            )
+            return
+        }
+    }
+    let changes: List(TextDocumentEdit) = list(files.len)
+    for &f in files {
+        changes.push(self.document_edit(f, s.name.len, new_name))
+    }
+    let edit = WorkspaceEdit { document_changes = move changes }
+    defer edit.deinit()
+    self.out.respond(msg.id().unwrap(), &edit)
+}
+
+// One file's rename sites: its path and analyzed text (views into a project unit) and the name's
+// start offsets.
+type FileEdits = struct {
+    path: String
+    text: String
+    starts: List(usize)
+}
+
+pub fn deinit(self: move FileEdits) {
+    self.starts.deinit()
+}
+
+fn collect_rename(self: &LspServer, s: &RenameSite, files: &List(FileEdits)) {
+    const home = &self.ws.projects[s.pi].unit
+    const decl_path = home.file_paths[s.sym.decl.file_id as usize].view
+    for qi in 0..self.ws.projects.len {
+        const unit = &self.ws.projects[qi].unit
+        let sym: Symbol? = Some(s.sym)
+        if qi != s.pi {
+            sym = project_symbol(unit, decl_path, s.sym.decl.start, s.name)
+        }
+        if sym.is_none() {
+            continue
+        }
+        let spans = symbol_edits(unit, &sym.unwrap(), s.name)
+        for &span in spans {
+            const fid = span.file_id as usize
+            add_file_edit(files, unit.file_paths[fid].view, unit.sources[fid].view, span.start)
+        }
+        spans.deinit()
+    }
+}
+
+// The symbol declared at `start` in `path`, as project `unit` resolves it; null when the project
+// does not load the file.
+fn project_symbol(unit: &AnalyzedProject, path: String, start: usize, name: String) Symbol? {
+    const fid = file_id_of(unit, path)
+    if fid.is_none() {
+        return null
+    }
+    return symbol_at(unit, fid.unwrap(), start, name)
+}
+
+fn add_file_edit(files: &List(FileEdits), path: String, text: String, start: usize) {
+    for &f in files {
+        if f.path != path {
+            continue
+        }
+        for st in f.starts {
+            if st == start {
+                return
+            }
+        }
+        f.starts.push(start)
+        return
+    }
+    let starts: List(usize) = list(4)
+    starts.push(start)
+    files.push(FileEdits { path = path, text = text, starts = move starts })
+}
+
+// The edits replacing the `len`-byte name at each of `f`'s offsets.
+fn document_edit(self: &LspServer, f: &FileEdits, len: usize, new_name: String) TextDocumentEdit {
+    let lidx = line_index(f.text)
+    defer lidx.deinit()
+    let edits: List(TextEdit) = list(f.starts.len)
+    for st in f.starts {
+        const span = SourceSpan { file_id = 0, start = st, length = len }
+        edits.push(TextEdit {
+            range = lsp_range(&lidx, f.text, span, self.encoding),
+            new_text = new_name,
+        })
+    }
+    return .{
+        text_document = EditedDocument { uri = self.uri_for_path(f.path), version = Value.Null },
+        edits = move edits,
+    }
 }
 
 // =============================================================================
@@ -3190,7 +3543,7 @@ test "unknown request errors, unknown notification is ignored" {
     defer input.deinit()
     frame_into(
         &input,
-        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"textDocument/rename\",\"params\":{}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"textDocument/semanticTokens/full\",\"params\":{}}",
     )
     frame_into(&input, "{\"jsonrpc\":\"2.0\",\"method\":\"$/setTrace\",\"params\":{}}")
 
@@ -3223,4 +3576,304 @@ test "malformed body gets a ParseError response and the loop continues" {
 
     assert_true(contains(out.as_view(), "\"code\":-32700"), "ParseError reported")
     assert_true(contains(out.as_view(), "\"id\":1,\"result\":null"), "later messages still served")
+}
+
+// A project for the rename tests: /r/m.f declares a struct, an enum, a context field, functions and
+// locals that reference each other; /r/dep.f stands in for a dependency (not project-origin), and
+// `core.runtime` supplies the `Context` the context field joins.
+const RENAME_SRC: String = "pub type P = struct { x: i32 }\npub type E = enum { A B(i32) }\ncontext depth: i32 = 0\npub fn mk(v: i32) P { return P { x = v } }\npub fn get(p: &P) i32 { return p.x }\npub fn pick(e: E) i32 {\n    return e match {\n        A => context.depth\n        E.B(n) => n\n    }\n}\npub fn run() i32 {\n    let total = get(&mk(1)) + pick(E.B(2)) + pick(E.A)\n    context(depth = 2) { total = total + 1 }\n    return total\n}\npub fn call_dep() i32 { return helper() }\npub type Dir = enum {\n    // Heading up.\n    Up(i32)\n    Down\n}\npub fn go_up() Dir { return Dir.Up(1) }\n#if platform.os == \"nowhere\" {\n    pub fn never() { }\n} else {\n    pub fn always() { }\n}\npub fn branchy() i32 {\n    #if runtime.testing {\n        let t = 1\n        return t\n    }\n    return 0\n}\n// Makes a twin.\n#define(twin, N: Ident) {\n    pub fn #(N)_twice() i32 { return 2 }\n}\n#twin(foo)\n#twin(Dir)\n"
+
+// Opens /r/m.f, then sends each of `requests`.
+fn rename_run(requests: String[], out: &StringBuilder) {
+    rename_run_with(requests, out, false)
+}
+
+// An in-memory project named `name` over `sources`, `fqns[i]` naming source i and doubling as its
+// path, `origin[i]` whether it is the project's own.
+fn open_test_project(
+    srv: &LspServer,
+    name: String,
+    sources: String[],
+    fqns: String[],
+    origin: bool[],
+) &AnalyzedProject {
+    let srcs: List(OwnedString) = list(sources.len)
+    let names: List(String) = list(fqns.len)
+    for i in 0..sources.len {
+        srcs.push(from_view(sources[i]))
+        names.push(fqns[i])
+    }
+    let unit = analyze_source_set(srcs, &names)
+    names.deinit()
+    let flags = &unit.project_origin
+    for o in origin {
+        flags.push(o)
+    }
+    let index = build_indexes(&unit)
+    let manifest = $"[project]\nname = \"{name}\"\n"
+    let proj = parse_project(manifest.view).unwrap()
+    manifest.deinit()
+    let ctx = resolve_ctx(&proj, "")
+    proj.deinit()
+    srv.ws.projects.push(OpenProject {
+        dir = $"/{name}",
+        name = from_view(name),
+        ctx = move ctx,
+        unit = move unit,
+        index = move index,
+    })
+    return &srv.ws.projects[srv.ws.projects.len - 1].unit
+}
+
+// `rename_run`, plus with `second` a project /s that loads /r/m.f as a dependency and calls `mk`.
+fn rename_run_with(requests: String[], out: &StringBuilder, second: bool) {
+    let input = string_builder(4096)
+    defer input.deinit()
+    let body = string_builder(RENAME_SRC.len + 32)
+    for i in 0..RENAME_SRC.len {
+        RENAME_SRC[i] match {
+            '\n' => body.append("\\n")
+            '"' => body.append("\\\"")
+            else => body.append(RENAME_SRC[i..(i + 1)])
+        }
+    }
+    const open = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///r/m.f\",\"version\":1,\"text\":\"{body.as_view()}\"}}}}}}"
+    body.deinit()
+    frame_into(&input, open.view)
+    open.deinit()
+    for r in requests {
+        frame_into(&input, r)
+    }
+
+    let mr = mem_reader(input.as_view())
+    let srv = lsp_server(mr.reader(), out.writer())
+    defer srv.deinit()
+    const context_src = "pub type Context = struct {}\n"
+    const comptime_src = "pub type Platform = struct {\n    // The target OS.\n    os: String\n    arch: String\n}\npub type Runtime = struct {\n    testing: bool\n    release: bool\n}\n"
+    open_test_project(
+        &srv,
+        "r",
+        [RENAME_SRC, "pub fn helper() i32 { return 1 }\n", context_src, comptime_src],
+        ["/r/m.f", "/r/dep.f", "core.runtime", "core.comptime"],
+        [true, false, false, false],
+    )
+    if second {
+        // The dependency's FQN is what the import names; its path is the file /r/m.f.
+        const unit = open_test_project(
+            &srv,
+            "s",
+            [RENAME_SRC, "import r.m\npub fn use_mk() i32 { return get(&mk(5)) }\n", context_src],
+            ["r.m", "/s/u.f", "core.runtime"],
+            [false, true, false],
+        )
+        replace(&unit.file_paths[0], from_view("/r/m.f")).deinit()
+    }
+    srv.run()
+}
+
+// Renames the symbol at (line, ch) to `fresh` and answers how many edits came back.
+fn rename_count(id: i32, line: i32, ch: i32, fresh: String) usize {
+    let out = string_builder(8192)
+    defer out.deinit()
+    const req = $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/rename\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///r/m.f\"}},\"position\":{{\"line\":{line},\"character\":{ch}}},\"newName\":\"{fresh}\"}}}}"
+    rename_run([req.view], &out)
+    req.deinit()
+    const want = $"\"newText\":\"{fresh}\""
+    defer want.deinit()
+    return count(out.as_view(), want.view)
+}
+
+test "rename rewrites a field at its declaration, initializer and read" {
+    assert_eq(rename_count(70, 0, 22, "y"), 3 as usize, "from the declaration")
+    assert_eq(rename_count(71, 4, 33, "y"), 3 as usize, "from a read")
+    assert_eq(rename_count(72, 3, 33, "y"), 3 as usize, "from a literal's initializer")
+}
+
+test "rename rewrites a struct at every type position" {
+    assert_eq(rename_count(73, 0, 9, "Q"), 4 as usize, "declaration, return, literal, param")
+    assert_eq(rename_count(74, 4, 15, "Q"), 4 as usize, "from a reference")
+}
+
+test "rename rewrites an enum, its qualifiers and its variants" {
+    assert_eq(rename_count(75, 1, 9, "F"), 5 as usize, "declaration, param, three qualifiers")
+    assert_eq(rename_count(76, 8, 8, "F"), 5 as usize, "from a pattern qualifier")
+    assert_eq(
+        rename_count(77, 1, 22, "C"),
+        3 as usize,
+        "variant: declaration, pattern, construction",
+    )
+    assert_eq(rename_count(78, 12, 52, "Z"), 3 as usize, "nullary variant from a qualified use")
+    assert_eq(rename_count(109, 17, 9, "Way"), 4 as usize, "a generator argument renames along")
+}
+
+test "rename rewrites a context field, a function and a local" {
+    assert_eq(rename_count(79, 2, 8, "level"), 3 as usize, "context: declaration, read, rebind")
+    assert_eq(rename_count(80, 7, 21, "level"), 3 as usize, "context field from its read")
+    assert_eq(rename_count(81, 3, 7, "make"), 2 as usize, "function: declaration and call")
+    assert_eq(rename_count(82, 12, 8, "sum"), 4 as usize, "local: binder and three reads")
+}
+
+test "rename answers a WorkspaceEdit of document changes" {
+    let out = string_builder(8192)
+    defer out.deinit()
+    rename_run(
+        [
+            "{\"jsonrpc\":\"2.0\",\"id\":83,\"method\":\"textDocument/rename\",\"params\":{\"textDocument\":{\"uri\":\"file:///r/m.f\"},\"position\":{\"line\":3,\"character\":7},\"newName\":\"make\"}}",
+        ],
+        &out,
+    )
+    assert_true(
+        contains(
+            out.as_view(),
+            "\"documentChanges\":[{\"textDocument\":{\"uri\":\"file:///r/m.f\",\"version\":null}",
+        ),
+        "one change per file, versioned null",
+    )
+    assert_true(
+        contains(
+            out.as_view(),
+            "{\"range\":{\"start\":{\"line\":3,\"character\":7},\"end\":{\"line\":3,\"character\":9}},\"newText\":\"make\"}",
+        ),
+        "the declaration's name replaced",
+    )
+}
+
+test "prepareRename answers the word and its placeholder" {
+    let out = string_builder(4096)
+    defer out.deinit()
+    rename_run(
+        [
+            "{\"jsonrpc\":\"2.0\",\"id\":84,\"method\":\"textDocument/prepareRename\",\"params\":{\"textDocument\":{\"uri\":\"file:///r/m.f\"},\"position\":{\"line\":12,\"character\":10}}}",
+        ],
+        &out,
+    )
+    assert_true(
+        contains(
+            out.as_view(),
+            "\"id\":84,\"result\":{\"range\":{\"start\":{\"line\":12,\"character\":8},\"end\":{\"line\":12,\"character\":13}},\"placeholder\":\"total\"}",
+        ),
+        "the whole word, its spelling as the placeholder",
+    )
+}
+
+// Whether a `method` request at (line, ch) draws the error `code`.
+fn rename_refused(id: i32, method: String, line: i32, ch: i32, fresh: String, code: String) bool {
+    let out = string_builder(4096)
+    defer out.deinit()
+    const req = $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/{method}\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///r/m.f\"}},\"position\":{{\"line\":{line},\"character\":{ch}}},\"newName\":\"{fresh}\"}}}}"
+    rename_run([req.view], &out)
+    req.deinit()
+    const want = $"\"id\":{id},\"error\":{{\"code\":{code}"
+    defer want.deinit()
+    return contains(out.as_view(), want.view)
+}
+
+test "rename refuses dependencies, keywords, bad names and empty space" {
+    assert_true(
+        rename_refused(85, "prepareRename", 16, 32, "", "-32803"),
+        "a dependency's function",
+    )
+    assert_true(rename_refused(86, "prepareRename", 5, 1, "", "-32803"), "a keyword")
+    assert_true(rename_refused(87, "prepareRename", 6, 2, "", "-32803"), "whitespace")
+    assert_true(rename_refused(88, "rename", 12, 8, "match", "-32602"), "a keyword as the new name")
+    assert_true(rename_refused(89, "rename", 12, 8, "a b", "-32602"), "two words as the new name")
+}
+
+test "rename refuses while the buffer differs from the analyzed text" {
+    let out = string_builder(4096)
+    defer out.deinit()
+    rename_run(
+        [
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"file:///r/m.f\",\"version\":2},\"contentChanges\":[{\"text\":\"// edited\\n\"}]}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":90,\"method\":\"textDocument/prepareRename\",\"params\":{\"textDocument\":{\"uri\":\"file:///r/m.f\"},\"position\":{\"line\":12,\"character\":8}}}",
+        ],
+        &out,
+    )
+    assert_true(
+        contains(out.as_view(), "\"id\":90,\"error\":{\"code\":-32803"),
+        "unsaved edits refuse",
+    )
+}
+
+test "rename reaches every open project that loads the declaring file" {
+    let out = string_builder(8192)
+    defer out.deinit()
+    rename_run_with(
+        [
+            "{\"jsonrpc\":\"2.0\",\"id\":108,\"method\":\"textDocument/rename\",\"params\":{\"textDocument\":{\"uri\":\"file:///r/m.f\"},\"position\":{\"line\":3,\"character\":7},\"newName\":\"make\"}}",
+        ],
+        &out,
+        true,
+    )
+    assert_eq(count(out.as_view(), "\"newText\":\"make\""), 3 as usize, "shared file merged once")
+    assert_true(
+        contains(out.as_view(), "\"uri\":\"file:///s/u.f\""),
+        "the dependent project's caller",
+    )
+}
+
+// Hovers (line, ch) in the rename project and checks the answer holds `want`.
+fn hover_holds(id: i32, line: i32, ch: i32, want: String) bool {
+    let out = string_builder(8192)
+    defer out.deinit()
+    const req = $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/hover\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///r/m.f\"}},\"position\":{{\"line\":{line},\"character\":{ch}}}}}}}"
+    rename_run([req.view], &out)
+    req.deinit()
+    return contains(out.as_view(), want)
+}
+
+test "hover on a variant shows it qualified, with its payload and docstring" {
+    assert_true(hover_holds(91, 22, 32, "Dir.Up(i32)\\n```\\n\\nHeading up."), "payload variant")
+    assert_true(hover_holds(92, 12, 52, "```flang\\nE.A\\n```"), "nullary variant")
+    assert_true(hover_holds(93, 12, 35, "pub type E = enum"), "the qualifier is the enum")
+}
+
+test "hover on a type name, a field initializer and a context field" {
+    assert_true(hover_holds(94, 4, 15, "pub type P = struct"), "a struct, not a type variable")
+    assert_true(hover_holds(95, 3, 33, "field x: i32"), "an initializer names its field")
+    assert_true(hover_holds(96, 7, 21, "context depth: i32 = 0"), "a context field read")
+    assert_true(hover_holds(97, 13, 12, "context depth: i32 = 0"), "a rebind argument")
+    assert_true(
+        hover_holds(
+            105,
+            7,
+            14,
+            "```flang\\ncontext: Context\\n\\ntype Context = struct {\\n    depth: i32 // ",
+        ),
+        "the keyword reading lists the assembled fields",
+    )
+    assert_true(hover_holds(106, 13, 5, "```flang\\ncontext: Context\\n"), "the keyword rebinding")
+    assert_true(hover_holds(107, 2, 3, "\"id\":107,\"result\":null"), "the keyword declaring")
+}
+
+test "a #if head hovers the compile-time context like a runtime condition" {
+    assert_true(hover_holds(98, 23, 1, "\"id\":98,\"result\":null"), "the keyword shows nothing")
+    assert_true(hover_holds(99, 23, 5, "```flang\\nconst platform: Platform\\n```"), "the root")
+    assert_true(
+        hover_holds(100, 23, 14, "```flang\\nfield os: String\\n```\\n\\nThe target OS."),
+        "a member, with its field's docstring",
+    )
+    assert_true(hover_holds(101, 29, 16, "field testing: bool"), "a statement-level directive")
+    assert_true(hover_holds(110, 23, 20, "\"id\":110,\"result\":null"), "a literal shows nothing")
+}
+
+test "definition on the compile-time context lands on core.comptime" {
+    let out = string_builder(4096)
+    defer out.deinit()
+    rename_run(
+        [
+            "{\"jsonrpc\":\"2.0\",\"id\":111,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///r/m.f\"},\"position\":{\"line\":23,\"character\":14}}}",
+        ],
+        &out,
+    )
+    assert_true(
+        contains(out.as_view(), "core.comptime\",\"range\":{\"start\":{\"line\":2,"),
+        "the field",
+    )
+}
+
+test "hover on a generator invocation shows its define and expansion" {
+    assert_true(hover_holds(102, 39, 2, "#define(twin, N: Ident)"), "the define's header")
+    assert_true(hover_holds(103, 39, 2, "Makes a twin."), "its docstring")
+    assert_true(hover_holds(104, 39, 2, "This expansion declares `foo_twice`."), "what it declared")
 }

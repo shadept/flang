@@ -1021,6 +1021,15 @@ error, exactly as `if platform.os { }` is invalid FLang.
 | `runtime.release` | bool   | true when compiling with `--release`           |
 | `runtime.env`     | dict   | Build-time environment variables               |
 
+The context's shape is declared in `core.comptime` (in the prelude):
+`platform` is a constant of `Platform { os, arch }` and `runtime` one of
+`Runtime { testing, release, env }`, where `env` is an `Environment`, a
+process environment read one variable at a time through its index
+operator (`env["KEY"]: String?`). The compiler supplies the two values
+for the target being built; no runtime value of `platform` or `runtime`
+exists yet. `Environment` works at run time too, and `std.env.env` reads
+through it.
+
 `platform.os` / `platform.arch` describe the **target**, which defaults
 to the host; `--target-os` and `--target-arch` override them so any host
 can emit any platform's code (cross-bootstrap). Unknown target values

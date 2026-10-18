@@ -1,4 +1,5 @@
 pub import core.cmp
+pub import core.comptime
 pub import core.deinit
 pub import core.hash
 pub import core.math

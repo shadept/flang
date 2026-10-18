@@ -373,7 +373,9 @@ references.
   a later `Reader`/`Writer` implementation.
 - On-disk analysis cache (the index seam is built, the persistence is not).
 - rename, codeAction, callHierarchy, semanticTokens, formatting - all post-v1.
-  Formatting can import `lib/flang_fmt` (`format_source`) directly.
+  Formatting can import `lib/flang_fmt` (`format_source`) directly. Formatting
+  and rename (with prepareRename) have since landed: architecture.md §Language
+  Server.
 - Moving the extension into this repo.
 
 ## Open questions

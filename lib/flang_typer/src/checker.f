@@ -1260,6 +1260,7 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
     }
     if found_id.is_some() {
         warn_deprecated_type(self, found_id.unwrap(), n.name, n.span)
+        record_nominal_ref(self, head_span(n.span, n.name.len), found_id.unwrap())
         let args = resolve_generic_args(self, n)
         apply_nominal_bounds(self, found_id.unwrap(), &args, n.name, n.span)
         return mk_nominal(self, found_id.unwrap(), args)
@@ -3474,15 +3475,86 @@ fn record_type_ref(self: &Checker, span: SourceSpan, name: String) {
         self.sig_refs.push(SigRef { span = span, name = name })
     }
     const decl = b.unwrap().decl
+    record_ref(self, span, ResolvedTarget.RtType(decl), self.results.get_span(decl))
+}
+
+// A use of the nominal `id` at `span` (a type name, an enum qualifier), recorded as a type target
+// on its declaration. A synthesized nominal has no declaration to point at.
+fn record_nominal_ref(self: &Checker, span: SourceSpan, id: NominalId) {
+    const decl_span = self.nominals.get(id).* match {
+        NomStruct(sd) => sd.decl_span
+        NomEnum(ed) => ed.decl_span
+    }
+    if decl_span.file_id < 0 {
+        return
+    }
+    record_ref(self, span, ResolvedTarget.RtType(node_id_of(decl_span)), Some(decl_span))
+}
+
+// The use of field `name` at `span` on the struct behind `recv`, recorded as a field target.
+fn record_field_ref(self: &Checker, recv: Ty, name: String, span: SourceSpan) {
+    const hit = field_index(self, recv, name)
+    if hit.is_none() {
+        return
+    }
+    record_ref(self, span, ResolvedTarget.RtStructField(hit.unwrap().nom, hit.unwrap().idx), null)
+}
+
+// A named initializer or pattern field `name = v` at `span`. The shorthand `name` alone is its
+// binding's node, so it records nothing.
+fn record_init_ref(self: &Checker, recv: Ty, name: String, span: SourceSpan) {
+    if span.length <= name.len {
+        return
+    }
+    record_field_ref(self, recv, name, head_span(span, name.len))
+}
+
+type FieldIndex = struct {
+    nom: NominalId
+    idx: u32
+}
+
+fn field_index(self: &Checker, recv: Ty, name: String) FieldIndex? {
+    const peeled = peel_refs(self, self.engine.zonk(recv))
+    const nom = ty_node(self, peeled) match {
+        NNominal(n) => n.id
+        _ => return null
+    }
+    const idx = self.nominals.get(nom).* match {
+        NomStruct(sd) => field_position(&sd.fields, name)
+        NomEnum(_) => null
+    }
+    return idx match {
+        Some(i) => Some(FieldIndex { nom = nom, idx = i })
+        None => null
+    }
+}
+
+fn field_position(fields: &List(Field), name: String) u32? {
+    for i in 0..fields.len {
+        if fields[i].name == name {
+            return Some(i as u32)
+        }
+    }
+    return null
+}
+
+fn tail_span(span: SourceSpan, len: usize) SourceSpan {
+    return .{ file_id = span.file_id, start = span.start + span.length - len, length = len }
+}
+
+fn head_span(span: SourceSpan, len: usize) SourceSpan {
+    return .{ file_id = span.file_id, start = span.start, length = len }
+}
+
+// One reference edge (`RtType`, `RtStructField`) at `span`. An expression's own target, which
+// lowering reads, is never replaced. The signature and resolve passes log the edge, so a demand
+// skipping them replays it.
+fn record_ref(self: &Checker, span: SourceSpan, target: ResolvedTarget, decl_span: SourceSpan?) {
     const node = self.node_of(span)
-    // A type parameter read as a value (`size_of(T)`) carries the expression's own target, which
-    // lowering reads; only a type reference's earlier edge is replaced.
     const prior = self.results.resolved_targets.get(node)
     const keeps = prior match {
-        Some(t) => t match {
-            RtType(_) => false
-            _ => true
-        }
+        Some(t) => !is_ref_edge(&t)
         None => false
     }
     if keeps {
@@ -3491,15 +3563,30 @@ fn record_type_ref(self: &Checker, span: SourceSpan, name: String) {
     if prior.is_none() {
         self.ref_new = self.ref_new + 1
     }
-    self.results.record_target(node, ResolvedTarget.RtType(decl))
-    const decl_span = self.results.get_span(decl)
-    if self.ref_logging and decl_span.is_some() {
+    target match {
+        RtType(decl) => {
+            if decl_span.is_some() {
+                self.results.record_span(decl, decl_span.unwrap())
+            }
+        }
+        _ => {}
+    }
+    self.results.record_target(node, target)
+    if self.ref_logging {
         self.ref_log.push(TypeRefFact {
             node = node,
             span = span,
-            decl = decl,
-            decl_span = decl_span.unwrap(),
+            target = target,
+            decl_span = decl_span,
         })
+    }
+}
+
+fn is_ref_edge(t: &ResolvedTarget) bool {
+    return t.* match {
+        RtType(_) => true
+        RtStructField(_, _) => true
+        _ => false
     }
 }
 
@@ -3518,19 +3605,27 @@ fn rerecord_sig_refs(self: &Checker) {
     }
 }
 
-// One go-to-definition edge a skipped pass replays: the use's node and span, the declaration's.
+// One reference edge a skipped pass replays: the use's node, span and target, and a type target's
+// declaration span.
 pub type TypeRefFact = struct {
     node: NodeId
     span: SourceSpan
-    decl: NodeId
-    decl_span: SourceSpan
+    target: ResolvedTarget
+    decl_span: SourceSpan?
 }
 
 fn replay_type_refs(self: &Checker, refs: &List(TypeRefFact)) {
     for &r in refs {
         self.results.record_span(r.node, r.span)
-        self.results.record_span(r.decl, r.decl_span)
-        self.results.record_target(r.node, ResolvedTarget.RtType(r.decl))
+        r.target match {
+            RtType(decl) => {
+                if r.decl_span.is_some() {
+                    self.results.record_span(decl, r.decl_span.unwrap())
+                }
+            }
+            _ => {}
+        }
+        self.results.record_target(r.node, r.target)
     }
 }
 
@@ -5100,6 +5195,7 @@ fn resolve_anon_literals(self: &Checker) {
             present.push(rec.name)
             let fty = struct_field_lookup(self, z, rec.name)
             if fty.is_some() {
+                record_init_ref(self, z, rec.name, rec.span)
                 const o = self.engine.unify(rec.ty, fty.unwrap())
                 report_unify(self, &o, E_TYPE_MISMATCH, rec.span)
             }
@@ -6657,6 +6753,9 @@ fn check_struct_pattern(self: &Checker, s: &StructPattern, expected: Ty) {
         if fty.is_none() {
             push_diag_e(self, f.span, E_FIELD_NOT_FOUND, $"no field `{f.name}` on this type")
         }
+        if fty.is_some() {
+            record_init_ref(self, expected, f.name, f.span)
+        }
         const t = fty match {
             Some(x) => x
             None => self.engine.fresh_var()
@@ -6748,6 +6847,9 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
         return
     }
     self.results.record_target(self.node_of(ev.span), ResolvedTarget.RtEnumVariant(n.id, vnum))
+    if ev.qualifier.is_some() {
+        record_nominal_ref(self, head_span(ev.span, ev.qualifier.unwrap().len), n.id)
+    }
 
     let payloads = &e.variants[vnum as usize].payloads
     if payloads.len != ev.payloads.len {
@@ -11480,10 +11582,14 @@ fn variant_call(self: &Checker, call: &CallExpr, arg_tys: &List(Ty)) Ty? {
     return call.callee.* match {
         MemberAccess(ma) => {
             let id = enum_receiver(self, ma.receiver)
-            id match {
-                Some(i) => construct_variant(self, i, ma.member, arg_tys, call.span, node)
-                None => null
+            if id.is_none() {
+                return null
             }
+            const out = construct_variant(self, id.unwrap(), ma.member, arg_tys, call.span, node)
+            if out.is_some() {
+                record_nominal_ref(self, expr_span(ma.receiver), id.unwrap())
+            }
+            out
         }
         Identifier(ide) => unqualified_variant_call(self, &ide, arg_tys, call.span, node)
         _ => null
@@ -11680,6 +11786,7 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
         let v = check_field_value(self, fi)
         let fty = struct_field_lookup(self, ty, fi.name)
         if fty.is_some() {
+            record_init_ref(self, ty, fi.name, fi.span)
             const o = self.engine.unify(v, fty.unwrap())
             report_unify(self, &o, E_TYPE_MISMATCH, fi.span)
         }
@@ -11769,6 +11876,7 @@ fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
     }
     let fty = struct_field_lookup(self, recv, ma.member)
     if fty.is_some() {
+        record_field_ref(self, recv, ma.member, tail_span(ma.span, ma.member.len))
         return fty.unwrap()
     }
     // `let a = .{ x, y }` - nothing has pinned the literal's var yet (`resolve_anon_literals`
@@ -11827,6 +11935,7 @@ fn resolve_pending_members(self: &Checker) {
         self.current_module = pm.module
         const fty = struct_field_lookup(self, z, pm.member)
         if fty.is_some() {
+            record_field_ref(self, z, pm.member, tail_span(pm.span, pm.member.len))
             const o = self.engine.unify(pm.placeholder, fty.unwrap())
             report_unify(self, &o, E_TYPE_MISMATCH, pm.span)
         } else if struct_without_field(self, z, pm.member) {
@@ -12015,7 +12124,11 @@ fn enum_variant_access(self: &Checker, ma: &MemberAccessExpr) Ty? {
     if id.is_none() {
         return null
     }
-    return construct_nullary(self, id.unwrap(), ma.member, ma.span)
+    const out = construct_nullary(self, id.unwrap(), ma.member, ma.span)
+    if out.is_some() {
+        record_nominal_ref(self, expr_span(ma.receiver), id.unwrap())
+    }
+    return out
 }
 
 // The nominal a bare-identifier receiver names, when it is not shadowed by a value binding. Locals

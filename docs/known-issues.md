@@ -735,6 +735,30 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### LSP Rename: What the First Cut Leaves Out
+
+**Status:** Open
+**Affected:** `lib/flang_lsp/src/handlers/rename.f`, `lib/flang_typer/src/checker.f` (`record_ref`)
+
+Rename rewrites what the checker recorded an edge for. These uses carry none, so a rename leaves them
+spelled the old way and the next check reports the break:
+
+- **Shorthand initializers and pattern fields.** `P { x }` and `P { x } =>` are the binding's node,
+  so the field edge is not recorded there. Renaming field `x` leaves them; renaming a local `x`
+  rewrites them to `P { y }`, which names a field `P` lacks. The fix is to expand the shorthand
+  (`P { x = y }`) when either side is renamed.
+- **Member access through `op_deref`.** A field reached through a smart pointer (`w.x` with
+  `w: Wrapper(P)`) records the deref chain, not the field.
+- **Operator functions.** Uses through an operator (`a == b` calling `op_eq`) live in
+  `resolved_ops`, not `resolved_targets`.
+- **Type aliases.** `type Index = usize` is not a nominal and records no edges; rename refuses it.
+- **Uninstantiated generic bodies and `#define` template text.** No overlay exists for the first,
+  and template bodies are CST byte ranges, not AST.
+
+Name collisions with an existing declaration are not checked before answering.
+
+---
+
 ### LSP: Hover and Inlay Hints Inside Generic Bodies Show One Instantiation's Types
 
 **Status:** Open (deferred)

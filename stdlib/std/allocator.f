@@ -8,14 +8,33 @@ import std.option
 // For the colocated test blocks' assertions only - no shipped code here depends on std.test.
 import std.test
 
-// The allocator code allocates through when it names none (RFC-038): every allocator parameter
-// defaults to it, and a null `&Allocator` resolves to it at the allocation functions. A process
-// starts on the global (malloc) allocator; a scope picks another by rebinding it.
+// The default allocator. Collections and other allocating structures in the standard library use it
+// when no allocator is passed explicitly: `list(8)` is `list(8, context.allocator)`. A collection
+// captures the allocator when it is created and keeps it for its whole life, so a later rebind
+// never moves memory it already owns.
+//
+// It starts as the global allocator, the C heap (`malloc` / `free`). Like every context field it is
+// dynamically scoped: a rebind holds for the block and everything called from it, and the previous
+// allocator is back when the block ends.
+//
+//     let names = list(16, &arena) // this collection only
+//
+//     context(allocator = &arena) {
+//         let names = list(16) // everything allocated in the block
+//     }
 pub context allocator: &Allocator = &global_allocator
 
-// The allocator for memory nothing frees on its own: it is reclaimed all at once when the scope
-// that rebinds this field resets it - a request in a server, a frame in a game, a test. Under the
-// default, the global allocator, such memory is never reclaimed.
+// The temporary allocator, for short-lived allocations with a known lifetime: everything allocated
+// between a fixed start and end - a request, a frame, a test - can be reclaimed all at once at the
+// end. It is usually rebound to an arena that is reset when that work is done:
+//
+//     const frame = arena.allocator()
+//     context(temp_allocator = &frame) {
+//         render(scene)
+//     }
+//     arena.reset()
+//
+// It starts as the global allocator, the same default as `allocator`.
 pub context temp_allocator: &Allocator = &global_allocator
 
 // =============================================================================

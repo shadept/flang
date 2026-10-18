@@ -10,6 +10,7 @@
 import std.collections.list
 import std.derive
 import std.encoding.codec
+import std.encoding.value
 import std.option
 import std.string
 
@@ -163,6 +164,7 @@ pub type ServerCapabilities = struct {
     document_formatting_provider: bool
     code_lens_provider: CodeLensOptions?
     signature_help_provider: SignatureHelpOptions
+    rename_provider: RenameOptions
 }
 
 #derive(ServerCapabilities, serialize)
@@ -282,6 +284,53 @@ pub type TextEdit = struct {
 }
 
 #derive(TextEdit, serialize)
+
+// ---- Rename ----
+
+pub type RenameOptions = struct {
+    prepare_provider: bool
+}
+
+#derive(RenameOptions, serialize)
+
+pub type PrepareRenameResult = struct {
+    range: LspRange
+    placeholder: String
+}
+
+#derive(PrepareRenameResult, serialize)
+
+// An OptionalVersionedTextDocumentIdentifier: `version` must be present, and is always `null` - the
+// edits apply to whatever version the client holds.
+pub type EditedDocument = struct {
+    uri: OwnedString
+    version: Value
+}
+
+#derive(EditedDocument, serialize)
+
+pub type TextDocumentEdit = struct {
+    text_document: EditedDocument
+    edits: List(TextEdit)
+}
+
+#derive(TextDocumentEdit, serialize)
+
+pub fn deinit(self: move TextDocumentEdit) {
+    self.text_document.uri.deinit()
+    self.edits.deinit()
+}
+
+// URIs travel as values (`documentChanges`), never as map keys: the encoder camel-cases every key.
+pub type WorkspaceEdit = struct {
+    document_changes: List(TextDocumentEdit)
+}
+
+#derive(WorkspaceEdit, serialize)
+
+pub fn deinit(self: move WorkspaceEdit) {
+    self.document_changes.deinit()
+}
 
 // ---- Code lens ----
 
