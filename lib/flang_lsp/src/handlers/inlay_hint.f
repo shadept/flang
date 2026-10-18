@@ -336,7 +336,7 @@ fn walk_if(out: &List(Binder), i: &IfExpr, owner: SourceSpan) {
 // Tests
 
 test "hint sites cover annotation-less lets and for binders, nested included" {
-    const src = "fn go() {\n    let a = 1\n    let b: i32 = 2\n    for x in 0..3 {\n        let c = fn(y: i32) i32 { let d = y\n return d }\n    }\n}\n"
+    const src = "fn go() {\n    let a = 1\n    let b: i32 = 2\n    for x in 0..3 {\n        let c = { y: i32 => let d = y\n d }\n    }\n}\n"
     let doc = parse_doc(src)
     defer doc.deinit()
     let sites = hint_sites(&doc.module)

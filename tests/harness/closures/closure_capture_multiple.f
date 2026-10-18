@@ -7,6 +7,6 @@
 pub fn main() i32 {
     let a = 10
     let b = 13
-    let f = fn() i32 { a + b }
+    let f = { => a + b }
     return f()
 }

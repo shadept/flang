@@ -7,7 +7,7 @@ import std.collections.list
 pub fn main() i32 {
     let xs: List(i32) = list(0)
     defer xs.deinit()
-    let add = fn(v: i32) { xs.push(v) }
+    let add = { v: i32 => xs.push(v) }
     add(1)
     add(2)
     return xs.len as i32

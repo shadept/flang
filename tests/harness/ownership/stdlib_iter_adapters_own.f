@@ -29,9 +29,9 @@ pub fn next(self: &Gen) i32? {
 
 pub fn main() i32 {
     let total = 0
-    for x in gen(4).filter(fn(v: i32) bool { return v % 2 == 1 }) {
+    for x in gen(4).filter({ v: i32 => v % 2 == 1 }) {
         total = total + x
     }
-    const n = gen(3).map(fn(v: i32) i32 { return v * 2 }).count()
+    const n = gen(3).map { v: i32 => v * 2 }.count()
     return total + (n as i32) - 1
 }

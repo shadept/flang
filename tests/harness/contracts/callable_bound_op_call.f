@@ -15,6 +15,6 @@ fn apply(x: i32, f: $F) i32 where F: fn(i32) i32 {
 
 pub fn main() i32 {
     const base: i32 = 4
-    const add = fn(x: i32) i32 { x + base }
+    const add = { x: i32 => x + base }
     return apply(5, Scale { k = 2 }) + apply(16, add)
 }

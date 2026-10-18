@@ -131,7 +131,8 @@ pub type NodeKind = enum {
     MatchExpr
     // One arm inside a match expression.
     MatchArm
-    // `fn(x: T) U { ... }` - anonymous function literal (may capture).
+    // `{ x: T => ... }` - anonymous function literal (may capture); also the removed `fn(x: T) U {
+    // ... }` form, kept for error recovery.
     LambdaExpr
     // `$"text {expr} more"` and friends.
     InterpolatedStringExpr

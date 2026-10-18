@@ -13,5 +13,5 @@ fn apply_bounded(x: i32, f: $F) i32 where F: fn(i32) i32 {
 }
 
 pub fn main() i32 {
-    return apply(1, fn(v) { v }) + apply_bounded(1, fn(v) { v })
+    return apply(1) { v => v } + apply_bounded(1) { v => v }
 }

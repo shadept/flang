@@ -19,7 +19,7 @@ pub fn main() i32 {
 
     // keys through filter + to_list, with a captured threshold
     let min_key = 1u32
-    let big = d.keys().filter(fn(k) { k > min_key }).to_list()
+    let big = d.keys().filter { k => k > min_key }.to_list()
     defer big.deinit()
     if big.len != 2 {
         return 1
@@ -27,7 +27,7 @@ pub fn main() i32 {
 
     // values through map + fold
     let scale = 2i32
-    let total = d.values().map(fn(v) { v * scale }).fold(0i32, fn(a, v) { a + v })
+    let total = d.values().map { v => v * scale }.fold(0i32) { a, v => a + v }
     if total != 120 {
         return 2
     }
@@ -39,10 +39,10 @@ pub fn main() i32 {
     if d.values().max().unwrap() != 30 {
         return 4
     }
-    if d.values().min_by(fn(v) { 0 - v }).unwrap() != 30 {
+    if d.values().min_by({ v => 0 - v }).unwrap() != 30 {
         return 5
     }
-    if !d.values().any(fn(v) { v == 20 }) {
+    if !d.values().any({ v => v == 20 }) {
         return 6
     }
 

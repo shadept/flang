@@ -261,48 +261,48 @@ pub fn rpc_writer(w: Writer, options: JsonOptions = json_options()) RpcWriter {
 }
 
 pub fn request(self: &RpcWriter, id: i64, method: String, params: &$P) where P: Serialize {
-    self.send(fn(e: &Encoder) void {
+    self.send { e =>
         e.key("id")
         e.encode_int(id, 8)
         e.key("method")
         e.encode_str(method)
         e.key("params")
         params.serialize(e)
-    })
+    }
 }
 
 // A request without params.
 pub fn request(self: &RpcWriter, id: i64, method: String) {
-    self.send(fn(e: &Encoder) void {
+    self.send { e =>
         e.key("id")
         e.encode_int(id, 8)
         e.key("method")
         e.encode_str(method)
-    })
+    }
 }
 
 pub fn notify(self: &RpcWriter, method: String, params: &$P) where P: Serialize {
-    self.send(fn(e: &Encoder) void {
+    self.send { e =>
         e.key("method")
         e.encode_str(method)
         e.key("params")
         params.serialize(e)
-    })
+    }
 }
 
 // The answer to the request `id` names. A response must carry `result`, and a `None` there is an
 // absent value the encoder leaves out: answer "no result" with `&Value.Null`.
 pub fn respond(self: &RpcWriter, id: &Value, result: &$R) where R: Serialize {
-    self.send(fn(e: &Encoder) void {
+    self.send { e =>
         e.key("id")
         id.serialize(e)
         e.key("result")
         result.serialize(e)
-    })
+    }
 }
 
 pub fn respond_error(self: &RpcWriter, id: &Value, code: i64, message: String) {
-    self.send(fn(e: &Encoder) void {
+    self.send { e =>
         e.key("id")
         id.serialize(e)
         e.key("error")
@@ -312,7 +312,7 @@ pub fn respond_error(self: &RpcWriter, id: &Value, code: i64, message: String) {
         e.key("message")
         e.encode_str(message)
         e.end_map()
-    })
+    }
 }
 
 // One frame: the envelope object with its version, the members `body` writes, closed.

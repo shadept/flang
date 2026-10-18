@@ -29,12 +29,12 @@ fn take(self: &Wrap($T)) T where T: copyable {
 }
 
 pub fn main() i32 {
-    let wf = mk(Foo { x = 1i32 }, fn(p: &Foo) {})
+    let wf = mk(Foo { x = 1i32 }) { p: &Foo => }
     if take(&wf).x != 1i32 {
         return 1
     }
 
-    let wb = mk(Bar { y = 2i32 }, fn(p: &Bar) {})
+    let wb = mk(Bar { y = 2i32 }) { p: &Bar => }
     if take(&wb).y != 2i32 {
         return 2
     }

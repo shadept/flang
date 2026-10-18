@@ -26,7 +26,7 @@ pub fn main() i32 {
     if xs[0].fd != 2 or xs[2].fd != 9 {
         return 1
     }
-    xs.sort(fn(a, b) { op_cmp(b.fd, a.fd) })
+    xs.sort { a, b => op_cmp(b.fd, a.fd) }
     if xs[0].fd != 9 or xs[2].fd != 2 {
         return 2
     }

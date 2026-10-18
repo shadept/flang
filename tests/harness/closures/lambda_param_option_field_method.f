@@ -20,7 +20,7 @@ fn apply(f: $F, entry: Undo) u32 where F: fn(Undo) u32 {
 }
 
 pub fn main() i32 {
-    let restored = apply(fn(entry) {
+    let restored = apply({ entry =>
         if entry.prev.is_some() {
             entry.prev.unwrap()
         } else {

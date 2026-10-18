@@ -445,7 +445,7 @@ fn check_project(
         return
     }
 
-    let path_views = self.fqns.map(fn(s: OwnedString) { s.view })
+    let path_views = self.fqns.map { it.view }
     defer path_views.deinit()
     let edges = index_edges(&self.file_paths, edge_from, edge_to)
     defer edges.deinit()

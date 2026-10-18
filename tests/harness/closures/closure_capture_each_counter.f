@@ -6,6 +6,6 @@ pub fn main() i32 {
     let values: [i32; 3] = [4, 5, 6]
     let s: i32[] = values
     let c: usize = 0
-    s.each(fn(v) { c = c + 1 })
+    s.each { v => c = c + 1 }
     return c as i32
 }

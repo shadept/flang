@@ -25,11 +25,11 @@ fn bad(n: i32) Result(FileHandle, FileHandle) {
 
 // Both payloads leave a result through `map`, `map_err` and `and_then`, whichever arm holds them.
 pub fn main() i32 {
-    const a = good(1).map_err(fn(e: move FileHandle) i32 { return close(e) }).unwrap().close()
-    const b = bad(2).map(fn(h: move FileHandle) i32 { return close(h) }).unwrap_err().close()
-    const c = bad(3).and_then(fn(h: move FileHandle) Result(i32, FileHandle) { return Ok(close(h)) })
+    const a = good(1).map_err { e: move FileHandle => close(e) }.unwrap().close()
+    const b = bad(2).map { h: move FileHandle => close(h) }.unwrap_err().close()
+    const c = bad(3).and_then { h: move FileHandle => Ok(close(h)) }
         .unwrap_err().close()
-    const d = good(4).map(fn(h: move FileHandle) i32 { return close(h) }).unwrap()
-    const e = bad(5).map_err(fn(e: move FileHandle) i32 { return close(e) }).unwrap_err()
+    const d = good(4).map { h: move FileHandle => close(h) }.unwrap()
+    const e = bad(5).map_err { e: move FileHandle => close(e) }.unwrap_err()
     return a + b + c + d + e
 }

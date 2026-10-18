@@ -9,15 +9,15 @@
 fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 { return f(x) }
 
 fn with_key(key: $F, x: i32) i32 where F: fn(i32) i32 {
-    let inner = fn(v: i32) i32 { key(v) + 100 }
+    let inner = { v: i32 => key(v) + 100 }
     return apply(inner, x)
 }
 
 pub fn main() i32 {
-    if with_key(fn(x: i32) i32 { x * 3 }, 4) != 112 { return 1 }
+    if with_key({ x: i32 => x * 3 }, 4) != 112 { return 1 }
 
     let off = 7
-    if with_key(fn(x: i32) i32 { x + off }, 4) != 111 { return 2 }
+    if with_key({ x: i32 => x + off }, 4) != 111 { return 2 }
 
     return 0
 }

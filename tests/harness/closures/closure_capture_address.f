@@ -8,7 +8,7 @@ fn set(p: &i32, v: i32) {
 // `&k` inside the body addresses the outer binding.
 pub fn main() i32 {
     let k = 0
-    let f = fn() { set(&k, 7) }
+    let f = { => set(&k, 7) }
     f()
     return k
 }

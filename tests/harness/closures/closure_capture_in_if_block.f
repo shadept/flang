@@ -8,7 +8,7 @@ pub fn main() i32 {
     let base = 7
     let pick = true
     if pick {
-        let f = fn(x: i32) i32 { x * base }
+        let f = { x: i32 => x * base }
         return f(3)
     } else {
         return 0

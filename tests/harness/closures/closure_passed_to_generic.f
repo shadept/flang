@@ -11,5 +11,5 @@ fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 {
 
 pub fn main() i32 {
     let bias = 40
-    return apply(fn(x: i32) i32 { x + bias }, 10)
+    return apply({ x: i32 => x + bias }, 10)
 }

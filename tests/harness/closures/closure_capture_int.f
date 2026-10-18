@@ -6,6 +6,6 @@
 
 pub fn main() i32 {
     let k = 7
-    let f = fn(x: i32) i32 { x * k }
+    let f = { x: i32 => x * k }
     return f(2)
 }

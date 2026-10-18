@@ -181,38 +181,32 @@ test "unwrap_err returns error on Err" {
 }
 
 test "map transforms an Ok and passes an Err through" {
-    const doubled: Result(i32, String) = Ok(21).map(fn(v: i32) i32 { return v * 2 })
+    const doubled: Result(i32, String) = Ok(21).map { it * 2 }
     assert_eq(doubled.unwrap(), 42, "Ok is mapped")
 
     const failed: Result(i32, String) = Err("nope")
-    const still: Result(i32, String) = failed.map(fn(v: i32) i32 { return v * 2 })
+    const still: Result(i32, String) = failed.map { it * 2 }
     assert_true(still.is_err(), "Err passes through")
     assert_eq(still.unwrap_err(), "nope", "error is unchanged")
 }
 
 test "map_err translates an Err and leaves an Ok alone" {
     const failed: Result(i32, i32) = Err(2)
-    const translated: Result(i32, String) = failed.map_err(fn(e: i32) String { return "code" })
+    const translated: Result(i32, String) = failed.map_err { "code" }
     assert_true(translated.is_err(), "still an error")
     assert_eq(translated.unwrap_err(), "code", "error is translated")
 
     const fine: Result(i32, i32) = Ok(7)
-    const untouched: Result(i32, String) = fine.map_err(fn(e: i32) String { return "code" })
+    const untouched: Result(i32, String) = fine.map_err { "code" }
     assert_eq(untouched.unwrap(), 7, "Ok is untouched")
 }
 
 test "and_then chains a fallible step without nesting" {
     const ok: Result(i32, String) = Ok(4)
-    const chained: Result(
-        i32,
-        String,
-    ) = ok.and_then(fn(v: i32) Result(i32, String) { return Ok(v + 1) })
+    const chained: Result(i32, String) = ok.and_then { Ok(it + 1) }
     assert_eq(chained.unwrap(), 5, "chained through")
 
-    const bailed: Result(
-        i32,
-        String,
-    ) = ok.and_then(fn(v: i32) Result(i32, String) { return Err("bail") })
+    const bailed: Result(i32, String) = ok.and_then { Err("bail") }
     assert_true(bailed.is_err(), "inner failure surfaces")
 }
 

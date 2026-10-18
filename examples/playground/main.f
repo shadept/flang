@@ -28,7 +28,7 @@ pub fn main() i32 {
 
     let sb = string_builder(content.len)
     let writer = sb.buffered_writer() // example using writer
-    for c in content.chars().map(fn(c) { c.upper() }) {
+    for c in content.chars().map({ it.upper() }) {
         writer.write(c as u8)
     }
 

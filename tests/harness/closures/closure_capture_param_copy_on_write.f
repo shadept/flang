@@ -7,7 +7,7 @@ type Pt = struct {
 }
 
 fn bump(p: Pt) i32 {
-    let f = fn() { p.x = p.x + 10 }
+    let f = { => p.x = p.x + 10 }
     f()
     return p.x
 }

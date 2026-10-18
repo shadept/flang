@@ -4,7 +4,7 @@
 // Capturing the enclosing function's parameter, not just a `let`-binding.
 
 fn make_adder(base: i32, x: i32) i32 {
-    let f = fn(y: i32) i32 { base + y }
+    let f = { y: i32 => base + y }
     return f(x)
 }
 

@@ -9,5 +9,5 @@ fn apply(f: fn(i32) i32, x: i32) i32 {
 }
 
 pub fn main() i32 {
-    return apply(fn(x: i32) i32 { x * 2 }, 21)
+    return apply({ x: i32 => x * 2 }, 21)
 }

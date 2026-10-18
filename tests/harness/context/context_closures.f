@@ -19,12 +19,12 @@ fn run(f: $F) where F: fn() {
 pub fn main() i32 {
     context(who = "creator") {
         const saved: Context = context
-        run(fn() { println(context.who) })
-        run(fn() {
+        run { => println(context.who) }
+        run { =>
             context(saved) {
                 println(context.who)
             }
-        })
+        }
     }
     return 0
 }

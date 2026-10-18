@@ -32,8 +32,8 @@ fn run() i32? {
 
 fn fallback() i32 {
     return none().unwrap_or(open(0)).close()
-        + maybe(1).map(fn(h: move FileHandle) i32 { return close(h) }).unwrap_or(0)
-        + maybe(2).filter(fn(h: FileHandle) bool { return h.fd > 5 }).map(fn(h: move FileHandle) i32 { return close(h) }).unwrap_or(0)
+        + maybe(1).map { h: move FileHandle => close(h) }.unwrap_or(0)
+        + maybe(2).filter { h: FileHandle => h.fd > 5 }.map { h: move FileHandle => close(h) }.unwrap_or(0)
 }
 
 // A payload leaves an option through `?`, `??`, `unwrap_or`, `map` and `filter`.

@@ -15,9 +15,9 @@ fn close(h: move FileHandle) i32 {
 }
 
 pub fn main() i32 {
-    let f = fn() i32 {
+    let f = { =>
         open(3)                     // error E2132
-        return 0
+        0
     }
     return f()
 }

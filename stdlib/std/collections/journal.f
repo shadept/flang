@@ -143,7 +143,7 @@ test "rollback undoes the innermost checkpoint newest first; commit keeps it" {
     j.record(value)
     value = 2
     let target = &value
-    j.rollback(fn(prev) { apply_undo(target, prev) })
+    j.rollback { apply_undo(target, it) }
     assert_eq(value, 0i32, "both mutations undone, in reverse")
     assert_eq(j.depth(), 0 as usize, "the checkpoint is closed")
 
@@ -170,7 +170,7 @@ test "an inner commit folds into the outer checkpoint, which an outer rollback s
     j.commit()
     assert_eq(value, 2i32, "the inner region kept its change")
     assert_eq(j.depth(), 1 as usize, "one checkpoint left")
-    j.rollback(fn(prev) { apply_undo(target, prev) })
+    j.rollback { apply_undo(target, it) }
     assert_eq(value, 0i32, "the outer rollback undid the inner region's change too")
 }
 
@@ -185,7 +185,7 @@ test "a journal reaches its high-water mark and then stops allocating" {
             j.record(i)
         }
         j.commit()
-        j.rollback(fn(prev) {})
+        j.rollback {}
     }
     const after_warmup = counting.allocs
     for round in 0..50i32 {
@@ -193,7 +193,7 @@ test "a journal reaches its high-water mark and then stops allocating" {
         for i in 0..20i32 {
             j.record(i)
         }
-        j.rollback(fn(prev) {})
+        j.rollback {}
     }
     assert_eq(counting.allocs, after_warmup, "no allocation once the buffers have settled")
     j.deinit()

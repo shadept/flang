@@ -16,9 +16,9 @@ fn close(h: move FileHandle) i32 {
 
 // A lambda body is checked like any function body.
 pub fn main() i32 {
-    let f = fn(h: move FileHandle) i32 {
+    let f = { h: move FileHandle =>
         let n = h.close()
-        return n + h.fd             // error E2123
+        n + h.fd             // error E2123
     }
     return f(open(3))
 }

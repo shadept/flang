@@ -5,7 +5,7 @@
 // was built.
 pub fn main() i32 {
     let k = 5
-    let f = fn() i32 { k }
+    let f = { => k }
     k = 999
     return f() - 990
 }

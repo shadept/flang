@@ -32,15 +32,15 @@ pub fn main() i32 {
     defer d.deinit()
     d.set(1u32, 10i32)
     d.set(2u32, 21i32)
-    let evens = d.filter(fn(k, v) { v % 2 == 0 })
+    let evens = d.filter { k, v => v % 2 == 0 }
     defer evens.deinit()
     if evens.len() != 1 {
         return 3
     }
-    if !d.any(fn(k, v) { v > 20 }) {
+    if !d.any({ k, v => v > 20 }) {
         return 4
     }
-    if d.count(fn(k, v) { v > 5 }) != 2 {
+    if d.count({ k, v => v > 5 }) != 2 {
         return 5
     }
 

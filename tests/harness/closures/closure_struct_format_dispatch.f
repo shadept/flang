@@ -16,7 +16,7 @@ type Deferred = struct(F) {
     emit: F
 }
 
-fn deferred(f: move $F) Deferred(F) {
+fn deferred(f: move $F) Deferred(F) where F: fn(Writer) {
     return .{ emit = move f }
 }
 
@@ -26,11 +26,11 @@ pub fn format(self: &Deferred($F), w: Writer, spec: String) {
 
 pub fn main() i32 {
     let x = 42i32
-    let d = deferred(fn(w: Writer) {
+    let d = deferred { w: Writer =>
         w.write_str("a")
         x.format(w, "")
         w.write_str("b")
-    })
+    }
 
     let out = string_builder(16)
     defer out.deinit()

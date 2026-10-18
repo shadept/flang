@@ -8,6 +8,6 @@ fn apply(f: fn(i32) i32, x: i32) i32 {
 }
 
 pub fn main() i32 {
-    let f: fn(i32) i32 = fn(x) { x + 1 }
+    let f: fn(i32) i32 = { x => x + 1 }
     return f(41)
 }

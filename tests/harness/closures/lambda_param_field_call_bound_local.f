@@ -18,7 +18,7 @@ fn apply(f: $F, entry: Undo) u32 where F: fn(Undo) u32 {
 }
 
 pub fn main() i32 {
-    let restored = apply(fn(entry) {
+    let restored = apply({ entry =>
         let present = entry.prev.is_some()
         let value = entry.prev.unwrap_or(0u32)
         if present { value } else { 1u32 }

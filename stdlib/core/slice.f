@@ -231,7 +231,7 @@ pub fn partition_point(s: $T[], pred: $F) usize where F: fn(T) bool {
 //
 // - `s`: must be sorted ascending.
 pub fn lower_bound(s: $T[], value: T) usize where T: Ordered {
-    return s.partition_point(fn(x) { x < value })
+    return s.partition_point { it < value }
 }
 
 // Returns the index of the first element greater than `value`: the last position at which `value`
@@ -239,7 +239,7 @@ pub fn lower_bound(s: $T[], value: T) usize where T: Ordered {
 //
 // - `s`: must be sorted ascending.
 pub fn upper_bound(s: $T[], value: T) usize where T: Ordered {
-    return s.partition_point(fn(x) { !(value < x) })
+    return s.partition_point { !(value < it) }
 }
 
 // Returns the index of `value`, or null when absent; with duplicates, the first.
@@ -611,7 +611,7 @@ test "first, last, find, any, all over a slice" {
 test "partition_point, lower_bound, upper_bound and binary_search over a sorted slice" {
     let arr = [1i32, 3i32, 3i32, 3i32, 8i32]
     const s = arr as i32[]
-    assert_eq(s.partition_point(fn(x: i32) bool { x < 5 }), 4 as usize, "prefix below 5")
+    assert_eq(s.partition_point { it < 5 }, 4 as usize, "prefix below 5")
     assert_eq(s.lower_bound(3), 1 as usize, "first 3")
     assert_eq(s.upper_bound(3), 4 as usize, "past the last 3")
     assert_eq(s.upper_bound(3) - s.lower_bound(3), 3 as usize, "three copies")
@@ -632,10 +632,10 @@ test "min, max and the folds over a slice" {
     const s = arr as i32[]
     assert_eq(s.min().unwrap(), 1, "min")
     assert_eq(s.max().unwrap(), 9, "max")
-    assert_eq(s.min_by(fn(v: i32) i32 { 0 - v }).unwrap(), 9, "min_by negated")
-    assert_eq(s.fold(0i32, fn(a: i32, b: i32) i32 { a + b }), 13, "fold")
+    assert_eq(s.min_by { 0 - it }.unwrap(), 9, "min_by negated")
+    assert_eq(s.fold(0i32) { a, b => a + b }, 13, "fold")
     assert_eq(
-        s.fold_right(10i32, fn(x: i32, acc: i32) i32 { acc - x }),
+        s.fold_right(10i32) { x, acc => acc - x },
         10 - 1 - 9 - 3,
         "fold_right runs from the end",
     )

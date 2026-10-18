@@ -32,7 +32,7 @@ const INSERTION_CUTOFF: usize = 24
 // =============================================================================
 
 pub fn insertion_sort(s: $T[]) where T: Ordered {
-    _insertion_sort_range(s, 0, s.len, fn(a: T, b: T) Ord { return op_cmp(a, b) })
+    _insertion_sort_range(s, 0, s.len) { a, b => op_cmp(a, b) }
 }
 
 pub fn insertion_sort(s: $T[], cmp: $F) where F: fn(T, T) Ord {
@@ -73,7 +73,7 @@ fn _insertion_sort_range(s: $T[], lo: usize, hi: usize, cmp: $F) where F: fn(T, 
 // =============================================================================
 
 pub fn quicksort(s: $T[]) where T: Ordered {
-    _quicksort_range(s, 0, s.len, fn(a: T, b: T) Ord { return op_cmp(a, b) })
+    _quicksort_range(s, 0, s.len) { a, b => op_cmp(a, b) }
 }
 
 pub fn quicksort(s: $T[], cmp: $F) where F: fn(T, T) Ord {
@@ -176,7 +176,7 @@ fn _sort3(s: $T[], a: usize, b: usize, c: usize, cmp: fn(T, T) Ord) {
 // Optimally Adapt to Existing Runs" (ESA 2018).
 
 pub fn powersort(s: $T[]) where T: Ordered {
-    _powersort_impl(s, fn(a: T, b: T) Ord { return op_cmp(a, b) })
+    _powersort_impl(s) { a, b => op_cmp(a, b) }
 }
 
 pub fn powersort(s: $T[], cmp: $F) where F: fn(T, T) Ord {
@@ -219,7 +219,7 @@ fn _powersort_owning(s: $T[], cmp: $F) where F: fn(T, T) Ord {
     for i in 0..n {
         order[i] = i
     }
-    _powersort_impl(order, fn(a: usize, b: usize) Ord { return cmp(s[a], s[b]) })
+    _powersort_impl(order) { a, b => cmp(s[a], s[b]) }
     _apply_order(s, order)
 }
 
@@ -428,7 +428,7 @@ pub fn sort(s: $T[], cmp: $F) where F: fn(T, T) Ord {
 
 // Sorts `s` in place by `key(x)` ascending, keeping the order of equal keys.
 pub fn sort_by(s: $T[], key: $F) where F: fn(T) $K, K: Ordered {
-    sort(s, fn(a, b) {
+    sort(s) { a, b =>
         let ka = key(a)
         let kb = key(b)
         if ka < kb {
@@ -438,7 +438,7 @@ pub fn sort_by(s: $T[], key: $F) where F: fn(T) $K, K: Ordered {
         } else {
             Ord.Equal
         }
-    })
+    }
 }
 
 // =============================================================================

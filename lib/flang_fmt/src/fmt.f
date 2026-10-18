@@ -2749,7 +2749,7 @@ test "a comment or a blank line inside a list keeps it broken" {
 
 test "statements inside a lambda argument never join" {
     const cfg = default_config()
-    const src = "fn f() {\n    g(fn() {\n        a()\n        b()\n    })\n}\n"
+    const src = "fn f() {\n    g({ =>\n        a()\n        b()\n    })\n}\n"
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()

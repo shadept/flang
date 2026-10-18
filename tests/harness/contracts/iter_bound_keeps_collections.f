@@ -20,14 +20,14 @@ pub fn main() i32 {
     let d: Dict(i32, i32) = dict()
     defer d.deinit()
     d[1i32] = 10i32
-    if !d.any(fn(k, v) { k == 1 and v == 10 }) {
+    if !d.any({ k, v => k == 1 and v == 10 }) {
         return 2
     }
     // And on an iterator they still apply.
-    if xs.iter().map(fn(x) { x * 2 }).last().unwrap() != 6 {
+    if xs.iter().map({ x => x * 2 }).last().unwrap() != 6 {
         return 3
     }
-    if xs.iter().filter(fn(x) { x > 1 }).count() != 2 {
+    if xs.iter().filter({ x => x > 1 }).count() != 2 {
         return 4
     }
     return 0

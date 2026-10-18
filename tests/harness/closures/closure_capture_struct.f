@@ -7,6 +7,6 @@ type Point = struct { x: i32, y: i32 }
 
 pub fn main() i32 {
     let p = Point { x = 10, y = 20 }
-    let f = fn() i32 { p.x + p.y }
+    let f = { => p.x + p.y }
     return f()
 }

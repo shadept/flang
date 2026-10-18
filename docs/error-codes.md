@@ -219,7 +219,7 @@ pub fn main() i32 {
 
 ### E1006: Break Outside Loop
 
-`break` can only appear inside a `loop` or `for` body.
+`break` can only appear inside a `loop`, `for` or `while` body. A lambda body is outside every enclosing loop.
 
 ```flang
 pub fn main() i32 {
@@ -232,7 +232,7 @@ pub fn main() i32 {
 
 ### E1007: Continue Outside Loop
 
-`continue` can only appear inside a `loop` or `for` body.
+`continue` can only appear inside a `loop`, `for` or `while` body. A lambda body is outside every enclosing loop.
 
 ```flang
 pub fn main() i32 {
@@ -3212,6 +3212,56 @@ Move the type parameters from the name to after the `struct`/`enum` keyword.
 
 ---
 
+### E1053: Removed Lambda Syntax
+
+**Category**: Parsing
+**Severity**: Error
+
+#### Description
+
+The `fn(params) R { body }` lambda expression was removed by RFC-039. A lambda is a brace block
+with its parameters before `=>`, and has no return-type slot: the return type comes from the
+expected function type or bound, else from the body.
+
+#### Example
+
+```flang
+// Error:
+apply(fn(x: i32) i32 { x * 2 }, 21)
+
+// Correct:
+apply({ x: i32 => x * 2 }, 21)
+xs.map { it * 2 }
+```
+
+---
+
+### E1054: `return` Inside a Lambda
+
+**Category**: Parsing
+**Severity**: Error
+
+#### Description
+
+A lambda's value is its body's last expression (RFC-039). Inside braces, `return` reads as leaving
+the enclosing function, so it is refused in a lambda body rather than silently leaving the lambda.
+
+#### Example
+
+```flang
+// Error:
+xs.map { x => return x * 2 }
+
+// Correct:
+xs.map { it * 2 }
+with_c_path(path) { p =>
+    check(open(p), err)?            // early exit: `?`, `if`/`else` or `match`
+    Ok(fd)
+}
+```
+
+---
+
 ## E209X: Postfix Try Operator (RFC-009)
 
 ### E2090: `?` Outside Function
@@ -3456,7 +3506,7 @@ fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }
 
 pub fn main() i32 {
     let k = 7
-    return apply(fn(x: i32) i32 { x * k }, 5)   // error E2111
+    return apply({ x: i32 => x * k }, 5)   // error E2111
 }
 ```
 

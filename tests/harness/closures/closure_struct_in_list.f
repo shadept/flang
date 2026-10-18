@@ -10,7 +10,7 @@ type Thunk = struct(F) {
     f: F
 }
 
-fn thunk(f: move $F) Thunk(F) {
+fn thunk(f: move $F) Thunk(F) where F: fn() i32 {
     return .{ f = move f }
 }
 
@@ -19,7 +19,7 @@ pub fn main() i32 {
     let xs = list(3)
     defer xs.deinit()
     for _i in 0..3usize {
-        xs.push(thunk(fn() i32 { scale }))
+        xs.push(thunk { => scale })
     }
     let total = 0i32
     for j in 0..xs.len {

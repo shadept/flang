@@ -16,7 +16,7 @@ fn close(h: move FileHandle) i32 {
 
 // A parameter without `move` stays read-only through a capture.
 fn reset(h: FileHandle) i32 {
-    let f = fn() { h.fd = 0 }       // error E2131
+    let f = { => h.fd = 0 }       // error E2131
     f()
     return h.fd
 }

@@ -24,5 +24,5 @@ fn apply(x: $T, f: $F) i32 where F: fn(T) i32 {
 }
 
 pub fn main() i32 {
-    return apply(Feet { v = 14 }, fn(x) { x.amount() })
+    return apply(Feet { v = 14 }) { x => x.amount() }
 }

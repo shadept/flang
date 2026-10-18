@@ -10,5 +10,5 @@ fn apply(f: fn(i32) i32, x: i32) i32 {
 
 pub fn main() i32 {
     let k = 7
-    return apply(fn(x: i32) i32 { x * k }, 5)
+    return apply({ x: i32 => x * k }, 5)
 }

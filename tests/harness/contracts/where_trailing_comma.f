@@ -15,5 +15,5 @@ where
 }
 
 pub fn main() i32 {
-    return pick(3i32, true) + apply(3i32, fn(v: i32) i32 { v + 1 })
+    return pick(3i32, true) + apply(3i32) { v: i32 => v + 1 }
 }

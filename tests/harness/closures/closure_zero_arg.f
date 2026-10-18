@@ -5,6 +5,6 @@
 
 pub fn main() i32 {
     let answer = 42
-    let fetch = fn() i32 { answer }
+    let fetch = { => answer }
     return fetch()
 }

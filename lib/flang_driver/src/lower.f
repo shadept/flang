@@ -10131,7 +10131,7 @@ fn gep_offset_count(f: &Function, off: i64) usize {
 test "a non-capturing lambda emits a module-level function and a FuncRef" {
     let unit = analyze(
         from_view(
-            "fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { return apply(fn(v: i32) i32 { v + 1 }, 4) }",
+            "fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { return apply({ v => v + 1 }, 4) }",
         ),
         "test.f",
     )
@@ -10145,7 +10145,7 @@ test "a non-capturing lambda emits a module-level function and a FuncRef" {
 test "a fn-typed parameter call lowers to CallIndirect" {
     let unit = analyze(
         from_view(
-            "fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { return apply(fn(v: i32) i32 { v + 1 }, 4) }",
+            "fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { return apply({ v => v + 1 }, 4) }",
         ),
         "test.f",
     )
@@ -10175,7 +10175,7 @@ test "a fn-typed parameter call lowers to CallIndirect" {
 test "a capturing closure through $F lowers env struct, op_call, and dispatch" {
     let unit = analyze(
         from_view(
-            "fn apply(f: $F, x: i32) i32 { return f(x) }\nfn main() i32 { let k = 40\n return apply(fn(v: i32) i32 { v + k }, 2) }",
+            "fn apply(f: $F, x: i32) i32 { return f(x) }\nfn main() i32 { let k = 40\n return apply({ v => v + k }, 2) }",
         ),
         "test.f",
     )
@@ -10209,7 +10209,7 @@ test "two unannotated lambdas settling to one signature dedup the spec symbol" {
     // (Capturing closures never collide: each literal is its own nominal.)
     let unit = analyze(
         from_view(
-            "fn apply(f: $F, x: i32) i32 { return f(x) }\nfn main() i32 { return apply(fn(v) { v + 1 }, 1) + apply(fn(v) { v * 2 }, 2) }",
+            "fn apply(f: $F, x: i32) i32 { return f(x) }\nfn main() i32 { return apply({ v => v + 1 }, 1) + apply({ v => v * 2 }, 2) }",
         ),
         "test.f",
     )
@@ -10235,7 +10235,7 @@ test "two unannotated lambdas settling to one signature dedup the spec symbol" {
 test "a closure stored in a generic struct field dispatches on h.f(x)" {
     let unit = analyze(
         from_view(
-            "type Holder = struct(F) { f: F }\nfn hold(f: $F) Holder(F) { return .{ f = f } }\nfn invoke(h: &Holder($F), x: i32) i32 { return h.f(x) }\nfn main() i32 { let b = 5\n let h = hold(fn(v: i32) i32 { v + b })\n return invoke(&h, 1) }",
+            "type Holder = struct(F) { f: F }\nfn hold(f: $F) Holder(F) { return .{ f = f } }\nfn invoke(h: &Holder($F), x: i32) i32 { return h.f(x) }\nfn main() i32 { let b = 5\n let h = hold({ v: i32 => v + b })\n return invoke(&h, 1) }",
         ),
         "test.f",
     )

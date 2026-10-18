@@ -8,7 +8,7 @@ fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 { return f(x) }
 
 pub fn main() i32 {
     let base = 10
-    let add_base = fn(x: i32) i32 { x + base }
-    let wrapped = fn(x: i32) i32 { add_base(x) * 2 }
+    let add_base = { x: i32 => x + base }
+    let wrapped = { x: i32 => add_base(x) * 2 }
     return apply(wrapped, 5)
 }

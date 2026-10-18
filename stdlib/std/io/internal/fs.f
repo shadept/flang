@@ -132,18 +132,14 @@ fn check(status: i32, err: i32) Result((), FsError) {
 
 // `mode` is one of FS_OPEN_READ / FS_OPEN_WRITE / FS_OPEN_APPEND.
 pub fn raw_open(path: String, mode: i32) Result(i32, FsError) {
-    // The capture (`mode`) is used only in a straight-line expression, and the branch is an `if`
-    // rather than `?`: a capture referenced inside a match arm - which is what `?` lowers to -
-    // fails to resolve (docs/known-issues.md). Non-capturing lambdas below use `?` freely.
-    return with_c_path(path, fn(p: &u8) Result(i32, FsError) {
+    // The capture (`mode`) stays out of the arms `?` lowers to: a capture referenced inside a match
+    // arm fails to resolve (docs/known-issues.md).
+    return with_c_path(path) { p =>
         let fd: i32 = 0
         let err: i32 = 0
-        const r = check(__flang_fs_open(p, mode, &fd, &err), err)
-        if r.is_err() {
-            return Err(r.unwrap_err())
-        }
-        return Ok(fd)
-    })
+        check(__flang_fs_open(p, mode, &fd, &err), err)?
+        Ok(fd)
+    }
 }
 
 pub fn raw_close(fd: i32) Result((), FsError) {
@@ -175,10 +171,10 @@ pub fn raw_write(fd: i32, data: u8[]) Result(usize, FsError) {
 }
 
 pub fn raw_unlink(path: String) Result((), FsError) {
-    return with_c_path(path, fn(p: &u8) Result((), FsError) {
+    return with_c_path(path) { p =>
         let err: i32 = 0
-        return check(__flang_fs_unlink(p, &err), err)
-    })
+        check(__flang_fs_unlink(p, &err), err)
+    }
 }
 
 // =============================================================================
@@ -186,26 +182,26 @@ pub fn raw_unlink(path: String) Result((), FsError) {
 // =============================================================================
 
 pub fn raw_mkdir(path: String) Result((), FsError) {
-    return with_c_path(path, fn(p: &u8) Result((), FsError) {
+    return with_c_path(path) { p =>
         let err: i32 = 0
-        return check(__flang_fs_mkdir(p, &err), err)
-    })
+        check(__flang_fs_mkdir(p, &err), err)
+    }
 }
 
 pub fn raw_rmdir(path: String) Result((), FsError) {
-    return with_c_path(path, fn(p: &u8) Result((), FsError) {
+    return with_c_path(path) { p =>
         let err: i32 = 0
-        return check(__flang_fs_rmdir(p, &err), err)
-    })
+        check(__flang_fs_rmdir(p, &err), err)
+    }
 }
 
 pub fn raw_opendir(path: String) Result(usize, FsError) {
-    return with_c_path(path, fn(p: &u8) Result(usize, FsError) {
+    return with_c_path(path) { p =>
         let handle: usize = 0
         let err: i32 = 0
         check(__flang_fs_opendir(p, &handle, &err), err)?
-        return Ok(handle)
-    })
+        Ok(handle)
+    }
 }
 
 pub fn raw_closedir(handle: usize) Result((), FsError) {
@@ -294,25 +290,25 @@ pub fn deinit(self: move RawDir) {
 
 // Follows symlinks - the reported kind is the target's, not the link's.
 pub fn raw_stat(path: String) Result(FileInfo, FsError) {
-    return with_c_path(path, fn(p: &u8) Result(FileInfo, FsError) {
+    return with_c_path(path) { p =>
         let kind: i32 = 0
         let size: u64 = 0
         let err: i32 = 0
         check(__flang_fs_stat(p, &kind, &size, &err), err)?
-        return Ok(FileInfo { kind = kind as FileKind, size = size })
-    })
+        Ok(FileInfo { kind = kind as FileKind, size = size })
+    }
 }
 
 // Replaces `to` when it exists, on every platform - the Windows shim uses MoveFileEx rather than
 // the CRT rename, which refuses an existing target.
 pub fn raw_rename(from: String, to: String) Result((), FsError) {
     // Two paths, so two nested copies - the inner lambda captures the outer's buffer pointer.
-    return with_c_path(from, fn(f: &u8) Result((), FsError) {
-        return with_c_path(to, fn(t: &u8) Result((), FsError) {
+    return with_c_path(from) { f =>
+        with_c_path(to) { t =>
             let err: i32 = 0
-            return check(__flang_fs_rename(f, t, &err), err)
-        })
-    })
+            check(__flang_fs_rename(f, t, &err), err)
+        }
+    }
 }
 
 pub fn raw_getcwd(allocator: &Allocator = context.allocator) Result(OwnedString, FsError) {
@@ -336,17 +332,14 @@ pub fn raw_realpath(
     path: String,
     allocator: &Allocator = context.allocator,
 ) Result(OwnedString, FsError) {
-    // `buf.len` rather than FS_PATH_BUF_CAP, and an `if` rather than `?`: a lambda can reference
-    // neither a module-level const nor a capture inside a match arm (docs/known-issues.md).
-    // `allocator` is captured, so it is only named in a straight-line expression.
-    return with_c_path(path, fn(p: &u8) Result(OwnedString, FsError) {
+    // `buf.len` rather than FS_PATH_BUF_CAP: a lambda can reference neither a module-level const
+    // nor a capture inside a match arm (docs/known-issues.md). `allocator` is captured, so it stays
+    // out of the arms `?` lowers to.
+    return with_c_path(path) { p =>
         let buf = [0u8; 4096]
         let out_len: usize = 0
         let err: i32 = 0
-        const r = check(__flang_fs_realpath(p, buf.ptr, buf.len, &out_len, &err), err)
-        if r.is_err() {
-            return Err(r.unwrap_err())
-        }
-        return Ok(from_view(from_c_string(buf.ptr, Some(out_len)), allocator))
-    })
+        check(__flang_fs_realpath(p, buf.ptr, buf.len, &out_len, &err), err)?
+        Ok(from_view(from_c_string(buf.ptr, Some(out_len)), allocator))
+    }
 }

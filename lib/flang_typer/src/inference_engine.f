@@ -1075,27 +1075,27 @@ pub fn commit(self: &Engine) {
 // old value back, an inserted one is removed. Panics when no region is open.
 pub fn rollback(self: &Engine) {
     self.uf.rollback()
-    self.binding_undo.rollback(fn(entry: BindingUndo) {
+    self.binding_undo.rollback { entry =>
         if entry.prev.is_some() {
             self.bindings.set(entry.var_id, entry.prev.unwrap())
         } else {
             let _discard = self.bindings.remove(entry.var_id)
         }
-    })
-    self.prim_undo.rollback(fn(entry: PrimConstraintUndo) {
+    }
+    self.prim_undo.rollback { entry =>
         if entry.prev.is_some() {
             self.prim_constraints.set(entry.var_id, entry.prev.unwrap())
         } else {
             let _discard = self.prim_constraints.remove(entry.var_id)
         }
-    })
-    self.level_undo.rollback(fn(entry: LevelUndo) {
+    }
+    self.level_undo.rollback { entry =>
         if entry.prev.is_some() {
             self.levels.set(entry.var_id, entry.prev.unwrap())
         } else {
             let _discard = self.levels.remove(entry.var_id)
         }
-    })
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────

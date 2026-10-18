@@ -17,6 +17,6 @@ fn add(v: move i32) {
 pub fn main() i32 {
     let xs: [i32; 3] = [1, 2, 3]
     each(xs, add)
-    each(xs, fn(v: move i32) { total = total + v })
+    each(xs) { v: move i32 => total = total + v }
     return total
 }

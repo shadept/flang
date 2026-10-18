@@ -126,7 +126,7 @@ fn build_adjacency(
         }
     }
     for &row in adj {
-        row.sort_by(fn(i) { name_of(fqns, i) })
+        row.sort_by { name_of(fqns, it) }
     }
     return adj
 }
@@ -165,7 +165,7 @@ fn visit(t: &Tarjan, v: usize, fqns: &List(String)) {
             break
         }
     }
-    comp.sort_by(fn(i) { name_of(fqns, i) })
+    comp.sort_by { name_of(fqns, it) }
     for m in comp {
         t.out.push(m, t.allocator)
     }
@@ -178,7 +178,7 @@ fn by_fqn(count: usize, fqns: &List(String)) List(usize) {
     for i in 0..count {
         all.push(i)
     }
-    all.sort_by(fn(i) { name_of(fqns, i) })
+    all.sort_by { name_of(fqns, it) }
     return all
 }
 

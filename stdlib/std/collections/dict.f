@@ -825,7 +825,7 @@ test "an UnmanagedDict takes its allocator at every allocating call" {
         sum = sum + e.value
     }
     assert_eq(sum, 11i32, "for over the live entries")
-    const doubled = d.map_values(fn(k, v) { v * 2 }, &alloc)
+    const doubled = d.map_values({ k, v => v * 2 }, &alloc)
     assert_eq(doubled.get(1u32).unwrap(), 22i32, "derived dict with explicit allocator")
     doubled.deinit(&alloc)
     d.deinit(&alloc)
@@ -835,9 +835,9 @@ test "an UnmanagedDict takes its allocator at every allocating call" {
 test "add reports a new key and get_or_insert_with hands back the slot" {
     let d: Dict(u32, i32) = dict()
     defer d.deinit()
-    let first = d.get_or_insert_with(1u32, fn() { 10i32 })
+    let first = d.get_or_insert_with(1u32) { => 10i32 }
     first.* = first.* + 1
-    let again = d.get_or_insert_with(1u32, fn() { 99i32 })
+    let again = d.get_or_insert_with(1u32) { => 99i32 }
     assert_eq(again.*, 11i32, "the second call found the first slot, not the fallback")
     assert_eq(d.len(), 1 as usize, "one key")
 
@@ -968,24 +968,24 @@ test "map_values filter each any all count" {
     d.set(3u32, 3i32)
 
     let scale = 10i32
-    let scaled = d.map_values(fn(k, v) { v * scale })
+    let scaled = d.map_values { k, v => v * scale }
     defer scaled.deinit()
     assert_eq(scaled.get(2u32).unwrap(), 20i32, "value mapped, key kept")
     assert_eq(scaled.len(), 3 as usize, "same entry count")
 
-    let evens = d.filter(fn(k, v) { v % 2 == 0 })
+    let evens = d.filter { k, v => v % 2 == 0 }
     defer evens.deinit()
     assert_eq(evens.len(), 1 as usize, "one even value")
     assert_eq(evens.get(2u32).unwrap(), 2i32, "the right entry survived")
 
     let sum = 0i32
     let sum_ref = &sum
-    d.each(fn(k, v) { sum_ref.* = sum_ref.* + v })
+    d.each { k, v => sum_ref.* = sum_ref.* + v }
     assert_eq(sum, 6i32, "each visited every entry")
 
-    assert_true(d.any(fn(k, v) { v > 2 }), "one value exceeds 2")
-    assert_true(!d.all(fn(k, v) { v > 2 }), "not all do")
-    assert_eq(d.count(fn(k, v) { v > 1 }), 2 as usize, "two values exceed 1")
+    assert_true(d.any { k, v => v > 2 }, "one value exceeds 2")
+    assert_true(!d.all { k, v => v > 2 }, "not all do")
+    assert_eq(d.count { k, v => v > 1 }, 2 as usize, "two values exceed 1")
 }
 
 test "get_or update merge" {
@@ -995,13 +995,13 @@ test "get_or update merge" {
 
     assert_eq(d.get_or(1u32, 0i32), 5i32, "present key reads its value")
     assert_eq(d.get_or(9u32, -1i32), -1i32, "absent key reads the fallback")
-    assert_eq(d.get_or_else(1u32, fn() { 0i32 }), 5i32, "present key skips the fallback fn")
+    assert_eq(d.get_or_else(1u32) { => 0i32 }, 5i32, "present key skips the fallback fn")
     let expensive = 42i32
-    assert_eq(d.get_or_else(9u32, fn() { expensive }), 42i32, "absent key computes it")
+    assert_eq(d.get_or_else(9u32) { => expensive }, 42i32, "absent key computes it")
 
-    assert_true(d.update(1u32, fn(v) { v.* = v.* + 1i32 }), "update hits the key")
+    assert_true(d.update(1u32) { it.* = it.* + 1i32 }, "update hits the key")
     assert_eq(d.get(1u32).unwrap(), 6i32, "mutated in place")
-    assert_true(!d.update(9u32, fn(v) { v.* = 0i32 }), "absent key reports false")
+    assert_true(!d.update(9u32) { it.* = 0i32 }, "absent key reports false")
 
     let other: Dict(u32, i32) = dict()
     defer other.deinit()

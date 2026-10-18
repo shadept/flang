@@ -9,7 +9,7 @@ type Holder = struct(F) {
     f: F
 }
 
-fn make_holder(f: move $F) Holder(F) {
+fn make_holder(f: move $F) Holder(F) where F: fn(i32) i32 {
     return .{ f = move f }
 }
 
@@ -21,7 +21,7 @@ fn invoke(h: &Holder($F), x: i32) i32 {
 
 pub fn main() i32 {
     let scale = 10
-    let h = make_holder(fn(x: i32) i32 { x * scale })
+    let h = make_holder { x: i32 => x * scale }
 
     // Direct field call
     let a = h.f(2)

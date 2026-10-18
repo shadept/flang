@@ -15172,8 +15172,8 @@ pub fn check_all(
     // re-registered.
     let old_aliases = snapshot_aliases(self, &retiring)
     let old_defs = snapshot_nominal_defs(self, &retiring)
-    let old_consts = snapshot_types(&self.constants, &retiring, fn(t) { t })
-    let old_ctx = snapshot_types(&self.ctx_fields, &retiring, fn(f) { f.ty })
+    let old_consts = snapshot_types(&self.constants, &retiring) { it }
+    let old_ctx = snapshot_types(&self.ctx_fields, &retiring) { it.ty }
     for i in seq {
         if needs_collect(recollect, i) {
             self.aliases.evict_module(paths[i])
@@ -15289,8 +15289,8 @@ pub fn check_all(
     // slots are stale - resolution against the registries can now answer differently.
     const sigs_changed = self.functions.changed or self.functions.next_id != fns_before
         or removed_fns or self.defaults_changed
-        or types_differ(&self.constants, &old_consts, &retiring, fn(t) { t })
-        or types_differ(&self.ctx_fields, &old_ctx, &retiring, fn(f) { f.ty })
+        or types_differ(&self.constants, &old_consts, &retiring) { it }
+        or types_differ(&self.ctx_fields, &old_ctx, &retiring) { it.ty }
     old_consts.deinit()
     old_ctx.deinit()
     // A carried specialization of a re-parsed module's template holds a stale declaration AST, and
@@ -17115,7 +17115,7 @@ test "a carried slot restores its closures and specializations" {
     let r = redemand_errors(
         "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
-        "fn id(x: move $T) $T { return x }\nfn main() i32 {\n    const k = 2\n    let f = fn(x: i32) i32 { x + k }\n    return id(5)\n}\n",
+        "fn id(x: move $T) $T { return x }\nfn main() i32 {\n    const k = 2\n    let f = { x: i32 => x + k }\n    return id(5)\n}\n",
     )
     assert_eq(r.first, 0 as usize, "the program type-checks cold")
     assert_eq(r.second, 0 as usize, "and identically when the slot replays")
@@ -17259,7 +17259,7 @@ test "a reused specialization replays its closure environment" {
     let r = redemand_errors(
         "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
-        "fn wrap(x: $T) i32 {\n    const k = 1i32\n    let f = fn(y: i32) i32 { y + k }\n    return 0\n}\nfn main() i32 { return wrap(4i32) }\n",
+        "fn wrap(x: $T) i32 {\n    const k = 1i32\n    let f = { y: i32 => y + k }\n    return 0\n}\nfn main() i32 { return wrap(4i32) }\n",
     )
     assert_eq(r.first, 0 as usize, "the program type-checks cold")
     assert_eq(r.second, 0 as usize, "and identically when the entry is reused")
@@ -18045,7 +18045,7 @@ test "ranking: a wrapper declares the member a catch-all would otherwise take" {
     // The `Dict.any(fn(k, v) ...)` shape: std.iter's `any($I, $F)` matches the wrapper as written,
     // so the wrapper declares its own `any` rather than relying on the peel.
     let src = with_wrap(
-        "pub fn any(x: &Inner, pred: $F) bool { return pred(x.value, x.value) }\npub fn any(w: &Wrap, pred: $F) bool { return w.inner.any(pred) }\npub fn any(it: $I, pred: $F) bool { return pred(0i64) }\nfn main(w: &Wrap) bool { return w.any(fn(a, b) { a == b }) }\n",
+        "pub fn any(x: &Inner, pred: $F) bool { return pred(x.value, x.value) }\npub fn any(w: &Wrap, pred: $F) bool { return w.inner.any(pred) }\npub fn any(it: $I, pred: $F) bool { return pred(0i64) }\nfn main(w: &Wrap) bool { return w.any({ a, b => a == b }) }\n",
     )
     defer src.deinit()
     let r = resolved_call(src.view, "any")
@@ -18142,7 +18142,7 @@ test "a generic member call inside a partially-fixed generic instantiates" {
 // ─────────────────────────────────────────────────────────────────────
 
 test "a non-capturing lambda records a bare-fn lambda info" {
-    let src = "fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { return apply(fn(v: i32) i32 { v + 1 }, 4) }\n"
+    let src = "fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { return apply({ v => v + 1 }, 4) }\n"
     let errs = count_check_errors([src], ["m"])
     assert_eq(errs, 0 as usize, "checks clean")
     let res = check_result_of([src], ["m"])
@@ -18157,7 +18157,7 @@ test "a non-capturing lambda records a bare-fn lambda info" {
 }
 
 test "a capturing lambda synthesizes a closure and dispatches through $F" {
-    let src = "fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 { return f(x) }\nfn main() i32 { let k = 40 return apply(fn(v: i32) i32 { v + k }, 2) }\n"
+    let src = "fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 { return f(x) }\nfn main() i32 { let k = 40 return apply({ v => v + k }, 2) }\n"
     let errs = count_check_errors([src], ["m"])
     assert_eq(errs, 0 as usize, "capturing closure through $F checks clean")
     let res = check_result_of([src], ["m"])
@@ -18172,7 +18172,7 @@ test "a capturing lambda synthesizes a closure and dispatches through $F" {
 }
 
 test "unannotated lambda params pin through a generic callable slot" {
-    let src = "fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 { return f(x) }\nfn main() i32 { return apply(fn(v) { v + 1 }, 4) }\n"
+    let src = "fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 { return f(x) }\nfn main() i32 { return apply({ v => v + 1 }, 4) }\n"
     let errs = count_check_errors([src], ["m"])
     assert_eq(errs, 0 as usize, "no-annotation lambda through $F checks clean")
     let res = check_result_of([src], ["m"])
@@ -18191,7 +18191,7 @@ test "unannotated lambda params pin through a generic callable slot" {
 test "a closure may assign a captured name (RFC-033)" {
     let errs = count_check_errors(
         [
-            "fn take(f: $F) i32 where F: fn(i32) i32 { return f(1) }\nfn main() i32 { let k: i32 = 1\n return take(fn(v: i32) i32 { k = 2\n return v }) + k }\n",
+            "fn take(f: $F) i32 where F: fn(i32) i32 { return f(1) }\nfn main() i32 { let k: i32 = 1\n return take { v => k = 2\n v } + k }\n",
         ],
         ["m"],
     )
@@ -18242,7 +18242,7 @@ pub fn maybe(a: &move H, b: move H, c: bool) H { let tmp = move a.*
 test "a nested closure captures through the enclosing one (RFC-033)" {
     let errs = count_check_errors(
         [
-            "fn take(f: $F) i32 where F: fn(i32) i32 { return f(1) }\nfn main() i32 { let a: i32 = 1\n return take(fn(x: i32) i32 { let g = fn(y: i32) i32 { return y + a }\n return g(x) + a }) }\n",
+            "fn take(f: $F) i32 where F: fn(i32) i32 { return f(1) }\nfn main() i32 { let a: i32 = 1\n return take { x => let g = { y: i32 => y + a }\n g(x) + a } }\n",
         ],
         ["m"],
     )
@@ -18252,7 +18252,7 @@ test "a nested closure captures through the enclosing one (RFC-033)" {
 test "a capturing closure cannot fill a bare fn slot (E2111 hint)" {
     let errs = count_check_errors(
         [
-            "fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { let k = 1\n return apply(fn(v: i32) i32 { v + k }, 2) }\n",
+            "fn apply(f: fn(i32) i32, x: i32) i32 { return f(x) }\nfn main() i32 { let k = 1\n return apply({ v => v + k }, 2) }\n",
         ],
         ["m"],
     )
@@ -18260,7 +18260,7 @@ test "a capturing closure cannot fill a bare fn slot (E2111 hint)" {
 }
 
 test "a lambda inside a generic template records per instantiation" {
-    let src = "fn scale(x: $T) T where T: copyable { let f = fn(v: T) T { v }\n return f(x) }\nfn main() i32 { let a = scale(1i32)\n let b = scale(2i64)\n if b == 2 { return a } return 0 }\n"
+    let src = "fn scale(x: $T) T where T: copyable { let f = { v: T => v }\n return f(x) }\nfn main() i32 { let a = scale(1i32)\n let b = scale(2i64)\n if b == 2 { return a } return 0 }\n"
     let errs = count_check_errors([src], ["m"])
     assert_eq(errs, 0 as usize, "template lambda checks per instantiation")
     let res = check_result_of([src], ["m"])

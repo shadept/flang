@@ -11,7 +11,7 @@ type Adder = struct(F) {
 }
 
 fn make_adder(base: i32) Adder($F) {
-    return .{ f = fn(x: i32) i32 { base + x } }
+    return .{ f = { x: i32 => base + x } }
 }
 
 pub fn main() i32 {

@@ -120,7 +120,7 @@ pub fn commit(self: &UnionFind($K)) {
 // Closes the innermost region and undoes its mutations, newest first, restoring the node table to
 // exactly what it was when the region opened. Panics when no region is open.
 pub fn rollback(self: &UnionFind($K)) where K: copyable {
-    self.undo.rollback(fn(entry: UnionFindUndo(K)) {
+    self.undo.rollback { entry =>
         if entry.was_new {
             let _removed = self.nodes.remove(entry.key)
         } else {
@@ -130,7 +130,7 @@ pub fn rollback(self: &UnionFind($K)) where K: copyable {
                 self.allocator,
             )
         }
-    })
+    }
 }
 
 // Record one mutation in the innermost open region. No-op outside a checkpoint, so non-speculative

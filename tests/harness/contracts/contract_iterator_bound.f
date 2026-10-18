@@ -37,5 +37,5 @@ fn count_where(it: move $I, pred: $F) i32 where I: Iter($T), F: fn(T) bool {
 
 pub fn main() i32 {
     const c = Counter { n = 0, limit = 10 }
-    return count_where(c, fn(x) { x % 2 == 0 })
+    return count_where(c) { x => x % 2 == 0 }
 }

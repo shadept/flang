@@ -1,7 +1,8 @@
 ---
-status: accepted
+status: implemented
 type: language
 created: 2026-10-17
+implemented: 2026-10-18
 relates: [RFC-014, RFC-033, RFC-035, RFC-037, RFC-038]
 ---
 
@@ -54,7 +55,8 @@ This RFC is syntax only. Captures (RFC-033), closure lowering (RFC-014) and func
 
 - Parameters take the forms function parameters take, without defaults or variadics.
 - The body is a block: statements, then an optional trailing expression that is its value.
-  `return` returns from the lambda.
+  `return` inside a lambda is an error (E1054, amended 2026-10-18): inside braces it reads as
+  leaving the enclosing function. `break` and `continue` cannot reach a loop outside the lambda.
 - **No return-type slot.** The return type comes from the bound or the expected function type,
   else from the body. Where nothing pins it, annotate the binding:
   `const f: fn(i32) i32 = { x => x + 1 }`.
@@ -189,14 +191,20 @@ Each step lands with harness tests. The old form stays accepted until step 6.
 
 ### Implementation status
 
-- Steps 1-3 and 7 landed: parser, projector, checker (`it` arity, case rule E2155, arity error
-  E2154, no trailing slot E2156), formatter, docs. One code covers both binding errors: a
-  required parameter after the last callable one leaves no slot.
-- Step 4 needed no change: every stdlib callback parameter already carries a `fn` bound.
-- Steps 5-6 (promote, migrate, remove the `fn(...) { }` expression) are next.
+- Implemented 2026-10-18: parser, projector, checker (`it` arity E2154, case rule E2155, trailing
+  slot E2156), formatter, docs. One code covers both binding errors: a required parameter after
+  the last callable one leaves no slot.
+- A lambda argument is checked after its call resolves, against the parameter it fills: its
+  parameters take the expected types first, and an expected `void` return discards the body's
+  value (the migration needed it: `fn(e) void { ... e.end_map() }` became `{ e => ... }`).
+- Step 4 needed no change outside two harness helpers: every stdlib callback already carried a
+  `fn` bound.
+- Migration: 188 lambdas rewritten from CST spans (trailing where the call allowed it), 20 more in
+  compiler test sources. The `fn(...) { }` expression is E1053.
 
 ## Out of scope
 
 - Generic lambdas' semantics (`{ x: $T => ... }` parses; what it instantiates is the next RFC).
-- Returning from the enclosing function out of a lambda (Kotlin's non-local return).
+- Returning from the enclosing function out of a lambda (Kotlin's non-local return). E1054 keeps
+  `return` free for it.
 - Destructuring parameters.

@@ -9,10 +9,10 @@ pub fn main() i32 {
     let xs: i32[] = xa
     let ys: i32[] = ya
     let total = 0
-    xs.each(fn(x: i32) {
-        ys.each(fn(y: i32) {
+    xs.each { x: i32 =>
+        ys.each { y: i32 =>
             total = total + x * y
-        })
-    })
+        }
+    }
     return total
 }

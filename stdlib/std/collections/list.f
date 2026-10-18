@@ -992,7 +992,7 @@ test "a ListRef grows the field it wraps and owns nothing" {
         total = total + x
     }
     assert_eq(total, 3i32, "for through the handle")
-    let doubled = h.map(fn(v: i32) i32 { v * 2 })
+    let doubled = h.map { it * 2 }
     assert_eq(doubled[1], 4i32, "a transformation yields a List on the handle's allocator")
     doubled.deinit()
     field.deinit(&alloc)
@@ -1049,7 +1049,7 @@ test "an UnmanagedList takes its allocator at every allocating call" {
         sum = sum + x
     }
     assert_eq(sum, 3, "for")
-    const doubled = xs.map(fn(v: i32) i32 { v * 2 }, &alloc)
+    const doubled = xs.map({ it * 2 }, &alloc)
     assert_eq(doubled[1], 4, "combinator with explicit allocator")
     doubled.deinit(&alloc)
     xs.deinit(&alloc)
@@ -1139,7 +1139,7 @@ test "map applies f in order and leaves the receiver alone" {
     xs.push(2)
     xs.push(3)
 
-    let doubled = xs.map(fn(v: i32) i32 { v * 2 })
+    let doubled = xs.map { it * 2 }
     defer doubled.deinit()
     assert_eq(doubled.len, 3 as usize, "same length")
     assert_eq(doubled[0], 2, "first doubled")
@@ -1153,12 +1153,12 @@ test "flat_map concatenates and frees the intermediates" {
     xs.push(1)
     xs.push(2)
 
-    let out = xs.flat_map(fn(v: i32) List(i32) {
+    let out = xs.flat_map { v =>
         let part: List(i32) = list(2)
         part.push(v)
         part.push(v * 10)
         part
-    })
+    }
     defer out.deinit()
     assert_eq(out.len, 4 as usize, "two elements each")
     assert_eq(out[1], 10, "second of the first pair")
@@ -1170,9 +1170,9 @@ test "filter keeps matches, remove keeps the rest" {
     defer xs.deinit()
     for i in 0..6usize { xs.push(i as i32) }
 
-    let evens = xs.filter(fn(v: i32) bool { v % 2 == 0 })
+    let evens = xs.filter { it % 2 == 0 }
     defer evens.deinit()
-    let odds = xs.remove(fn(v: i32) bool { v % 2 == 0 })
+    let odds = xs.remove { it % 2 == 0 }
     defer odds.deinit()
 
     assert_eq(evens.len, 3 as usize, "three evens")
@@ -1194,8 +1194,8 @@ test "fold and fold_right differ in association" {
     // right 1-(2-(3-0)) = 2
     // The seed pins the accumulator type ($A): a bare `0` won't default, because `f` is duck-typed
     // ($F) and only constrains A at instantiation.
-    let l = xs.fold(0i32, fn(acc, v) { acc - v })
-    let r = xs.fold_right(0i32, fn(v, acc) { v - acc })
+    let l = xs.fold(0i32) { acc, v => acc - v }
+    let r = xs.fold_right(0i32) { v, acc => v - acc }
     assert_eq(l, -6i32, "left-associated")
     assert_eq(r, 2i32, "right-associated")
 }
@@ -1269,9 +1269,9 @@ test "combinators accept capturing closures with unannotated params" {
 
     let floor = 1
     let scale = 10
-    let kept = xs.filter(fn(v) { v > floor })
+    let kept = xs.filter { it > floor }
     defer kept.deinit()
-    let scaled = kept.map(fn(v) { v * scale })
+    let scaled = kept.map { it * scale }
     defer scaled.deinit()
     assert_eq(scaled.len, 2 as usize, "two elements pass the floor")
     assert_eq(scaled[0], 20i32, "closure saw the captured scale")
@@ -1287,7 +1287,7 @@ test "each and count" {
     // Captures are by value and read-only: mutate through a captured reference.
     let sum = 0i32
     let sum_ref = &sum
-    xs.each(fn(v) { sum_ref.* = sum_ref.* + v })
+    xs.each { sum_ref.* = sum_ref.* + it }
     assert_eq(sum, 6i32, "each visited every element")
 
     assert_eq(xs.count(test_is_even), 1 as usize, "one even element")
@@ -1302,13 +1302,13 @@ test "min max min_by max_by on lists" {
 
     assert_eq(xs.min().unwrap(), 1i32, "smallest")
     assert_eq(xs.max().unwrap(), 4i32, "largest")
-    assert_eq(xs.min_by(fn(v) { 0 - v }).unwrap(), 4i32, "smallest key = largest value")
-    assert_eq(xs.max_by(fn(v) { 0 - v }).unwrap(), 1i32, "largest key = smallest value")
+    assert_eq(xs.min_by { 0 - it }.unwrap(), 4i32, "smallest key = largest value")
+    assert_eq(xs.max_by { 0 - it }.unwrap(), 1i32, "largest key = smallest value")
 
     let empty: List(i32) = list(0)
     defer empty.deinit()
     assert_true(empty.min().is_none(), "empty min is null")
-    assert_true(empty.min_by(fn(v) { v }).is_none(), "empty min_by is null")
+    assert_true(empty.min_by { it }.is_none(), "empty min_by is null")
 }
 
 test "sort_by orders by key" {
@@ -1318,7 +1318,7 @@ test "sort_by orders by key" {
     xs.push(3i32)
     xs.push(2i32)
 
-    xs.sort_by(fn(v) { 0 - v })
+    xs.sort_by { 0 - it }
     assert_eq(xs[0], 3i32, "descending by negated key")
     assert_eq(xs[2], 1i32, "smallest last")
 }

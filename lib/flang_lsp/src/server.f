@@ -322,9 +322,7 @@ fn publish_file_diags(self: &LspServer, uri: String, text: String, diags: &List(
     defer idx.deinit()
     let params = PublishDiagnosticsParams {
         uri = uri,
-        diagnostics = diags.map(
-            fn(d: &Diagnostic) { lsp_diagnostic(&idx, text, d, self.encoding) },
-        ),
+        diagnostics = diags.map { lsp_diagnostic(&idx, text, it, self.encoding) },
     }
     defer params.deinit()
     self.out.notify("textDocument/publishDiagnostics", &params)
@@ -463,7 +461,7 @@ fn send_status(self: &LspServer) {
     }
     let status = ServerStatus {
         version = self.version.view,
-        folders = self.folders.map(fn(f: OwnedString) { f.view }),
+        folders = self.folders.map { it.view },
         projects = move projects,
     }
     defer status.deinit()
@@ -1001,9 +999,7 @@ fn on_folding_range(self: &LspServer, msg: &RpcMessage) {
     }
     let folds = folding_ranges(doc.unwrap().text.view)
     defer folds.deinit()
-    let out = folds.map(
-        fn(f: FoldRange) { FoldingRange { start_line = f.start_line, end_line = f.end_line } },
-    )
+    let out = folds.map { f => FoldingRange { start_line = f.start_line, end_line = f.end_line } }
     defer out.deinit()
     self.out.respond(msg.id().unwrap(), &out)
 }
@@ -2150,7 +2146,7 @@ fn on_signature_help(self: &LspServer, msg: &RpcMessage) {
         }
         signatures.push(SignatureInformation {
             label = label.unwrap(),
-            parameters = params.map(fn(pl: String) { ParameterInformation { label = pl } }),
+            parameters = params.map { ParameterInformation { label = it } },
         })
     }
     let help = SignatureHelp {
@@ -2788,7 +2784,7 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
 
 // A small analyzed project for the cursor-request tests, fabricated in memory: one file at
 // /t/m.f, no disk, no stdlib.
-const DEMO_SRC: String = "pub fn point(q: i32) i32 { return q }\npub type P = struct { x: i32 }\npub fn go(n: i32) i32 {\n    let a = point(3)\n    let s = P { x = 1 }\n    for v in 0..n {\n        let b = v\n    }\n    return a\n}\n// see Wide\npub fn pick(x: $T) $T { return x }\npub fn wait(k: i32) {\n    while k > 0 {\n        k = k - 1\n    }\n}\npub fn use_pick() i32 { return pick(7) }\npub fn wrap(y: $T) i32 { return point(8) }\npub fn use_wrap() i32 { return wrap(true) }\npub fn lone(z: $T) i32 { return point(4) }\npub fn read_x(pp: P) i32 { return pp.x }\npub fn solo(w: $T, point: i32) i32 { return point }\npub type E = enum { A B }\npub fn pick_e() E { return E.A }\npub type Q = struct {\n    // The y.\n    y: i32\n}\npub fn read_y(qq: Q) i32 { return qq.y }\npub type It = contract {\n    type Item\n    fn next(self: &Self) Item\n}\npub fn first(it: &$I) I.Item where I: It { return it.next() }\npub fn keep(it: &$I, b: I) I where I: It, I.Item: It { return b }\npub type Node = struct(T) { next: &Self }\npub fn apply(x: $T, f: $F) T where F: fn(T) T { return f(x) }\npub fn use_apply() i32 { return apply(3i32, fn(v) { v }) }\n"
+const DEMO_SRC: String = "pub fn point(q: i32) i32 { return q }\npub type P = struct { x: i32 }\npub fn go(n: i32) i32 {\n    let a = point(3)\n    let s = P { x = 1 }\n    for v in 0..n {\n        let b = v\n    }\n    return a\n}\n// see Wide\npub fn pick(x: $T) $T { return x }\npub fn wait(k: i32) {\n    while k > 0 {\n        k = k - 1\n    }\n}\npub fn use_pick() i32 { return pick(7) }\npub fn wrap(y: $T) i32 { return point(8) }\npub fn use_wrap() i32 { return wrap(true) }\npub fn lone(z: $T) i32 { return point(4) }\npub fn read_x(pp: P) i32 { return pp.x }\npub fn solo(w: $T, point: i32) i32 { return point }\npub type E = enum { A B }\npub fn pick_e() E { return E.A }\npub type Q = struct {\n    // The y.\n    y: i32\n}\npub fn read_y(qq: Q) i32 { return qq.y }\npub type It = contract {\n    type Item\n    fn next(self: &Self) Item\n}\npub fn first(it: &$I) I.Item where I: It { return it.next() }\npub fn keep(it: &$I, b: I) I where I: It, I.Item: It { return b }\npub type Node = struct(T) { next: &Self }\npub fn apply(x: $T, f: $F) T where F: fn(T) T { return f(x) }\npub fn use_apply() i32 { return apply(3i32) { v => v } }\n"
 
 fn demo_project_into(srv: &LspServer) {
     let srcs: List(OwnedString) = list(2)

@@ -48,7 +48,7 @@ fn filter(it: move $I, f: move $F) Filtered(I, F) {
 }
 
 pub fn main() i32 {
-    let evens = filter(Counter { n = 0, limit = 10 }, fn(x) { x % 2 == 0 })
+    let evens = filter(Counter { n = 0, limit = 10 }) { x => x % 2 == 0 }
     let sum: i32 = 0
     loop {
         const v = evens.next()

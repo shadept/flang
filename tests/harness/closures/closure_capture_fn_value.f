@@ -9,7 +9,7 @@
 fn apply(f: $F, x: i32) i32 where F: fn(i32) i32 { return f(x) }
 
 pub fn main() i32 {
-    let g = fn(x: i32) i32 { x * 2 }
-    let h = fn(x: i32) i32 { g(x) + 1 }
+    let g = { x: i32 => x * 2 }
+    let h = { x: i32 => g(x) + 1 }
     return apply(h, 5)
 }

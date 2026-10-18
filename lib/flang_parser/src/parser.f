@@ -55,8 +55,10 @@ pub type Parser = struct {
     // terminates the expression instead of starting a struct construction or block literal.
     stop_at_brace: bool
     // Enclosing loop bodies being parsed. `break` / `continue` outside every one of them is E1006 /
-    // E1007.
+    // E1007. A lambda body starts it again at zero: a loop outside the lambda is out of reach.
     loop_depth: usize
+    // Enclosing lambda bodies being parsed. `return` inside one is E1054 (RFC-039).
+    lambda_depth: usize
 }
 
 // Construct a Parser over the given token list. The list is borrowed - every CST node will
@@ -77,6 +79,7 @@ pub fn parser(
         file_id = -1,
         stop_at_brace = false,
         loop_depth = 0,
+        lambda_depth = 0,
     }
 }
 
@@ -1103,6 +1106,12 @@ fn eat_optional_semicolon(self: &Parser, b: &NodeBuilder) {
 
 fn parse_return_stmt(self: &Parser) CstNodeId {
     let b = self.open(NodeKind.ReturnStmt)
+    if self.lambda_depth > 0 {
+        self.record_error_here(
+            "E1054",
+            from_view("`return` inside a lambda: its value is the body's last expression"),
+        )
+    }
     self.eat_into(&b) // `return`
     if !self.is_bare_return_terminator() {
         const e = self.parse_expression()
@@ -1904,8 +1913,16 @@ fn parse_array_literal(self: &Parser) CstNodeId {
     return self.finish(b)
 }
 
+// `fn(params) R { body }` - the removed lambda form (RFC-039). Parsed anyway so the rest of the
+// file still reads, but rejected at its keyword (E1053).
 fn parse_lambda_expression(self: &Parser) CstNodeId {
     let b = self.open(NodeKind.LambdaExpr)
+    self.record_error_here(
+        "E1053",
+        from_view(
+            "`fn(params) R { body }` lambdas have been removed, use `{ params => body }` instead",
+        ),
+    )
     self.eat_into(&b) // `fn`
     if self.current_kind() == TokenKind.OpenParenthesis {
         self.eat_into(&b)
@@ -1984,6 +2001,10 @@ fn parse_brace_lambda_params(self: &Parser, b: &NodeBuilder) {
 fn parse_lambda_body(self: &Parser) CstNodeId {
     const saved_brace = self.suspend_brace_stop()
     defer self.restore_brace_stop(saved_brace)
+    const saved_loops = self.loop_depth
+    self.loop_depth = 0
+    self.lambda_depth = self.lambda_depth + 1
+    defer self.leave_lambda(saved_loops)
     let b = self.open(NodeKind.BlockExpr)
     while !self.at_eof() and self.current_kind() != TokenKind.CloseBrace {
         const stmt = self.parse_statement()
@@ -1991,6 +2012,11 @@ fn parse_lambda_body(self: &Parser) CstNodeId {
     }
     self.expect_into(&b, TokenKind.CloseBrace, "E1002")
     return self.finish(b)
+}
+
+fn leave_lambda(self: &Parser, saved_loops: usize) {
+    self.loop_depth = saved_loops
+    self.lambda_depth = self.lambda_depth - 1
 }
 
 // `$"…"` / `$(args)"…"` / `$ident"…"`. The lexer resolves all three

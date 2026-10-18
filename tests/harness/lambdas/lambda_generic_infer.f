@@ -14,5 +14,5 @@ fn apply(f: fn($T) $U, x: $T) $U {
 }
 
 pub fn main() i32 {
-    return apply(fn(x) { x.double() }, 21)
+    return apply({ x => x.double() }, 21)
 }

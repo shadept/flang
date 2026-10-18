@@ -751,9 +751,10 @@ pub type MatchArm = struct {
     body: &Expr
 }
 
-// `fn(params) ret? { body }` or `{ params => body }` (RFC-039) - anonymous function. May capture
-// surrounding locals (RFC-014 Phase 2 by-value capture). Same shape as `FunctionDecl` minus name,
-// directives, and visibility - none of which apply to lambdas.
+// `{ params => body }` (RFC-039) - anonymous function; `return_type` is set only by the removed
+// `fn(params) R { body }` form, still projected for error recovery (E1053). May capture surrounding
+// locals (RFC-014 Phase 2 by-value capture). Same shape as `FunctionDecl` minus name, directives,
+// and visibility - none of which apply to lambdas.
 pub type LambdaExpr = struct {
     span: SourceSpan
     params: FunctionParam[]

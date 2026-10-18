@@ -16,7 +16,7 @@ fn close(h: move FileHandle) i32 {
 // A closure writes a non-copyable local it captures, in place.
 pub fn main() i32 {
     let h = open(3)
-    let bump = fn() { h.fd = h.fd + 1 }
+    let bump = { => h.fd = h.fd + 1 }
     bump()
     return h.close()
 }

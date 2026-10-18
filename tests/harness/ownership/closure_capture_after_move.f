@@ -18,6 +18,6 @@ fn close(h: move FileHandle) i32 {
 pub fn main() i32 {
     let h = open(3)
     let n = h.close()
-    let f = fn() i32 { h.fd }       // error E2123
+    let f = { => h.fd }       // error E2123
     return f() + n
 }

@@ -287,18 +287,18 @@ test "set functional utilities" {
     s.add(2i32)
     s.add(3i32)
 
-    let evens = s.filter(fn(x) { x % 2 == 0 })
+    let evens = s.filter { it % 2 == 0 }
     defer evens.deinit()
     assert_eq(evens.len(), 1 as usize, "one even element")
     assert_true(evens.contains(2i32), "the right one")
 
     let sum = 0i32
     let sum_ref = &sum
-    s.each(fn(x) { sum_ref.* = sum_ref.* + x })
+    s.each { sum_ref.* = sum_ref.* + it }
     assert_eq(sum, 6i32, "each visited every element")
 
-    assert_true(s.any(fn(x) { x > 2 }), "one element exceeds 2")
-    assert_true(!s.all(fn(x) { x > 2 }), "not all do")
+    assert_true(s.any { it > 2 }, "one element exceeds 2")
+    assert_true(!s.all { it > 2 }, "not all do")
 
     let xs = s.to_list()
     defer xs.deinit()

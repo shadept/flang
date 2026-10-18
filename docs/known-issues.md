@@ -457,14 +457,14 @@ rejected copies.
 specialization drain), `lib/flang_driver` (the layout panic that reports it)
 
 A lambda whose parameter is unannotated and whose type comes from the callee's `$F` slot -
-`journal.rollback(fn(entry) { ... })` - checks its body while the parameter is still an open
+`journal.rollback { entry => ... }` - checks its body while the parameter is still an open
 variable. A generic method called on one of the parameter's Option fields inside the body,
 `entry.prev.is_some()` or `entry.prev.unwrap()`, is specialized against that open field type. The
 parameter itself settles once the callee's specialization pins it, but the recorded
 `unwrap(Option($T))` keeps the variable, and lowering panics: `unresolved type variable reached
 layout - checker bug`. Calling a non-generic function on the field, or a method on the parameter
 itself, is fine; the field-of-parameter plus generic-callee combination is what trips it.
-Annotating the parameter (`fn(entry: BindingUndo)`) sidesteps it, which is what the engine and
+Annotating the parameter (`{ entry: BindingUndo => ... }`) sidesteps it, which is what the engine and
 `UnionFind` do. Pinned by `closures/lambda_param_option_field_method.f` and
 `closures/lambda_param_field_call_bound_local.f`.
 
@@ -482,7 +482,7 @@ the return type is unwritable:
 
 ```flang
 fn make_adder(base: i32) Adder($F) {
-    return .{ f = fn(x: i32) i32 { base + x } }
+    return .{ f = { x: i32 => base + x } }
 }
 ```
 
@@ -1220,7 +1220,10 @@ close the first defect without touching defer lowering.
 
 ### A `$F` Callback Parameter Is Pinned by Luck, Not by the Signature
 
-**Status:** Open — needs a constraint on type signatures
+**Status:** Parameter side resolved 2026-10-18 (RFC-039): every callback is bounded
+(`where F: fn(T) U`), and a lambda argument is checked after its call resolves, its unannotated
+parameters typed from the bound before the body is checked, so `xs.map { s => s.view }` no longer
+depends on what is imported. The return side below is still open. Original report follows.
 **Affected:** `lib/flang_typer/src/checker.f` (overload resolution), every `$F` stdlib combinator
 
 Combinators used to type their callback as `fn(T) $U`, which unified the
@@ -1245,7 +1248,7 @@ import std.string
 import std.path            // as_view(&Path)
 import std.string_builder  // as_view(&StringBuilder)
 
-let vs = xs.map(fn(s) { s.as_view() })
+let vs = xs.map { s => s.as_view() }
 // error[E2001]: cannot infer the lambda's parameter or return types
 ```
 
@@ -1254,7 +1257,7 @@ Remove either of the last two imports and the same line compiles - three
 and the parameter is never pinned. Whether a lambda infers therefore depends on
 what else is imported, which is not a property a caller can reason about.
 
-Workaround: annotate the parameter (`fn(s: OwnedString) { ... }`).
+Workaround (no longer needed): annotate the parameter (`{ s: OwnedString => ... }`).
 
 The return side has the same shape. `opt.map(extract)` leaves `$U` open until the drain, and a
 consumer with several overloads pins it to whichever concrete candidate it tries first:
@@ -2547,7 +2550,7 @@ When a `match` arm binds a payload, the binding is always **by value**. `match s
 
 `op_cmp` is overloaded across many types. Passing it as a function-typed argument — e.g. `_quicksort_range(s, 0, s.len, op_cmp)` — fails because overload resolution has no expected type at the point the name is taken as a value, and the compiler picks the first registered overload (typically `op_cmp(String, String)`) regardless of context.
 
-**Workaround:** Wrap in an inline lambda: `fn(a: T, b: T) Ord { return op_cmp(a, b) }`. This defers overload resolution until the call site, where T is concrete. The `std.sort` wrappers (`sort(s)`, `quicksort(s)`, etc.) use this pattern internally.
+**Workaround:** Wrap in an inline lambda: `{ a: T, b: T => op_cmp(a, b) }`. This defers overload resolution until the call site, where T is concrete. The `std.sort` wrappers (`sort(s)`, `quicksort(s)`, etc.) use this pattern internally.
 
 **Concrete case (2026-08-20):** `self.__cwd.map(deinit)` for `__cwd: OwnedString?` ICEs at lowering ("unresolved type variable reached lowering") — `deinit` has ~40 overloads and nothing picks `deinit(&OwnedString)` from `map`'s `fn(T) $U` parameter. Functions as values are a first-class feature of the language; overload resolution here is a compiler bug, not a design limit — the expected parameter type names the overload unambiguously. The rewritten site uses `Option.deinit` instead (`self.__cwd.deinit()`), which is the better idiom regardless.
 
@@ -3382,17 +3385,17 @@ capture in the match *scrutinee* is fine, which is what makes this confusing.
 fn run(op: $F) $T { return op() }
 
 fn scrutinee(x: i32) i32 {          // ok
-    return run(fn() i32 {
+    return run { =>
         const o: i32? = Some(x)
-        return o match { Some(v) => v, None => 0 }
-    })
+        o match { Some(v) => v, None => 0 }
+    }
 }
 
 fn arm(x: i32) i32 {                // error[E3002]: Unresolved identifier `x`
-    return run(fn() i32 {
+    return run { =>
         const o: i32? = Some(1)
-        return o match { Some(v) => v + x, None => 0 }
-    })
+        o match { Some(v) => v + x, None => 0 }
+    }
 }
 ```
 
@@ -3811,7 +3814,7 @@ variable, and a `void` body bound it.
 fn uses(cmp: $F) bool {
     return cmp(1i32, 2i32) == Ord3.Lo    // E2002: expected `void`, got `Ord3`
 }
-const r = uses(fn(a, b) { if a < b { Ord3.Lo } else { Ord3.Hi } })
+const r = uses { a, b => if a < b { Ord3.Lo } else { Ord3.Hi } }
 ```
 
 **Fix:** `project_block_node` now promotes a trailing `IfExpr` that carries an

@@ -54,7 +54,7 @@ pub fn main() i32 {
     l.push(4i32)
     l.push(9i32)
     l.push(2i32)
-    if l.iter().max().unwrap() != 9 or l.iter().min_by(fn(x) { 0 - x }).unwrap() != 9 {
+    if l.iter().max().unwrap() != 9 or l.iter().min_by({ x => 0 - x }).unwrap() != 9 {
         return 6
     }
     return 0

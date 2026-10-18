@@ -951,8 +951,8 @@ test "filter and map accept capturing closures with unannotated params" {
     let floor = 1
     let scale = 10
     let out = xs.iter()
-        .filter(fn(x) { x > floor })
-        .map(fn(x) { x * scale })
+        .filter { it > floor }
+        .map { it * scale }
         .to_list()
     defer out.deinit()
     assert_eq(out.len, 2 as usize, "two elements pass the floor")
@@ -1042,14 +1042,14 @@ test "consumers: fold each count any all find position last" {
     let xs = list123()
     defer xs.deinit()
 
-    assert_eq(xs.iter().fold(0i32, fn(a, x) { a + x }), 6i32, "fold sums")
-    assert_eq(xs.iter().reduce(fn(a, x) { a + x }).unwrap(), 6i32, "seeded reduce agrees")
+    assert_eq(xs.iter().fold(0i32) { a, x => a + x }, 6i32, "fold sums")
+    assert_eq(xs.iter().reduce { a, x => a + x }.unwrap(), 6i32, "seeded reduce agrees")
 
     // Captures are by value and read-only (RFC-014): to mutate outer state from `each`, capture a
     // reference and write through it.
     let sum = 0i32
     let sum_ref = &sum
-    xs.iter().each(fn(x) { sum_ref.* = sum_ref.* + x })
+    xs.iter().each { sum_ref.* = sum_ref.* + it }
     assert_eq(sum, 6i32, "each visits every element via the captured reference")
 
     assert_eq(xs.iter().count(), 3 as usize, "count consumes all")
@@ -1058,7 +1058,7 @@ test "consumers: fold each count any all find position last" {
     assert_true(!xs.iter().all(is_even), "1 is not")
     assert_eq(xs.iter().find(is_even).unwrap(), 2i32, "first even")
     assert_eq(xs.iter().position(is_even).unwrap(), 1 as usize, "its position")
-    assert_true(xs.iter().find(fn(x: i32) { x > 99 }).is_none(), "no match is null")
+    assert_true(xs.iter().find { it > 99 }.is_none(), "no match is null")
     assert_eq(xs.iter().last().unwrap(), 3i32, "last element")
 }
 
@@ -1072,13 +1072,13 @@ test "min max min_by max_by" {
     assert_eq(xs.iter().min().unwrap(), 1i32, "smallest")
     assert_eq(xs.iter().max().unwrap(), 4i32, "largest")
     // key inverts the order: min_by picks the element whose KEY is smallest
-    assert_eq(xs.iter().min_by(fn(x) { 0 - x }).unwrap(), 4i32, "smallest key = largest value")
-    assert_eq(xs.iter().max_by(fn(x) { 0 - x }).unwrap(), 1i32, "largest key = smallest value")
+    assert_eq(xs.iter().min_by { 0 - it }.unwrap(), 4i32, "smallest key = largest value")
+    assert_eq(xs.iter().max_by { 0 - it }.unwrap(), 1i32, "largest key = smallest value")
 
     let empty: List(i32) = list(0)
     defer empty.deinit()
     assert_true(empty.iter().min().is_none(), "empty min is null")
-    assert_true(empty.iter().max_by(fn(x) { x }).is_none(), "empty max_by is null")
+    assert_true(empty.iter().max_by { it }.is_none(), "empty max_by is null")
 }
 
 test "chain composes iterators of different types" {
@@ -1135,7 +1135,7 @@ test "to_set and to_dict collect an iterator" {
     assert_eq(s.len(), 3 as usize, "duplicates collapse")
     assert_true(s.contains(2i32), "elements present")
 
-    let d = xs.iter().to_dict(fn(x) { x * 10 })
+    let d = xs.iter().to_dict { it * 10 }
     defer d.deinit()
     assert_eq(d.len(), 3 as usize, "same key overwrites")
     assert_eq(d.get(20i32).unwrap(), 2i32, "keyed by the extractor")
@@ -1193,7 +1193,9 @@ test "tap passes elements through unchanged" {
 test "scan yields the running fold" {
     let xs = list123()
     defer xs.deinit()
-    let sums = xs.iter().scan(0i32, fn(acc: i32, x: i32) i32 { acc + x }).to_list()
+    let sums = xs.iter()
+        .scan(0i32) { acc, x => acc + x }
+        .to_list()
     defer sums.deinit()
     assert_eq(sums.len, 3 as usize, "one per element")
     assert_eq(sums[0], 1i32, "1")
@@ -1220,7 +1222,7 @@ test "extend appends what an iterator yields" {
     let xs = list123()
     defer xs.deinit()
     const ys = list123()
-    xs.extend(ys.iter().filter(fn(x) { x != 2 }))
+    xs.extend(ys.iter().filter { it != 2 })
     ys.deinit()
     assert_eq(xs.len, 5usize, "two of the three appended")
     assert_eq(xs[4], 3i32, "in order")
