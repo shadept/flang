@@ -43,7 +43,7 @@ pub type Coercion = struct {
 
 // Build a side-effect-free coercion. Most widening rules use this.
 #inline pub fn simple(result_ty: Ty, allocator: &Allocator = context.allocator) Coercion {
-    let empty = list(0, allocator)
+    let empty = list(0)
     return .{ result_ty = result_ty, cost = 1u32, side_unifications = move empty }
 }
 
@@ -90,19 +90,14 @@ fn unsigned_rank(p: PrimitiveKind) i32 {
     }
 }
 
-pub fn try_integer_widening(
-    it: &TypeInterner,
-    from: Ty,
-    to: Ty,
-    allocator: &Allocator = context.allocator,
-) Coercion? {
+pub fn try_integer_widening(it: &TypeInterner, from: Ty, to: Ty) Coercion? {
     let pf = prim_kind_of(it, from) match { Some(p) => p, None => return null }
     let pt = prim_kind_of(it, to) match { Some(p) => p, None => return null }
 
     // bool → any integer
     if pf == PrimitiveKind.Bool {
         if signed_rank(pt) > 0i32 or unsigned_rank(pt) > 0i32 {
-            return Some(simple(to, allocator))
+            return Some(simple(to))
         }
         return null
     }
@@ -110,19 +105,19 @@ pub fn try_integer_widening(
     let sf = signed_rank(pf)
     let st = signed_rank(pt)
     if sf > 0i32 and st > 0i32 and sf <= st {
-        return Some(simple(to, allocator))
+        return Some(simple(to))
     }
 
     let uf = unsigned_rank(pf)
     let ut = unsigned_rank(pt)
     if uf > 0i32 and ut > 0i32 and uf <= ut {
-        return Some(simple(to, allocator))
+        return Some(simple(to))
     }
 
     // Unsigned → signed with strictly larger rank (so the unsigned range
     // fits without truncation or sign reinterpretation).
     if uf > 0i32 and st > 0i32 and uf < st {
-        return Some(simple(to, allocator))
+        return Some(simple(to))
     }
 
     return null
@@ -134,16 +129,11 @@ pub fn try_integer_widening(
 // truncates above U+00FF; restricting it to literals is the tighter rule.
 // ─────────────────────────────────────────────────────────────────────
 
-pub fn try_char_to_u8(
-    it: &TypeInterner,
-    from: Ty,
-    to: Ty,
-    allocator: &Allocator = context.allocator,
-) Coercion? {
+pub fn try_char_to_u8(it: &TypeInterner, from: Ty, to: Ty) Coercion? {
     let pf = prim_kind_of(it, from) match { Some(p) => p, None => return null }
     let pt = prim_kind_of(it, to) match { Some(p) => p, None => return null }
     if pf == PrimitiveKind.Char and pt == PrimitiveKind.U8 {
-        return Some(simple(to, allocator))
+        return Some(simple(to))
     }
     return null
 }
@@ -152,16 +142,11 @@ pub fn try_char_to_u8(
 // Float widening: f32 → f64.
 // ─────────────────────────────────────────────────────────────────────
 
-pub fn try_float_widening(
-    it: &TypeInterner,
-    from: Ty,
-    to: Ty,
-    allocator: &Allocator = context.allocator,
-) Coercion? {
+pub fn try_float_widening(it: &TypeInterner, from: Ty, to: Ty) Coercion? {
     let pf = prim_kind_of(it, from) match { Some(p) => p, None => return null }
     let pt = prim_kind_of(it, to) match { Some(p) => p, None => return null }
     if pf == PrimitiveKind.F32 and pt == PrimitiveKind.F64 {
-        return Some(simple(to, allocator))
+        return Some(simple(to))
     }
     return null
 }
@@ -188,13 +173,7 @@ fn nominal_node_of(it: &TypeInterner, t: Ty) NNominalNode? {
 
 // `Type(T) → TypeInfo` - a reified type handle flows wherever the
 // erased runtime type-info record is expected.
-pub fn try_type_to_typeinfo(
-    it: &TypeInterner,
-    from: Ty,
-    to: Ty,
-    reg: &NominalRegistry,
-    allocator: &Allocator = context.allocator,
-) Coercion? {
+pub fn try_type_to_typeinfo(it: &TypeInterner, from: Ty, to: Ty, reg: &NominalRegistry) Coercion? {
     let fn_n = nominal_node_of(it, from) match { Some(n) => n, None => return null }
     let tn = nominal_node_of(it, to) match { Some(n) => n, None => return null }
     let type_id = lookup_well_known(reg, FQN_TYPE)
@@ -207,7 +186,7 @@ pub fn try_type_to_typeinfo(
         Some(iid) => if iid != tn.id { return null }
         None => return null
     }
-    return Some(simple(to, allocator))
+    return Some(simple(to))
 }
 
 // `String → Slice(u8)` - binary-compatible view cast.
@@ -216,7 +195,6 @@ pub fn try_string_to_byte_slice(
     from: Ty,
     to: Ty,
     reg: &NominalRegistry,
-    allocator: &Allocator = context.allocator,
 ) Coercion? {
     let fn_n = nominal_node_of(it, from) match { Some(n) => n, None => return null }
     let tn = nominal_node_of(it, to) match { Some(n) => n, None => return null }
@@ -237,7 +215,7 @@ pub fn try_string_to_byte_slice(
     if it.child_ids(tn.args)[0] != prim_of(PrimitiveKind.U8) {
         return null
     }
-    return Some(simple(to, allocator))
+    return Some(simple(to))
 }
 
 // `Slice(u8) → String` - the inverse binary-compatible view cast. The
@@ -248,13 +226,12 @@ pub fn try_byte_slice_to_string(
     from: Ty,
     to: Ty,
     reg: &NominalRegistry,
-    allocator: &Allocator = context.allocator,
 ) Coercion? {
-    let c = try_string_to_byte_slice(it, to, from, reg, allocator)
+    let c = try_string_to_byte_slice(it, to, from, reg)
     return c match {
         Some(inner) => {
             inner.side_unifications.deinit()
-            Some(simple(to, allocator))
+            Some(simple(to))
         }
         None => null
     }
@@ -268,13 +245,7 @@ pub fn try_byte_slice_to_string(
 //   - `&[T; N] → &T`
 // Each emits one side-unification: the array's element type unifies with the target's element /
 // inner type.
-pub fn try_array_decay(
-    it: &TypeInterner,
-    from: Ty,
-    to: Ty,
-    reg: &NominalRegistry,
-    allocator: &Allocator = context.allocator,
-) Coercion? {
+pub fn try_array_decay(it: &TypeInterner, from: Ty, to: Ty, reg: &NominalRegistry) Coercion? {
     // Identify the array element of `from`, if any (with or without a surrounding reference).
     let elem = array_element_of(it, from)
     if elem.is_none() {
@@ -282,7 +253,7 @@ pub fn try_array_decay(
     }
     let e = elem.unwrap()
 
-    return decay_to(it, to, e, reg, allocator)
+    return decay_to(it, to, e, reg)
 }
 
 fn array_element_of(it: &TypeInterner, t: Ty) Ty? {
@@ -296,16 +267,10 @@ fn array_element_of(it: &TypeInterner, t: Ty) Ty? {
     }
 }
 
-fn decay_to(
-    it: &TypeInterner,
-    to: Ty,
-    elem: Ty,
-    reg: &NominalRegistry,
-    allocator: &Allocator,
-) Coercion? {
+fn decay_to(it: &TypeInterner, to: Ty, elem: Ty, reg: &NominalRegistry) Coercion? {
     return it.node(to) match {
-        NNominal(n) => decay_to_slice(it, to, &n, elem, reg, allocator)
-        NRef(target_inner) => decay_to_ref(to, target_inner, elem, allocator)
+        NNominal(n) => decay_to_slice(it, to, &n, elem, reg)
+        NRef(target_inner) => decay_to_ref(to, target_inner, elem)
         _ => null
     }
 }
@@ -316,7 +281,6 @@ fn decay_to_slice(
     n: &NNominalNode,
     elem: Ty,
     reg: &NominalRegistry,
-    allocator: &Allocator,
 ) Coercion? {
     let slice_id = lookup_well_known(reg, FQN_SLICE)
     if slice_id.is_none() {
@@ -328,13 +292,13 @@ fn decay_to_slice(
     if n.args.len != 1 {
         return null
     }
-    let side = list(1, allocator)
+    let side = list(1)
     side.push(Constraint { a = elem, b = it.child_ids(n.args)[0] })
     return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
 }
 
-fn decay_to_ref(to: Ty, target_inner: Ty, elem: Ty, allocator: &Allocator) Coercion? {
-    let side = list(1, allocator)
+fn decay_to_ref(to: Ty, target_inner: Ty, elem: Ty) Coercion? {
+    let side = list(1)
     side.push(Constraint { a = elem, b = target_inner })
     return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
 }
@@ -342,13 +306,7 @@ fn decay_to_ref(to: Ty, target_inner: Ty, elem: Ty, allocator: &Allocator) Coerc
 // `T → Type(T)` for RTTI handles. The result wraps `from` in a
 // freshly-instantiated `Type(T)`. The instantiation is recorded by the engine so codegen knows
 // which RTTI tables to emit.
-pub fn try_nominal_to_type(
-    it: &TypeInterner,
-    from: Ty,
-    to: Ty,
-    reg: &NominalRegistry,
-    allocator: &Allocator = context.allocator,
-) Coercion? {
+pub fn try_nominal_to_type(it: &TypeInterner, from: Ty, to: Ty, reg: &NominalRegistry) Coercion? {
     let tn = nominal_node_of(it, to) match { Some(n) => n, None => return null }
     let type_id = lookup_well_known(reg, FQN_TYPE)
     type_id match {
@@ -375,7 +333,7 @@ pub fn try_nominal_to_type(
     if !valid_from {
         return null
     }
-    let side = list(1, allocator)
+    let side = list(1)
     side.push(Constraint { a = from, b = it.child_ids(tn.args)[0] })
     return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
 }

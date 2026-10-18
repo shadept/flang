@@ -32,7 +32,6 @@ pub fn is_copyable_ty(
     it: &TypeInterner,
     reg: &NominalRegistry,
     ty: Ty,
-    alloc: &Allocator,
     rigid: &Dict(VarId, bool)? = null,
 ) bool {
     return it.node(ty) match {
@@ -42,10 +41,10 @@ pub fn is_copyable_ty(
             Some(r) => r.get(v.id) ?? true
             None => true
         }
-        NArray(arr) => is_copyable_ty(it, reg, arr.elem, alloc, rigid)
-        NTuple(span) => copyable_span(it, reg, span, alloc, rigid)
-        NRecord(rec) => copyable_span(it, reg, rec.tys, alloc, rigid)
-        NNominal(nn) => copyable_nominal(it, reg, ty, &nn, alloc, rigid)
+        NArray(arr) => is_copyable_ty(it, reg, arr.elem, rigid)
+        NTuple(span) => copyable_span(it, reg, span, rigid)
+        NRecord(rec) => copyable_span(it, reg, rec.tys, rigid)
+        NNominal(nn) => copyable_nominal(it, reg, ty, &nn, rigid)
         _ => true
     }
 }
@@ -54,11 +53,10 @@ fn copyable_span(
     it: &TypeInterner,
     reg: &NominalRegistry,
     span: ChildSpan,
-    alloc: &Allocator,
     rigid: &Dict(VarId, bool)?,
 ) bool {
     for i in 0..span.len {
-        if !is_copyable_ty(it, reg, it.child_at(span, i), alloc, rigid) {
+        if !is_copyable_ty(it, reg, it.child_at(span, i), rigid) {
             return false
         }
     }
@@ -70,12 +68,11 @@ fn copyable_nominal(
     reg: &NominalRegistry,
     ty: Ty,
     nn: &NNominalNode,
-    alloc: &Allocator,
     rigid: &Dict(VarId, bool)?,
 ) bool {
     return reg.get(nn.id).* match {
-        NomStruct(sd) => copyable_struct(it, reg, ty, &sd, nn, alloc, rigid)
-        NomEnum(ed) => copyable_enum(it, reg, ty, &ed, nn, alloc, rigid)
+        NomStruct(sd) => copyable_struct(it, reg, ty, &sd, nn, rigid)
+        NomEnum(ed) => copyable_enum(it, reg, ty, &ed, nn, rigid)
     }
 }
 
@@ -85,7 +82,6 @@ fn copyable_struct(
     ty: Ty,
     sd: &StructDef,
     nn: &NNominalNode,
-    alloc: &Allocator,
     rigid: &Dict(VarId, bool)?,
 ) bool {
     for i in 0..sd.fields.len {
@@ -93,11 +89,11 @@ fn copyable_struct(
             return false
         }
     }
-    let subst = reg.instance_subst(ty, &sd.type_params, &sd.assoc_params, nn.args, it, alloc)
+    let subst = reg.instance_subst(ty, &sd.type_params, &sd.assoc_params, nn.args, it)
     defer subst.deinit()
     for i in 0..sd.fields.len {
-        const ft = it.substitute(sd.fields[i].ty, &subst, alloc)
-        if !is_copyable_ty(it, reg, ft, alloc, rigid) {
+        const ft = it.substitute(sd.fields[i].ty, &subst)
+        if !is_copyable_ty(it, reg, ft, rigid) {
             return false
         }
     }
@@ -110,15 +106,14 @@ fn copyable_enum(
     ty: Ty,
     ed: &EnumDef,
     nn: &NNominalNode,
-    alloc: &Allocator,
     rigid: &Dict(VarId, bool)?,
 ) bool {
-    let subst = reg.instance_subst(ty, &ed.type_params, &ed.assoc_params, nn.args, it, alloc)
+    let subst = reg.instance_subst(ty, &ed.type_params, &ed.assoc_params, nn.args, it)
     defer subst.deinit()
     for vi in 0..ed.variants.len {
         for pi in 0..ed.variants[vi].payloads.len {
-            const pt = it.substitute(ed.variants[vi].payloads[pi], &subst, alloc)
-            if !is_copyable_ty(it, reg, pt, alloc, rigid) {
+            const pt = it.substitute(ed.variants[vi].payloads[pi], &subst)
+            if !is_copyable_ty(it, reg, pt, rigid) {
                 return false
             }
         }

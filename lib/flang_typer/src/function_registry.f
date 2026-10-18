@@ -47,10 +47,10 @@ pub fn deinit(self: move FunctionScheme) {
 }
 
 // An independent copy, owning its own quantified set.
-pub fn clone(self: &FunctionScheme, allocator: &Allocator = context.allocator) FunctionScheme {
+pub fn clone(self: &FunctionScheme) FunctionScheme {
     return FunctionScheme {
         name = self.name,
-        signature = self.signature.clone(allocator),
+        signature = self.signature.clone(),
         module = self.module,
         is_pub = self.is_pub,
         is_foreign = self.is_foreign,
@@ -89,12 +89,11 @@ pub type FunctionRegistry = struct {
     // the variable stream is position-stable across demands, so handle equality is scheme equality;
     // a spurious inequality from an upstream stream shift only over-invalidates.
     changed: bool
-    allocator: &Allocator
 }
 
-pub fn function_registry(allocator: &Allocator = context.allocator) FunctionRegistry {
-    let by_name: Dict(String, List(FunctionScheme)) = dict(allocator)
-    return .{ by_name = move by_name, next_id = 0u32, changed = false, allocator = allocator }
+pub fn function_registry() FunctionRegistry {
+    let by_name: Dict(String, List(FunctionScheme)) = dict()
+    return .{ by_name = move by_name, next_id = 0u32, changed = false }
 }
 
 pub fn deinit(self: move FunctionRegistry) {
@@ -110,7 +109,7 @@ pub fn deinit(self: move FunctionRegistry) {
 // is what pairs each declaration with its own slot.
 pub fn register(self: &FunctionRegistry, scheme: move FunctionScheme) u32 {
     if self.by_name.get_ref(scheme.name).is_none() {
-        let fresh: List(FunctionScheme) = list(1, self.allocator)
+        let fresh: List(FunctionScheme) = list(1)
         self.by_name.set(scheme.name, fresh)
     }
     // In place through the stored list: the get-copy-push-set dance both leaked and double-freed
@@ -186,7 +185,7 @@ pub fn reset_changed(self: &FunctionRegistry) {
 
 // The registered names, snapshotted so a caller can mutate the lists behind them while it walks.
 fn key_list(self: &FunctionRegistry) List(String) {
-    let names: List(String) = list(self.by_name.len(), self.allocator)
+    let names: List(String) = list(self.by_name.len())
     for entry in self.by_name {
         names.push(entry.key)
     }
@@ -216,12 +215,12 @@ pub fn retire_module(self: &FunctionRegistry, module: String) {
 // dropped ids so the caller can clear its own id-keyed side tables. Live entries keep their
 // positions.
 pub fn purge_retired(self: &FunctionRegistry) List(u32) {
-    let dropped: List(u32) = list(0, self.allocator)
+    let dropped: List(u32) = list(0)
     let names = key_list(self)
     defer names.deinit()
     for name in names {
         let lst = self.by_name.get_ref(name).unwrap()
-        let keep: List(FunctionScheme) = list(lst.len, self.allocator)
+        let keep: List(FunctionScheme) = list(lst.len)
         for f in lst.drain() {
             if f.retired {
                 dropped.push(f.id)
@@ -239,20 +238,17 @@ pub fn purge_retired(self: &FunctionRegistry) List(u32) {
 // the next demand while the snapshot keeps the original. Each scheme is cloned, so the two
 // registries own their quantified sets apart; names, modules and deprecations are views into
 // buffers that outlive both.
-pub fn carried_copy(
-    self: &FunctionRegistry,
-    allocator: &Allocator = context.allocator,
-) FunctionRegistry {
-    let out = function_registry(allocator)
-    fill_fn_carried(&out, self, allocator)
+pub fn carried_copy(self: &FunctionRegistry) FunctionRegistry {
+    let out = function_registry()
+    fill_fn_carried(&out, self)
     return out
 }
 
-fn fill_fn_carried(out: &FunctionRegistry, src: &FunctionRegistry, allocator: &Allocator) {
+fn fill_fn_carried(out: &FunctionRegistry, src: &FunctionRegistry) {
     for entry in src.by_name {
-        let cl: List(FunctionScheme) = list(entry.value.len, allocator)
+        let cl: List(FunctionScheme) = list(entry.value.len)
         for &f in entry.value {
-            cl.push(f.clone(allocator))
+            cl.push(f.clone())
         }
         out.by_name.set(entry.key, cl)
     }
@@ -283,7 +279,7 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
     }
     let overloads = overloads_opt.unwrap()
 
-    let visible: List(&FunctionScheme) = list(0, self.allocator)
+    let visible: List(&FunctionScheme) = list(0)
     let hidden_module: String? = null
     let hidden_at: usize = 0
     for j in 0..overloads.len {
@@ -310,7 +306,7 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
         return FnLookup.FnLookFound(move visible)
     }
     if hidden_module.is_some() {
-        let one: List(&FunctionScheme) = list(1, self.allocator)
+        let one: List(&FunctionScheme) = list(1)
         one.push(&overloads[hidden_at])
         return FnLookup.FnLookHidden(FnLookHiddenInfo {
             candidates = move one,

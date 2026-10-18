@@ -191,7 +191,6 @@ pub type InferenceResults = struct {
     cap_derefs: List(NodeId)
     cap_arg_derefs: List(NodeId)
     cap_adapts: List(NodeId)
-    allocator: &Allocator
 }
 
 // How a UFCS receiver was adapted to its parameter.
@@ -217,19 +216,19 @@ pub type CapturedKeys = struct {
     adapts: List(NodeId)
 }
 
-pub fn captured_keys(allocator: &Allocator = context.allocator) CapturedKeys {
+pub fn captured_keys() CapturedKeys {
     return .{
-        spans = list(0, allocator),
-        types = list(0, allocator),
-        targets = list(0, allocator),
-        ops = list(0, allocator),
-        desugars = list(0, allocator),
-        lambdas = list(0, allocator),
-        default_args = list(0, allocator),
-        arg_lists = list(0, allocator),
-        derefs = list(0, allocator),
-        arg_derefs = list(0, allocator),
-        adapts = list(0, allocator),
+        spans = list(0),
+        types = list(0),
+        targets = list(0),
+        ops = list(0),
+        desugars = list(0),
+        lambdas = list(0),
+        default_args = list(0),
+        arg_lists = list(0),
+        derefs = list(0),
+        arg_derefs = list(0),
+        adapts = list(0),
     }
 }
 
@@ -247,34 +246,33 @@ pub fn deinit(self: move CapturedKeys) {
     self.adapts.deinit()
 }
 
-pub fn inference_results(allocator: &Allocator = context.allocator) InferenceResults {
+pub fn inference_results() InferenceResults {
     return .{
-        node_types = dict(allocator),
-        resolved_ops = dict(allocator),
-        resolved_targets = dict(allocator),
-        instantiated_types = list(0, allocator),
-        synth_strings = list(0, allocator),
-        desugars = dict(allocator),
-        lambdas = dict(allocator),
-        default_args = dict(allocator),
-        arg_lists = dict(allocator),
-        receiver_derefs = dict(allocator),
-        receiver_adapts = dict(allocator),
-        arg_derefs = dict(allocator),
-        spans = dict(allocator),
+        node_types = dict(),
+        resolved_ops = dict(),
+        resolved_targets = dict(),
+        instantiated_types = list(0),
+        synth_strings = list(0),
+        desugars = dict(),
+        lambdas = dict(),
+        default_args = dict(),
+        arg_lists = dict(),
+        receiver_derefs = dict(),
+        receiver_adapts = dict(),
+        arg_derefs = dict(),
+        spans = dict(),
         cap_on = false,
-        cap_spans = list(0, allocator),
-        cap_types = list(0, allocator),
-        cap_targets = list(0, allocator),
-        cap_ops = list(0, allocator),
-        cap_desugars = list(0, allocator),
-        cap_lambdas = list(0, allocator),
-        cap_default_args = list(0, allocator),
-        cap_arg_lists = list(0, allocator),
-        cap_derefs = list(0, allocator),
-        cap_arg_derefs = list(0, allocator),
-        cap_adapts = list(0, allocator),
-        allocator = allocator,
+        cap_spans = list(0),
+        cap_types = list(0),
+        cap_targets = list(0),
+        cap_ops = list(0),
+        cap_desugars = list(0),
+        cap_lambdas = list(0),
+        cap_default_args = list(0),
+        cap_arg_lists = list(0),
+        cap_derefs = list(0),
+        cap_arg_derefs = list(0),
+        cap_adapts = list(0),
     }
 }
 
@@ -298,17 +296,17 @@ pub type TableCaps = struct {
 // Rebuild the node-keyed tables at the given capacities. Only meaningful on a fresh, empty result
 // set - existing entries are dropped, not migrated.
 pub fn presize_tables(self: &InferenceResults, s: &TableCaps) {
-    install(&self.node_types, dict(s.node_types, self.allocator))
-    install(&self.spans, dict(s.spans, self.allocator))
-    install(&self.resolved_targets, dict(s.targets, self.allocator))
-    install(&self.resolved_ops, dict(s.ops, self.allocator))
-    install(&self.desugars, dict(s.desugars, self.allocator))
-    install(&self.lambdas, dict(s.lambdas, self.allocator))
-    install(&self.default_args, dict(s.default_args, self.allocator))
-    install(&self.arg_lists, dict(s.arg_lists, self.allocator))
-    install(&self.receiver_derefs, dict(s.derefs, self.allocator))
-    install(&self.arg_derefs, dict(s.arg_derefs, self.allocator))
-    install(&self.receiver_adapts, dict(s.adapts, self.allocator))
+    install(&self.node_types, dict(s.node_types))
+    install(&self.spans, dict(s.spans))
+    install(&self.resolved_targets, dict(s.targets))
+    install(&self.resolved_ops, dict(s.ops))
+    install(&self.desugars, dict(s.desugars))
+    install(&self.lambdas, dict(s.lambdas))
+    install(&self.default_args, dict(s.default_args))
+    install(&self.arg_lists, dict(s.arg_lists))
+    install(&self.receiver_derefs, dict(s.derefs))
+    install(&self.arg_derefs, dict(s.arg_derefs))
+    install(&self.receiver_adapts, dict(s.adapts))
 }
 
 // Start collecting the keys of every entry recorded from here on.
@@ -320,17 +318,17 @@ pub fn begin_capture(self: &InferenceResults) {
 pub fn end_capture(self: &InferenceResults) CapturedKeys {
     self.cap_on = false
     let out = CapturedKeys {
-        spans = replace(&self.cap_spans, list(0, self.allocator)),
-        types = replace(&self.cap_types, list(0, self.allocator)),
-        targets = replace(&self.cap_targets, list(0, self.allocator)),
-        ops = replace(&self.cap_ops, list(0, self.allocator)),
-        desugars = replace(&self.cap_desugars, list(0, self.allocator)),
-        lambdas = replace(&self.cap_lambdas, list(0, self.allocator)),
-        default_args = replace(&self.cap_default_args, list(0, self.allocator)),
-        arg_lists = replace(&self.cap_arg_lists, list(0, self.allocator)),
-        derefs = replace(&self.cap_derefs, list(0, self.allocator)),
-        arg_derefs = replace(&self.cap_arg_derefs, list(0, self.allocator)),
-        adapts = replace(&self.cap_adapts, list(0, self.allocator)),
+        spans = replace(&self.cap_spans, list(0)),
+        types = replace(&self.cap_types, list(0)),
+        targets = replace(&self.cap_targets, list(0)),
+        ops = replace(&self.cap_ops, list(0)),
+        desugars = replace(&self.cap_desugars, list(0)),
+        lambdas = replace(&self.cap_lambdas, list(0)),
+        default_args = replace(&self.cap_default_args, list(0)),
+        arg_lists = replace(&self.cap_arg_lists, list(0)),
+        derefs = replace(&self.cap_derefs, list(0)),
+        arg_derefs = replace(&self.cap_arg_derefs, list(0)),
+        adapts = replace(&self.cap_adapts, list(0)),
     }
     return out
 }
@@ -443,11 +441,7 @@ pub fn record_arg_list(self: &InferenceResults, id: NodeId, exprs: move List(&Ex
     }
 }
 
-pub fn record_receiver_deref(
-    self: &InferenceResults,
-    id: NodeId,
-    chain: move List(ResolvedTarget),
-) {
+pub fn record_receiver_deref(self: &InferenceResults, id: NodeId, chain: move List(ResolvedTarget)) {
     self.receiver_derefs.set(id, chain)
     if self.cap_on {
         self.cap_derefs.push(id)
@@ -534,10 +528,10 @@ pub fn with_spec(op: &ResolvedOperator, spec_id: SpecId) ResolvedOperator {
 }
 
 // An owning copy of one lambda record - handles and views shared, lists and the symbol duplicated.
-pub fn copy_lambda(info: &LambdaInfo, allocator: &Allocator = context.allocator) LambdaInfo {
-    let ps: List(Ty) = list(info.params.len, allocator)
+pub fn copy_lambda(info: &LambdaInfo) LambdaInfo {
+    let ps: List(Ty) = list(info.params.len)
     ps.push_all(info.params.as_slice())
-    let caps: List(CaptureRec) = list(info.captures.len, allocator)
+    let caps: List(CaptureRec) = list(info.captures.len)
     caps.push_all(info.captures.as_slice())
     return LambdaInfo {
         span = info.span,
@@ -545,19 +539,19 @@ pub fn copy_lambda(info: &LambdaInfo, allocator: &Allocator = context.allocator)
         ret = info.ret,
         captures = move caps,
         closure_id = info.closure_id,
-        symbol = from_view(info.symbol.view, allocator),
+        symbol = from_view(info.symbol.view),
     }
 }
 
 // An owning copy of one closure dispatch record - handles shared, the params list and symbol
 // duplicated.
-pub fn copy_sig(sig: &ClosureSig, allocator: &Allocator = context.allocator) ClosureSig {
-    let ps: List(Ty) = list(sig.params.len, allocator)
+pub fn copy_sig(sig: &ClosureSig) ClosureSig {
+    let ps: List(Ty) = list(sig.params.len)
     ps.push_all(sig.params.as_slice())
     return ClosureSig {
         params = move ps,
         ret = sig.ret,
-        symbol = from_view(sig.symbol.view, allocator),
+        symbol = from_view(sig.symbol.view),
         lambda_node = sig.lambda_node,
     }
 }
@@ -567,67 +561,64 @@ pub fn copy_sig(sig: &ClosureSig, allocator: &Allocator = context.allocator) Clo
 // tables keep viewing the ORIGINAL set's string buffers - `synth_strings` is left empty rather than
 // copied into orphan buffers nothing views - so the copy lives only as long as its source's
 // storage. Capture state starts clean.
-pub fn deep_copy(
-    self: &InferenceResults,
-    allocator: &Allocator = context.allocator,
-) InferenceResults {
+pub fn deep_copy(self: &InferenceResults) InferenceResults {
     // Every container fills as a local and wraps at the end - growing one through a local struct's
     // field is the two-field-hop hazard.
-    let node_types: Dict(NodeId, Ty) = dict(self.node_types.len(), allocator)
+    let node_types: Dict(NodeId, Ty) = dict(self.node_types.len())
     for e in self.node_types {
         node_types.set(e.key, e.value)
     }
-    let resolved_ops: Dict(NodeId, ResolvedOperator) = dict(allocator)
+    let resolved_ops: Dict(NodeId, ResolvedOperator) = dict()
     for e in self.resolved_ops {
         resolved_ops.set(e.key, e.value)
     }
-    let resolved_targets: Dict(NodeId, ResolvedTarget) = dict(allocator)
+    let resolved_targets: Dict(NodeId, ResolvedTarget) = dict()
     for e in self.resolved_targets {
         resolved_targets.set(e.key, e.value)
     }
-    let instantiated: List(Ty) = list(self.instantiated_types.len, allocator)
+    let instantiated: List(Ty) = list(self.instantiated_types.len)
     instantiated.push_all(self.instantiated_types.as_slice())
-    let desugars: Dict(NodeId, &BlockExpr) = dict(allocator)
+    let desugars: Dict(NodeId, &BlockExpr) = dict()
     for e in self.desugars {
         desugars.set(e.key, e.value)
     }
-    let lambdas: Dict(NodeId, LambdaInfo) = dict(allocator)
+    let lambdas: Dict(NodeId, LambdaInfo) = dict()
     for e in self.lambdas {
-        lambdas.set(e.key, copy_lambda(&e.value, allocator))
+        lambdas.set(e.key, copy_lambda(&e.value))
     }
-    let default_args: Dict(NodeId, List(&Expr)) = dict(allocator)
+    let default_args: Dict(NodeId, List(&Expr)) = dict()
     for e in self.default_args {
-        let xs: List(&Expr) = list(e.value.len, allocator)
+        let xs: List(&Expr) = list(e.value.len)
         xs.push_all(e.value.as_slice())
         default_args.set(e.key, xs)
     }
-    let arg_lists: Dict(NodeId, List(&Expr)) = dict(allocator)
+    let arg_lists: Dict(NodeId, List(&Expr)) = dict()
     for e in self.arg_lists {
-        let xs: List(&Expr) = list(e.value.len, allocator)
+        let xs: List(&Expr) = list(e.value.len)
         xs.push_all(e.value.as_slice())
         arg_lists.set(e.key, xs)
     }
-    let derefs: Dict(NodeId, List(ResolvedTarget)) = dict(allocator)
+    let derefs: Dict(NodeId, List(ResolvedTarget)) = dict()
     for e in self.receiver_derefs {
-        let chain: List(ResolvedTarget) = list(e.value.len, allocator)
+        let chain: List(ResolvedTarget) = list(e.value.len)
         chain.push_all(e.value.as_slice())
         derefs.set(e.key, chain)
     }
-    let arg_derefs: Dict(NodeId, List(ResolvedTarget)) = dict(allocator)
+    let arg_derefs: Dict(NodeId, List(ResolvedTarget)) = dict()
     for e in self.arg_derefs {
-        let chain: List(ResolvedTarget) = list(e.value.len, allocator)
+        let chain: List(ResolvedTarget) = list(e.value.len)
         chain.push_all(e.value.as_slice())
         arg_derefs.set(e.key, chain)
     }
-    let adapts: Dict(NodeId, ReceiverAdapt) = dict(allocator)
+    let adapts: Dict(NodeId, ReceiverAdapt) = dict()
     for e in self.receiver_adapts {
         adapts.set(e.key, e.value)
     }
-    let spans: Dict(NodeId, SourceSpan) = dict(self.spans.len(), allocator)
+    let spans: Dict(NodeId, SourceSpan) = dict(self.spans.len())
     for e in self.spans {
         spans.set(e.key, e.value)
     }
-    let out = inference_results(allocator)
+    let out = inference_results()
     install(&out.node_types, node_types)
     install(&out.resolved_ops, resolved_ops)
     install(&out.resolved_targets, resolved_targets)
@@ -647,77 +638,77 @@ pub fn deep_copy(
 // frees nothing twice. Only this module may take its fields out (RFC-033).
 
 pub fn take_resolved_ops(self: &InferenceResults) Dict(NodeId, ResolvedOperator) {
-    const out = replace(&self.resolved_ops, dict(self.allocator))
+    const out = replace(&self.resolved_ops, dict())
     return out
 }
 
 pub fn take_resolved_targets(self: &InferenceResults) Dict(NodeId, ResolvedTarget) {
-    const out = replace(&self.resolved_targets, dict(self.allocator))
+    const out = replace(&self.resolved_targets, dict())
     return out
 }
 
 pub fn take_instantiated_types(self: &InferenceResults) List(Ty) {
-    const out = replace(&self.instantiated_types, list(0, self.allocator))
+    const out = replace(&self.instantiated_types, list(0))
     return out
 }
 
 pub fn take_desugars(self: &InferenceResults) Dict(NodeId, &BlockExpr) {
-    const out = replace(&self.desugars, dict(self.allocator))
+    const out = replace(&self.desugars, dict())
     return out
 }
 
 pub fn take_synth_strings(self: &InferenceResults) List(OwnedString) {
-    const out = replace(&self.synth_strings, list(0, self.allocator))
+    const out = replace(&self.synth_strings, list(0))
     return out
 }
 
 pub fn take_default_args(self: &InferenceResults) Dict(NodeId, List(&Expr)) {
-    const out = replace(&self.default_args, dict(self.allocator))
+    const out = replace(&self.default_args, dict())
     return out
 }
 
 pub fn take_arg_lists(self: &InferenceResults) Dict(NodeId, List(&Expr)) {
-    const out = replace(&self.arg_lists, dict(self.allocator))
+    const out = replace(&self.arg_lists, dict())
     return out
 }
 
 pub fn take_receiver_derefs(self: &InferenceResults) Dict(NodeId, List(ResolvedTarget)) {
-    const out = replace(&self.receiver_derefs, dict(self.allocator))
+    const out = replace(&self.receiver_derefs, dict())
     return out
 }
 
 pub fn take_receiver_adapts(self: &InferenceResults) Dict(NodeId, ReceiverAdapt) {
-    const out = replace(&self.receiver_adapts, dict(self.allocator))
+    const out = replace(&self.receiver_adapts, dict())
     return out
 }
 
 pub fn take_arg_derefs(self: &InferenceResults) Dict(NodeId, List(ResolvedTarget)) {
-    const out = replace(&self.arg_derefs, dict(self.allocator))
+    const out = replace(&self.arg_derefs, dict())
     return out
 }
 
 pub fn take_lambdas(self: &InferenceResults) Dict(NodeId, LambdaInfo) {
-    const out = replace(&self.lambdas, dict(self.allocator))
+    const out = replace(&self.lambdas, dict())
     return out
 }
 
 pub fn take_spans(self: &InferenceResults) Dict(NodeId, SourceSpan) {
-    const out = replace(&self.spans, dict(self.allocator))
+    const out = replace(&self.spans, dict())
     return out
 }
 // Reset the transferred side tables to empty so a later `deinit()` can't double-free; `node_types`
 // is kept.
 pub fn reset_side_tables(self: &InferenceResults) {
-    self.resolved_ops = dict(self.allocator)
-    self.resolved_targets = dict(self.allocator)
-    self.instantiated_types = list(0, self.allocator)
-    self.synth_strings = list(0, self.allocator)
-    self.desugars = dict(self.allocator)
-    self.lambdas = dict(self.allocator)
-    self.default_args = dict(self.allocator)
-    self.arg_lists = dict(self.allocator)
-    self.receiver_derefs = dict(self.allocator)
-    self.receiver_adapts = dict(self.allocator)
-    self.arg_derefs = dict(self.allocator)
-    self.spans = dict(self.allocator)
+    self.resolved_ops = dict()
+    self.resolved_targets = dict()
+    self.instantiated_types = list(0)
+    self.synth_strings = list(0)
+    self.desugars = dict()
+    self.lambdas = dict()
+    self.default_args = dict()
+    self.arg_lists = dict()
+    self.receiver_derefs = dict()
+    self.receiver_adapts = dict()
+    self.arg_derefs = dict()
+    self.spans = dict()
 }

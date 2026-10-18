@@ -32,12 +32,8 @@ const PROF_NAMES = "__flang_prof_names"
 // are the module's display names where one exists (`module.path.name(&Type,u32)`), the raw symbol
 // otherwise. Returns the buffer backing the name-table global; the caller keeps it alive until the
 // backend has consumed `m`, then deinits it.
-pub fn instrument_profile(
-    m: &IrModule,
-    all: bool = false,
-    allocator: &Allocator = context.allocator,
-) OwnedString {
-    let names = string_builder(m.functions.len * 24, allocator)
+pub fn instrument_profile(m: &IrModule, all: bool = false) OwnedString {
+    let names = string_builder(m.functions.len * 24)
     let count: usize = 0
     for i in 0..m.functions.len {
         let f = &m.functions[i]
@@ -50,7 +46,7 @@ pub fn instrument_profile(
             None => names.append(f.name)
         }
         names.append('\n')
-        instrument_fn(f, count, allocator)
+        instrument_fn(f, count)
         count = count + 1
     }
     let blob = names.to_string()
@@ -60,7 +56,7 @@ pub fn instrument_profile(
         let f = &m.functions[i]
         if f.name == "main" {
             let entry = &f.blocks[0]
-            entry.instrs.insert(0, register_call(count, blob.view.len, allocator))
+            entry.instrs.insert(0, register_call(count, blob.view.len))
         }
     }
 
@@ -71,7 +67,7 @@ pub fn instrument_profile(
         init_bytes = Some(as_raw_bytes(blob.view)),
         relocs = null,
     })
-    add_runtime_foreigns(m, allocator)
+    add_runtime_foreigns(m)
     return blob
 }
 
@@ -85,12 +81,12 @@ fn is_stdlib_symbol(name: String) bool {
 // Enter at the top of the entry block, exit at the bottom of every block that returns. A block
 // ending in `Br`/`BrIf` stays inside the function; `Unreachable` never comes back, so neither needs
 // a probe.
-fn instrument_fn(f: &Function, id: usize, allocator: &Allocator) {
+fn instrument_fn(f: &Function, id: usize) {
     if f.blocks.len == 0 {
         return
     }
     let entry = &f.blocks[0]
-    entry.instrs.insert(0, probe_call(PROF_ENTER, Some(id), allocator))
+    entry.instrs.insert(0, probe_call(PROF_ENTER, Some(id)))
 
     for bi in 0..f.blocks.len {
         let b = &f.blocks[bi]
@@ -99,19 +95,19 @@ fn instrument_fn(f: &Function, id: usize, allocator: &Allocator) {
             _ => false
         }
         if returns {
-            b.instrs.push(probe_call(PROF_EXIT, null, allocator))
+            b.instrs.push(probe_call(PROF_EXIT, null))
         }
     }
 }
 
 // A void call to `callee`, with the function id as sole argument when given.
-fn probe_call(callee: String, id: usize?, allocator: &Allocator) Instr {
-    let args: List(Operand) = list(1, allocator)
+fn probe_call(callee: String, id: usize?) Instr {
+    let args: List(Operand) = list(1)
     id match {
         Some(v) => args.push(Operand.IntConst(v as i64))
         None => {}
     }
-    let variadic: List(IrType) = list(0, allocator)
+    let variadic: List(IrType) = list(0)
     return Instr.Call(CallInstr {
         result = null,
         result_ty = null,
@@ -121,12 +117,12 @@ fn probe_call(callee: String, id: usize?, allocator: &Allocator) Instr {
     })
 }
 
-fn register_call(count: usize, names_len: usize, allocator: &Allocator) Instr {
-    let args: List(Operand) = list(3, allocator)
+fn register_call(count: usize, names_len: usize) Instr {
+    let args: List(Operand) = list(3)
     args.push(Operand.IntConst(count as i64))
     args.push(Operand.GlobalRef(PROF_NAMES))
     args.push(Operand.IntConst(names_len as i64))
-    let variadic: List(IrType) = list(0, allocator)
+    let variadic: List(IrType) = list(0)
     return Instr.Call(CallInstr {
         result = null,
         result_ty = null,
@@ -138,8 +134,8 @@ fn register_call(count: usize, names_len: usize, allocator: &Allocator) Instr {
 
 // Extern prototypes for the three runtime entry points, resolved against stdlib/std/profile.c at
 // link time.
-fn add_runtime_foreigns(m: &IrModule, allocator: &Allocator) {
-    let enter_params: List(IrType) = list(1, allocator)
+fn add_runtime_foreigns(m: &IrModule) {
+    let enter_params: List(IrType) = list(1)
     enter_params.push(IrType.I32)
     m.add_foreign(ForeignDecl {
         name = PROF_ENTER,
@@ -149,7 +145,7 @@ fn add_runtime_foreigns(m: &IrModule, allocator: &Allocator) {
         cc = CallConv.C,
     })
 
-    let exit_params: List(IrType) = list(0, allocator)
+    let exit_params: List(IrType) = list(0)
     m.add_foreign(ForeignDecl {
         name = PROF_EXIT,
         return_ty = null,
@@ -158,7 +154,7 @@ fn add_runtime_foreigns(m: &IrModule, allocator: &Allocator) {
         cc = CallConv.C,
     })
 
-    let register_params: List(IrType) = list(3, allocator)
+    let register_params: List(IrType) = list(3)
     register_params.push(IrType.I64)
     register_params.push(IrType.Ptr)
     register_params.push(IrType.I64)

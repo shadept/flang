@@ -37,25 +37,25 @@ pub fn deinit(self: move DocSymbol) {
     self.name.deinit()
 }
 
-pub fn document_symbols(m: &Module, allocator: &Allocator = context.allocator) List(DocSymbol) {
-    let out: List(DocSymbol) = list(0, allocator)
+pub fn document_symbols(m: &Module) List(DocSymbol) {
+    let out: List(DocSymbol) = list(0)
     for &d in m.decls {
         d.* match {
-            Function(f) => out.push(leaf(f.name, SymbolKind.Function, f.span, allocator))
-            Const(c) => out.push(leaf(c.name, SymbolKind.Constant, c.span, allocator))
-            Context(c) => out.push(leaf(c.name, SymbolKind.Field, c.span, allocator))
-            Type(t) => out.push(type_symbol(&t, allocator))
+            Function(f) => out.push(leaf(f.name, SymbolKind.Function, f.span))
+            Const(c) => out.push(leaf(c.name, SymbolKind.Constant, c.span))
+            Context(c) => out.push(leaf(c.name, SymbolKind.Field, c.span))
+            Type(t) => out.push(type_symbol(&t))
             Test(t) => {
                 // Quoted for display, mirroring the declaration: `label` is the literal's value,
                 // and a label with spaces in it needs the delimiters to read as one name.
                 const label = $"test \"{t.label}\""
                 defer label.deinit()
-                out.push(leaf(label.view, SymbolKind.Function, t.span, allocator))
+                out.push(leaf(label.view, SymbolKind.Function, t.span))
             }
             GenDef(g) => {
                 const label = $"#{g.name}"
                 defer label.deinit()
-                out.push(leaf(label.view, SymbolKind.Function, g.span, allocator))
+                out.push(leaf(label.view, SymbolKind.Function, g.span))
             }
             _ => {}
         }
@@ -63,38 +63,33 @@ pub fn document_symbols(m: &Module, allocator: &Allocator = context.allocator) L
     return out
 }
 
-fn leaf(name: String, kind: SymbolKind, span: SourceSpan, alloc: &Allocator) DocSymbol {
-    return .{
-        name = from_view(name, alloc),
-        kind = kind,
-        span = span,
-        children = list(0, alloc),
-    }
+fn leaf(name: String, kind: SymbolKind, span: SourceSpan) DocSymbol {
+    return .{ name = from_view(name), kind = kind, span = span, children = list(0) }
 }
 
-fn type_symbol(t: &TypeDecl, alloc: &Allocator) DocSymbol {
+fn type_symbol(t: &TypeDecl) DocSymbol {
     t.body match {
         AnonStruct(st) => {
-            let children: List(DocSymbol) = list(st.fields.len, alloc)
+            let children: List(DocSymbol) = list(st.fields.len)
             for &f in st.fields {
-                children.push(leaf(f.name, SymbolKind.Field, f.span, alloc))
+                children.push(leaf(f.name, SymbolKind.Field, f.span))
             }
-            let sym = leaf(t.name, SymbolKind.Struct, t.span, alloc)
+            let sym = leaf(t.name, SymbolKind.Struct, t.span)
             install(&sym.children, children)
             return sym
         }
         AnonEnum(en) => {
-            let children: List(DocSymbol) = list(en.variants.len, alloc)
+            let children: List(DocSymbol) = list(en.variants.len)
             for &v in en.variants {
-                children.push(leaf(v.name, SymbolKind.EnumMember, v.span, alloc))
+                children.push(leaf(v.name, SymbolKind.EnumMember, v.span))
             }
-            let sym = leaf(t.name, SymbolKind.Enum, t.span, alloc)
+            let sym = leaf(t.name, SymbolKind.Enum, t.span)
             install(&sym.children, children)
             return sym
         }
         else => {}
     }
-    return leaf(t.name, SymbolKind.Class, t.span, alloc)
+    return leaf(t.name, SymbolKind.Class, t.span)
 }
 
 // Tests

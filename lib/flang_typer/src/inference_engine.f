@@ -157,20 +157,19 @@ pub type Engine = struct {
     // instantiation (RFC-029). One unifies with itself and with an unbound variable, nothing else;
     // the value is whether a `where T: copyable` bound lets it copy.
     rigid: Dict(VarId, bool)
-    allocator: &Allocator
 }
 
-pub fn engine(allocator: &Allocator = context.allocator) Engine {
-    let uf: UnionFind(VarId) = union_find(allocator)
-    let bindings: Dict(VarId, Ty) = dict(allocator)
-    let prim_constraints: Dict(VarId, PrimSet) = dict(allocator)
-    let levels: Dict(VarId, Level) = dict(allocator)
-    let bu: Journal(BindingUndo) = journal(allocator)
-    let pu: Journal(PrimConstraintUndo) = journal(allocator)
-    let lu: Journal(LevelUndo) = journal(allocator)
+pub fn engine() Engine {
+    let uf: UnionFind(VarId) = union_find()
+    let bindings: Dict(VarId, Ty) = dict()
+    let prim_constraints: Dict(VarId, PrimSet) = dict()
+    let levels: Dict(VarId, Level) = dict()
+    let bu: Journal(BindingUndo) = journal()
+    let pu: Journal(PrimConstraintUndo) = journal()
+    let lu: Journal(LevelUndo) = journal()
     return .{
         uf = move uf,
-        interner = type_interner(allocator),
+        interner = type_interner(),
         bindings = move bindings,
         prim_constraints = move prim_constraints,
         levels = move levels,
@@ -180,8 +179,7 @@ pub fn engine(allocator: &Allocator = context.allocator) Engine {
         var_counter = 0u32,
         level = 0u32,
         nominals = null,
-        rigid = dict(allocator),
-        allocator = allocator,
+        rigid = dict(),
     }
 }
 
@@ -208,7 +206,7 @@ pub fn deinit(self: move Engine) {
 // the moved table, so nothing may resolve through this engine afterwards - the next demand readies
 // a fresh one.
 pub fn take_interner(self: &Engine) TypeInterner {
-    let out = replace(&self.interner, type_interner(self.allocator, 0))
+    let out = replace(&self.interner, type_interner(0))
     return out
 }
 
@@ -378,7 +376,7 @@ pub fn zonk(self: &Engine, t: Ty) Ty {
 }
 
 fn zonk_span(self: &Engine, span: ChildSpan) List(Ty) {
-    let out: List(Ty) = list(span.len, self.allocator)
+    let out: List(Ty) = list(span.len)
     for i in 0..span.len {
         out.push(self.zonk(self.interner.child_at(span, i)))
     }
@@ -404,7 +402,7 @@ fn zonk_nominal(self: &Engine, nn: &NNominalNode) Ty {
 }
 
 fn zonk_record(self: &Engine, rec: &NRecordNode) Ty {
-    let fs: List(Field) = list(rec.tys.len, self.allocator)
+    let fs: List(Field) = list(rec.tys.len)
     defer fs.deinit()
     for i in 0..rec.tys.len {
         fs.push(Field {
@@ -423,7 +421,7 @@ fn zonk_record(self: &Engine, rec: &NRecordNode) Ty {
 // ─────────────────────────────────────────────────────────────────────
 
 pub fn substitute_shared(self: &Engine, ty: Ty, subst: &Dict(VarId, Ty)) Ty {
-    return self.interner.substitute(ty, subst, self.allocator)
+    return self.interner.substitute(ty, subst)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -438,7 +436,7 @@ pub fn is_copyable(self: &Engine, ty: Ty) bool {
         Some(r) => r
         None => return true
     }
-    return is_copyable_ty(&self.interner, reg, self.zonk(ty), self.allocator, Some(&self.rigid))
+    return is_copyable_ty(&self.interner, reg, self.zonk(ty), Some(&self.rigid))
 }
 
 // One hop of the derivation that cleared a type's copyable bit: the aggregate, the field that
@@ -497,7 +495,6 @@ fn blame_struct(self: &Engine, ty: Ty, sd: &StructDef, nn: &NNominalNode, out: &
         &sd.assoc_params,
         nn.args,
         &self.interner,
-        self.allocator,
     )
     defer subst.deinit()
     for i in 0..sd.fields.len {
@@ -533,7 +530,6 @@ fn blame_enum(self: &Engine, ty: Ty, ed: &EnumDef, nn: &NNominalNode, out: &List
         &ed.assoc_params,
         nn.args,
         &self.interner,
-        self.allocator,
     )
     defer subst.deinit()
     for vi in 0..ed.variants.len {
@@ -688,15 +684,15 @@ fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
     const it = &self.interner
     // Prim rules match on the (already top-resolved) raw shapes, so the common failed probe pays no
     // allocation.
-    let r1 = try_integer_widening(it, raw_from, raw_to, self.allocator)
+    let r1 = try_integer_widening(it, raw_from, raw_to)
     if r1.is_some() {
         return r1
     }
-    let r2 = try_float_widening(it, raw_from, raw_to, self.allocator)
+    let r2 = try_float_widening(it, raw_from, raw_to)
     if r2.is_some() {
         return r2
     }
-    let r8 = try_char_to_u8(it, raw_from, raw_to, self.allocator)
+    let r8 = try_char_to_u8(it, raw_from, raw_to)
     if r8.is_some() {
         return r8
     }
@@ -706,23 +702,23 @@ fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
             // types must be collapsed first.
             let from = self.zonk(raw_from)
             let to = self.zonk(raw_to)
-            let r4 = try_string_to_byte_slice(it, from, to, reg, self.allocator)
+            let r4 = try_string_to_byte_slice(it, from, to, reg)
             if r4.is_some() {
                 return r4
             }
-            let r10 = try_byte_slice_to_string(it, from, to, reg, self.allocator)
+            let r10 = try_byte_slice_to_string(it, from, to, reg)
             if r10.is_some() {
                 return r10
             }
-            let r5 = try_array_decay(it, from, to, reg, self.allocator)
+            let r5 = try_array_decay(it, from, to, reg)
             if r5.is_some() {
                 return r5
             }
-            let r7 = try_nominal_to_type(it, from, to, reg, self.allocator)
+            let r7 = try_nominal_to_type(it, from, to, reg)
             if r7.is_some() {
                 return r7
             }
-            let r9 = try_type_to_typeinfo(it, from, to, reg, self.allocator)
+            let r9 = try_type_to_typeinfo(it, from, to, reg)
             if r9.is_some() {
                 return r9
             }
@@ -763,10 +759,11 @@ fn unify_var_var(self: &Engine, va: TyVar, vb: TyVar) UnifyOutcome {
     // disjoint and the partitions can't merge.
     let merged_constraint = intersect_prim_constraints(self, ra, rb)
     if merged_constraint.is_some() and merged_constraint.unwrap().is_empty() {
-        return poisoned(self, ra, UnifyOutcome.UniPrimConstraint(.{
-            got = self.interner.var_of(va),
-            allowed = 0u32,
-        }))
+        return poisoned(
+            self,
+            ra,
+            UnifyOutcome.UniPrimConstraint(.{ got = self.interner.var_of(va), allowed = 0u32 }),
+        )
     }
 
     // Compute the merged level *before* the merge - both reps still have their own slots at this
@@ -835,10 +832,7 @@ fn check_prim_constraint(self: &Engine, allowed: PrimSet, concrete: Ty) UnifyOut
     if satisfied {
         return null
     }
-    return Some(UnifyOutcome.UniPrimConstraint(PrimViolation {
-        got = concrete,
-        allowed = allowed,
-    }))
+    return Some(UnifyOutcome.UniPrimConstraint(PrimViolation { got = concrete, allowed = allowed }))
 }
 
 fn make_mismatch(a: Ty, b: Ty) UnifyOutcome {
@@ -1000,11 +994,7 @@ pub fn unify_exact(self: &Engine, actual: Ty, expected: Ty) UnifyOutcome {
 
 fn unify_spans(self: &Engine, ta: ChildSpan, tb: ChildSpan, a: Ty, what: ArityKind) UnifyOutcome {
     if ta.len != tb.len {
-        return UnifyOutcome.UniArityMismatch(.{
-            what = what,
-            expected = tb.len,
-            actual = ta.len,
-        })
+        return UnifyOutcome.UniArityMismatch(.{ what = what, expected = tb.len, actual = ta.len })
     }
     for i in 0..ta.len {
         let ea = self.interner.child_at(ta, i)
@@ -1116,7 +1106,7 @@ pub fn rollback(self: &Engine) {
 // is zonked first so any chain of bound vars is collapsed before the free-var walk.
 pub fn generalize(self: &Engine, t: Ty) Scheme {
     let z = self.zonk(t)
-    let quantified: Set(VarId) = set(self.allocator)
+    let quantified: Set(VarId) = set()
     free_vars(&self.interner, z, self.level, &quantified)
     return .{ quantified = move quantified, body = z }
 }
@@ -1128,7 +1118,7 @@ pub fn specialize(self: &Engine, s: &Scheme) Ty {
     if s.quantified.len() == 0 {
         return s.body
     }
-    let subst: Dict(VarId, Ty) = dict(self.allocator)
+    let subst: Dict(VarId, Ty) = dict()
     let t = self.specialize_capture(s, &subst)
     subst.deinit()
     return t
@@ -1459,9 +1449,11 @@ test "a view over a non-copyable element stays copyable" {
     let params: List(VarId) = list(1)
     params.push(tv)
     let fs: List(Field) = list(2)
-    fs.push(
-        cp_field("ptr", eng.mk_ref(eng.interner.var_of(TyVar { id = tv, level = 0u32 })), false),
-    )
+    fs.push(cp_field(
+        "ptr",
+        eng.mk_ref(eng.interner.var_of(TyVar { id = tv, level = 0u32 })),
+        false,
+    ))
     fs.push(cp_field("len", prim_of(PrimitiveKind.USize), false))
     const view = reg.register(NominalDef.NomStruct(cp_struct(params, fs)), $"m.View")
 
@@ -1485,17 +1477,20 @@ test "an enum variant payload propagates the bit" {
     let variants: List(VariantDef) = list(2)
     variants.push(VariantDef { name = "None", payloads = list(0), decl_span = none_span() })
     variants.push(VariantDef { name = "Some", payloads = move payload, decl_span = none_span() })
-    const maybe = reg.register(NominalDef.NomEnum(EnumDef {
-        fqn = "",
-        module = "m",
-        is_pub = true,
-        type_params = list(0),
-        assoc_params = list(0),
-        variants = move variants,
-        tag_values = null,
-        decl_span = none_span(),
-        deprecation = null,
-    }), $"m.Maybe")
+    const maybe = reg.register(
+        NominalDef.NomEnum(EnumDef {
+            fqn = "",
+            module = "m",
+            is_pub = true,
+            type_params = list(0),
+            assoc_params = list(0),
+            variants = move variants,
+            tag_values = null,
+            decl_span = none_span(),
+            deprecation = null,
+        }),
+        $"m.Maybe",
+    )
 
     assert_true(
         !eng.is_copyable(cp_nominal(&eng, maybe, list(0))),

@@ -19,8 +19,8 @@ pub type LineIndex = struct {
     text_len: usize
 }
 
-pub fn line_index(text: String, allocator: &Allocator = context.allocator) LineIndex {
-    let starts: List(usize) = list(16, allocator)
+pub fn line_index(text: String) LineIndex {
+    let starts: List(usize) = list(16)
     starts.push(0)
     for i in 0..text.len {
         if text[i] == '\n' {

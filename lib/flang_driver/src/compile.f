@@ -26,13 +26,9 @@ import flang_driver.lower
 // Lower `unit` to FIR and compile+link it to an executable at `output_path` (the backend appends a
 // platform extension if missing). The unit must be error-free - callers check `error_count` first;
 // a unit that failed to type-check has no usable types to lower.
-pub fn build_unit(
-    unit: &AnalyzedUnit,
-    output_path: String,
-    allocator: &Allocator = context.allocator,
-) Result(BuildResult, BuildError) {
-    let m = lower_module(&unit.module, &unit.result, allocator)
-    let opts = build_options(output_path, allocator)
+pub fn build_unit(unit: &AnalyzedUnit, output_path: String) Result(BuildResult, BuildError) {
+    let m = lower_module(&unit.module, &unit.result)
+    let opts = build_options(output_path)
     let r = compile(&m, &opts)
     opts.deinit()
     m.deinit()
@@ -81,19 +77,9 @@ pub fn build_program(
     emit_only: bool = false,
     tests: &List(bool)? = null,
     name_filter: String? = null,
-    allocator: &Allocator = context.allocator,
 ) Result(BuildResult, BuildError) {
     const lower_start = monotonic_ns()
-    let m = lower_program(
-        modules,
-        fqns,
-        result,
-        comptime_ctx,
-        demanded,
-        tests,
-        name_filter,
-        allocator,
-    )
+    let m = lower_program(modules, fqns, result, comptime_ctx, demanded, tests, name_filter)
     const lower_ns = elapsed_ns(lower_start)
     if stats and m.skip_notes.len > 0 {
         const hdr = $"  {m.functions.len} function(s) emitted, {m.skip_notes.len} skipped:"
@@ -142,7 +128,7 @@ pub fn build_program(
             println(line.view)
         }
     }
-    let opts = build_options(output_path, allocator)
+    let opts = build_options(output_path)
     let _k = opts.set_keep_temps(keep_c)
     let _r = opts.set_release(release)
     let _e = opts.set_emit_only(emit_only)
@@ -155,7 +141,7 @@ pub fn build_program(
         None => {}
     }
 
-    let runtime_c = companion_c_files(source_paths, allocator)
+    let runtime_c = companion_c_files(source_paths)
     for i in 0..runtime_c.len {
         let _o = opts.add_c_file(runtime_c[i].view)
     }
@@ -173,7 +159,7 @@ pub fn build_program(
     // - don't add it twice. `prof_blob` backs the name-table global; it must outlive `compile()`.
     const prof_blob: OwnedString? = profile_runtime match {
         Some(rt) => {
-            const blob = instrument_profile(&m, profile_all, allocator)
+            const blob = instrument_profile(&m, profile_all)
             if !contains_path(&runtime_c, rt) {
                 let _p = opts.add_c_file(rt)
             }
@@ -261,11 +247,8 @@ fn print_refusal_chain(m: &IrModule, sym: String) {
 // Every `<mod>.c` sitting beside a `<mod>.f` in the module set. A `.c` the compiler itself emitted
 // is skipped: the harness writes `<test>.c` next to `<test>.f`, and linking a previous build's
 // output would duplicate every symbol in it.
-fn companion_c_files(
-    source_paths: &List(OwnedString),
-    allocator: &Allocator = context.allocator,
-) List(OwnedString) {
-    let found: List(OwnedString) = list(0, allocator)
+fn companion_c_files(source_paths: &List(OwnedString)) List(OwnedString) {
+    let found: List(OwnedString) = list(0)
     for i in 0..source_paths.len {
         const path = source_paths[i].view
         if path.len < 2 {

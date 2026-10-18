@@ -32,8 +32,8 @@ pub type Binder = struct {
     intro: String
 }
 
-pub fn module_binders(m: &Module, allocator: &Allocator = context.allocator) List(Binder) {
-    let out: List(Binder) = list(16, allocator)
+pub fn module_binders(m: &Module) List(Binder) {
+    let out: List(Binder) = list(16)
     for &d in m.decls {
         d.* match {
             Function(f) => {
@@ -57,9 +57,9 @@ pub type HintSite = struct {
     node: NodeId
 }
 
-pub fn hint_sites(m: &Module, allocator: &Allocator = context.allocator) List(HintSite) {
-    let binders = module_binders(m, allocator)
-    let out: List(HintSite) = list(binders.len, allocator)
+pub fn hint_sites(m: &Module) List(HintSite) {
+    let binders = module_binders(m)
+    let out: List(HintSite) = list(binders.len)
     for &b in binders {
         if b.hintable {
             out.push(.{
@@ -77,15 +77,11 @@ pub fn hint_sites(m: &Module, allocator: &Allocator = context.allocator) List(Hi
 // the ANALYZED module's node ids. The two binder sequences pair positionally by name; pairing stops
 // at the first mismatch (a binder added, removed or renamed), so hints below that divergence wait
 // for the next analysis while everything above keeps rendering at live offsets.
-pub fn live_hint_sites(
-    live_text: String,
-    analyzed: &Module,
-    allocator: &Allocator = context.allocator,
-) List(HintSite) {
-    let doc = parse_doc(live_text, allocator)
-    let live = module_binders(&doc.module, allocator)
-    let anal = module_binders(analyzed, allocator)
-    let out: List(HintSite) = list(anal.len, allocator)
+pub fn live_hint_sites(live_text: String, analyzed: &Module) List(HintSite) {
+    let doc = parse_doc(live_text)
+    let live = module_binders(&doc.module)
+    let anal = module_binders(analyzed)
+    let out: List(HintSite) = list(anal.len)
 
     let i: usize = 0
     let j: usize = 0

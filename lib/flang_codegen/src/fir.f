@@ -493,15 +493,15 @@ pub type IrModule = struct {
 // Constructors
 // ─────────────────────────────────────────────────────────────────────────
 
-pub fn module(allocator: &Allocator = context.allocator) IrModule {
-    let globals: List(Global) = list(0, allocator)
-    let foreigns: List(ForeignDecl) = list(0, allocator)
-    let functions: List(Function) = list(0, allocator)
-    let skipped: List(String) = list(0, allocator)
-    let skip_notes: List(OwnedString) = list(0, allocator)
-    let aggs: List(AggDef) = list(0, allocator)
-    let displays: Dict(String, OwnedString) = dict(allocator)
-    let tests: List(TestCase) = list(0, allocator)
+pub fn module() IrModule {
+    let globals: List(Global) = list(0)
+    let foreigns: List(ForeignDecl) = list(0)
+    let functions: List(Function) = list(0)
+    let skipped: List(String) = list(0)
+    let skip_notes: List(OwnedString) = list(0)
+    let aggs: List(AggDef) = list(0)
+    let displays: Dict(String, OwnedString) = dict()
+    let tests: List(TestCase) = list(0)
     return IrModule {
         globals = move globals,
         foreigns = move foreigns,
@@ -722,36 +722,25 @@ pub fn remap_operand(op: Operand, subst: &Dict(u32, Operand)) Operand {
     }
 }
 
-pub fn clone_operand_list(
-    args: &List(Operand),
-    subst: &Dict(u32, Operand),
-    alloc: &Allocator,
-) List(Operand) {
-    let out: List(Operand) = list(args.len, alloc)
+pub fn clone_operand_list(args: &List(Operand), subst: &Dict(u32, Operand)) List(Operand) {
+    let out: List(Operand) = list(args.len)
     for i in 0..args.len {
         out.push(remap_operand(args[i], subst))
     }
     return out
 }
 
-pub fn clone_ir_type_list(tys: &List(IrType), alloc: &Allocator) List(IrType) {
-    let out: List(IrType) = list(tys.len, alloc)
+pub fn clone_ir_type_list(tys: &List(IrType)) List(IrType) {
+    let out: List(IrType) = list(tys.len)
     out.push_all(tys.as_slice())
     return out
 }
 
-pub fn clone_block_target(
-    t: &BlockTarget,
-    subst: &Dict(u32, Operand),
-    alloc: &Allocator,
-) BlockTarget {
-    return BlockTarget {
-        label = t.label,
-        args = clone_operand_list(&t.args, subst, alloc),
-    }
+pub fn clone_block_target(t: &BlockTarget, subst: &Dict(u32, Operand)) BlockTarget {
+    return BlockTarget { label = t.label, args = clone_operand_list(&t.args, subst) }
 }
 
-pub fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator) Instr {
+pub fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand)) Instr {
     return inst.* match {
         Binary(b) => Instr.Binary(BinaryInstr {
             result = b.result,
@@ -816,32 +805,28 @@ pub fn rewrite_instr(inst: &Instr, subst: &Dict(u32, Operand), alloc: &Allocator
             result = c.result,
             result_ty = c.result_ty,
             callee = c.callee,
-            args = clone_operand_list(&c.args, subst, alloc),
-            variadic_arg_types = clone_ir_type_list(&c.variadic_arg_types, alloc),
+            args = clone_operand_list(&c.args, subst),
+            variadic_arg_types = clone_ir_type_list(&c.variadic_arg_types),
         })
         CallIndirect(c) => Instr.CallIndirect(CallIndirectInstr {
             result = c.result,
             result_ty = c.result_ty,
             fn_ptr = remap_operand(c.fn_ptr, subst),
-            param_types = clone_ir_type_list(&c.param_types, alloc),
-            args = clone_operand_list(&c.args, subst, alloc),
-            variadic_arg_types = clone_ir_type_list(&c.variadic_arg_types, alloc),
+            param_types = clone_ir_type_list(&c.param_types),
+            args = clone_operand_list(&c.args, subst),
+            variadic_arg_types = clone_ir_type_list(&c.variadic_arg_types),
             cc = c.cc,
         })
     }
 }
 
-pub fn rewrite_terminator(
-    t: &Terminator,
-    subst: &Dict(u32, Operand),
-    alloc: &Allocator,
-) Terminator {
+pub fn rewrite_terminator(t: &Terminator, subst: &Dict(u32, Operand)) Terminator {
     return t.* match {
-        Br(target) => Terminator.Br(clone_block_target(&target, subst, alloc))
+        Br(target) => Terminator.Br(clone_block_target(&target, subst))
         BrIf(b) => Terminator.BrIf(BrIfTerm {
             cond = remap_operand(b.cond, subst),
-            then_target = clone_block_target(&b.then_target, subst, alloc),
-            else_target = clone_block_target(&b.else_target, subst, alloc),
+            then_target = clone_block_target(&b.then_target, subst),
+            else_target = clone_block_target(&b.else_target, subst),
         })
         Ret(v) => {
             let new_v: Operand? = null

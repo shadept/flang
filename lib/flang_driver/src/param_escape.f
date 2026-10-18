@@ -36,16 +36,15 @@ pub fn shadowed_params(
     decl: &FunctionDecl,
     result: &TypeCheckResult,
     overlay: &InferenceResults?,
-    allocator: &Allocator = context.allocator,
 ) List(bool) {
-    let out: List(bool) = list(decl.params.len, allocator)
+    let out: List(bool) = list(decl.params.len)
     const body = decl.body
     for &p in decl.params {
         if body.is_none() {
             out.push(true)
             continue
         }
-        out.push(needs_shadow(p.name, body.unwrap(), result, overlay, allocator))
+        out.push(needs_shadow(p.name, body.unwrap(), result, overlay))
     }
     return out
 }
@@ -56,11 +55,10 @@ pub fn needs_shadow(
     body: &BlockExpr,
     result: &TypeCheckResult,
     overlay: &InferenceResults?,
-    allocator: &Allocator = context.allocator,
 ) bool {
     // The names that alias the parameter's storage: the parameter, plus whatever a pattern bound
     // out of it. Scope is ignored; a name kept live past its arm costs an extra copy.
-    let aliases: List(String) = list(4, allocator)
+    let aliases: List(String) = list(4)
     defer aliases.deinit()
     aliases.push(name)
     return block_escapes(body, &aliases, result, overlay)
@@ -68,12 +66,7 @@ pub fn needs_shadow(
 
 // ── the walk ───────────────────────────────────────────────────────────
 
-fn block_escapes(
-    b: &BlockExpr,
-    al: &List(String),
-    r: &TypeCheckResult,
-    ov: &InferenceResults?,
-) bool {
+fn block_escapes(b: &BlockExpr, al: &List(String), r: &TypeCheckResult, ov: &InferenceResults?) bool {
     if stmts_escape(b.stmts, al, r, ov) {
         return true
     }
@@ -252,12 +245,7 @@ fn call_escapes(c: &CallExpr, al: &List(String), r: &TypeCheckResult, ov: &Infer
     return false
 }
 
-fn match_escapes(
-    m: &MatchExpr,
-    al: &List(String),
-    r: &TypeCheckResult,
-    ov: &InferenceResults?,
-) bool {
+fn match_escapes(m: &MatchExpr, al: &List(String), r: &TypeCheckResult, ov: &InferenceResults?) bool {
     if expr_escapes(m.scrutinee, al, r, ov) {
         return true
     }

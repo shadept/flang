@@ -30,11 +30,7 @@ pub fn deinit(self: move CallSite) {
 // against (`(`, `,`, brackets) never occur inside a multi-byte sequence.
 
 // Scan backwards from `offset` for the unmatched `(` and count top-level commas on the way.
-pub fn call_site_at(
-    text: String,
-    offset: usize,
-    allocator: &Allocator = context.allocator,
-) CallSite? {
+pub fn call_site_at(text: String, offset: usize) CallSite? {
     let depth: i32 = 0
     let commas: usize = 0
     let i = if offset > text.len { text.len } else { offset }
@@ -68,10 +64,7 @@ pub fn call_site_at(
             while start > 0 and is_ident_char(text[start - 1]) {
                 start = start - 1
             }
-            return Some(CallSite {
-                name = from_view(text[start..i], allocator),
-                active = commas,
-            })
+            return Some(CallSite { name = from_view(text[start..i]), active = commas })
         }
     }
     return null
@@ -80,8 +73,8 @@ pub fn call_site_at(
 // Split a rendered signature label into its parameter label ranges: the substrings between the
 // first `(` and its matching `)`, cut at top-level commas, whitespace-trimmed. Each is a substring
 // of `label`, which is what LSP needs to highlight the active parameter.
-pub fn param_labels(label: String, allocator: &Allocator = context.allocator) List(String) {
-    let out: List(String) = list(4, allocator)
+pub fn param_labels(label: String) List(String) {
+    let out: List(String) = list(4)
     const open = find(label, '(')
     if open.is_none() {
         return out

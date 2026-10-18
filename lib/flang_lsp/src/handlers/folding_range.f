@@ -17,15 +17,15 @@ pub type FoldRange = struct {
     end_line: usize
 }
 
-pub fn folding_ranges(text: String, allocator: &Allocator = context.allocator) List(FoldRange) {
-    let out: List(FoldRange) = list(0, allocator)
-    let lx = lexer(text, allocator)
+pub fn folding_ranges(text: String) List(FoldRange) {
+    let out: List(FoldRange) = list(0)
+    let lx = lexer(text)
     let tokens = lx.tokenize()
     defer tokens.deinit()
 
-    let open_kinds: List(u8) = list(16, allocator)
+    let open_kinds: List(u8) = list(16)
     defer open_kinds.deinit()
-    let open_lines: List(usize) = list(16, allocator)
+    let open_lines: List(usize) = list(16)
     defer open_lines.deinit()
 
     // Tokens carry no line number. Counting newlines while advancing costs one pass over the

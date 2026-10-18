@@ -475,13 +475,8 @@ pub fn nominal_decl_span(result: &TypeCheckResult, ty: Ty) SourceSpan? {
 
 // Render `ty` the way diagnostics do: short nominal names, `&`/array sugar. `vars` names a generic
 // signature's free type variables (`checker.type_param_names`).
-pub fn render_ty(
-    result: &TypeCheckResult,
-    ty: Ty,
-    vars: &Dict(VarId, String)? = null,
-    allocator: &Allocator = context.allocator,
-) OwnedString {
-    let sb = string_builder(32, allocator)
+pub fn render_ty(result: &TypeCheckResult, ty: Ty, vars: &Dict(VarId, String)? = null) OwnedString {
+    let sb = string_builder(32)
     let reg: &NominalRegistry? = Some(&result.nominals)
     format_with_names(&result.interner, ty, &sb, reg, vars)
     const out = sb.to_string()
@@ -540,12 +535,8 @@ pub fn same_target(a: &ResolvedTarget, b: &ResolvedTarget) bool {
 // Every use-site span resolving to `target`, project-wide. The declaration itself is not included
 // (except the ConstDecl node, which carries its own RtConst entry); callers wanting it add
 // `target_decl_span`.
-pub fn reference_spans(
-    result: &TypeCheckResult,
-    target: &ResolvedTarget,
-    allocator: &Allocator = context.allocator,
-) List(SourceSpan) {
-    let out: List(SourceSpan) = list(8, allocator)
+pub fn reference_spans(result: &TypeCheckResult, target: &ResolvedTarget) List(SourceSpan) {
+    let out: List(SourceSpan) = list(8)
     for e in result.resolved_targets.iter() {
         const v = e.value
         if !same_target(&v, target) {

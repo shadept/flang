@@ -52,9 +52,8 @@ pub fn render_diagnostic(
     idx: &LineIndex,
     d: &Diagnostic,
     style: &RenderStyle,
-    allocator: &Allocator = context.allocator,
 ) OwnedString {
-    let sb = string_builder(256, allocator)
+    let sb = string_builder(256)
     write_header(&sb, d, style)
     if is_none(d.span) {
         return sb.to_string()
@@ -234,13 +233,7 @@ fn line_text(source: String, idx: &LineIndex, line: usize) String {
 }
 
 // Columns `offset` sits at within its line once tabs are expanded, counting a codepoint once.
-fn display_col(
-    source: String,
-    idx: &LineIndex,
-    line: usize,
-    offset: usize,
-    tab_width: usize,
-) usize {
+fn display_col(source: String, idx: &LineIndex, line: usize, offset: usize, tab_width: usize) usize {
     const b = idx.line_bounds(source, line)
     let stop = offset
     if stop < b.0 {

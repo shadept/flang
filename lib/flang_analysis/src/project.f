@@ -90,17 +90,14 @@ pub fn format(self: ManifestError, w: Writer, spec: String) {
 // Parse a flang.toml manifest. Missing `[project]` fields fall back to defaults (`kind = exe`,
 // `source = "src/**/*.f"`, `output = "build"`); callers that require a field validate it
 // themselves. Unknown sections and keys are ignored.
-pub fn parse_project(
-    text: String,
-    allocator: &Allocator = context.allocator,
-) Result(Project, ManifestError) {
-    const parsed = parse_toml(text, allocator)
+pub fn parse_project(text: String) Result(Project, ManifestError) {
+    const parsed = parse_toml(text)
     if parsed.is_err() {
         return Err(ManifestError.Syntax(parsed.unwrap_err()))
     }
     let doc = parsed.unwrap()
     defer doc.deinit()
-    let proj = new_project(allocator)
+    let proj = new_project()
     let r = ManifestReader { allocator = allocator, wrong = null }
     r.read_manifest(&proj, &doc)
     if r.wrong.is_some() {
@@ -116,12 +113,9 @@ pub fn deinit(self: move Project) {
     self.source.deinit()
     self.output.deinit()
     self.deps.deinit()
-    const windows = move self.windows
-    deinit_platform(windows)
-    const linux = move self.linux
-    deinit_platform(linux)
-    const macos = move self.macos
-    deinit_platform(macos)
+    self.windows.deinit()
+    self.linux.deinit()
+    self.macos.deinit()
     self.global_imports.deinit()
     self.fmt.deinit()
 }
@@ -139,9 +133,9 @@ pub fn current_platform(self: &Project) &PlatformConfig {
 // `x.generated.f` files are `--emit-generated` debug output, never input: template expansion is in
 // memory (RFC-021). They are skipped so a stale emission next to its origin cannot become a second
 // module.
-pub fn glob_sources(pattern: String, allocator: &Allocator = context.allocator) List(OwnedString) {
-    let out: List(OwnedString) = list(0, allocator)
-    let r = glob(pattern, allocator)
+pub fn glob_sources(pattern: String) List(OwnedString) {
+    let out: List(OwnedString) = list(0)
+    let r = glob(pattern)
     if r.is_err() {
         return out
     }
@@ -158,32 +152,27 @@ pub fn glob_sources(pattern: String, allocator: &Allocator = context.allocator) 
 
 // Construction / teardown helpers
 
-fn new_project(alloc: &Allocator) Project {
+fn new_project() Project {
     return Project {
         name = from_view(""),
         version = from_view(""),
         kind = ProjectKind.Exe,
         source = from_view("src/**/*.f"),
         output = from_view("build"),
-        deps = list(0, alloc),
-        windows = new_platform(alloc),
-        linux = new_platform(alloc),
-        macos = new_platform(alloc),
-        global_imports = list(0, alloc),
-        fmt = list(0, alloc),
+        deps = list(0),
+        windows = new_platform(),
+        linux = new_platform(),
+        macos = new_platform(),
+        global_imports = list(0),
+        fmt = list(0),
     }
 }
 
-fn new_platform(alloc: &Allocator) PlatformConfig {
-    return PlatformConfig {
-        headers = list(0, alloc),
-        libs = list(0, alloc),
-        cflags = list(0, alloc),
-        ldflags = list(0, alloc),
-    }
+fn new_platform() PlatformConfig {
+    return PlatformConfig { headers = list(0), libs = list(0), cflags = list(0), ldflags = list(0) }
 }
 
-fn deinit_platform(self: move PlatformConfig) {
+fn deinit(self: move PlatformConfig) {
     self.headers.deinit()
     self.libs.deinit()
     self.cflags.deinit()
@@ -195,7 +184,6 @@ fn deinit_platform(self: move PlatformConfig) {
 // Copies the manifest's fields out of the document, keeping the first key found with the wrong
 // type.
 type ManifestReader = struct {
-    allocator: &Allocator
     wrong: String?
 }
 
@@ -269,22 +257,20 @@ fn read_deps(self: &ManifestReader, proj: &Project, t: &Value) {
             return
         }
         proj.deps.push(DependencySpec {
-            name = from_view(e.key.view, self.allocator),
-            path = from_view(text.unwrap(), self.allocator),
+            name = from_view(e.key.view),
+            path = from_view(text.unwrap()),
         })
     }
 }
 
 fn read_fmt(self: &ManifestReader, proj: &Project, t: &Value) {
     for e in t.as_map().unwrap() {
-        const text = scalar_text(&e.value, self.allocator)
+        const text = scalar_text(&e.value)
         if text.is_none() {
             self.mismatch("fmt")
             return
         }
-        proj.fmt.push(
-            FmtEntry { key = from_view(e.key.view, self.allocator), value = text.unwrap() },
-        )
+        proj.fmt.push(FmtEntry { key = from_view(e.key.view), value = text.unwrap() })
     }
 }
 
@@ -316,7 +302,7 @@ fn replace_text(self: &ManifestReader, dest: &OwnedString, t: &Value, key: Strin
         self.mismatch(field)
         return
     }
-    const old = replace(dest, from_view(s.unwrap(), self.allocator))
+    const old = replace(dest, from_view(s.unwrap()))
     old.deinit()
 }
 
@@ -337,7 +323,7 @@ fn replace_strings(
         self.mismatch(field)
         return
     }
-    let out: List(OwnedString) = list(items.unwrap().len, self.allocator)
+    let out: List(OwnedString) = list(items.unwrap().len)
     for i in 0..items.unwrap().len {
         const s = items.unwrap()[i].as_string()
         if s.is_none() {
@@ -345,15 +331,15 @@ fn replace_strings(
             self.mismatch(field)
             return
         }
-        out.push(from_view(s.unwrap(), self.allocator))
+        out.push(from_view(s.unwrap()))
     }
     const old = replace(dest, out)
     old.deinit()
 }
 
 // A string, number or bool as the text it reads as; null for anything else.
-fn scalar_text(v: &Value, allocator: &Allocator) OwnedString? {
-    let sb = string_builder(16, allocator)
+fn scalar_text(v: &Value) OwnedString? {
+    let sb = string_builder(16)
     defer sb.deinit()
     v.* match {
         Str(s) => sb.append(s.view)

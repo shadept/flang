@@ -83,10 +83,9 @@ pub fn unused_functions(
     project_origin: &List(bool),
     lib_kind: bool,
     tests_checked: bool,
-    allocator: &Allocator = context.allocator,
 ) List(Diagnostic) {
     // Project module FQN -> its index (= its file id).
-    let index_of: Dict(String, usize) = dict(allocator)
+    let index_of: Dict(String, usize) = dict()
     defer index_of.deinit()
     for i in 0..fqns.len {
         if i < project_origin.len and project_origin[i] {
@@ -94,13 +93,13 @@ pub fn unused_functions(
         }
     }
 
-    let has_tests = filled_list(modules.len, false, allocator)
+    let has_tests = filled_list(modules.len, false)
     defer has_tests.deinit()
-    let directive: Set(String) = set(allocator)
+    let directive: Set(String) = set()
     defer directive.deinit()
     for i in 0..sources.len {
         if is_project(project_origin, i) {
-            directive_names(sources[i].view, &directive, allocator)
+            directive_names(sources[i].view, &directive)
         }
     }
     for i in 0..modules.len {
@@ -116,16 +115,16 @@ pub fn unused_functions(
     // span containment. Foreign declarations have no body and are left out entirely; a generated
     // declaration's span cites its chunk's file id, not its origin module's, and is left out the
     // same way.
-    let nodes: Dict(u32, FnNode) = dict(allocator)
+    let nodes: Dict(u32, FnNode) = dict()
     defer nodes.deinit()
-    let per_file: List(List(FnNode)) = list(modules.len, allocator)
+    let per_file: List(List(FnNode)) = list(modules.len)
     defer per_file.deinit()
     for _i in 0..modules.len {
-        per_file.push(list(0, allocator))
+        per_file.push(list(0))
     }
-    let reached: Dict(u32, bool) = dict(allocator)
+    let reached: Dict(u32, bool) = dict()
     defer reached.deinit()
-    let work: List(u32) = list(0, allocator)
+    let work: List(u32) = list(0)
     defer work.deinit()
 
     for entry in result.functions.by_name {
@@ -170,7 +169,7 @@ pub fn unused_functions(
 
     // Edges. A target outside the project is dropped; a site outside any project function roots its
     // target.
-    let adj: MultiMap(u32, u32) = multimap(allocator)
+    let adj: MultiMap(u32, u32) = multimap()
     defer adj.deinit()
     add_table_edges(
         result,
@@ -196,7 +195,7 @@ pub fn unused_functions(
     }
 
     // Report the unreached, source order per file.
-    let missed: List(FnNode) = list(0, allocator)
+    let missed: List(FnNode) = list(0)
     defer missed.deinit()
     for entry in nodes {
         const n = entry.value
@@ -210,21 +209,19 @@ pub fn unused_functions(
     }
     missed.sort(cmp_file_start)
 
-    let out: List(Diagnostic) = list(missed.len, allocator)
+    let out: List(Diagnostic) = list(missed.len)
     for &n in missed {
-        out.push(
-            Diagnostic {
-                severity = Severity.Warning,
-                code = W_UNUSED_FUNCTION,
-                message = $"unused function `{n.name}`",
-                hint = from_view("prefix with `_` to suppress"),
-                span = SourceSpan {
-                    file_id = n.file as i32,
-                    start = n.start,
-                    length = n.end - n.start,
-                },
+        out.push(Diagnostic {
+            severity = Severity.Warning,
+            code = W_UNUSED_FUNCTION,
+            message = $"unused function `{n.name}`",
+            hint = from_view("prefix with `_` to suppress"),
+            span = SourceSpan {
+                file_id = n.file as i32,
+                start = n.start,
+                length = n.end - n.start,
             },
-        )
+        })
     }
     return out
 }
@@ -298,8 +295,8 @@ fn root_at(fns: &List(FnNode), start: usize, reached: &Dict(u32, bool), work: &L
 
 // Every identifier inside a `#if` directive's branches in `source` onto `out`, nested directives
 // included.
-fn directive_names(source: String, out: &Set(String), allocator: &Allocator) {
-    let lx = lexer(source, allocator)
+fn directive_names(source: String, out: &Set(String)) {
+    let lx = lexer(source)
     let tokens = lx.tokenize()
     defer tokens.deinit()
     let i: usize = 0
@@ -538,17 +535,16 @@ pub fn unused_imports(
     sources: &List(OwnedString),
     project_origin: &List(bool),
     tests_checked: bool,
-    allocator: &Allocator = context.allocator,
 ) List(Diagnostic) {
     // Module FQN -> index, all modules - uses land anywhere in the tree.
-    let index_of: Dict(String, usize) = dict(allocator)
+    let index_of: Dict(String, usize) = dict()
     defer index_of.deinit()
     for i in 0..fqns.len {
         index_of.set(fqns[i], i)
     }
 
     // Function id -> defining module FQN, for every registered function.
-    let fn_module: Dict(u32, String) = dict(allocator)
+    let fn_module: Dict(u32, String) = dict()
     defer fn_module.deinit()
     for entry in result.functions.by_name {
         const overloads = &entry.value
@@ -560,10 +556,10 @@ pub fn unused_imports(
     }
 
     // Per project file: the set of module FQNs its recorded edges land in.
-    let used: List(Set(String)) = list(modules.len, allocator)
+    let used: List(Set(String)) = list(modules.len)
     defer used.deinit()
     for _i in 0..modules.len {
-        used.push(set(allocator))
+        used.push(set())
     }
 
     // A name inside a `#if` branch the checker skipped resolves nowhere: every module defining a
@@ -572,9 +568,9 @@ pub fn unused_imports(
         if i >= modules.len or !is_project(project_origin, i) {
             continue
         }
-        let names: Set(String) = set(allocator)
+        let names: Set(String) = set()
         defer names.deinit()
-        directive_names(sources[i].view, &names, allocator)
+        directive_names(sources[i].view, &names)
         let u = &used[i]
         for name in names {
             const overloads = result.functions.by_name.get_ref(name)
@@ -611,10 +607,10 @@ pub fn unused_imports(
     // Nominal citations in each project file's node types, tree-walked through the interner with a
     // per-file memo (types are heavily shared). One bucketing pass over the table, then one walk
     // per file.
-    let buckets: List(List(Ty)) = list(modules.len, allocator)
+    let buckets: List(List(Ty)) = list(modules.len)
     defer buckets.deinit()
     for _i in 0..modules.len {
-        buckets.push(list(0, allocator))
+        buckets.push(list(0))
     }
     for e in result.node_types {
         const span = result.spans.get(e.key)
@@ -629,10 +625,10 @@ pub fn unused_imports(
     }
     // One memo per file: the memo records "already walked for this file's set", so it cannot be
     // shared across files.
-    let memos: List(Dict(Ty, bool)) = list(modules.len, allocator)
+    let memos: List(Dict(Ty, bool)) = list(modules.len)
     defer memos.deinit()
     for _i in 0..modules.len {
-        let m: Dict(Ty, bool) = dict(allocator)
+        let m: Dict(Ty, bool) = dict()
         memos.push(m)
     }
     for i in 0..modules.len {
@@ -715,7 +711,7 @@ pub fn unused_imports(
                 add_opt(u, target_module(result, &fn_module, t))
             }
         }
-        let smemo: Dict(Ty, bool) = dict(allocator)
+        let smemo: Dict(Ty, bool) = dict()
         defer smemo.deinit()
         for e in s.overlay.node_types {
             add_ty_modules(result, e.value, u, &smemo)
@@ -723,15 +719,15 @@ pub fn unused_imports(
     }
 
     // Per module: its `pub import` targets, for the re-export closure.
-    let reexports: List(List(usize)) = list(modules.len, allocator)
+    let reexports: List(List(usize)) = list(modules.len)
     defer reexports.deinit()
     for i in 0..modules.len {
-        let row: List(usize) = list(0, allocator)
+        let row: List(usize) = list(0)
         for &d in modules[i].decls {
             d.* match {
                 Import(id) => {
                     if id.is_pub {
-                        let dotted = dotted_name(id.path, allocator)
+                        let dotted = dotted_name(id.path)
                         const to = index_of.get(dotted.view)
                         dotted.deinit()
                         if to.is_some() {
@@ -745,7 +741,7 @@ pub fn unused_imports(
         reexports.push(row)
     }
 
-    let missed: List(ImportSite) = list(0, allocator)
+    let missed: List(ImportSite) = list(0)
     defer missed.deinit()
     for i in 0..modules.len {
         if !is_project(project_origin, i) {
@@ -765,7 +761,6 @@ pub fn unused_imports(
                     &used[i],
                     &reexports,
                     &missed,
-                    allocator,
                 )
                 _ => {}
             }
@@ -773,7 +768,7 @@ pub fn unused_imports(
     }
     missed.sort(cmp_site)
 
-    let out: List(Diagnostic) = list(missed.len, allocator)
+    let out: List(Diagnostic) = list(missed.len)
     for &m in missed {
         out.push(Diagnostic {
             severity = Severity.Warning,
@@ -829,7 +824,6 @@ fn check_import(
     used: &Set(String),
     reexports: &List(List(usize)),
     missed: &List(ImportSite),
-    allocator: &Allocator,
 ) {
     if id.is_pub {
         return
@@ -838,7 +832,7 @@ fn check_import(
     if id.span.file_id != from as i32 {
         return
     }
-    let dotted = dotted_name(id.path, allocator)
+    let dotted = dotted_name(id.path)
     if dotted.view == "core.prelude" or index_of.get(dotted.view).is_none() {
         dotted.deinit()
         return
@@ -850,7 +844,7 @@ fn check_import(
     }
 
     // The import's reach: the target plus its transitive `pub import`s. Used if any member is.
-    let closure: List(usize) = list(4, allocator)
+    let closure: List(usize) = list(4)
     defer closure.deinit()
     closure.push(target)
     let head: usize = 0
@@ -1000,8 +994,8 @@ fn add_ty_modules(result: &TypeCheckResult, t: Ty, used: &Set(String), memo: &Di
     }
 }
 
-fn dotted_name(segs: String[], allocator: &Allocator) OwnedString {
-    let sb = string_builder(0, allocator)
+fn dotted_name(segs: String[]) OwnedString {
+    let sb = string_builder(0)
     defer sb.deinit()
     for i in 0..segs.len {
         if i > 0 {

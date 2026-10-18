@@ -56,13 +56,12 @@ pub fn ct_type_info_of_ty(
     it: &TypeInterner,
     reg: &NominalRegistry,
     t: Ty,
-    alloc: &Allocator,
     rigid: &Dict(VarId, bool)? = null,
 ) CtTypeInfo {
     return CtTypeInfo {
         name = rtti_name(it, reg, t),
         kind = rtti_kind(it, reg, t),
         source = CtTypeSource.FromTy,
-        copyable = Some(is_copyable_ty(it, reg, t, alloc, rigid)),
+        copyable = Some(is_copyable_ty(it, reg, t, rigid)),
     }
 }

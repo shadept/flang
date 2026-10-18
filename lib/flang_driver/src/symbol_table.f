@@ -147,20 +147,16 @@ pub type SymbolBuilder = struct {
     displays: Dict(String, OwnedString)
     nominals: &NominalRegistry
     interner: &TypeInterner
-    allocator: &Allocator
 }
 
 // Index every lowerable scheme by its declaration span and registry id up front; the per-module
 // walk then maps each decl to its symbol with one lookup. A scheme outside the lowerable subset is
 // left out entirely - membership in these tables IS the "is this callable?" gate.
-pub fn symbol_builder(
-    result: &TypeCheckResult,
-    allocator: &Allocator = context.allocator,
-) SymbolBuilder {
-    let by_fn_id: Dict(u32, OwnedString) = dict(allocator)
-    let by_decl: Dict(NodeId, u32) = dict(allocator)
-    let by_fn_sig: Dict(u32, FnSig) = dict(allocator)
-    let by_fn_foreign: Dict(u32, bool) = dict(allocator)
+pub fn symbol_builder(result: &TypeCheckResult) SymbolBuilder {
+    let by_fn_id: Dict(u32, OwnedString) = dict()
+    let by_decl: Dict(NodeId, u32) = dict()
+    let by_fn_sig: Dict(u32, FnSig) = dict()
+    let by_fn_foreign: Dict(u32, bool) = dict()
     for entry in result.functions.by_name {
         // Annotated: the self-hosted checker types for-over-iterator variables as unconstrained
         // vars (protocol resolution is post-M10), so `entry.value` needs the pin.
@@ -189,41 +185,27 @@ pub fn symbol_builder(
 
     // Specializations (M10): concrete by construction, so the callable gate only filters the shapes
     // lowering cannot represent yet.
-    let by_spec_id: Dict(u32, OwnedString) = dict(allocator)
-    let by_spec_sig: Dict(u32, FnSig) = dict(allocator)
-    let displays: Dict(String, OwnedString) = dict(allocator)
+    let by_spec_id: Dict(u32, OwnedString) = dict()
+    let by_spec_sig: Dict(u32, FnSig) = dict()
+    let displays: Dict(String, OwnedString) = dict()
     for i in 0..(result.specializations.next_id as usize) {
         let found = result.specializations.find(i as u32)
         if found.is_none() {
             continue
         }
         let sp = found.unwrap()
-        let params: List(Ty) = list(sp.concrete_params.len, allocator)
+        let params: List(Ty) = list(sp.concrete_params.len)
         params.push_all(sp.concrete_params.as_slice())
         let s = FnSig { params = move params, ret = sp.concrete_return }
         if !sig_lowerable(&result.interner, &s, false, &result.nominals) {
             continue
         }
-        let sym = mangle_spec_symbol(
-            &result.interner,
-            sp.module,
-            sp.name,
-            &s,
-            &result.nominals,
-            allocator,
-        )
+        let sym = mangle_spec_symbol(&result.interner, sp.module, sp.name, &s, &result.nominals)
         const sym_view = sym.view
         by_spec_id.set(sp.id, sym)
         displays.set(
             sym_view,
-            pretty_symbol(
-                &result.interner,
-                sp.module,
-                sp.name,
-                &s.params,
-                &result.nominals,
-                allocator,
-            ),
+            pretty_symbol(&result.interner, sp.module, sp.name, &s.params, &result.nominals),
         )
         by_spec_sig.set(sp.id, s)
     }
@@ -238,7 +220,6 @@ pub fn symbol_builder(
         displays = move displays,
         nominals = &result.nominals,
         interner = &result.interner,
-        allocator = allocator,
     }
 }
 
@@ -479,23 +460,14 @@ fn add_function_symbol(self: &SymbolBuilder, decl: &FunctionDecl, fqn: String) {
     }
     let s = sig.unwrap()
     const foreign = is_foreign_directive(decl.directives)
-    let sym = mangle_symbol(
-        self.interner,
-        fqn,
-        decl.name,
-        foreign,
-        &s.params,
-        s.ret,
-        self.nominals,
-        self.allocator,
-    )
+    let sym = mangle_symbol(self.interner, fqn, decl.name, foreign, &s.params, s.ret, self.nominals)
     const sym_view = sym.view
     self.by_fn_id.set(fid.unwrap(), sym)
     // `main` and foreigns keep their bare, already-readable symbol.
     if !foreign and decl.name != "main" {
         self.displays.set(
             sym_view,
-            pretty_symbol(self.interner, fqn, decl.name, &s.params, self.nominals, self.allocator),
+            pretty_symbol(self.interner, fqn, decl.name, &s.params, self.nominals),
         )
     }
 }
@@ -711,9 +683,8 @@ fn pretty_symbol(
     name: String,
     params: &List(Ty),
     reg: &NominalRegistry,
-    allocator: &Allocator = context.allocator,
 ) OwnedString {
-    let sb = string_builder(fqn.len + name.len + 16, allocator)
+    let sb = string_builder(fqn.len + name.len + 16)
     defer sb.deinit()
     if fqn.len > 0 {
         sb.append(fqn)
@@ -763,13 +734,12 @@ fn mangle_symbol(
     params: &List(Ty),
     ret: Ty,
     reg: &NominalRegistry,
-    allocator: &Allocator = context.allocator,
 ) OwnedString {
     if is_foreign or name == "main" {
-        return from_view(name, allocator)
+        return from_view(name)
     }
 
-    let sb = string_builder(fqn.len + name.len + 16, allocator)
+    let sb = string_builder(fqn.len + name.len + 16)
     defer sb.deinit()
     append_mangled(it, &sb, fqn, name, params, reg)
     const is_void = it.node(ret) match {
@@ -793,9 +763,8 @@ fn mangle_spec_symbol(
     name: String,
     sig: &FnSig,
     reg: &NominalRegistry,
-    allocator: &Allocator = context.allocator,
 ) OwnedString {
-    let sb = string_builder(fqn.len + name.len + 24, allocator)
+    let sb = string_builder(fqn.len + name.len + 24)
     defer sb.deinit()
     append_mangled(it, &sb, fqn, name, &sig.params, reg)
     sb.append("__ret_")

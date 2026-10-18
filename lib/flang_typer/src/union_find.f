@@ -48,12 +48,9 @@ pub type UnionFind = struct(K) {
 }
 
 // Creates an empty forest. Nothing allocates until the first `find`.
-//
-// - `allocator`: kept for the forest's whole life. Null is the global allocator.
-pub fn union_find(allocator: &Allocator = context.allocator) UnionFind($K) {
-    const alloc = allocator
+pub fn union_find() UnionFind($K) {
     let nodes: UnmanagedDict(K, UnionFindNode(K))
-    return .{ nodes = move nodes, undo = journal(alloc), allocator = alloc }
+    return .{ nodes = move nodes, undo = journal(), allocator = context.allocator }
 }
 
 // Frees the node table and the undo journal, open regions included. Idempotent.
@@ -127,10 +124,11 @@ pub fn rollback(self: &UnionFind($K)) where K: copyable {
         if entry.was_new {
             let _removed = self.nodes.remove(entry.key)
         } else {
-            self.nodes.set(entry.key, .{
-                parent = entry.old_parent,
-                size = entry.old_size,
-            }, self.allocator)
+            self.nodes.set(
+                entry.key,
+                .{ parent = entry.old_parent, size = entry.old_size },
+                self.allocator,
+            )
         }
     })
 }
@@ -142,7 +140,10 @@ where K: copyable {
     if !self.undo.is_open() {
         return
     }
-    self.undo.record(
-            .{ key = key, old_parent = old_parent, old_size = old_size, was_new = was_new },
-    )
+    self.undo.record(.{
+        key = key,
+        old_parent = old_parent,
+        old_size = old_size,
+        was_new = was_new,
+    })
 }

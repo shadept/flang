@@ -72,17 +72,10 @@ pub type TemplateState = struct {
     syntax: Dict(OwnedString, DeclRef)
     chunk_modules: List(Module)
     emitted: List(EmittedFile)
-    allocator: &Allocator
 }
 
-pub fn template_state(allocator: &Allocator = context.allocator) TemplateState {
-    return .{
-        defs = dict(allocator),
-        syntax = dict(allocator),
-        chunk_modules = list(0, allocator),
-        emitted = list(0, allocator),
-        allocator = allocator,
-    }
+pub fn template_state() TemplateState {
+    return .{ defs = dict(), syntax = dict(), chunk_modules = list(0), emitted = list(0) }
 }
 
 // Generated modules and texts outlive the checker (lowering walks the appended decls): the driver
@@ -92,14 +85,14 @@ pub type TemplateOutput = struct {
     emitted: List(EmittedFile)
 }
 
-pub fn empty_template_output(allocator: &Allocator = context.allocator) TemplateOutput {
-    return .{ chunk_modules = list(0, allocator), emitted = list(0, allocator) }
+pub fn empty_template_output() TemplateOutput {
+    return .{ chunk_modules = list(0), emitted = list(0) }
 }
 
 pub fn take_output(self: &TemplateState) TemplateOutput {
     return .{
-        chunk_modules = replace(&self.chunk_modules, list(0, self.allocator)),
-        emitted = replace(&self.emitted, list(0, self.allocator)),
+        chunk_modules = replace(&self.chunk_modules, list(0)),
+        emitted = replace(&self.emitted, list(0)),
     }
 }
 
@@ -194,7 +187,7 @@ pub fn expand_templates(
     if sources.len < modules.len {
         return
     }
-    let work: List(WorkItem) = list(0, chk.allocator)
+    let work: List(WorkItem) = list(0)
     for m in 0..modules.len {
         index_module(state, &modules[m], m, 0, paths[m], sources[m].view, &work, 0)
     }
@@ -203,7 +196,7 @@ pub fn expand_templates(
     }
 
     loop {
-        let parked: List(WorkItem) = list(0, chk.allocator)
+        let parked: List(WorkItem) = list(0)
         let progress = false
         for item in work.drain() {
             if item.generation >= MAX_GENERATIONS {
@@ -259,7 +252,7 @@ fn index_module(
     for &d in module.decls {
         d.* match {
             GenDef(g) => {
-                let params: List(GenParam) = list(g.params.len, state.allocator)
+                let params: List(GenParam) = list(g.params.len)
                 params.push_all(g.params)
                 state.defs[$"{g.name}"] = GenDefEntry {
                     name = g.name,
@@ -316,7 +309,7 @@ fn expand_one(
     }
 
     // Everything produced while expanding this one invocation lives here.
-    let arena = arena_allocator(chk.allocator)
+    let arena = arena_allocator(context.allocator)
     defer arena.deinit()
     let a = arena.allocator()
 
@@ -398,9 +391,9 @@ fn expand_one(
 
     // Register the chunk as a padded file entry so its spans line up with the combined generated
     // text for this origin.
-    const emitted = emitted_for(state, chk.allocator, file_paths[item.module].view)
+    const emitted = emitted_for(state, context.allocator, file_paths[item.module].view)
     const lines_before = emitted.lines
-    let padded = string_builder(chunk.len + lines_before, chk.allocator)
+    let padded = string_builder(chunk.len + lines_before)
     for _i in 0..lines_before { padded.append('\n') }
     padded.append(chunk.as_view())
     emitted.text.append(chunk.as_view())
@@ -500,12 +493,7 @@ fn type_is_collected(chk: &Checker, name: String) bool {
     }
 }
 
-fn report_unknown_types(
-    chk: &Checker,
-    state: &TemplateState,
-    paths: &List(String),
-    item: &WorkItem,
-) {
+fn report_unknown_types(chk: &Checker, state: &TemplateState, paths: &List(String), item: &WorkItem) {
     const found = state.defs.get_ref(item.inv.name)
     if found.is_none() {
         return
@@ -535,13 +523,13 @@ fn report_unknown_types(
 }
 
 fn parse_chunk(chk: &Checker, text: String, file_id: i32) Module {
-    let lx = lexer(text, chk.allocator)
+    let lx = lexer(text)
     let tokens = lx.tokenize()
-    let p = parser(tokens, text, chk.allocator)
+    let p = parser(tokens, text)
     p.set_file_id(file_id)
     const cst = p.tree.node_at(p.parse_module())
-    let module = project_module(cst, file_id, chk.allocator, Some(&chk.diagnostics))
-    flatten_module_decls(&module, &chk.comptime, &chk.diagnostics, chk.allocator)
+    let module = project_module(cst, file_id, Some(&chk.diagnostics))
+    flatten_module_decls(&module, &chk.comptime, &chk.diagnostics)
     for d in p.diagnostics.drain() {
         chk.diagnostics.push(d)
     }
@@ -555,7 +543,7 @@ fn emitted_for(state: &TemplateState, allocator: &Allocator, origin_path: String
             return &state.emitted[i]
         }
     }
-    let text = string_builder(256, allocator)
+    let text = string_builder(256)
     text.append("// Generated from ")
     text.append(base_name(origin_path))
     text.append("\n\n")

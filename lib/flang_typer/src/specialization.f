@@ -48,16 +48,16 @@ pub fn deinit(self: move ClosureFact) {
     self.sig.deinit()
 }
 
-pub fn clone_fact(f: &ClosureFact, allocator: &Allocator = context.allocator) ClosureFact {
-    let fields: List(Field) = list(f.fields.len, allocator)
+pub fn clone_fact(f: &ClosureFact) ClosureFact {
+    let fields: List(Field) = list(f.fields.len)
     fields.push_all(f.fields.as_slice())
     return ClosureFact {
         id = f.id,
-        fqn = from_view(f.fqn.view, allocator),
+        fqn = from_view(f.fqn.view),
         module = f.module,
         fields = move fields,
         decl_span = f.decl_span,
-        sig = copy_sig(&f.sig, allocator),
+        sig = copy_sig(&f.sig),
     }
 }
 
@@ -125,7 +125,6 @@ pub fn new_specialization(
     concrete_params: move List(Ty),
     concrete_return: Ty,
     overlay: move InferenceResults,
-    allocator: &Allocator = context.allocator,
 ) Specialization {
     return Specialization {
         id = 0 as SpecId,
@@ -147,8 +146,8 @@ pub fn new_specialization(
         own_var_burn = 0 as u32,
         own_synth_burn = 0 as u32,
         own_lambda_burn = 0 as u32,
-        deps = list(0, allocator),
-        closures = list(0, allocator),
+        deps = list(0),
+        closures = list(0),
     }
 }
 
@@ -174,17 +173,10 @@ pub type SpecializationRegistry = struct {
     // registers, replaces or reuses. The registry travels with the result and is adopted back by
     // the next demand, so the counter is monotone across a project's life.
     gen: u64
-    allocator: &Allocator
 }
 
-pub fn specialization_registry(allocator: &Allocator = context.allocator) SpecializationRegistry {
-    return .{
-        by_key = dict(allocator),
-        specs = dict(allocator),
-        next_id = 0 as SpecId,
-        gen = 0 as u64,
-        allocator = allocator,
-    }
+pub fn specialization_registry() SpecializationRegistry {
+    return .{ by_key = dict(), specs = dict(), next_id = 0 as SpecId, gen = 0 as u64 }
 }
 
 pub fn deinit(self: move SpecializationRegistry) {
@@ -194,14 +186,8 @@ pub fn deinit(self: move SpecializationRegistry) {
 
 // Canonical key for `(function_id, concrete_params)`. Two specialisations with identical signatures
 // share an id.
-pub fn key_for(
-    it: &TypeInterner,
-    function_id: u32,
-    params: &List(Ty),
-    ret: Ty,
-    allocator: &Allocator = context.allocator,
-) OwnedString {
-    let sb = string_builder(64, allocator)
+pub fn key_for(it: &TypeInterner, function_id: u32, params: &List(Ty), ret: Ty) OwnedString {
+    let sb = string_builder(64)
     defer sb.deinit()
     sb.append(function_id)
     sb.append("@")
@@ -325,7 +311,7 @@ pub fn mark_unreusable(self: &SpecializationRegistry, id: SpecId) {
 // Move a spec's dep list out - the reuse hints its in-place re-instantiation matches nested picks
 // against.
 pub fn take_deps(self: &SpecializationRegistry, id: SpecId) List(SpecDep) {
-    return replace(&self.specs.get_ref(id).unwrap().deps, list(0, self.allocator))
+    return replace(&self.specs.get_ref(id).unwrap().deps, list(0))
 }
 
 // Frame bookkeeping, recorded when an instantiation's body re-check finishes: the stream anchors,
@@ -377,7 +363,7 @@ pub fn finish_harvest(
 // specialization alive. A touched entry's deps are always touched with it, so eviction only ever
 // removes whole undemanded subgraphs and no live dep list is left citing a hole.
 pub fn sweep(self: &SpecializationRegistry) {
-    let doomed: List(SpecId) = list(0, self.allocator)
+    let doomed: List(SpecId) = list(0)
     for i in 0..(self.next_id as usize) {
         const found = self.specs.get_ref(i as SpecId)
         if found.is_none() {
@@ -397,8 +383,7 @@ pub fn sweep(self: &SpecializationRegistry) {
 // a global invalidation makes every carried entry unusable, exactly a cold check.
 pub fn reset(self: &SpecializationRegistry) {
     const g = self.gen
-    const a = self.allocator
-    install(self, specialization_registry(a))
+    install(self, specialization_registry())
     self.gen = g
 }
 
@@ -406,38 +391,35 @@ pub fn reset(self: &SpecializationRegistry) {
 // A keeps retired results whole). `decl` stays a shallow AST copy and name/module stay views -
 // their storage is retired, not freed. The overlay copies share desugar blocks and view the
 // original result's string buffers, so the copy lives only as long as its source's retirement.
-pub fn carried_copy(
-    self: &SpecializationRegistry,
-    allocator: &Allocator = context.allocator,
-) SpecializationRegistry {
+pub fn carried_copy(self: &SpecializationRegistry) SpecializationRegistry {
     // The dicts fill as locals and wrap at the end - growing a container through a local struct's
     // field is the two-field-hop hazard.
-    let by_key: Dict(String, SpecId) = dict(allocator)
-    let specs: Dict(SpecId, Specialization) = dict(allocator)
+    let by_key: Dict(String, SpecId) = dict()
+    let specs: Dict(SpecId, Specialization) = dict()
     for i in 0..(self.next_id as usize) {
         const found = self.specs.get_ref(i as SpecId)
         if found.is_none() {
             continue
         }
         const s = found.unwrap()
-        let params: List(Ty) = list(s.concrete_params.len, allocator)
+        let params: List(Ty) = list(s.concrete_params.len)
         params.push_all(s.concrete_params.as_slice())
-        let deps: List(SpecDep) = list(s.deps.len, allocator)
+        let deps: List(SpecDep) = list(s.deps.len)
         deps.push_all(s.deps.as_slice())
-        let facts: List(ClosureFact) = list(s.closures.len, allocator)
+        let facts: List(ClosureFact) = list(s.closures.len)
         for &f in s.closures {
-            facts.push(clone_fact(f, allocator))
+            facts.push(clone_fact(f))
         }
         let copy = Specialization {
             id = s.id,
             function_id = s.function_id,
-            key = from_view(s.key.view, allocator),
+            key = from_view(s.key.view),
             name = s.name,
             module = s.module,
             decl = s.decl,
             concrete_params = move params,
             concrete_return = s.concrete_return,
-            overlay = deep_copy(&s.overlay, allocator),
+            overlay = deep_copy(&s.overlay),
             touched_gen = s.touched_gen,
             stale = s.stale,
             reusable = s.reusable,
@@ -460,7 +442,6 @@ pub fn carried_copy(
         specs = move specs,
         next_id = self.next_id,
         gen = self.gen,
-        allocator = allocator,
     }
 }
 

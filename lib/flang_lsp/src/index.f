@@ -38,25 +38,25 @@ pub fn deinit(self: move ModuleIndex) {
 
 // Build the index for one parsed module: the documentSymbol outline, flattened, members keeping
 // their container's name.
-pub fn module_index(m: &Module, allocator: &Allocator = context.allocator) ModuleIndex {
-    let tree = document_symbols(m, allocator)
-    let symbols: List(IndexSymbol) = list(tree.len, allocator)
+pub fn module_index(m: &Module) ModuleIndex {
+    let tree = document_symbols(m)
+    let symbols: List(IndexSymbol) = list(tree.len)
     for &s in tree {
-        flatten(&symbols, s, "", allocator)
+        flatten(&symbols, s, "")
     }
     tree.deinit()
     return .{ symbols = move symbols }
 }
 
-fn flatten(out: &List(IndexSymbol), s: &DocSymbol, container: String, alloc: &Allocator) {
+fn flatten(out: &List(IndexSymbol), s: &DocSymbol, container: String) {
     out.push(.{
-        name = from_view(s.name.view, alloc),
-        container = from_view(container, alloc),
+        name = from_view(s.name.view),
+        container = from_view(container),
         kind = s.kind,
         span = s.span,
     })
     for &c in s.children {
-        flatten(out, c, s.name.view, alloc)
+        flatten(out, c, s.name.view)
     }
 }
 

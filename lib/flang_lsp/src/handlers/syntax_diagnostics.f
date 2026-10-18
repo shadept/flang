@@ -29,15 +29,15 @@ pub fn deinit(self: move ParsedDoc) {
 
 // Lex, parse and project one buffer. Decl-level #if resolves against the host context, matching
 // what a build of this machine would compile.
-pub fn parse_doc(text: String, allocator: &Allocator = context.allocator) ParsedDoc {
-    let diagnostics: List(Diagnostic) = list(0, allocator)
-    let lx = lexer(text, allocator)
+pub fn parse_doc(text: String) ParsedDoc {
+    let diagnostics: List(Diagnostic) = list(0)
+    let lx = lexer(text)
     let tokens = lx.tokenize()
-    let p = parser(tokens, text, allocator)
+    let p = parser(tokens, text)
     let cst = p.tree.node_at(p.parse_module())
-    let module = project_module(cst, 0i32, allocator, Some(&diagnostics))
+    let module = project_module(cst, 0i32, Some(&diagnostics))
     const cctx = host_ctx()
-    flatten_module_decls(&module, &cctx, &diagnostics, allocator)
+    flatten_module_decls(&module, &cctx, &diagnostics)
     for d in p.diagnostics.drain() {
         diagnostics.push(d)
     }

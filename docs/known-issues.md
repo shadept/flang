@@ -182,6 +182,28 @@ The language mechanism, the calling convention and the root context are in. Not 
 
 ---
 
+### An Overloaded Function Name Is Accepted Where a Non-Function Is Expected
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (`check_identifier`, `resolve_fn_name_values`)
+
+An overloaded name in value position gets a fresh variable that `resolve_fn_name_values` resolves
+once its `Func` shape settles. When the slot is not a function type at all, the variable unifies
+with it and nothing reports: the checker passes, and lowering refuses the enclosing function.
+
+```flang
+fn make(n: i32) Box { ... }
+fn make(n: i64) Box { ... }
+fn take(b: &Box) i32 { ... }
+take(make)                     // no checker error; "`main` was not emitted"
+```
+
+Found when a stripped `allocator` parameter left `type_interner(allocator, 0)` naming the
+`std.allocator.allocator` overloads. Fix: report E2002 when a parked name's slot settles to a
+non-function type.
+
+---
+
 ### A Read-Only Parameter Sees Aliased Writes Made During the Call
 
 **Status:** Open (deferred)

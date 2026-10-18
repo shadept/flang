@@ -44,13 +44,8 @@ type Projector = struct {
 // Project a parsed CST `Module` node into the typed AST `Module`. `allocator` is the backing
 // allocator for the arena (defaults to the global allocator). `file_id` is forwarded into every
 // produced `SourceSpan` - pass the workspace-stable id, or `-1` for "none".
-pub fn project_module(
-    cst: CstNode,
-    file_id: i32,
-    allocator: &Allocator = context.allocator,
-    diags: &List(Diagnostic)? = null,
-) Module {
-    const backing = allocator
+pub fn project_module(cst: CstNode, file_id: i32, diags: &List(Diagnostic)? = null) Module {
+    const backing = context.allocator
     let arena = arena_allocator(backing)
     let arena_a = arena.allocator()
     const p: Projector = .{ alloc = &arena_a, file_id = file_id, diags = diags }
@@ -68,11 +63,7 @@ pub fn project_module(
         }
     }
 
-    return Module {
-        span = p.span_from(cst),
-        decls = move decls,
-        arena = move arena,
-    }
+    return Module { span = p.span_from(cst), decls = move decls, arena = move arena }
 }
 
 // True for CST kinds that round-trip to an AST `Decl`. Everything else at module level (stray
@@ -91,19 +82,11 @@ fn is_module_child(kind: NodeKind) bool {
 // ─────────────────────────────────────────────────────────────────────────
 
 fn span_from(self: &Projector, cst: CstNode) SourceSpan {
-    return .{
-        file_id = self.file_id,
-        start = cst.start,
-        length = cst.end - cst.start,
-    }
+    return .{ file_id = self.file_id, start = cst.start, length = cst.end - cst.start }
 }
 
 fn span_from_token(self: &Projector, tok: &Token) SourceSpan {
-    return .{
-        file_id = self.file_id,
-        start = tok.offset,
-        length = tok.text.len,
-    }
+    return .{ file_id = self.file_id, start = tok.offset, length = tok.text.len }
 }
 
 // Return the n-th sub-node child (0-indexed), or null if there are fewer. Token children are
@@ -166,13 +149,11 @@ fn first_ident_text(cst: CstNode) String {
 // would otherwise carry it silently.
 fn error_pattern(self: &Projector, span: SourceSpan) Pattern {
     self.diags match {
-        Some(d) => d.push(
-            error(
-                "E2115",
-                from_view("unsupported pattern form: this shape is not a pattern"),
-                span,
-            ),
-        )
+        Some(d) => d.push(error(
+            "E2115",
+            from_view("unsupported pattern form: this shape is not a pattern"),
+            span,
+        ))
         None => {}
     }
     return Pattern.Error(ErrorPattern { span = span })
@@ -608,11 +589,7 @@ fn project_type_param(self: &Projector, cst: CstNode) GenericParam {
         Some(tok) => span = self.span_from_token(&tok)
         None => {}
     }
-    return GenericParam {
-        span = span,
-        name = first_ident_text(cst),
-        bound = self.boxed_opt(bound),
-    }
+    return GenericParam { span = span, name = first_ident_text(cst), bound = self.boxed_opt(bound) }
 }
 
 // True when the field declares `owned`. The parser emits the modifier as a bare identifier token
@@ -986,11 +963,7 @@ fn project_generator_invocation(self: &Projector, cst: CstNode) GenInvoke {
             }
         }
     }
-    return .{
-        span = self.span_from(cst),
-        name = name,
-        args = frozen(args),
-    }
+    return .{ span = self.span_from(cst), name = name, args = frozen(args) }
 }
 
 // The condition is the first expression child that is not a BlockExpr (the branch bodies are
@@ -1479,10 +1452,7 @@ fn project_string_literal(self: &Projector, cst: CstNode) LiteralExpr {
     const text = strip_quotes(raw)
     return .{
         span = self.span_from(cst),
-        value = LiteralValue.String(StringLiteral {
-            span = self.span_from(cst),
-            text = text,
-        }),
+        value = LiteralValue.String(StringLiteral { span = self.span_from(cst), text = text }),
     }
 }
 
@@ -1496,10 +1466,7 @@ fn project_char_literal(self: &Projector, cst: CstNode) LiteralExpr {
     const text = strip_quotes(raw)
     return .{
         span = self.span_from(cst),
-        value = LiteralValue.Char(CharLiteral {
-            span = self.span_from(cst),
-            text = text,
-        }),
+        value = LiteralValue.Char(CharLiteral { span = self.span_from(cst), text = text }),
     }
 }
 
@@ -1517,10 +1484,7 @@ fn project_byte_literal(self: &Projector, cst: CstNode) LiteralExpr {
     }
     return .{
         span = self.span_from(cst),
-        value = LiteralValue.Byte(ByteLiteral {
-            span = self.span_from(cst),
-            text = text,
-        }),
+        value = LiteralValue.Byte(ByteLiteral { span = self.span_from(cst), text = text }),
     }
 }
 
@@ -1543,10 +1507,7 @@ fn project_bool_literal(self: &Projector, cst: CstNode) LiteralExpr {
     }
     return .{
         span = self.span_from(cst),
-        value = LiteralValue.Bool(BoolLiteral {
-            span = self.span_from(cst),
-            value = value,
-        }),
+        value = LiteralValue.Bool(BoolLiteral { span = self.span_from(cst), value = value }),
     }
 }
 
@@ -1652,10 +1613,7 @@ fn project_move(self: &Projector, cst: CstNode) Expr {
         Some(child) => { install(&operand, self.project_expr(child)) }
         None => {}
     }
-    return Expr.Move(MoveExpr {
-        span = self.span_from(cst),
-        operand = self.boxed(operand),
-    })
+    return Expr.Move(MoveExpr { span = self.span_from(cst), operand = self.boxed(operand) })
 }
 
 fn project_dereference(self: &Projector, cst: CstNode) Expr {
@@ -1890,11 +1848,7 @@ fn project_named_argument(self: &Projector, cst: CstNode) NamedCallArgument {
             }
         }
     }
-    return .{
-        span = self.span_from(cst),
-        name = name,
-        value = self.boxed(value),
-    }
+    return .{ span = self.span_from(cst), name = name, value = self.boxed(value) }
 }
 
 fn project_cast(self: &Projector, cst: CstNode) Expr {
@@ -1981,10 +1935,7 @@ fn project_try(self: &Projector, cst: CstNode) Expr {
         Some(child) => { install(&operand, self.project_expr(child)) }
         None => {}
     }
-    return Expr.Try(TryExpr {
-        span = self.span_from(cst),
-        operand = self.boxed(operand),
-    })
+    return Expr.Try(TryExpr { span = self.span_from(cst), operand = self.boxed(operand) })
 }
 
 // `start..end` / `start..=end` / `..end` / `start..` / `..`. Parser always emits a `DotDot` token
@@ -2165,9 +2116,11 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
                 if tok.kind == TokenKind.Identifier {
                     // Flush previous pending field as shorthand.
                     if pending_active {
-                        fields.push(
-                            self.make_struct_field_init(pending_name, pending_span, pending_value),
-                        )
+                        fields.push(self.make_struct_field_init(
+                            pending_name,
+                            pending_span,
+                            pending_value,
+                        ))
                     }
                     pending_name = tok.text
                     pending_span = self.span_from_token(tok)
@@ -2182,9 +2135,11 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
                 }
                 if tok.kind == TokenKind.Comma {
                     if pending_active {
-                        fields.push(
-                            self.make_struct_field_init(pending_name, pending_span, pending_value),
-                        )
+                        fields.push(self.make_struct_field_init(
+                            pending_name,
+                            pending_span,
+                            pending_value,
+                        ))
                         pending_active = false
                         install(&pending_value, null)
                     }
@@ -2192,9 +2147,11 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
                 }
                 if tok.kind == TokenKind.CloseBrace {
                     if pending_active {
-                        fields.push(
-                            self.make_struct_field_init(pending_name, pending_span, pending_value),
-                        )
+                        fields.push(self.make_struct_field_init(
+                            pending_name,
+                            pending_span,
+                            pending_value,
+                        ))
                         pending_active = false
                         install(&pending_value, null)
                     }
@@ -2242,11 +2199,7 @@ fn make_struct_field_init(
         Some(e) => { v_ref = Some(self.boxed(e)) }
         None => {}
     }
-    return .{
-        span = span,
-        name = name,
-        value = v_ref,
-    }
+    return .{ span = span, name = name, value = v_ref }
 }
 
 // `Point { ... }` or `Point(T) { ... }`. Reconstruct the named type by reading the leading
@@ -2331,16 +2284,12 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
             return null
         }
         let no_args: List(TypeExpr) = list(0, self.alloc)
-        return Some(
-            TypeExpr.Named(
-                NamedType {
-                    span = span,
-                    name = name,
-                    generic_args = frozen(no_args),
-                    assoc_args = frozen(list(0, self.alloc)),
-                },
-            ),
-        )
+        return Some(TypeExpr.Named(NamedType {
+            span = span,
+            name = name,
+            generic_args = frozen(no_args),
+            assoc_args = frozen(list(0, self.alloc)),
+        }))
     }
     if cst.kind == NodeKind.CallExpr {
         let name: String = ""
@@ -2366,16 +2315,12 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
         if name.len == 0 {
             return null
         }
-        return Some(
-            TypeExpr.Named(
-                NamedType {
-                    span = span,
-                    name = name,
-                    generic_args = frozen(args),
-                    assoc_args = frozen(list(0, self.alloc)),
-                },
-            ),
-        )
+        return Some(TypeExpr.Named(NamedType {
+            span = span,
+            name = name,
+            generic_args = frozen(args),
+            assoc_args = frozen(list(0, self.alloc)),
+        }))
     }
     return null
 }
@@ -2543,11 +2488,7 @@ fn project_match_expr(self: &Projector, cst: CstNode) MatchExpr {
             TokenChild(_) => {}
         }
     }
-    return .{
-        span = self.span_from(cst),
-        scrutinee = self.boxed(scrutinee),
-        arms = frozen(arms),
-    }
+    return .{ span = self.span_from(cst), scrutinee = self.boxed(scrutinee), arms = frozen(arms) }
 }
 
 // `pat (if guard)? => body`. The parser doesn't surface pattern sub-nodes - it consumes pattern
@@ -2835,11 +2776,7 @@ fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr 
         }
         None => {}
     }
-    return .{
-        span = self.span_from(cst),
-        target = target,
-        parts = frozen(parts),
-    }
+    return .{ span = self.span_from(cst), target = target, parts = frozen(parts) }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -2900,10 +2837,7 @@ fn project_named_type(self: &Projector, cst: CstNode) TypeExpr {
         }
     }
     if saw_dollar {
-        return TypeExpr.GenericBind(GenericBindType {
-            span = self.span_from(cst),
-            name = name,
-        })
+        return TypeExpr.GenericBind(GenericBindType { span = self.span_from(cst), name = name })
     }
     return TypeExpr.Named(NamedType {
         span = self.span_from(cst),
@@ -2967,10 +2901,7 @@ fn project_optional_type(self: &Projector, cst: CstNode) TypeExpr {
         } }
         None => {}
     }
-    return TypeExpr.Optional(OptionalType {
-        span = self.span_from(cst),
-        inner = self.boxed(inner),
-    })
+    return TypeExpr.Optional(OptionalType { span = self.span_from(cst), inner = self.boxed(inner) })
 }
 
 fn project_array_type(self: &Projector, cst: CstNode) TypeExpr {
@@ -3005,10 +2936,7 @@ fn project_slice_type(self: &Projector, cst: CstNode) TypeExpr {
         } }
         None => {}
     }
-    return TypeExpr.Slice(SliceType {
-        span = self.span_from(cst),
-        element = self.boxed(element),
-    })
+    return TypeExpr.Slice(SliceType { span = self.span_from(cst), element = self.boxed(element) })
 }
 
 fn project_tuple_type(self: &Projector, cst: CstNode) TypeExpr {
@@ -3023,10 +2951,7 @@ fn project_tuple_type(self: &Projector, cst: CstNode) TypeExpr {
             TokenChild(_) => {}
         }
     }
-    return TypeExpr.Tuple(TupleType {
-        span = self.span_from(cst),
-        elements = frozen(elements),
-    })
+    return TypeExpr.Tuple(TupleType { span = self.span_from(cst), elements = frozen(elements) })
 }
 
 fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
@@ -3086,10 +3011,7 @@ fn project_combined_type(self: &Projector, cst: CstNode) TypeExpr {
             TokenChild(_) => {}
         }
     }
-    return TypeExpr.Combined(CombinedType {
-        span = self.span_from(cst),
-        parts = frozen(parts),
-    })
+    return TypeExpr.Combined(CombinedType { span = self.span_from(cst), parts = frozen(parts) })
 }
 
 // The `(params) ret?` of a function type or a contract requirement.
@@ -3557,14 +3479,13 @@ fn literal_pattern_for(self: &Projector, tok: Token, span: SourceSpan) Pattern {
         })
     }
     if tok.kind == TokenKind.StringLiteral {
-        return Pattern.Literal(
-            LiteralPattern {
+        return Pattern.Literal(LiteralPattern {
+            span = span,
+            value = LiteralValue.String(StringLiteral {
                 span = span,
-                value = LiteralValue.String(
-                    StringLiteral { span = span, text = strip_quotes(tok.text) },
-                ),
-            },
-        )
+                text = strip_quotes(tok.text),
+            }),
+        })
     }
     if tok.kind == TokenKind.CharLiteral {
         return Pattern.Literal(LiteralPattern {
@@ -3697,10 +3618,7 @@ fn split_numeric_suffix(text: String, is_float: bool) SuffixSplit {
         const float_suffixes = ["f32", "f64"]
         for s in float_suffixes {
             if text.len >= s.len and tail_equals(text, s) {
-                return SuffixSplit {
-                    body = slice_str(text, 0, text.len - s.len),
-                    suffix = s,
-                }
+                return SuffixSplit { body = slice_str(text, 0, text.len - s.len), suffix = s }
             }
         }
         return SuffixSplit { body = text, suffix = "" }
@@ -3708,10 +3626,7 @@ fn split_numeric_suffix(text: String, is_float: bool) SuffixSplit {
     const int_suffixes = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "isize"]
     for s in int_suffixes {
         if text.len >= s.len and tail_equals(text, s) {
-            return SuffixSplit {
-                body = slice_str(text, 0, text.len - s.len),
-                suffix = s,
-            }
+            return SuffixSplit { body = slice_str(text, 0, text.len - s.len), suffix = s }
         }
     }
     return SuffixSplit { body = text, suffix = "" }

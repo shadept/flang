@@ -55,24 +55,20 @@ pub type AnalyzedUnit = struct {
 // Analyse source text: lex → parse → project → type-check. Consumes
 // `source` (the unit owns it). `path` labels the module for FQN construction and diagnostics; it
 // need not name a real file.
-pub fn analyze(
-    source: move OwnedString,
-    path: String,
-    allocator: &Allocator = context.allocator,
-) AnalyzedUnit {
-    let diagnostics: List(Diagnostic) = list(0, allocator)
+pub fn analyze(source: move OwnedString, path: String) AnalyzedUnit {
+    let diagnostics: List(Diagnostic) = list(0)
     const src = source.view
 
-    let lx = lexer(src, allocator)
+    let lx = lexer(src)
     let tokens = lx.tokenize()
-    let p = parser(tokens, src, allocator)
+    let p = parser(tokens, src)
     const cst = p.tree.node_at(p.parse_module())
-    let module = project_module(cst, 0i32, allocator, Some(&diagnostics))
+    let module = project_module(cst, 0i32, Some(&diagnostics))
 
     // Decl-level #if resolves once, before anything walks the decls: only the active branch's
     // declarations survive into collection.
     const cctx = host_ctx()
-    flatten_module_decls(&module, &cctx, &diagnostics, allocator)
+    flatten_module_decls(&module, &cctx, &diagnostics)
 
     // The AST views `source`, not the token structs - tokens and the parser are dead once the
     // Module exists. Drain parse diagnostics first so they survive `p.deinit()`.
@@ -81,19 +77,19 @@ pub fn analyze(
 
     // A file that didn't parse is not type-checked.
     let checked = count_errors(&diagnostics) == 0
-    let result = empty_result(allocator)
+    let result = empty_result()
     if checked {
-        let modules: List(Module) = list(1, allocator)
+        let modules: List(Module) = list(1)
         modules.push(module)
-        let paths: List(String) = list(1, allocator)
+        let paths: List(String) = list(1)
         paths.push(path)
 
-        let srcs: List(OwnedString) = list(1, allocator)
-        srcs.push(from_view(src, allocator))
-        let fps: List(OwnedString) = list(1, allocator)
-        fps.push(from_view(path, allocator))
-        let chk = checker(allocator)
-        let gens = template_state(allocator)
+        let srcs: List(OwnedString) = list(1)
+        srcs.push(from_view(src))
+        let fps: List(OwnedString) = list(1)
+        fps.push(from_view(path))
+        let chk = checker()
+        let gens = template_state()
 
         install(&result, check_all(&chk, &modules, &paths, &srcs, &fps, &gens))
         drain_diagnostics(&diagnostics, &chk.diagnostics)
@@ -112,7 +108,7 @@ pub fn analyze(
         paths.deinit()
     }
 
-    const kept = filter_allowed(&diagnostics, &module, allocator)
+    const kept = filter_allowed(&diagnostics, &module)
     install(&diagnostics, kept)
 
     return .{
@@ -131,12 +127,8 @@ pub fn analyze(
 // filter runs over the assembled list. Allowance is declaration-level only.
 //
 // Returns the survivors in order and leaves `diags` empty, its backing buffer released.
-pub fn filter_allowed(
-    diags: &List(Diagnostic),
-    module: &Module,
-    alloc: &Allocator = context.allocator,
-) List(Diagnostic) {
-    let kept: List(Diagnostic) = list(diags.len, alloc)
+pub fn filter_allowed(diags: &List(Diagnostic), module: &Module) List(Diagnostic) {
+    let kept: List(Diagnostic) = list(diags.len)
     for d in diags.drain() {
         if is_allowed(&d, module) {
             d.deinit()
@@ -149,12 +141,8 @@ pub fn filter_allowed(
 
 // The project-wide form: a diagnostic is matched against the declarations of the module its span's
 // file id selects.
-pub fn filter_allowed_project(
-    diags: &List(Diagnostic),
-    modules: &List(Module),
-    alloc: &Allocator = context.allocator,
-) List(Diagnostic) {
-    let kept: List(Diagnostic) = list(diags.len, alloc)
+pub fn filter_allowed_project(diags: &List(Diagnostic), modules: &List(Module)) List(Diagnostic) {
+    let kept: List(Diagnostic) = list(diags.len)
     for d in diags.drain() {
         let dropped = false
         for &m in modules {
@@ -326,20 +314,19 @@ pub fn analyze_project(
     ctx: &ResolveCtx,
     entries: &List(OwnedString),
     overrides: &Dict(String, String)? = null,
-    allocator: &Allocator = context.allocator,
 ) AnalyzedProject {
-    let parse_diags: List(Diagnostic) = list(0, allocator)
-    let sources: List(OwnedString) = list(0, allocator)
-    let fqns: List(OwnedString) = list(0, allocator)
-    let file_paths: List(OwnedString) = list(0, allocator)
-    let modules: List(Module) = list(0, allocator)
+    let parse_diags: List(Diagnostic) = list(0)
+    let sources: List(OwnedString) = list(0)
+    let fqns: List(OwnedString) = list(0)
+    let file_paths: List(OwnedString) = list(0)
+    let modules: List(Module) = list(0)
     const parse_start = monotonic_ns()
 
     // BFS over the import graph, deduplicated by canonical file identity (`canon_path`) - the same
     // file reached under two spellings (relative vs absolute, `./`, drive-letter case) is one
     // module. The queue keeps each path as first spelled; the canonical form is only the identity.
-    let queue: List(OwnedString) = list(0, allocator)
-    let seen: Set(OwnedString) = set(allocator)
+    let queue: List(OwnedString) = list(0)
+    let seen: Set(OwnedString) = set()
     for i in 0..entries.len {
         enqueue_copy(&queue, &seen, entries[i].view)
     }
@@ -347,16 +334,16 @@ pub fn analyze_project(
     // project file. `[imports].global` applies to project files only, so the boundary has to be
     // recorded before the seeds run.
     let project_count = queue.len
-    let project_origin: List(bool) = list(0, allocator)
-    seed_globals(ctx, &queue, &seen, &parse_diags, allocator)
-    seed_prelude(ctx, &queue, &seen, allocator)
-    seed_stdlib(ctx, &queue, &seen, allocator)
+    let project_origin: List(bool) = list(0)
+    seed_globals(ctx, &queue, &seen, &parse_diags)
+    seed_prelude(ctx, &queue, &seen)
+    seed_stdlib(ctx, &queue, &seen)
 
     // Import edges as they resolve. `edge_to` holds paths, not indices: the target module may not
     // be parsed yet when the edge is seen.
-    let edge_from = list(0, allocator)
+    let edge_from = list(0)
     defer edge_from.deinit()
-    let edge_to = list(0, allocator)
+    let edge_to = list(0)
     defer edge_to.deinit()
 
     let qi: usize = 0
@@ -372,8 +359,8 @@ pub fn analyze_project(
         }
         let src = src_opt.unwrap()
         let fid = modules.len as i32
-        let module = parse_to_module(src.view, fid, &ctx.comptime, &parse_diags, allocator)
-        let fqn = module_fqn(ctx, path, allocator)
+        let module = parse_to_module(src.view, fid, &ctx.comptime, &parse_diags)
+        let fqn = module_fqn(ctx, path)
         enqueue_imports(
             ctx,
             &module,
@@ -383,7 +370,6 @@ pub fn analyze_project(
             &edge_from,
             &edge_to,
             &parse_diags,
-            allocator,
         )
         sources.push(src)
         file_paths.push(from_view(path))
@@ -402,21 +388,21 @@ pub fn analyze_project(
         file_paths = move file_paths,
         modules = move modules,
         project_origin = move project_origin,
-        demanded = list(0, allocator),
-        retired_sources = list(0, allocator),
-        retired_modules = list(0, allocator),
-        retired_results = list(0, allocator),
-        result = empty_result(allocator),
+        demanded = list(0),
+        retired_sources = list(0),
+        retired_modules = list(0),
+        retired_results = list(0),
+        result = empty_result(),
         checked = false,
         parse_diags = move parse_diags,
-        diagnostics = list(0, allocator),
-        checker = checker(allocator),
-        generated = empty_template_output(allocator),
+        diagnostics = list(0),
+        checker = checker(),
+        generated = empty_template_output(),
         parse_ns = parse_ns,
         check_ns = 0,
     }
     const check_start = monotonic_ns()
-    check_project(&unit, ctx, &edge_from, &edge_to, null, allocator)
+    check_project(&unit, ctx, &edge_from, &edge_to, null)
     unit.check_ns = elapsed_ns(check_start)
     return unit
 }
@@ -433,7 +419,6 @@ fn check_project(
     edge_from: &List(usize),
     edge_to: &List(OwnedString),
     recollect: &List(bool)?,
-    allocator: &Allocator,
 ) {
     // Expansion appends one source per generated chunk. Those buffers are retired, since a result
     // from a previous check holds string views into them; the matching `file_paths` entries are
@@ -449,7 +434,7 @@ fn check_project(
     // The check tier is regenerated whole on every demand, so the previous run's copy goes and the
     // parse tier is replayed underneath it.
     // An owning element is lent to the copy, not handed to it: the replay clones each diagnostic.
-    let replayed: List(Diagnostic) = list(self.parse_diags.len, allocator)
+    let replayed: List(Diagnostic) = list(self.parse_diags.len)
     for &d in self.parse_diags {
         replayed.push(clone_diag(d))
     }
@@ -462,17 +447,17 @@ fn check_project(
 
     let path_views = self.fqns.map(fn(s: OwnedString) { s.view })
     defer path_views.deinit()
-    let edges = index_edges(&self.file_paths, edge_from, edge_to, allocator)
+    let edges = index_edges(&self.file_paths, edge_from, edge_to)
     defer edges.deinit()
-    let order = demand_order(path_views.len, &path_views, &edges, allocator)
+    let order = demand_order(path_views.len, &path_views, &edges)
     defer order.deinit()
 
     // Lazy demand: which modules' bodies this demand checks. Total (an empty mask) unless the
     // context asks for laziness - the LSP and the analysis tests want every body.
     const demanded = if ctx.lazy_bodies {
-        demand_mask(&path_views, &self.project_origin, &ctx.global_imports, &edges, allocator)
+        demand_mask(&path_views, &self.project_origin, &ctx.global_imports, &edges)
     } else {
-        list(0, allocator)
+        list(0)
     }
     install(&self.demanded, demanded)
     let dm: &List(bool)? = null
@@ -496,9 +481,9 @@ fn check_project(
     slim_retire(&self.result)
     // The retired snapshot moves into the list; a fresh empty one takes its place until the demand
     // installs the new result below.
-    const retired = replace(&self.result, empty_result(allocator))
+    const retired = replace(&self.result, empty_result())
     self.retired_results.push(retired)
-    let gens = template_state(allocator)
+    let gens = template_state()
     chk.set_comptime_ctx(ctx.comptime)
     // Set once per context, not per demand: a carried body slot (RFC-022 5d) replays what the
     // demand that captured it checked, so flipping this between demands on one unit would leave the
@@ -534,7 +519,6 @@ fn check_project(
             &self.project_origin,
             ctx.lib_kind,
             ctx.check_tests,
-            allocator,
         )
         drain_diagnostics(&self.diagnostics, &w)
         w.deinit()
@@ -545,14 +529,13 @@ fn check_project(
             &self.sources,
             &self.project_origin,
             ctx.check_tests,
-            allocator,
         )
         drain_diagnostics(&self.diagnostics, &wi)
         wi.deinit()
     }
 
     // Last, so a code is silenced whichever phase raised it, the unused warnings included.
-    self.diagnostics = filter_allowed_project(&self.diagnostics, &self.modules, allocator)
+    self.diagnostics = filter_allowed_project(&self.diagnostics, &self.modules)
 }
 
 // The demand set for a lazy check (RFC-022 §6): the project's own modules, the auto-imported
@@ -564,10 +547,9 @@ fn demand_mask(
     project_origin: &List(bool),
     globals: &List(OwnedString),
     edges: &List(ImportEdge),
-    alloc: &Allocator,
 ) List(bool) {
-    let mask = filled_list(fqns.len, false, alloc)
-    let work: List(usize) = list(fqns.len, alloc)
+    let mask = filled_list(fqns.len, false)
+    let work: List(usize) = list(fqns.len)
     defer work.deinit()
     for i in 0..fqns.len {
         if !demand_root(fqns[i], i, project_origin, globals) {
@@ -577,10 +559,10 @@ fn demand_mask(
         work.push(i)
     }
 
-    let adj: List(List(usize)) = list(fqns.len, alloc)
+    let adj: List(List(usize)) = list(fqns.len)
     defer adj.deinit()
     for _i in 0..fqns.len {
-        adj.push(list(0, alloc))
+        adj.push(list(0))
     }
     for &e in edges {
         if e.from < fqns.len and e.to < fqns.len {
@@ -603,12 +585,7 @@ fn demand_mask(
     return mask
 }
 
-fn demand_root(
-    fqn: String,
-    i: usize,
-    project_origin: &List(bool),
-    globals: &List(OwnedString),
-) bool {
+fn demand_root(fqn: String, i: usize, project_origin: &List(bool), globals: &List(OwnedString)) bool {
     if i < project_origin.len and project_origin[i] {
         return true
     }
@@ -649,13 +626,12 @@ pub fn reanalyze(
     ctx: &ResolveCtx,
     dirty: &Set(String),
     overrides: &Dict(String, String)? = null,
-    allocator: &Allocator = context.allocator,
 ) {
     const reparse_all = self.parse_diags.len > 0
     if reparse_all {
-        install(&self.parse_diags, list(0, allocator))
+        install(&self.parse_diags, list(0))
     }
-    let stale: Set(String) = set(allocator)
+    let stale: Set(String) = set()
     defer stale.deinit()
     for &e in self.generated.emitted {
         stale.add(e.origin_path)
@@ -665,7 +641,7 @@ pub fn reanalyze(
     // Per module: was it re-parsed. A reused AST is the same declarations the checker already has
     // names for, so only the re-parsed ones are collected again. A module whose read failed keeps
     // the AST it had, and is left out for the same reason.
-    let recollect = filled_list(self.modules.len, false, allocator)
+    let recollect = filled_list(self.modules.len, false)
     let srcs = &self.sources
     let mods = &self.modules
     for i in 0..self.modules.len {
@@ -690,7 +666,6 @@ pub fn reanalyze(
             i as i32,
             &ctx.comptime,
             &self.parse_diags,
-            allocator,
         )
         swap(&mods[i], &incoming_module)
         self.retired_modules.push(incoming_module)
@@ -700,16 +675,16 @@ pub fn reanalyze(
 
     // ponytail: re-walks the whole import graph, one `resolve_import` per import. Cache the edges
     // on the unit if a profile shows it.
-    let edge_from = list(0, allocator)
+    let edge_from = list(0)
     defer edge_from.deinit()
-    let edge_to = list(0, allocator)
+    let edge_to = list(0)
     defer edge_to.deinit()
-    collect_edges(ctx, &self.modules, &edge_from, &edge_to, allocator)
+    collect_edges(ctx, &self.modules, &edge_from, &edge_to)
 
-    install(&self.generated, empty_template_output(allocator))
+    install(&self.generated, empty_template_output())
 
     const check_start = monotonic_ns()
-    check_project(self, ctx, &edge_from, &edge_to, Some(&recollect), allocator)
+    check_project(self, ctx, &edge_from, &edge_to, Some(&recollect))
     self.check_ns = elapsed_ns(check_start)
     recollect.deinit()
 }
@@ -721,13 +696,12 @@ fn collect_edges(
     modules: &List(Module),
     edge_from: &List(usize),
     edge_to: &List(OwnedString),
-    alloc: &Allocator,
 ) {
     for i in 0..modules.len {
         for &d in modules[i].decls {
             d match {
                 Import(id) => {
-                    const r = resolve_import(ctx, id.path, alloc)
+                    const r = resolve_import(ctx, id.path)
                     if r.is_some() {
                         edge_from.push(i)
                         edge_to.push(r.unwrap())
@@ -743,51 +717,47 @@ fn collect_edges(
 // set - no import discovery, no file IO. `fqns[i]` is both `srcs[i]`'s module FQN and its
 // diagnostic label. Test support: lowering suites use it to place well-known modules (core.option,
 // core.string) next to the module under test. Consumes `srcs`.
-pub fn analyze_source_set(
-    srcs: move List(OwnedString),
-    fqns: &List(String),
-    allocator: &Allocator = context.allocator,
-) AnalyzedProject {
-    let parse_diags: List(Diagnostic) = list(0, allocator)
-    let owned_fqns: List(OwnedString) = list(fqns.len, allocator)
-    let file_paths: List(OwnedString) = list(fqns.len, allocator)
-    let modules: List(Module) = list(srcs.len, allocator)
+pub fn analyze_source_set(srcs: move List(OwnedString), fqns: &List(String)) AnalyzedProject {
+    let parse_diags: List(Diagnostic) = list(0)
+    let owned_fqns: List(OwnedString) = list(fqns.len)
+    let file_paths: List(OwnedString) = list(fqns.len)
+    let modules: List(Module) = list(srcs.len)
     const host = host_ctx()
     for i in 0..srcs.len {
-        modules.push(parse_to_module(srcs[i].view, i as i32, &host, &parse_diags, allocator))
+        modules.push(parse_to_module(srcs[i].view, i as i32, &host, &parse_diags))
         owned_fqns.push(from_view(fqns[i]))
         file_paths.push(from_view(fqns[i]))
     }
 
-    let diagnostics: List(Diagnostic) = list(parse_diags.len, allocator)
+    let diagnostics: List(Diagnostic) = list(parse_diags.len)
     for &d in parse_diags {
         diagnostics.push(clone_diag(d))
     }
     let checked = count_errors(&diagnostics) == 0
-    let result = empty_result(allocator)
-    let generated = empty_template_output(allocator)
+    let result = empty_result()
+    let generated = empty_template_output()
     // The checker rides on the returned unit like `analyze_project`'s does - consumers (the LSP)
     // read its registries and type-parameter names.
-    let chk = checker(allocator)
+    let chk = checker()
     if checked {
-        let gens = template_state(allocator)
+        let gens = template_state()
         install(&result, check_all(&chk, &modules, fqns, &srcs, &file_paths, &gens))
         drain_diagnostics(&diagnostics, &chk.diagnostics)
         install(&generated, gens.take_output())
         gens.deinit()
     }
 
-    let no_origin: List(bool) = list(0, allocator)
+    let no_origin: List(bool) = list(0)
     return AnalyzedProject {
         sources = move srcs,
         fqns = move owned_fqns,
         file_paths = move file_paths,
         modules = move modules,
         project_origin = move no_origin,
-        demanded = list(0, allocator),
-        retired_sources = list(0, allocator),
-        retired_modules = list(0, allocator),
-        retired_results = list(0, allocator),
+        demanded = list(0),
+        retired_sources = list(0),
+        retired_modules = list(0),
+        retired_results = list(0),
         result = move result,
         checked = checked,
         parse_diags = move parse_diags,
@@ -842,19 +812,13 @@ pub fn project_error_count(self: &AnalyzedProject) usize {
     return count_errors(&self.diagnostics)
 }
 
-fn parse_to_module(
-    src: String,
-    file_id: i32,
-    target: &ComptimeCtx,
-    diags: &List(Diagnostic),
-    alloc: &Allocator,
-) Module {
-    let lx = lexer(src, alloc)
+fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List(Diagnostic)) Module {
+    let lx = lexer(src)
     let tokens = lx.tokenize()
-    let p = parser(tokens, src, alloc)
+    let p = parser(tokens, src)
     let cst = p.tree.node_at(p.parse_module())
-    let module = project_module(cst, file_id, alloc, Some(diags))
-    flatten_module_decls(&module, target, diags, alloc)
+    let module = project_module(cst, file_id, Some(diags))
+    flatten_module_decls(&module, target, diags)
     drain_diagnostics(diags, &p.diagnostics)
     p.deinit()
     return module
@@ -872,19 +836,18 @@ fn enqueue_imports(
     edge_from: &List(usize),
     edge_to: &List(OwnedString),
     diags: &List(Diagnostic),
-    alloc: &Allocator,
 ) {
     for &d in m.decls {
         d.* match {
             Import(id) => {
-                let r = resolve_import(ctx, id.path, alloc)
+                let r = resolve_import(ctx, id.path)
                 r match {
                     Some(p) => {
                         edge_from.push(from)
                         edge_to.push(from_view(p.view))
                         enqueue_owned(queue, seen, p)
                     }
-                    None => push_unresolved(diags, &id, alloc)
+                    None => push_unresolved(diags, &id)
                 }
             }
             _ => {}
@@ -900,11 +863,10 @@ fn seed_globals(
     queue: &List(OwnedString),
     seen: &Set(OwnedString),
     diags: &List(Diagnostic),
-    alloc: &Allocator,
 ) {
     for &g in ctx.global_imports {
         let segs = split(g.view, '.')
-        let r = resolve_import(ctx, segs.as_slice(), alloc)
+        let r = resolve_import(ctx, segs.as_slice())
         segs.deinit()
         r match {
             Some(p) => enqueue_owned(queue, seen, p)
@@ -916,16 +878,11 @@ fn seed_globals(
     }
 }
 
-fn seed_prelude(
-    ctx: &ResolveCtx,
-    queue: &List(OwnedString),
-    seen: &Set(OwnedString),
-    alloc: &Allocator,
-) {
-    let segs: List(String) = list(2, alloc)
+fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(OwnedString)) {
+    let segs: List(String) = list(2)
     segs.push("core")
     segs.push("prelude")
-    let r = resolve_import(ctx, segs.as_slice(), alloc)
+    let r = resolve_import(ctx, segs.as_slice())
     segs.deinit()
     r match {
         Some(p) => enqueue_owned(queue, seen, p)
@@ -943,21 +900,16 @@ fn seed_prelude(
 // project analyzable against any `--stdlib-path`, including a different stdlib checkout. ponytail:
 // typechecks all of std on every build; prune to the import closure once stdlib type visibility
 // turns strict.
-fn seed_stdlib(
-    ctx: &ResolveCtx,
-    queue: &List(OwnedString),
-    seen: &Set(OwnedString),
-    alloc: &Allocator,
-) {
+fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(OwnedString)) {
     if ctx.stdlib_root.view.len == 0 {
         return
     }
     let pattern = $"{ctx.stdlib_root.view}/**/*.f"
-    let found = glob_sources(pattern.view, alloc)
+    let found = glob_sources(pattern.view)
     pattern.deinit()
     for i in 0..found.len {
-        let norm = normalize_sep(found[i].view, alloc)
-        if shadowed_by_project(ctx, norm.view, alloc) {
+        let norm = normalize_sep(found[i].view)
+        if shadowed_by_project(ctx, norm.view) {
             norm.deinit()
             continue
         }
@@ -968,14 +920,14 @@ fn seed_stdlib(
 
 // Whether the project or a dependency provides its own module for this stdlib file's dotted name -
 // resolution would never pick the stdlib copy, so the loader must not either.
-fn shadowed_by_project(ctx: &ResolveCtx, stdlib_file: String, alloc: &Allocator) bool {
+fn shadowed_by_project(ctx: &ResolveCtx, stdlib_file: String) bool {
     const rel = module_rel(stdlib_file, ctx.stdlib_root.view)
     if rel.is_none() {
         return false
     }
     let segs = split(rel.unwrap(), '/')
     defer segs.deinit()
-    const r = resolve_import(ctx, segs.as_slice(), alloc)
+    const r = resolve_import(ctx, segs.as_slice())
     if r.is_none() {
         return false
     }
@@ -1024,18 +976,17 @@ fn index_edges(
     file_paths: &List(OwnedString),
     edge_from: &List(usize),
     edge_to: &List(OwnedString),
-    alloc: &Allocator,
 ) List(ImportEdge) {
-    let index_of: Dict(OwnedString, usize) = dict(alloc)
+    let index_of: Dict(OwnedString, usize) = dict()
     defer index_of.deinit()
     for i in 0..file_paths.len {
-        const key = canon_path(file_paths[i].view, alloc)
+        const key = canon_path(file_paths[i].view)
         index_of.set(key.view, i)
         key.deinit()
     }
-    let edges = list(edge_from.len, alloc)
+    let edges = list(edge_from.len)
     for i in 0..edge_from.len {
-        const key = canon_path(edge_to[i].view, alloc)
+        const key = canon_path(edge_to[i].view)
         const to = index_of.get(key.view)
         key.deinit()
         if to.is_none() {
@@ -1072,8 +1023,8 @@ fn mark_seen(seen: &Set(OwnedString), path: String) bool {
     return true
 }
 
-fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl, alloc: &Allocator) {
-    let dotted = dot_join(id.path, alloc)
+fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl) {
+    let dotted = dot_join(id.path)
     const msg = $"unresolved import `{dotted.view}`"
     dotted.deinit()
     diags.push(error("E0001", msg, id.span))
@@ -1291,7 +1242,7 @@ test "the demand mask is the project's import closure plus prelude and globals" 
     edges.push(ImportEdge { from = 1, to = 2 })
     edges.push(ImportEdge { from = 3, to = 1 })
 
-    let mask = demand_mask(&fqns, &origin, &globals, &edges, context.allocator)
+    let mask = demand_mask(&fqns, &origin, &globals, &edges)
     defer mask.deinit()
     assert_true(mask[0], "the project file is a root")
     assert_true(mask[1], "its import is demanded")

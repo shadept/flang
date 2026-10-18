@@ -31,12 +31,9 @@ pub type FqnMap = struct(V) {
 }
 
 // Creates an empty map. Nothing allocates until the first `register`.
-//
-// - `allocator`: kept for the map's whole life. Null is the global allocator.
-pub fn fqn_map(allocator: &Allocator = context.allocator) FqnMap($V) {
-    const alloc = allocator
+pub fn fqn_map() FqnMap($V) {
     let entries: UnmanagedDict(StrId, V)
-    return .{ entries = move entries, names = string_pool(alloc), allocator = alloc }
+    return .{ entries = move entries, names = string_pool(), allocator = context.allocator }
 }
 
 // Frees the table and the name pool. The values are not deinited: the map never owned them.
@@ -71,7 +68,7 @@ pub fn name(self: &FqnMap($V), id: StrId) String {
 // Drops every value whose FQN sits directly in `module`. The names stay interned, so a value
 // registered again under one of them lands on the same id.
 pub fn evict_module(self: &FqnMap($V), module: String) {
-    let doomed: List(StrId) = list(0, self.allocator)
+    let doomed: List(StrId) = list(0)
     defer doomed.deinit()
     for entry in self.entries {
         const fqn = self.names.get(entry.key)

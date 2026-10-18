@@ -51,7 +51,6 @@ type Tarjan = struct {
     stack: UnmanagedList(usize)
     next_index: usize
     out: UnmanagedList(usize)
-    // The one allocator every field allocates through.
     allocator: &Allocator
 }
 
@@ -73,13 +72,8 @@ fn deinit(self: move Tarjan) {
 //
 // Every module appears exactly once, so the result is a permutation of `0..count` whatever the
 // edges say.
-pub fn demand_order(
-    count: usize,
-    fqns: &List(String),
-    edges: &List(ImportEdge),
-    allocator: &Allocator = context.allocator,
-) List(usize) {
-    const alloc = allocator
+pub fn demand_order(count: usize, fqns: &List(String), edges: &List(ImportEdge)) List(usize) {
+    const alloc = context.allocator
     let t = Tarjan {
         adj = build_adjacency(count, fqns, edges, alloc),
         index = filled_unmanaged_list(count, UNVISITED, alloc),
@@ -91,7 +85,7 @@ pub fn demand_order(
         allocator = alloc,
     }
     // Roots in FQN order, so a disconnected module set is still deterministic.
-    let roots = by_fqn(count, fqns, alloc)
+    let roots = by_fqn(count, fqns)
     defer roots.deinit()
     for r in roots {
         if t.index[r] == UNVISITED {
@@ -100,7 +94,7 @@ pub fn demand_order(
     }
     // The order goes to the caller as a list over the same allocator; everything else was scratch.
     // Leaving an empty list behind keeps `deinit` free to release every field it owns.
-    let out: List(usize) = .{ __storage = move t.out, allocator = alloc }
+    let out: List(usize) = .{ __storage = move t.out, allocator = t.allocator }
     let empty: UnmanagedList(usize)
     t.out = move empty
     t.deinit()
@@ -117,7 +111,7 @@ fn build_adjacency(
 ) UnmanagedList(List(usize)) {
     let adj: UnmanagedList(List(usize)) = unmanaged_list(count, allocator)
     for _i in 0..count {
-        adj.push(list(0, allocator), allocator)
+        adj.push(list(0), allocator)
     }
     for e in edges {
         if e.from >= count or e.to >= count {
@@ -162,7 +156,7 @@ fn visit(t: &Tarjan, v: usize, fqns: &List(String)) {
     if t.low[v] != t.index[v] {
         return
     }
-    let comp: List(usize) = list(4, t.allocator)
+    let comp: List(usize) = list(4)
     loop {
         let w = t.stack.pop().unwrap()
         t.on_stack[w] = false
@@ -179,8 +173,8 @@ fn visit(t: &Tarjan, v: usize, fqns: &List(String)) {
 }
 
 // Returns every index in `0..count`, ordered by the name it maps to.
-fn by_fqn(count: usize, fqns: &List(String), allocator: &Allocator) List(usize) {
-    let all: List(usize) = list(count, allocator)
+fn by_fqn(count: usize, fqns: &List(String)) List(usize) {
+    let all: List(usize) = list(count)
     for i in 0..count {
         all.push(i)
     }

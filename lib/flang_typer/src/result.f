@@ -111,28 +111,28 @@ pub fn no_phases() CheckPhases {
 // as a bug, not silently fall back to a fresh var. An empty result - every table empty, registries
 // fresh. Handed back when a source failed to parse and was never type-checked. The interner is a
 // zero-capacity stand-in: nothing resolves through an empty result.
-pub fn empty_result(allocator: &Allocator = context.allocator) TypeCheckResult {
+pub fn empty_result() TypeCheckResult {
     return .{
-        node_types = dict(allocator),
-        interner = type_interner(allocator, 0),
-        resolved_ops = dict(allocator),
-        resolved_targets = dict(allocator),
-        instantiated_types = list(0, allocator),
-        specializations = specialization_registry(allocator),
-        desugars = dict(allocator),
-        synth_strings = list(0, allocator),
-        default_args = dict(allocator),
-        arg_lists = dict(allocator),
-        receiver_derefs = dict(allocator),
-        receiver_adapts = dict(allocator),
-        arg_derefs = dict(allocator),
-        nominals = nominal_registry(allocator),
-        functions = function_registry(allocator),
-        lambdas = dict(allocator),
-        closures = dict(allocator),
-        spans = dict(allocator),
-        file_paths = list(0, allocator),
-        context_fields = list(0, allocator),
+        node_types = dict(),
+        interner = type_interner(0),
+        resolved_ops = dict(),
+        resolved_targets = dict(),
+        instantiated_types = list(0),
+        specializations = specialization_registry(),
+        desugars = dict(),
+        synth_strings = list(0),
+        default_args = dict(),
+        arg_lists = dict(),
+        receiver_derefs = dict(),
+        receiver_adapts = dict(),
+        arg_derefs = dict(),
+        nominals = nominal_registry(),
+        functions = function_registry(),
+        lambdas = dict(),
+        closures = dict(),
+        spans = dict(),
+        file_paths = list(0),
+        context_fields = list(0),
         phases = no_phases(),
     }
 }
@@ -193,8 +193,7 @@ pub fn slim_retire(self: &TypeCheckResult) {
 // the table so the handles its carried registry holds stay resolvable; this snapshot's own handles
 // remain valid in the table wherever it now lives, but no longer resolve through this struct.
 pub fn take_interner(self: &TypeCheckResult) TypeInterner {
-    const alloc = self.interner.allocator
-    return replace(&self.interner, type_interner(alloc, 0))
+    return replace(&self.interner, type_interner(0))
 }
 
 // Move the specialization registry out of the snapshot so the next demand carries it forward -
@@ -203,10 +202,9 @@ pub fn take_interner(self: &TypeCheckResult) TypeInterner {
 // still compares this snapshot's tables after the re-demand (gate A).
 pub fn take_specs(self: &TypeCheckResult, keep: bool = false) SpecializationRegistry {
     if keep {
-        return self.specializations.carried_copy(self.specializations.allocator)
+        return self.specializations.carried_copy()
     }
-    const alloc = self.specializations.allocator
-    return replace(&self.specializations, specialization_registry(alloc))
+    return replace(&self.specializations, specialization_registry())
 }
 
 pub fn get_type(self: &TypeCheckResult, id: NodeId) Ty? {

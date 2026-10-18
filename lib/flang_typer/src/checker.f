@@ -457,7 +457,6 @@ pub type Checker = struct {
     slot_new_specs: List(SpecId)
     site_log_on: bool
 
-    allocator: &Allocator
 }
 
 // One module's cached diagnostics from the carried tiers. `bodies` covers the slot's capture window
@@ -723,99 +722,98 @@ type PendingFnName = struct {
     module: String?
 }
 
-pub fn checker(allocator: &Allocator = context.allocator) Checker {
+pub fn checker() Checker {
     return .{
-        engine = engine(allocator),
-        env = type_env(allocator),
-        nominals = nominal_registry(allocator),
-        aliases = fqn_map(allocator),
-        constants = fqn_map(allocator),
-        ctx_fields = fqn_map(allocator),
-        functions = function_registry(allocator),
-        specs = specialization_registry(allocator),
-        results = inference_results(allocator),
-        diagnostics = list(0, allocator),
+        engine = engine(),
+        env = type_env(),
+        nominals = nominal_registry(),
+        aliases = fqn_map(),
+        constants = fqn_map(),
+        ctx_fields = fqn_map(),
+        functions = function_registry(),
+        specs = specialization_registry(),
+        results = inference_results(),
+        diagnostics = list(0),
         comptime = host_ctx(),
         check_tests = false,
         current_module = null,
-        fn_stack = list(0, allocator),
-        fn_decl_params = dict(allocator),
-        anon_structs = dict(allocator),
+        fn_stack = list(0),
+        fn_decl_params = dict(),
+        anon_structs = dict(),
         default_depth = 0usize,
         defer_depth = 0usize,
-        alias_stack = list(0, allocator),
+        alias_stack = list(0),
         overload_deferred = false,
-        pending_calls = list(0, allocator),
-        fn_deprecations = dict(allocator),
-        templates = dict(allocator),
-        fn_bounds = dict(allocator),
-        nom_bounds = dict(allocator),
-        paths = dict(allocator),
-        path_bufs = list(0, allocator),
+        pending_calls = list(0),
+        fn_deprecations = dict(),
+        templates = dict(),
+        fn_bounds = dict(),
+        nom_bounds = dict(),
+        paths = dict(),
+        path_bufs = list(0),
         sig_open = false,
         sig_params_open = false,
         sugar_ok = false,
-        sig_sugar = list(0, allocator),
+        sig_sugar = list(0),
         sugar_param = "",
-        sig_implied = list(0, allocator),
-        sig_declared = list(0, allocator),
-        proj_pending = list(0, allocator),
+        sig_implied = list(0),
+        sig_declared = list(0),
+        proj_pending = list(0),
         check_apps = false,
         assoc_defs = false,
-        bound_texts = dict(allocator),
+        bound_texts = dict(),
         bounds_changed = false,
-        ref_log = list(0, allocator),
+        ref_log = list(0),
         ref_logging = false,
-        self_decls = dict(allocator),
-        sig_refs = list(0, allocator),
+        self_decls = dict(),
+        sig_refs = list(0),
         ref_new = 0usize,
         bound_depth = 0usize,
         probe_bound_failed = false,
-        tp_names = dict(allocator),
-        rigid_flagged = set(allocator),
+        tp_names = dict(),
+        rigid_flagged = set(),
         skip_ownership = false,
         rigid_mode = false,
         rigid_fid = 0u32,
-        rigid_tvars = dict(allocator),
-        sig_tps = list(0, allocator),
-        pending_specs = list(0, allocator),
-        spec_callers = list(0, allocator),
-        spec_call_spans = list(0, allocator),
+        rigid_tvars = dict(),
+        sig_tps = list(0),
+        pending_specs = list(0),
+        spec_callers = list(0),
+        spec_call_spans = list(0),
         spec_depth = 0usize,
-        pending_literals = list(0, allocator),
-        pending_anons = list(0, allocator),
-        pending_members = list(0, allocator),
+        pending_literals = list(0),
+        pending_anons = list(0),
+        pending_members = list(0),
         resolving_parked = false,
-        pending_fn_names = list(0, allocator),
-        visible_by_module = dict(allocator),
-        project_globals = list(0, allocator),
-        project_origin = list(0, allocator),
+        pending_fn_names = list(0),
+        visible_by_module = dict(),
+        project_globals = list(0),
+        project_origin = list(0),
         next_synth = 0u32,
-        lambda_frames = list(0, allocator),
-        closures = dict(allocator),
+        lambda_frames = list(0),
+        closures = dict(),
         next_lambda = 0u32,
-        recycled = dict(allocator),
+        recycled = dict(),
         saw_new_name = false,
-        nominal_diags = dict(allocator),
-        nominal_diag_keys = list(0, allocator),
-        sig_caches = dict(allocator),
-        sig_cache_keys = list(0, allocator),
+        nominal_diags = dict(),
+        nominal_diag_keys = list(0),
+        sig_caches = dict(),
+        sig_cache_keys = list(0),
         sig_capture = false,
-        sig_nodes = list(0, allocator),
-        body_caches = dict(allocator),
-        body_cache_keys = list(0, allocator),
-        template_types = dict(allocator),
-        template_type_keys = list(0, allocator),
+        sig_nodes = list(0),
+        body_caches = dict(),
+        body_cache_keys = list(0),
+        template_types = dict(),
+        template_type_keys = list(0),
         slot_log_on = false,
-        slot_picks = list(0, allocator),
+        slot_picks = list(0),
         slot_uninferable = 0usize,
         defaults_changed = false,
-        spec_frames = list(0, allocator),
-        slot_hints = list(0, allocator),
-        slot_sites = list(0, allocator),
-        slot_new_specs = list(0, allocator),
+        spec_frames = list(0),
+        slot_hints = list(0),
+        slot_sites = list(0),
+        slot_new_specs = list(0),
         site_log_on = false,
-        allocator = allocator,
     }
 }
 
@@ -836,33 +834,33 @@ pub fn checker(allocator: &Allocator = context.allocator) Checker {
 // The carry list is the fields moved onto the replacement below; `checker` and `deinit` enumerate
 // the rest.
 pub fn begin_demand(self: &Checker) {
-    let noms = replace(&self.nominals, nominal_registry(self.allocator))
-    let aliases = replace(&self.aliases, fqn_map(self.allocator))
-    let consts = replace(&self.constants, fqn_map(self.allocator))
-    let ctx_fields = replace(&self.ctx_fields, fqn_map(self.allocator))
-    let fns = replace(&self.functions, function_registry(self.allocator))
-    let tmpls = replace(&self.templates, dict(self.allocator))
-    let bounds = replace(&self.fn_bounds, dict(self.allocator))
-    let nbounds = replace(&self.nom_bounds, dict(self.allocator))
-    let paths = replace(&self.paths, dict(self.allocator))
-    let btexts = replace(&self.bound_texts, dict(self.allocator))
-    let sdecls = replace(&self.self_decls, dict(self.allocator))
-    let path_bufs = replace(&self.path_bufs, list(0, self.allocator))
-    let decl_params = replace(&self.fn_decl_params, dict(self.allocator))
-    let deprecations = replace(&self.fn_deprecations, dict(self.allocator))
-    let anons = replace(&self.anon_structs, dict(self.allocator))
-    let recycled = replace(&self.recycled, dict(self.allocator))
-    let nom_diags = replace(&self.nominal_diags, dict(self.allocator))
-    let nom_diag_keys = replace(&self.nominal_diag_keys, list(0, self.allocator))
-    let sig_caches = replace(&self.sig_caches, dict(self.allocator))
-    let sig_cache_keys = replace(&self.sig_cache_keys, list(0, self.allocator))
-    let body_caches = replace(&self.body_caches, dict(self.allocator))
-    let body_cache_keys = replace(&self.body_cache_keys, list(0, self.allocator))
-    let ttypes = replace(&self.template_types, dict(self.allocator))
-    let ttype_keys = replace(&self.template_type_keys, list(0, self.allocator))
+    let noms = replace(&self.nominals, nominal_registry())
+    let aliases = replace(&self.aliases, fqn_map())
+    let consts = replace(&self.constants, fqn_map())
+    let ctx_fields = replace(&self.ctx_fields, fqn_map())
+    let fns = replace(&self.functions, function_registry())
+    let tmpls = replace(&self.templates, dict())
+    let bounds = replace(&self.fn_bounds, dict())
+    let nbounds = replace(&self.nom_bounds, dict())
+    let paths = replace(&self.paths, dict())
+    let btexts = replace(&self.bound_texts, dict())
+    let sdecls = replace(&self.self_decls, dict())
+    let path_bufs = replace(&self.path_bufs, list(0))
+    let decl_params = replace(&self.fn_decl_params, dict())
+    let deprecations = replace(&self.fn_deprecations, dict())
+    let anons = replace(&self.anon_structs, dict())
+    let recycled = replace(&self.recycled, dict())
+    let nom_diags = replace(&self.nominal_diags, dict())
+    let nom_diag_keys = replace(&self.nominal_diag_keys, list(0))
+    let sig_caches = replace(&self.sig_caches, dict())
+    let sig_cache_keys = replace(&self.sig_cache_keys, list(0))
+    let body_caches = replace(&self.body_caches, dict())
+    let body_cache_keys = replace(&self.body_cache_keys, list(0))
+    let ttypes = replace(&self.template_types, dict())
+    let ttype_keys = replace(&self.template_type_keys, list(0))
     const ct = self.comptime
 
-    let next = checker(self.allocator)
+    let next = checker()
     // Each table the fresh checker built is released as the carried one takes its place.
     install(&next.nominals, noms)
     install(&next.aliases, aliases)
@@ -927,7 +925,7 @@ pub fn adopt_interner(self: &Checker, it: move TypeInterner) {
 // One pass over the registry covers the whole set: it is keyed by id and by FQN, with no index by
 // module.
 fn retire_names(self: &Checker, retiring: &Set(String)) {
-    let doomed: List(NominalId) = list(0, self.allocator)
+    let doomed: List(NominalId) = list(0)
     defer doomed.deinit()
     for i in 0..(self.nominals.next_id as usize) {
         const id = i as NominalId
@@ -1133,7 +1131,7 @@ fn contract_param(self: &Checker, te: &TypeExpr, label: String, span: SourceSpan
     // Diagnostics name the parameter (`it: Iter`) and its associated types by the contract
     // (`Iter.Item`); the bindings keep the occurrence's own name.
     self.sugar_ok = false
-    let members: List(Member) = list(0, self.allocator)
+    let members: List(Member) = list(0)
     lower_bound(self, v, te, self.sugar_param, "", span, &self.sig_sugar, &members, 0usize)
     for &m in members {
         bind_member(self, intern_path(self, name, m.name), m.ty, span, true, m.decl)
@@ -1160,7 +1158,7 @@ fn resolve_anon_struct_type(self: &Checker, a: &AnonStructType) Ty {
     if a.generics.len > 0 {
         return TY_ERROR
     }
-    let fields: List(Field) = list(a.fields.len, self.allocator)
+    let fields: List(Field) = list(a.fields.len)
     for i in 0..a.fields.len {
         fields.push(Field {
             name = a.fields[i].name,
@@ -1181,7 +1179,7 @@ fn resolve_anon_struct_type(self: &Checker, a: &AnonStructType) Ty {
 fn anon_struct_ty(self: &Checker, fields: move List(Field), span: SourceSpan) Ty {
     const key = self.engine.interner.record_of(&fields)
 
-    let no_args: List(Ty) = list(0, self.allocator)
+    let no_args: List(Ty) = list(0)
     let found = self.anon_structs.get(key)
     if found.is_some() {
         const id = found.unwrap()
@@ -1191,19 +1189,22 @@ fn anon_struct_ty(self: &Checker, fields: move List(Field), span: SourceSpan) Ty
 
     // The registry FQN is a bare counter: no rendering of a record shape survives C identifier
     // mangling. Interning happens through `anon_structs`.
-    let empty_tps: List(VarId) = list(0, self.allocator)
-    let nid = self.nominals.register(NominalDef.NomStruct(StructDef {
-        fqn = "",
-        module = "",
-        is_pub = true,
-        type_params = move empty_tps,
-        assoc_params = list(0, self.allocator),
-        fields = move fields,
-        decl_span = span,
-        deprecation = null,
-        is_simd = false,
-        is_foreign = false,
-    }), $"__anon_{self.nominals.next_id}")
+    let empty_tps: List(VarId) = list(0)
+    let nid = self.nominals.register(
+        NominalDef.NomStruct(StructDef {
+            fqn = "",
+            module = "",
+            is_pub = true,
+            type_params = move empty_tps,
+            assoc_params = list(0),
+            fields = move fields,
+            decl_span = span,
+            deprecation = null,
+            is_simd = false,
+            is_foreign = false,
+        }),
+        $"__anon_{self.nominals.next_id}",
+    )
     self.anon_structs.set(key, nid)
     return mk_nominal(self, nid, no_args)
 }
@@ -1341,7 +1342,7 @@ fn warn_deprecated_type(self: &Checker, id: NominalId, name: String, span: Sourc
 fn resolve_generic_args(self: &Checker, n: &NamedType) List(Ty) {
     const sugar = self.sugar_ok
     self.sugar_ok = false
-    let out: List(Ty) = list(n.generic_args.len, self.allocator)
+    let out: List(Ty) = list(n.generic_args.len)
     for &arg in n.generic_args {
         out.push(resolve_type_expr(self, arg))
     }
@@ -1374,7 +1375,7 @@ fn resolve_optional(self: &Checker, o: &OptionalType) Ty {
     if opt_id.is_none() {
         return TY_ERROR
     }
-    let args: List(Ty) = list(1, self.allocator)
+    let args: List(Ty) = list(1)
     args.push(inner)
     return mk_nominal(self, opt_id.unwrap(), args)
 }
@@ -1410,7 +1411,7 @@ fn slice_of(self: &Checker, elem: Ty) Ty {
     if slice_id.is_none() {
         return TY_ERROR
     }
-    let args: List(Ty) = list(1, self.allocator)
+    let args: List(Ty) = list(1)
     args.push(elem)
     return mk_nominal(self, slice_id.unwrap(), args)
 }
@@ -1427,7 +1428,7 @@ fn param_ty(self: &Checker, p: &FunctionParam) Ty {
 }
 
 fn resolve_tuple(self: &Checker, t: &TupleType) Ty {
-    let elems: List(Ty) = list(t.elements.len, self.allocator)
+    let elems: List(Ty) = list(t.elements.len)
     for &e in t.elements {
         elems.push(resolve_type_expr(self, e))
     }
@@ -1435,7 +1436,7 @@ fn resolve_tuple(self: &Checker, t: &TupleType) Ty {
 }
 
 fn resolve_function(self: &Checker, f: &FunctionType) Ty {
-    let params: List(Ty) = list(f.params.len, self.allocator)
+    let params: List(Ty) = list(f.params.len)
     let moves = 0usize
     for i in 0..f.params.len {
         const pt = resolve_type_expr(self, &f.params[i])
@@ -1527,12 +1528,15 @@ fn resolve_generic_bind(self: &Checker, g: &GenericBindType) Ty {
     let vid = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
     self.sig_tps.push(SigTypeParam { name = g.name, ty = fresh, decl = self.node_of(g.span) })
     self.tp_names.set(vid, g.name)
-    self.env.bind(g.name, Binding {
-        scheme = mono(fresh, self.allocator),
-        decl = self.node_of(g.span),
-        is_const = true,
-        is_type_param = true,
-    })
+    self.env.bind(
+        g.name,
+        Binding {
+            scheme = mono(fresh),
+            decl = self.node_of(g.span),
+            is_const = true,
+            is_type_param = true,
+        },
+    )
     return fresh
 }
 
@@ -1608,19 +1612,19 @@ pub fn push_diag_i(self: &Checker, span: SourceSpan, code: String, message: move
 // nothing; every mismatch produces one diagnostic on the checker's list.
 fn report_unify(self: &Checker, outcome: &UnifyOutcome, code: String, span: SourceSpan) {
     let ctx = report_ctx(code, span, Some(&self.nominals))
-    report(outcome, &ctx, &self.engine.interner, &self.diagnostics, self.allocator)
+    report(outcome, &ctx, &self.engine.interner, &self.diagnostics)
 }
 
 pub fn current_visibility(self: &Checker) Visibility {
     return self.current_module match {
         Some(m) => visibility(Some(m), base_visible_set(self, m))
-        None => open(self.allocator)
+        None => open()
     }
 }
 
 // The modules visible from `m`, as a fresh caller-owned set.
 fn base_visible_set(self: &Checker, m: String) Set(String) {
-    let fresh: Set(String) = set(self.allocator)
+    let fresh: Set(String) = set()
     self.visible_by_module.get_ref(m) match {
         Some(src) => copy_set_into(&fresh, src)
         None => {
@@ -1654,7 +1658,7 @@ fn fn_visibility(self: &Checker) Visibility {
             }
             visibility(Some(m), fresh)
         }
-        None => open(self.allocator)
+        None => open()
     }
 }
 
@@ -1675,17 +1679,16 @@ fn copy_set_into(dst: &Set(String), src: &Set(String)) {
 // direct imports, the `pub import` transitive closure reachable through them, and the auto-imported
 // core prelude.
 fn build_visibility(self: &Checker, modules: &List(Module), paths: &List(String)) {
-    let alloc = self.allocator
     let n = modules.len
 
     // Per-module edge lists (views into `paths`): all imports, and the `pub import` subset that
     // re-exports transitively.
-    let imports: List(List(String)) = list(0, alloc)
-    let reexports: List(List(String)) = list(0, alloc)
+    let imports: List(List(String)) = list(0)
+    let reexports: List(List(String)) = list(0)
     for i in 0..n {
-        let imps: List(String) = list(0, alloc)
-        let reexps: List(String) = list(0, alloc)
-        collect_edges(&modules[i], paths, &imps, &reexps, alloc)
+        let imps: List(String) = list(0)
+        let reexps: List(String) = list(0)
+        collect_edges(&modules[i], paths, &imps, &reexps)
         if paths[i] != "core.prelude" {
             let pre = find_fqn(paths, "core.prelude")
             if pre.is_some() {
@@ -1714,8 +1717,8 @@ fn build_visibility(self: &Checker, modules: &List(Module), paths: &List(String)
     }
 
     for i in 0..n {
-        let vis: Set(String) = set(alloc)
-        compute_visible(i, paths, &imports, &reexports, &vis, alloc)
+        let vis: Set(String) = set()
+        compute_visible(i, paths, &imports, &reexports, &vis)
         self.visible_by_module.set(paths[i], vis)
     }
 
@@ -1725,17 +1728,11 @@ fn build_visibility(self: &Checker, modules: &List(Module), paths: &List(String)
 
 // Record module `m`'s imports as views into `paths`. An import whose dotted path names no loaded
 // module is silently dropped here; the unresolved-import diagnostic is the loader's job.
-fn collect_edges(
-    m: &Module,
-    paths: &List(String),
-    imps: &List(String),
-    reexps: &List(String),
-    alloc: &Allocator,
-) {
+fn collect_edges(m: &Module, paths: &List(String), imps: &List(String), reexps: &List(String)) {
     for &d in m.decls {
         d.* match {
             Import(id) => {
-                let dotted = dot_join(id.path, alloc)
+                let dotted = dot_join(id.path)
                 let fv = find_fqn(paths, dotted.view)
                 dotted.deinit()
                 if fv.is_some() {
@@ -1763,10 +1760,9 @@ fn compute_visible(
     imports: &List(List(String)),
     reexports: &List(List(String)),
     out: &Set(String),
-    alloc: &Allocator,
 ) {
     out.add(paths[idx])
-    let work: List(String) = list(0, alloc)
+    let work: List(String) = list(0)
     for im in imports[idx] {
         if !out.contains(im) {
             out.add(im)
@@ -1790,8 +1786,8 @@ fn compute_visible(
     work.deinit()
 }
 
-pub fn dot_join(segs: String[], alloc: &Allocator) OwnedString {
-    let sb = string_builder(0, alloc)
+pub fn dot_join(segs: String[]) OwnedString {
+    let sb = string_builder(0)
     defer sb.deinit()
     for i in 0..segs.len {
         if i > 0 {
@@ -1939,7 +1935,7 @@ fn note_bound_text(self: &Checker, id: NominalId, body: &TypeExpr) {
         AnonEnum(e) => e.generics
         _ => return
     }
-    let sb = string_builder(32, self.allocator)
+    let sb = string_builder(32)
     let spelled = true
     for &g in generics {
         if g.bound.is_none() {
@@ -1970,8 +1966,8 @@ fn note_bound_text(self: &Checker, id: NominalId, body: &TypeExpr) {
 }
 
 fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedString) NominalId {
-    let empty_params: List(VarId) = list(0, self.allocator)
-    let empty_fields: List(Field) = list(0, self.allocator)
+    let empty_params: List(VarId) = list(0)
+    let empty_fields: List(Field) = list(0)
     // `fqn` field is a placeholder - `register` overwrites it with the stable view it owns. The
     // OwnedString is transferred to the registry.
     let sd = StructDef {
@@ -1979,7 +1975,7 @@ fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedStr
         module = self.current_module.unwrap(),
         is_pub = td.is_pub,
         type_params = move empty_params,
-        assoc_params = list(0, self.allocator),
+        assoc_params = list(0),
         fields = move empty_fields,
         decl_span = td.span,
         deprecation = deprecation_of(td.directives),
@@ -1994,14 +1990,14 @@ fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedStr
 }
 
 fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedString) NominalId {
-    let empty_params: List(VarId) = list(0, self.allocator)
-    let empty_variants: List(VariantDef) = list(0, self.allocator)
+    let empty_params: List(VarId) = list(0)
+    let empty_variants: List(VariantDef) = list(0)
     let ed = EnumDef {
         fqn = "",
         module = self.current_module.unwrap(),
         is_pub = td.is_pub,
         type_params = move empty_params,
-        assoc_params = list(0, self.allocator),
+        assoc_params = list(0),
         variants = move empty_variants,
         tag_values = null,
         decl_span = td.span,
@@ -2030,8 +2026,8 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
 
     // Bind generics into a fresh scope so field type-exprs can see them.
     self.env.push_scope()
-    let type_params: List(VarId) = list(anon.generics.len, self.allocator)
-    let self_args: List(Ty) = list(anon.generics.len, self.allocator)
+    let type_params: List(VarId) = list(anon.generics.len)
+    let self_args: List(Ty) = list(anon.generics.len)
     for &gp in anon.generics {
         refuse_self_name(self, gp.name, gp.span)
         let fresh = self.engine.fresh_var()
@@ -2039,17 +2035,20 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
         type_params.push(id)
         self_args.push(fresh)
         self.tp_names.set(id, gp.name)
-        self.env.bind(gp.name, Binding {
-            scheme = mono(fresh, self.allocator),
-            decl = self.node_of(gp.span),
-            is_const = true,
-            is_type_param = true,
-        })
+        self.env.bind(
+            gp.name,
+            Binding {
+                scheme = mono(fresh),
+                decl = self.node_of(gp.span),
+                is_const = true,
+                is_type_param = true,
+            },
+        )
     }
     bind_type_name(self, SELF_NAME, mk_nominal(self, id, self_args), td.span)
     lower_type_params(self, id, anon.generics)
 
-    let fields: List(Field) = list(anon.fields.len, self.allocator)
+    let fields: List(Field) = list(anon.fields.len)
     for &f in anon.fields {
         let ty = resolve_type_expr(self, f.type_expr)
         // A field name twice would make every later lookup ambiguous and silently pick the first -
@@ -2071,7 +2070,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
         })
     }
     self.env.pop_scope()
-    let assoc_params: List(VarId) = list(0, self.allocator)
+    let assoc_params: List(VarId) = list(0)
     for &f in fields {
         collect_assoc_vars(self, f.ty, &assoc_params)
     }
@@ -2129,7 +2128,7 @@ fn check_recursive_nominal(self: &Checker, id: NominalId, name: String, span: So
 // Returns the first member cut and whether it is an enum variant rather than a struct field, so the
 // diagnostic can name what closed the loop.
 fn cut_back_edges(self: &Checker, id: NominalId) (String, bool)? {
-    let seen: Set(NominalId) = set(self.allocator)
+    let seen: Set(NominalId) = set()
     defer seen.deinit()
     let hit: (String, bool)? = null
     let def = self.nominals.get(id)
@@ -2334,8 +2333,8 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let anon = anon_opt.unwrap()
 
     self.env.push_scope()
-    let type_params: List(VarId) = list(anon.generics.len, self.allocator)
-    let self_args: List(Ty) = list(anon.generics.len, self.allocator)
+    let type_params: List(VarId) = list(anon.generics.len)
+    let self_args: List(Ty) = list(anon.generics.len)
     for &gp in anon.generics {
         refuse_self_name(self, gp.name, gp.span)
         let fresh = self.engine.fresh_var()
@@ -2343,31 +2342,34 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
         type_params.push(vid)
         self_args.push(fresh)
         self.tp_names.set(vid, gp.name)
-        self.env.bind(gp.name, Binding {
-            scheme = mono(fresh, self.allocator),
-            decl = self.node_of(gp.span),
-            is_const = true,
-            is_type_param = true,
-        })
+        self.env.bind(
+            gp.name,
+            Binding {
+                scheme = mono(fresh),
+                decl = self.node_of(gp.span),
+                is_const = true,
+                is_type_param = true,
+            },
+        )
     }
     bind_type_name(self, SELF_NAME, mk_nominal(self, id, self_args), td.span)
     lower_type_params(self, id, anon.generics)
 
-    let variants: List(VariantDef) = list(anon.variants.len, self.allocator)
+    let variants: List(VariantDef) = list(anon.variants.len)
     // Naked-enum tag assignment mirrors C: an explicit `= N` sets the counter, an implicit variant
     // takes the next value. Two variants landing on the same tag - explicitly or through the
     // counter - make
     // the enum's tag→variant mapping ambiguous (E2048).
-    let tags: List(i64) = list(anon.variants.len, self.allocator)
+    let tags: List(i64) = list(anon.variants.len)
     defer tags.deinit()
     // Variant name -> wire tag, kept only when the enum spells its tags out; a standard enum's tag
     // is its declaration index and needs no table.
-    let tag_by_name: Dict(String, i64) = dict(self.allocator)
+    let tag_by_name: Dict(String, i64) = dict()
     let next_tag = 0i64
     let has_explicit_tag = false
     let has_payload = false
     for &v in anon.variants {
-        let payloads: List(Ty) = list(v.payloads.len, self.allocator)
+        let payloads: List(Ty) = list(v.payloads.len)
         for &p in v.payloads {
             payloads.push(self.engine.zonk(resolve_type_expr(self, p)))
         }
@@ -2414,7 +2416,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
         tag_by_name.deinit()
     }
     self.env.pop_scope()
-    let assoc_params: List(VarId) = list(0, self.allocator)
+    let assoc_params: List(VarId) = list(0)
     for &v in variants {
         for p in v.payloads {
             collect_assoc_vars(self, p, &assoc_params)
@@ -2549,7 +2551,7 @@ fn register_context_field(self: &Checker, cd: &ContextDecl) {
         return
     }
     if ty != TY_ERROR and !ty_copyable(self, ty) {
-        let sb = string_builder(64, self.allocator)
+        let sb = string_builder(64)
         defer sb.deinit()
         sb.append($"context field `{cd.name}` must have a copyable type")
         append_copy_blame(self, ty, &sb)
@@ -2560,12 +2562,10 @@ fn register_context_field(self: &Checker, cd: &ContextDecl) {
             sb.to_string(),
         )
     }
-    self.ctx_fields.register(fqn, CtxField {
-        ty = ty,
-        is_pub = cd.is_pub,
-        name = cd.name,
-        span = cd.span,
-    })
+    self.ctx_fields.register(
+        fqn,
+        CtxField { ty = ty, is_pub = cd.is_pub, name = cd.name, span = cd.span },
+    )
 }
 
 fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
@@ -2580,7 +2580,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     self.env.push_scope()
     self.engine.enter_level()
 
-    let params: List(Ty) = list(fd.params.len, self.allocator)
+    let params: List(Ty) = list(fd.params.len)
     let moves = 0usize
     for &p in fd.params {
         self.sugar_ok = true
@@ -2609,13 +2609,13 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     }
     // What the signature's types imply comes first: a type's own bounds solve the associated types
     // a `where` entry may read (`F: fn(I.Item) bool` beside `self: &FilterIter($I, $F)`).
-    let atoms: List(BoundAtom) = list(fd.bounds.len + self.sig_implied.len, self.allocator)
+    let atoms: List(BoundAtom) = list(fd.bounds.len + self.sig_implied.len)
     lower_bounds(self, fd.bounds, &atoms)
     atoms.push_all(self.sig_sugar.as_slice())
     self.sig_open = false
     report_undeclared_projections(self)
     rerecord_sig_refs(self)
-    let implied = replace(&self.sig_implied, list(0, self.allocator))
+    let implied = replace(&self.sig_implied, list(0))
     implied.push_all(atoms.as_slice())
     atoms.deinit()
     atoms = move implied
@@ -2672,7 +2672,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     // materialize the default expressions (`materialize_default_args`); named-argument calls read
     // the same table for the parameter NAMES, so every function records, not just the defaulted
     // ones.
-    let decl_params: List(FunctionParam) = list(fd.params.len, self.allocator)
+    let decl_params: List(FunctionParam) = list(fd.params.len)
     decl_params.push_all(fd.params)
     self.fn_decl_params.set(id, DeclParams { params = move decl_params })
     deprecation_of(fd.directives) match {
@@ -2699,11 +2699,14 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     }
     if quantified_count > 0 {
         // The template shares the declaration the module arena owns.
-        self.templates.set(id, GenericTemplate {
-            decl = fd,
-            module = self.current_module.unwrap(),
-            tps = replace(&self.sig_tps, list(0, self.allocator)),
-        })
+        self.templates.set(
+            id,
+            GenericTemplate {
+                decl = fd,
+                module = self.current_module.unwrap(),
+                tps = replace(&self.sig_tps, list(0)),
+            },
+        )
     }
 }
 
@@ -2893,7 +2896,7 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
     if self.spec_depth > 0 {
         self.check_apps = false
     }
-    let params: List(Ty) = list(fd.params.len, self.allocator)
+    let params: List(Ty) = list(fd.params.len)
     for &p in fd.params {
         self.sugar_ok = true
         let ty = param_ty(self, p)
@@ -2901,12 +2904,10 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
         // The parameter's type on its own node: a cursor on the signature resolves (hover).
         const p_node = self.node_of(p.span)
         self.results.record_type(p_node, ty)
-        self.env.bind(p.name, Binding {
-            scheme = mono(ty, self.allocator),
-            decl = p_node,
-            is_const = false,
-            is_type_param = false,
-        })
+        self.env.bind(
+            p.name,
+            Binding { scheme = mono(ty), decl = p_node, is_const = false, is_type_param = false },
+        )
         params.push(ty)
     }
     let ret = fd.return_type match {
@@ -3054,13 +3055,7 @@ fn directive_type(self: &Checker, ty: Ty, span: SourceSpan) CtValue {
 }
 
 fn directive_info(self: &Checker, ty: Ty) CtTypeInfo {
-    return ct_type_info_of_ty(
-        &self.engine.interner,
-        &self.nominals,
-        ty,
-        self.allocator,
-        Some(&self.engine.rigid),
-    )
+    return ct_type_info_of_ty(&self.engine.interner, &self.nominals, ty, Some(&self.engine.rigid))
 }
 
 // A generic nominal has no type to offer without its arguments, and a bare name carries none.
@@ -3078,7 +3073,7 @@ fn directive_nominal(self: &Checker, name: String) Ty? {
     if generic {
         return null
     }
-    let none: List(Ty) = list(0, self.allocator)
+    let none: List(Ty) = list(0)
     defer none.deinit()
     return Some(self.engine.interner.nominal_of(id, &none))
 }
@@ -3147,9 +3142,9 @@ fn pending_ready(self: &Checker, p: &PendingSpec) bool {
 // for the drain after them (a parked `x.double()` is what pins the lambda parameter `x` that an
 // `apply(f, x)` pick is waiting on).
 fn drain_pending_specs(self: &Checker, report: bool = true) {
-    let queue = replace(&self.pending_specs, list(0, self.allocator))
+    let queue = replace(&self.pending_specs, list(0))
     loop {
-        let deferred: List(PendingSpec) = list(queue.len, self.allocator)
+        let deferred: List(PendingSpec) = list(queue.len)
         let progressed = false
         for p in queue.drain() {
             if pending_ready(self, &p) {
@@ -3245,7 +3240,7 @@ fn prebind_bound_names(self: &Checker, fd: &FunctionDecl) {
     if fd.bounds.len == 0 {
         return
     }
-    let names: List(String) = list(0, self.allocator)
+    let names: List(String) = list(0)
     defer names.deinit()
     bound_generic_names(fd, &names)
     for name in names {
@@ -3516,7 +3511,7 @@ type SigRef = struct {
 }
 
 fn rerecord_sig_refs(self: &Checker) {
-    let refs = replace(&self.sig_refs, list(0, self.allocator))
+    let refs = replace(&self.sig_refs, list(0))
     defer refs.deinit()
     for &r in refs {
         record_type_ref(self, r.span, r.name)
@@ -3568,7 +3563,7 @@ fn lower_with_members(
     span: SourceSpan,
     out: &List(BoundAtom),
 ) {
-    let members: List(Member) = list(0, self.allocator)
+    let members: List(Member) = list(0)
     defer members.deinit()
     lower_bound(self, subject, te, path, "", span, out, &members, 0usize)
     for &m in members {
@@ -3675,7 +3670,7 @@ fn lower_named_bound(
     te.* match {
         Contract(c) => {
             let args = resolve_generic_args(self, n)
-            let mine: List(Member) = list(c.assoc_types.len, self.allocator)
+            let mine: List(Member) = list(c.assoc_types.len)
             lower_contract(self, subject, &c, Some(&args), param, own, span, out, &mine, depth + 1)
             args.deinit()
             apply_assoc_args(self, n, param, span, out, &mine, depth)
@@ -3743,7 +3738,7 @@ fn apply_assoc_args(
             }
             continue
         }
-        let sub: List(Member) = list(0, self.allocator)
+        let sub: List(Member) = list(0)
         lower_bound(
             self,
             m.unwrap(),
@@ -3756,9 +3751,11 @@ fn apply_assoc_args(
             depth + 1,
         )
         for &s in sub {
-            members.push(
-                Member { name = intern_path(self, a.name, s.name), ty = s.ty, decl = s.decl },
-            )
+            members.push(Member {
+                name = intern_path(self, a.name, s.name),
+                ty = s.ty,
+                decl = s.decl,
+            })
         }
         sub.deinit()
     }
@@ -3822,7 +3819,7 @@ fn lower_contract(
         const a = args.unwrap()
         bind_type_name(self, c.generics[i].name, a[i], c.generics[i].span)
     }
-    let pre: List(BoundAtom) = list(0, self.allocator)
+    let pre: List(BoundAtom) = list(0)
     defer pre.deinit()
     for i in 0..c.generics.len {
         const g = &c.generics[i]
@@ -3831,21 +3828,21 @@ fn lower_contract(
             None => {}
         }
     }
-    let own: List(Member) = list(c.assoc_types.len, self.allocator)
+    let own: List(Member) = list(c.assoc_types.len)
     defer own.deinit()
     for &at in c.assoc_types {
         if at.value.is_none() {
             bind_contract_member(self, at.name, self.engine.fresh_var(), at.span, &own)
         }
     }
-    let post: List(BoundAtom) = list(0, self.allocator)
+    let post: List(BoundAtom) = list(0)
     defer post.deinit()
     for &at in c.assoc_types {
         if at.bound.is_none() {
             continue
         }
         const v = member_named(&own, at.name).unwrap()
-        let sub: List(Member) = list(0, self.allocator)
+        let sub: List(Member) = list(0)
         lower_bound(
             self,
             v,
@@ -3889,13 +3886,7 @@ fn lower_contract(
 
 // A contract's associated type, bound inside the contract by its name and as `Self.name`, and
 // recorded for the bound's caller.
-fn bind_contract_member(
-    self: &Checker,
-    name: String,
-    ty: Ty,
-    span: SourceSpan,
-    own: &List(Member),
-) {
+fn bind_contract_member(self: &Checker, name: String, ty: Ty, span: SourceSpan, own: &List(Member)) {
     bind_type_name(self, name, ty, span)
     bind_type_name(self, intern_path(self, SELF_NAME, name), ty, span)
     own.push(Member { name = name, ty = ty, decl = span })
@@ -3912,7 +3903,7 @@ fn lower_scoped(
     out: &List(BoundAtom),
     depth: usize,
 ) {
-    let sub: List(Member) = list(0, self.allocator)
+    let sub: List(Member) = list(0)
     defer sub.deinit()
     lower_bound(self, subject, te, path, "", span, out, &sub, depth)
     for &s in sub {
@@ -3933,12 +3924,15 @@ fn refuse_self_name(self: &Checker, name: String, span: SourceSpan) {
 }
 
 fn bind_type_name(self: &Checker, name: String, ty: Ty, span: SourceSpan) {
-    self.env.bind(name, Binding {
-        scheme = mono(ty, self.allocator),
-        decl = self.node_of(span),
-        is_const = true,
-        is_type_param = true,
-    })
+    self.env.bind(
+        name,
+        Binding {
+            scheme = mono(ty),
+            decl = self.node_of(span),
+            is_const = true,
+            is_type_param = true,
+        },
+    )
 }
 
 // Atoms can mention variables the function type does not - `T` in `I: Iterator($T)` when nothing
@@ -3992,8 +3986,8 @@ fn lower_type_params(self: &Checker, id: NominalId, generics: GenericParam[]) {
         Some(old) => old.deinit()
         None => {}
     }
-    let atoms: List(BoundAtom) = list(0, self.allocator)
-    let members: List(NomMember) = list(0, self.allocator)
+    let atoms: List(BoundAtom) = list(0)
+    let members: List(NomMember) = list(0)
     self.engine.enter_level()
     for i in 0..generics.len {
         const g = &generics[i]
@@ -4014,7 +4008,7 @@ fn lower_type_params(self: &Checker, id: NominalId, generics: GenericParam[]) {
             continue
         }
         const subject = self.engine.specialize(&b.unwrap().scheme)
-        let sub: List(Member) = list(0, self.allocator)
+        let sub: List(Member) = list(0)
         lower_bound(self, subject, g.bound.unwrap(), g.name, "", g.span, &atoms, &sub, 0usize)
         for &s in sub {
             bind_member(self, intern_path(self, g.name, s.name), s.ty, g.span, true, s.decl)
@@ -4028,7 +4022,7 @@ fn lower_type_params(self: &Checker, id: NominalId, generics: GenericParam[]) {
         members.deinit()
         return
     }
-    let assoc: Set(VarId) = set(self.allocator)
+    let assoc: Set(VarId) = set()
     quantify_atoms(self, &atoms, &assoc)
     for &m in members {
         m.ty = self.engine.zonk(m.ty)
@@ -4043,7 +4037,7 @@ fn lower_type_params(self: &Checker, id: NominalId, generics: GenericParam[]) {
 // The associated-type variables a resolved field or payload type names (`I.Item`): the variables
 // deeper than the declaration's own parameters, which `lower_type_params` minted.
 fn collect_assoc_vars(self: &Checker, t: Ty, out: &List(VarId)) {
-    let q: Set(VarId) = set(self.allocator)
+    let q: Set(VarId) = set()
     defer q.deinit()
     free_vars(&self.engine.interner, self.engine.zonk(t), self.engine.level, &q)
     for v in q {
@@ -4067,14 +4061,7 @@ fn member_subst(
     if assoc.len > 0 {
         solve_instance(self, inst)
     }
-    let subst = self.nominals.instance_subst(
-        inst,
-        params,
-        assoc,
-        args,
-        &self.engine.interner,
-        self.allocator,
-    )
+    let subst = self.nominals.instance_subst(inst, params, assoc, args, &self.engine.interner)
     for v in assoc {
         if !subst.contains(v) {
             subst.set(v, open_assoc(self, inst, v, args))
@@ -4140,7 +4127,7 @@ fn solve_instance(self: &Checker, inst: Ty) {
     if tps.len != nn.args.len {
         return
     }
-    let binds: Dict(VarId, Ty) = dict(self.allocator)
+    let binds: Dict(VarId, Ty) = dict()
     defer binds.deinit()
     for i in 0..tps.len {
         binds.set(tps[i], self.engine.interner.child_at(nn.args, i))
@@ -4155,7 +4142,7 @@ fn solve_instance(self: &Checker, inst: Ty) {
     for &a in nb.unwrap().atoms {
         const _v = atom_verdict(self, a, Some(&binds))
     }
-    let solved: List(Ty) = list(assoc.len, self.allocator)
+    let solved: List(Ty) = list(assoc.len)
     for v in assoc {
         const b = binds.get(v)
         const x = if b.is_some() { self.engine.zonk(b.unwrap()) } else { TY_ERROR }
@@ -4214,7 +4201,7 @@ fn apply_nominal_bounds(
     if tps.len != args.len {
         return
     }
-    let binds: Dict(VarId, Ty) = dict(self.allocator)
+    let binds: Dict(VarId, Ty) = dict()
     defer binds.deinit()
     for i in 0..tps.len {
         binds.set(tps[i], args[i])
@@ -4344,7 +4331,7 @@ fn check_app_bounds(
         return
     }
     const a = failed.unwrap()
-    let sb = string_builder(160, self.allocator)
+    let sb = string_builder(160)
     sb.append($"`{name}` requires `{a.param}: {a.bound_name}`")
     append_bound_failure(self, &a, subject, &sb)
     own_report(self, span, E_BOUND_UNSATISFIED, sb.to_string())
@@ -4355,13 +4342,13 @@ fn check_app_bounds(
 fn validate_contract_decl(self: &Checker, td: &TypeDecl) {
     const subject = self.engine.fresh_var()
     const subject_id = ty_node(self, subject) match { NVar(v) => v.id, _ => 0u32 }
-    let scratch: List(BoundAtom) = list(0, self.allocator)
+    let scratch: List(BoundAtom) = list(0)
     defer scratch.deinit()
-    let members: List(Member) = list(0, self.allocator)
+    let members: List(Member) = list(0)
     defer members.deinit()
     td.body.* match {
         Contract(c) => {
-            let args: List(Ty) = list(c.generics.len, self.allocator)
+            let args: List(Ty) = list(c.generics.len)
             for i in 0..c.generics.len {
                 const g = &c.generics[i]
                 refuse_self_name(self, g.name, g.span)
@@ -4475,7 +4462,7 @@ fn require_verdict(self: &Checker, name: String, shape: Ty, span: SourceSpan) Ve
     if f.params.len == 0 {
         return Verdict.Fails
     }
-    let extra: List(Ty) = list(f.params.len, self.allocator)
+    let extra: List(Ty) = list(f.params.len)
     defer extra.deinit()
     for i in 1..f.params.len {
         extra.push(self.engine.interner.child_at(f.params, i))
@@ -4559,7 +4546,7 @@ fn callable_verdict(self: &Checker, callee: Ty, shape: Ty, span: SourceSpan) Ver
     if closure.is_some() {
         return closure_fits(self, closure.unwrap(), &want)
     }
-    let extra: List(Ty) = list(want.params.len, self.allocator)
+    let extra: List(Ty) = list(want.params.len)
     defer extra.deinit()
     for i in 0..want.params.len {
         extra.push(self.engine.interner.child_at(want.params, i))
@@ -4734,7 +4721,7 @@ fn check_call_bounds(self: &Checker, p: &PendingSpec) bool {
     let ok = true
     const formed_reported = has_errors(self)
     // One report per `where` entry: its first failing requirement.
-    let reported: List(SourceSpan) = list(0, self.allocator)
+    let reported: List(SourceSpan) = list(0)
     defer reported.deinit()
     for &a in atoms.unwrap() {
         const diags0 = self.diagnostics.len
@@ -4791,7 +4778,7 @@ fn report_bound(self: &Checker, p: &PendingSpec, a: &BoundAtom) {
     const template = self.templates.get_ref(p.function_id)
     const fname = if template.is_some() { template.unwrap().decl.name } else { "" }
     const subject = atom_inst(self, a.subject, Some(&p.tp_binds))
-    let sb = string_builder(160, self.allocator)
+    let sb = string_builder(160)
     sb.append($"`{fname}` requires `{a.param}: {a.bound_name}`")
     if a.owner.len > 0 {
         sb.append($" (a bound of `{a.owner}`)")
@@ -4831,7 +4818,7 @@ fn shape_for(self: &Checker, a: &BoundAtom, subject: Ty) Ty {
     if sv.is_none() {
         return a.shape
     }
-    let one: Dict(VarId, Ty) = dict(self.allocator)
+    let one: Dict(VarId, Ty) = dict()
     defer one.deinit()
     one.set(sv.unwrap(), subject)
     return self.engine.substitute_shared(a.shape, &one)
@@ -4861,7 +4848,7 @@ fn report_uninferable_spec(self: &Checker, p: &PendingSpec) {
 fn process_pending(self: &Checker, p: &PendingSpec) {
     // The call site's instantiated signature, settled by now. Any var still free means inference
     // never pinned a type argument.
-    let params: List(Ty) = list(p.inst_params.len, self.allocator)
+    let params: List(Ty) = list(p.inst_params.len)
     for i in 0..p.inst_params.len {
         params.push(self.engine.zonk(p.inst_params[i]))
     }
@@ -4880,7 +4867,7 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
     const s0 = self.next_synth
     const l0 = self.next_lambda
 
-    let key = key_for(&self.engine.interner, p.function_id, &params, ret, self.allocator)
+    let key = key_for(&self.engine.interner, p.function_id, &params, ret)
     let existing = self.specs.lookup(key.view)
     if existing.is_none() {
         // A provisional key that misses can still name a carried entry - one whose stored key was
@@ -4961,7 +4948,7 @@ fn resolve_against(
     if !alive {
         let ok = pick_concrete(self, p, &params, ret)
         if ok {
-            let trial: Set(SpecId) = set(self.allocator)
+            let trial: Set(SpecId) = set()
             const pos = StreamPos {
                 v = self.engine.var_counter,
                 s = self.next_synth,
@@ -4987,7 +4974,7 @@ fn pick_concrete(self: &Checker, p: &PendingSpec, params: &List(Ty), ret: Ty) bo
     if !sig_concrete(self, params, ret) {
         return false
     }
-    let q: Set(VarId) = set(self.allocator)
+    let q: Set(VarId) = set()
     for e in p.tp_binds {
         free_vars(&self.engine.interner, self.engine.zonk(e.value), 0u32, &q)
     }
@@ -5093,7 +5080,7 @@ fn resolve_anon_literals(self: &Checker) {
         // twin.
         let unpinned = self.engine.is_var(z)
         if unpinned {
-            let fields: List(Field) = list(pa.fields.len, self.allocator)
+            let fields: List(Field) = list(pa.fields.len)
             for &rec in pa.fields {
                 fields.push(Field {
                     name = rec.name,
@@ -5107,7 +5094,7 @@ fn resolve_anon_literals(self: &Checker) {
             report_unify(self, &o, E_TYPE_MISMATCH, span)
             continue
         }
-        let present: List(String) = list(pa.fields.len, self.allocator)
+        let present: List(String) = list(pa.fields.len)
         defer present.deinit()
         for &rec in pa.fields {
             present.push(rec.name)
@@ -5169,7 +5156,7 @@ fn validate_literals(self: &Checker, from: usize, to: usize) {
             // diagnostic, and `never` absorbs any type by definition.
             _ => {
                 if z != TY_ERROR and z != TY_NEVER {
-                    let sb = string_builder(64, self.allocator)
+                    let sb = string_builder(64)
                     sb.append("type mismatch: expected one of the numeric types, got `")
                     format_with_names(&self.engine.interner, z, &sb, Some(&self.nominals))
                     sb.append($"` for literal `{pl.text}`")
@@ -5310,7 +5297,7 @@ fn parse_int_magnitude(text: String) u64? {
 
 // No free type variable anywhere in the instantiated signature.
 fn sig_concrete(self: &Checker, params: &List(Ty), ret: Ty) bool {
-    let q: Set(VarId) = set(self.allocator)
+    let q: Set(VarId) = set()
     for i in 0..params.len {
         free_vars(&self.engine.interner, params[i], 0u32, &q)
     }
@@ -5338,12 +5325,12 @@ fn check_template_rigid(self: &Checker, fd: &FunctionDecl) {
 
     const diags0 = self.diagnostics.len
     const calls0 = self.pending_calls.len
-    let saved_results = replace(&self.results, inference_results(self.allocator))
-    let saved_pending = replace(&self.pending_specs, list(0, self.allocator))
-    let saved_literals = replace(&self.pending_literals, list(0, self.allocator))
-    let saved_anons = replace(&self.pending_anons, list(0, self.allocator))
-    let saved_members = replace(&self.pending_members, list(0, self.allocator))
-    let saved_fn_names = replace(&self.pending_fn_names, list(0, self.allocator))
+    let saved_results = replace(&self.results, inference_results())
+    let saved_pending = replace(&self.pending_specs, list(0))
+    let saved_literals = replace(&self.pending_literals, list(0))
+    let saved_anons = replace(&self.pending_anons, list(0))
+    let saved_members = replace(&self.pending_members, list(0))
+    let saved_fn_names = replace(&self.pending_fn_names, list(0))
 
     self.env.push_scope()
     self.rigid_fid = fid.unwrap()
@@ -5419,14 +5406,12 @@ pub fn template_type_at(self: &Checker, fid: i32, offset: usize) TemplateHit? {
                 continue
             }
             if best.is_none() or f.span.length < best_len {
-                best = Some(
-                    TemplateHit {
-                        span = f.span,
-                        ty = f.ty,
-                        names = &tt.names,
-                        bounds = &tt.bounds,
-                    },
-                )
+                best = Some(TemplateHit {
+                    span = f.span,
+                    ty = f.ty,
+                    names = &tt.names,
+                    bounds = &tt.bounds,
+                })
                 best_len = f.span.length
             }
         }
@@ -5444,12 +5429,11 @@ fn reset_template_types(self: &Checker, path: String) {
         return
     }
     const idx = self.template_type_keys.len
-    self.template_type_keys.push(from_view(path, self.allocator))
-    self.template_types.set(self.template_type_keys[idx].view, TemplateTypes {
-        facts = list(0, self.allocator),
-        names = dict(self.allocator),
-        bounds = dict(self.allocator),
-    })
+    self.template_type_keys.push(from_view(path))
+    self.template_types.set(
+        self.template_type_keys[idx].view,
+        TemplateTypes { facts = list(0), names = dict(), bounds = dict() },
+    )
 }
 
 // Records what the rigid check of `fd` typed, while its scratch tables and its type parameters'
@@ -5484,7 +5468,7 @@ fn keep_template_types(self: &Checker, fd: &FunctionDecl, fid: u32) {
         if v.is_none() {
             continue
         }
-        let sb = string_builder(32, self.allocator)
+        let sb = string_builder(32)
         if !render_alias_body(b.bound, &sb) {
             sb.deinit()
             continue
@@ -5564,7 +5548,7 @@ fn rigid_callable(self: &Checker, t: Ty) bool {
 // path its bounds pinned (`Item = List(T)`) binds to the pinned type over those variables.
 fn bind_rigid_params(self: &Checker, fid: u32) {
     const tps = &self.templates.get_ref(fid).unwrap().tps
-    let rigid: Dict(VarId, Ty) = dict(self.allocator)
+    let rigid: Dict(VarId, Ty) = dict()
     defer rigid.deinit()
     for &tp in tps {
         const vid = ty_node(self, self.engine.resolve(tp.ty)) match {
@@ -5586,10 +5570,7 @@ fn bind_rigid_params(self: &Checker, fid: u32) {
         self.env.bind(
             tp.name,
             Binding {
-                scheme = mono(
-                    self.engine.substitute_shared(self.engine.zonk(tp.ty), &rigid),
-                    self.allocator,
-                ),
+                scheme = mono(self.engine.substitute_shared(self.engine.zonk(tp.ty), &rigid)),
                 decl = tp.decl,
                 is_const = true,
                 is_type_param = true,
@@ -5641,7 +5622,7 @@ fn drop_pending_specs(specs: move List(PendingSpec)) {
 // Drops the diagnostics past `from` that an instantiation could contradict, keeping the ownership
 // pass's: those hold whatever `T` turns out to be.
 fn keep_ownership_diags(self: &Checker, from: usize) {
-    let tail: List(Diagnostic) = list(self.diagnostics.len - from, self.allocator)
+    let tail: List(Diagnostic) = list(self.diagnostics.len - from)
     while self.diagnostics.len > from {
         tail.push(self.diagnostics.pop().unwrap())
     }
@@ -5695,11 +5676,10 @@ fn instantiate(
         template.decl,
         params,
         ret,
-        inference_results(self.allocator),
-        self.allocator,
+        inference_results(),
     )
     let sid = 0 as SpecId
-    let hints: List(SpecDep) = list(0, self.allocator)
+    let hints: List(SpecDep) = list(0)
     at match {
         Some(existing) => {
             install(&hints, self.specs.take_deps(existing))
@@ -5718,7 +5698,7 @@ fn instantiate(
         child_vars = 0u32,
         child_synth = 0u32,
         child_lambda = 0u32,
-        deps = list(0, self.allocator),
+        deps = list(0),
         hints = move hints,
         diags0 = self.diagnostics.len,
         calls0 = self.pending_calls.len,
@@ -5728,11 +5708,11 @@ fn instantiate(
     // the caller chain - see `current_visibility`), a fresh overlay for the result tables, and a
     // fresh pending list so nested generic picks drain inside this frame, while the overlay is
     // still the active table set.
-    let saved_results = replace(&self.results, inference_results(self.allocator))
-    let saved_pending = replace(&self.pending_specs, list(0, self.allocator))
-    let saved_anons = replace(&self.pending_anons, list(0, self.allocator))
-    let saved_members = replace(&self.pending_members, list(0, self.allocator))
-    let saved_fn_names = replace(&self.pending_fn_names, list(0, self.allocator))
+    let saved_results = replace(&self.results, inference_results())
+    let saved_pending = replace(&self.pending_specs, list(0))
+    let saved_anons = replace(&self.pending_anons, list(0))
+    let saved_members = replace(&self.pending_members, list(0))
+    let saved_fn_names = replace(&self.pending_fn_names, list(0))
     let saved_module = self.current_module
     self.current_module = Some(template.module)
     self.spec_callers.push(p.caller_module)
@@ -5744,12 +5724,15 @@ fn instantiate(
     self.env.push_scope()
     for i in 0..template.tps.len {
         const conc = atom_inst(self, template.tps[i].ty, Some(&p.tp_binds))
-        self.env.bind(template.tps[i].name, Binding {
-            scheme = mono(conc, self.allocator),
-            decl = template.tps[i].decl,
-            is_const = true,
-            is_type_param = true,
-        })
+        self.env.bind(
+            template.tps[i].name,
+            Binding {
+                scheme = mono(conc),
+                decl = template.tps[i].decl,
+                is_const = true,
+                is_type_param = true,
+            },
+        )
     }
 
     const saved_skip = self.skip_ownership
@@ -5796,7 +5779,7 @@ fn instantiate(
     // The shared final zonk only walks the program tables; the overlay zonks here, while the engine
     // is live. Lambda records checked inside this instantiation zonk with it (the global closure
     // table waits for `check_all`'s final sweep - the engine outlives every overlay).
-    let zonked: Dict(NodeId, Ty) = dict(self.results.node_types.len(), self.allocator)
+    let zonked: Dict(NodeId, Ty) = dict(self.results.node_types.len())
     for entry in self.results.node_types {
         zonked.set(entry.key, self.engine.zonk(entry.value))
     }
@@ -5817,12 +5800,12 @@ fn instantiate(
     // final shape (spec symbols mangle from it) and re-key so identical final signatures dedup. A
     // duplicate final key keeps its own entry; emission dedups by symbol.
     let sp = self.specs.get(sid)
-    let fparams: List(Ty) = list(sp.concrete_params.len, self.allocator)
+    let fparams: List(Ty) = list(sp.concrete_params.len)
     for i in 0..sp.concrete_params.len {
         fparams.push(self.engine.zonk(sp.concrete_params[i]))
     }
     let fret = self.engine.zonk(sp.concrete_return)
-    let fkey = key_for(&self.engine.interner, p.function_id, &fparams, fret, self.allocator)
+    let fkey = key_for(&self.engine.interner, p.function_id, &fparams, fret)
     self.specs.set_signature(sid, fparams, fret)
     let _rk = self.specs.rekey(sid, fkey)
 
@@ -5889,7 +5872,7 @@ fn check_expr_kind(self: &Checker, expr: &Expr) Ty {
 // The compiler-provided `Context` type, or null when `core.runtime` is not in the source set.
 fn context_ty(self: &Checker) Ty? {
     return self.nominals.by_fqn.get(FQN_CONTEXT) match {
-        Some(id) => Some(mk_nominal(self, id, list(0, self.allocator)))
+        Some(id) => Some(mk_nominal(self, id, list(0)))
         None => null
     }
 }
@@ -5959,7 +5942,7 @@ fn resolve_context_field(self: &Checker, name: String, span: SourceSpan) CtxHit?
 
 // Record the field a use resolved to, as a result-owned FQN lowering and the LSP read.
 fn record_context_target(self: &Checker, span: SourceSpan, fqn: String) {
-    const stable = self.results.add_synth_string(from_view(fqn, self.allocator))
+    const stable = self.results.add_synth_string(from_view(fqn))
     self.results.record_target(self.node_of(span), ResolvedTarget.RtContextField(stable))
 }
 
@@ -5978,7 +5961,7 @@ fn context_member(self: &Checker, ma: &MemberAccessExpr) Ty {
 // typed by its declaration, and the construct's value is the body's.
 fn check_context_bind(self: &Checker, cb: &ContextBindExpr) Ty {
     const cty = context_ty(self)
-    let named: List(String) = list(cb.args.len, self.allocator)
+    let named: List(String) = list(cb.args.len)
     defer named.deinit()
     for i in 0..cb.args.len {
         cb.args[i] match {
@@ -6117,7 +6100,7 @@ fn parse_decimal(s: String) usize? {
 // The deferred deinit is a no-op on the happy path (`to_string` transfers ownership and zeroes the
 // builder) and frees the buffer when a hole's expression escapes early (`$"{f()?}"`).
 //
-// `$(…)` constructor args map onto `string_builder(capacity, allocator)`
+// `$(…)` constructor args map onto `string_builder(capacity)`
 // at FULL arity - the defaults are spelled out as `0` / `null`, so the desugared call never leans
 // on defaulted-argument materialization, which lowering does not do yet. A lone `&alloc` argument
 // routes to the allocator slot wrapped in `Some(...)` (no implicit T -> Option(T)).
@@ -6133,7 +6116,7 @@ fn check_interp_owned(self: &Checker, interp: &InterpolatedStringExpr, given: Ex
     // The synthesized AST stores the name as a view; the buffer parks with the result tables, which
     // the desugar shares a lifetime with.
     const name = self.results.add_synth_string(fresh_builder_name(self))
-    let stmts: List(Stmt) = list(interp.parts.len + 1, self.allocator)
+    let stmts: List(Stmt) = list(interp.parts.len + 1)
 
     const ctor = synth_free_call(self, "string_builder", builder_ctor_args(self, given))
     const let_span = synth_span(self)
@@ -6145,20 +6128,23 @@ fn check_interp_owned(self: &Checker, interp: &InterpolatedStringExpr, given: Ex
         type_annotation = null,
         init = Some(self.synth_box(ctor)),
     }))
-    let no_args: List(CallArgument) = list(0, self.allocator)
+    let no_args: List(CallArgument) = list(0)
     stmts.push(Stmt.Defer(DeferStmt {
         span = synth_span(self),
         expr = self.synth_box(synth_method_call(self, name, "deinit", no_args)),
     }))
     push_append_stmts(self, &stmts, name, interp)
 
-    let empty_args: List(CallArgument) = list(0, self.allocator)
+    let empty_args: List(CallArgument) = list(0)
     const done = synth_method_call(self, name, "to_string", empty_args)
-    let block = box(self.allocator, BlockExpr {
-        span = synth_span(self),
-        stmts = frozen(stmts),
-        trailing = Some(synth_box(self, done)),
-    })
+    let block = box(
+        context.allocator,
+        BlockExpr {
+            span = synth_span(self),
+            stmts = frozen(stmts),
+            trailing = Some(synth_box(self, done)),
+        },
+    )
     const ty = check_block(self, block)
     self.results.record_desugar(self.node_of(interp.span), block)
     return ty
@@ -6184,13 +6170,12 @@ fn check_interp_into(self: &Checker, interp: &InterpolatedStringExpr, target: &E
         return TY_VOID
     }
 
-    let stmts: List(Stmt) = list(interp.parts.len, self.allocator)
+    let stmts: List(Stmt) = list(interp.parts.len)
     push_append_stmts(self, &stmts, tname, interp)
-    let block = box(self.allocator, BlockExpr {
-        span = synth_span(self),
-        stmts = frozen(stmts),
-        trailing = null,
-    })
+    let block = box(
+        context.allocator,
+        BlockExpr { span = synth_span(self), stmts = frozen(stmts), trailing = null },
+    )
     const ty = check_block(self, block)
     self.results.record_desugar(self.node_of(interp.span), block)
     return ty
@@ -6208,7 +6193,7 @@ fn push_append_stmts(
         interp.parts[i] match {
             Text(t) => {
                 if t.len > 0 {
-                    let args: List(CallArgument) = list(1, self.allocator)
+                    let args: List(CallArgument) = list(1)
                     const lit = synth_string_lit(self, segment_literal_text(self, t))
                     args.push(CallArgument.Positional(synth_box(self, lit)))
                     push_expr_stmt(self, stmts, synth_method_call(self, name, "append", args))
@@ -6225,7 +6210,7 @@ fn push_append_stmts(
                 if hole_is_place(h.expr) {
                     push_expr_stmt(self, stmts, synth_hole_format(self, name, h.expr, spec_lit))
                 } else {
-                    let args: List(CallArgument) = list(2, self.allocator)
+                    let args: List(CallArgument) = list(2)
                     args.push(CallArgument.Positional(h.expr))
                     args.push(CallArgument.Positional(synth_box(self, spec_lit)))
                     push_expr_stmt(self, stmts, synth_method_call(self, name, "append", args))
@@ -6249,27 +6234,33 @@ fn hole_is_place(e: &Expr) bool {
 
 // `place.format(NAME.writer(), spec)` - the read form of an append.
 fn synth_hole_format(self: &Checker, name: String, place: &Expr, spec_lit: move Expr) Expr {
-    let wargs: List(CallArgument) = list(0, self.allocator)
-    let args: List(CallArgument) = list(2, self.allocator)
-    args.push(
-        CallArgument.Positional(synth_box(self, synth_method_call(self, name, "writer", wargs))),
-    )
+    let wargs: List(CallArgument) = list(0)
+    let args: List(CallArgument) = list(2)
+    args.push(CallArgument.Positional(synth_box(
+        self,
+        synth_method_call(self, name, "writer", wargs),
+    )))
     args.push(CallArgument.Positional(synth_box(self, spec_lit)))
-    const ma = Expr.MemberAccess(
-        MemberAccessExpr { span = synth_span(self), receiver = place, member = "format" },
-    )
-    return Expr.Call(
-        CallExpr { span = synth_span(self), callee = synth_box(self, ma), args = frozen(args) },
-    )
+    const ma = Expr.MemberAccess(MemberAccessExpr {
+        span = synth_span(self),
+        receiver = place,
+        member = "format",
+    })
+    return Expr.Call(CallExpr {
+        span = synth_span(self),
+        callee = synth_box(self, ma),
+        args = frozen(args),
+    })
 }
 
 fn push_expr_stmt(self: &Checker, stmts: &List(Stmt), e: move Expr) {
-    stmts.push(
-        Stmt.Expression(ExpressionStmt { span = synth_span(self), expr = self.synth_box(e) }),
-    )
+    stmts.push(Stmt.Expression(ExpressionStmt {
+        span = synth_span(self),
+        expr = self.synth_box(e),
+    }))
 }
 
-// `$(…)` args onto `string_builder(capacity, allocator)`, full arity.
+// `$(…)` args onto `string_builder(capacity)`, full arity.
 fn builder_ctor_args(self: &Checker, given: Expr[]) List(CallArgument) {
     // The arguments stay the interpolation's: each is shared into the synthesized call as the arena
     // node it already is.
@@ -6288,7 +6279,7 @@ fn builder_ctor_args(self: &Checker, given: Expr[]) List(CallArgument) {
         alloc_arg = Some(&given[1])
     }
 
-    let out: List(CallArgument) = list(2, self.allocator)
+    let out: List(CallArgument) = list(2)
     const cap_e = cap match {
         Some(e) => e
         None => synth_box(self, synth_int_lit(self, "0"))
@@ -6329,7 +6320,7 @@ fn synth_span(self: &Checker) SourceSpan {
 // Synthesized nodes live as long as the check result - allocated on the global allocator and
 // deliberately leaked with it.
 fn synth_box(self: &Checker, e: move Expr) &Expr {
-    return box(self.allocator, e)
+    return box(context.allocator, e)
 }
 
 fn synth_ident(self: &Checker, name: String) Expr {
@@ -6368,9 +6359,11 @@ fn synth_method_call(
         receiver = synth_box(self, synth_ident(self, recv_name)),
         member = method,
     })
-    return Expr.Call(
-        CallExpr { span = synth_span(self), callee = synth_box(self, ma), args = frozen(args) },
-    )
+    return Expr.Call(CallExpr {
+        span = synth_span(self),
+        callee = synth_box(self, ma),
+        args = frozen(args),
+    })
 }
 
 fn synth_free_call(self: &Checker, name: String, args: move List(CallArgument)) Expr {
@@ -6384,7 +6377,7 @@ fn synth_free_call(self: &Checker, name: String, args: move List(CallArgument)) 
 fn fresh_builder_name(self: &Checker) OwnedString {
     const n = self.next_synth
     self.next_synth = n + 1
-    let sb = string_builder(20, self.allocator)
+    let sb = string_builder(20)
     defer sb.deinit()
     sb.append("__interp_sb_")
     sb.append(n)
@@ -6405,7 +6398,7 @@ fn segment_literal_text(self: &Checker, raw: String) String {
     if !has_brace {
         return raw
     }
-    const decoded_opt = decode_interp_segment(raw, self.allocator)
+    const decoded_opt = decode_interp_segment(raw)
     // Malformed escape - the lexer already reported it; keep the raw text.
     if decoded_opt.is_none() {
         return raw
@@ -6426,9 +6419,9 @@ fn escape_backslashes(self: &Checker, s: String) OwnedString {
         }
     }
     if !has {
-        return from_view(s, self.allocator)
+        return from_view(s)
     }
-    let sb = string_builder(s.len + 4, self.allocator)
+    let sb = string_builder(s.len + 4)
     defer sb.deinit()
     for i in 0..s.len {
         if s[i] == '\\' {
@@ -6496,7 +6489,7 @@ fn check_match_coverage(self: &Checker, m: &MatchExpr, scrutinee: Ty) {
     }
     let e = ed.unwrap()
 
-    let covered: List(String) = list(e.variants.len, self.allocator)
+    let covered: List(String) = list(e.variants.len)
     defer covered.deinit()
     for &arm in m.arms {
         if arm.guard.is_some() {
@@ -6507,7 +6500,7 @@ fn check_match_coverage(self: &Checker, m: &MatchExpr, scrutinee: Ty) {
         }
         collect_covered(self, arm.pattern, e, &covered)
     }
-    let missing: List(String) = list(0, self.allocator)
+    let missing: List(String) = list(0)
     defer missing.deinit()
     for i in 0..e.variants.len {
         if !covered.contains(e.variants[i].name) {
@@ -6616,15 +6609,18 @@ fn check_pattern(self: &Checker, pat: &Pattern, expected: Ty, is_sub: bool = fal
                 )
                 if pick.is_some() {
                     let p = pick.unwrap()
-                    self.results.record_operator(self.node_of(l.span), ResolvedOperator {
-                        function_id = p.id,
-                        negate_result = false,
-                        cmp_derived_op = null,
-                        is_ref_form = false,
-                        spec_id = null,
-                        lhs_hops = 0u32,
-                        rhs_hops = 0u32,
-                    })
+                    self.results.record_operator(
+                        self.node_of(l.span),
+                        ResolvedOperator {
+                            function_id = p.id,
+                            negate_result = false,
+                            cmp_derived_op = null,
+                            is_ref_form = false,
+                            spec_id = null,
+                            lhs_hops = 0u32,
+                            rhs_hops = 0u32,
+                        },
+                    )
                     note_pending(self, l.span, true, &p)
                 }
             }
@@ -6844,12 +6840,15 @@ fn nullary_variant_index(self: &Checker, id: NominalId, name: String) u32? {
 }
 
 fn bind_pattern_var(self: &Checker, name: String, ty: Ty, span: SourceSpan) {
-    self.env.bind(name, Binding {
-        scheme = mono(ty, self.allocator),
-        decl = self.node_of(span),
-        is_const = true,
-        is_type_param = false,
-    })
+    self.env.bind(
+        name,
+        Binding {
+            scheme = mono(ty),
+            decl = self.node_of(span),
+            is_const = true,
+            is_type_param = false,
+        },
+    )
     // Lowering reads the binding's type off the pattern node.
     self.results.record_type(self.node_of(span), ty)
 }
@@ -7004,7 +7003,7 @@ fn try_set_index_assignment(self: &Checker, a: &AssignmentExpr, ix: &IndexExpr) 
     // A declared ref-form place wins over op_set_index - reached the same way `check_index` will
     // reach it (through `op_deref` included), so the key's type commits here and the place path
     // re-checks a settled index rather than minting a second literal var.
-    let key_only: List(Ty) = list(1, self.allocator)
+    let key_only: List(Ty) = list(1)
     key_only.push(key)
     const has_place = receiver_pick(self, "op_index_ref", base, &key_only, ix.span, ix.span)
     key_only.deinit()
@@ -7015,7 +7014,7 @@ fn try_set_index_assignment(self: &Checker, a: &AssignmentExpr, ix: &IndexExpr) 
     const value = check_expr(self, a.rhs)
     // Resolved as the method call it desugars to - `&Self`, value self, or through `op_deref` -
     // with the hop chain recorded on the assignment node beside the operator.
-    let extra: List(Ty) = list(2, self.allocator)
+    let extra: List(Ty) = list(2)
     extra.push(key)
     extra.push(value)
     let pick = receiver_pick(self, "op_set_index", base, &extra, a.span, a.span)
@@ -7024,15 +7023,18 @@ fn try_set_index_assignment(self: &Checker, a: &AssignmentExpr, ix: &IndexExpr) 
         return false
     }
     const p = pick.unwrap()
-    self.results.record_operator(self.node_of(a.span), ResolvedOperator {
-        function_id = p.id,
-        negate_result = false,
-        cmp_derived_op = null,
-        is_ref_form = true,
-        spec_id = null,
-        lhs_hops = 0u32,
-        rhs_hops = 0u32,
-    })
+    self.results.record_operator(
+        self.node_of(a.span),
+        ResolvedOperator {
+            function_id = p.id,
+            negate_result = false,
+            cmp_derived_op = null,
+            is_ref_form = true,
+            spec_id = null,
+            lhs_hops = 0u32,
+            rhs_hops = 0u32,
+        },
+    )
     note_pending(self, a.span, true, &p)
     return true
 }
@@ -7078,7 +7080,7 @@ fn check_move(self: &Checker, m: &MoveExpr) Ty {
 // appended when `ty` is copyable. A type several hops from any `owned` still refuses to be copied,
 // and the chain is the only thing in the message that says why.
 fn append_copy_blame(self: &Checker, ty: Ty, sb: &StringBuilder) {
-    let hops: List(CopyBlame) = list(2, self.allocator)
+    let hops: List(CopyBlame) = list(2)
     defer hops.deinit()
     solve_within(self, ty)
     self.engine.copy_blame(ty, &hops)
@@ -7297,7 +7299,7 @@ fn check_null_prop(self: &Checker, np: &NullPropagationExpr) Ty {
     if id.is_none() {
         return TY_ERROR
     }
-    let args: List(Ty) = list(1, self.allocator)
+    let args: List(Ty) = list(1)
     args.push(f)
     return mk_nominal(self, id.unwrap(), args)
 }
@@ -7329,7 +7331,7 @@ fn check_try(self: &Checker, t: &TryExpr) Ty {
         return self.engine.fresh_var()
     }
 
-    let args: List(Ty) = list(1, self.allocator)
+    let args: List(Ty) = list(1)
     args.push(operand)
     let pick = operator_pick(self, "op_try", &args, t.span)
     args.deinit()
@@ -7370,15 +7372,18 @@ fn check_try(self: &Checker, t: &TryExpr) Ty {
         t.span,
     )
 
-    self.results.record_operator(self.node_of(t.span), ResolvedOperator {
-        function_id = p.id,
-        negate_result = false,
-        cmp_derived_op = null,
-        is_ref_form = false,
-        spec_id = null,
-        lhs_hops = 0u32,
-        rhs_hops = 0u32,
-    })
+    self.results.record_operator(
+        self.node_of(t.span),
+        ResolvedOperator {
+            function_id = p.id,
+            negate_result = false,
+            cmp_derived_op = null,
+            is_ref_form = false,
+            spec_id = null,
+            lhs_hops = 0u32,
+            rhs_hops = 0u32,
+        },
+    )
     note_pending(self, t.span, true, &p)
     return self.engine.interner.child_at(n.args, 0)
 }
@@ -7412,7 +7417,7 @@ fn check_deref(self: &Checker, d: &DereferenceExpr) Ty {
 }
 
 fn user_deref(self: &Checker, t: Ty, span: SourceSpan) Ty {
-    let args: List(Ty) = list(1, self.allocator)
+    let args: List(Ty) = list(1)
     args.push(self.engine.mk_ref(t))
     let pick = operator_pick(self, "op_deref", &args, span)
     args.deinit()
@@ -7424,15 +7429,18 @@ fn user_deref(self: &Checker, t: Ty, span: SourceSpan) Ty {
         NRef(i) => i
         _ => return self.engine.fresh_var()
     }
-    self.results.record_operator(self.node_of(span), ResolvedOperator {
-        function_id = p.id,
-        negate_result = false,
-        cmp_derived_op = null,
-        is_ref_form = true,
-        spec_id = null,
-        lhs_hops = 0u32,
-        rhs_hops = 0u32,
-    })
+    self.results.record_operator(
+        self.node_of(span),
+        ResolvedOperator {
+            function_id = p.id,
+            negate_result = false,
+            cmp_derived_op = null,
+            is_ref_form = true,
+            spec_id = null,
+            lhs_hops = 0u32,
+            rhs_hops = 0u32,
+        },
+    )
     note_pending(self, span, true, &p)
     return inner
 }
@@ -7465,7 +7473,7 @@ fn mk_range(self: &Checker, elem: Ty) Ty {
     if id.is_none() {
         return TY_ERROR
     }
-    let args: List(Ty) = list(1, self.allocator)
+    let args: List(Ty) = list(1)
     args.push(elem)
     return mk_nominal(self, id.unwrap(), args)
 }
@@ -7475,7 +7483,7 @@ fn mk_slice_ty(self: &Checker, elem: Ty) Ty {
     if id.is_none() {
         return TY_ERROR
     }
-    let args: List(Ty) = list(1, self.allocator)
+    let args: List(Ty) = list(1)
     args.push(elem)
     return mk_nominal(self, id.unwrap(), args)
 }
@@ -7561,15 +7569,18 @@ fn check_index(self: &Checker, idx: &IndexExpr) Ty {
             let pick = operator_pick_2(self, "op_index", rbase, rindex, idx.span)
             if pick.is_some() {
                 let p = pick.unwrap()
-                self.results.record_operator(self.node_of(idx.span), ResolvedOperator {
-                    function_id = p.id,
-                    negate_result = false,
-                    cmp_derived_op = null,
-                    is_ref_form = false,
-                    spec_id = null,
-                    lhs_hops = 0u32,
-                    rhs_hops = 0u32,
-                })
+                self.results.record_operator(
+                    self.node_of(idx.span),
+                    ResolvedOperator {
+                        function_id = p.id,
+                        negate_result = false,
+                        cmp_derived_op = null,
+                        is_ref_form = false,
+                        spec_id = null,
+                        lhs_hops = 0u32,
+                        rhs_hops = 0u32,
+                    },
+                )
                 note_pending(self, idx.span, true, &p)
                 return p.ret
             }
@@ -7642,7 +7653,7 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty:
 
     // Each form is resolved as the method call it desugars to: the base as written, as `&Self` or
     // the pointee, or peeled through `op_deref` (a `List` indexing its storage), one ranked set.
-    let extra: List(Ty) = list(1, self.allocator)
+    let extra: List(Ty) = list(1)
     defer extra.deinit()
     extra.push(index_ty)
 
@@ -7667,15 +7678,18 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty:
             NRef(i) => i
             _ => self.engine.fresh_var()
         }
-        self.results.record_operator(self.node_of(idx.span), ResolvedOperator {
-            function_id = p.id,
-            negate_result = false,
-            cmp_derived_op = null,
-            is_ref_form = true,
-            spec_id = null,
-            lhs_hops = 0u32,
-            rhs_hops = 0u32,
-        })
+        self.results.record_operator(
+            self.node_of(idx.span),
+            ResolvedOperator {
+                function_id = p.id,
+                negate_result = false,
+                cmp_derived_op = null,
+                is_ref_form = true,
+                spec_id = null,
+                lhs_hops = 0u32,
+                rhs_hops = 0u32,
+            },
+        )
         note_pending(self, idx.span, true, &p)
         record_open_range_len(self, idx, rbase, p.hops)
         return inner
@@ -7684,15 +7698,18 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty:
     let value_pick = receiver_pick(self, "op_index", base_ty, &extra, idx.span, idx.span)
     if value_pick.is_some() {
         let p = value_pick.unwrap()
-        self.results.record_operator(self.node_of(idx.span), ResolvedOperator {
-            function_id = p.id,
-            negate_result = false,
-            cmp_derived_op = null,
-            is_ref_form = false,
-            spec_id = null,
-            lhs_hops = 0u32,
-            rhs_hops = 0u32,
-        })
+        self.results.record_operator(
+            self.node_of(idx.span),
+            ResolvedOperator {
+                function_id = p.id,
+                negate_result = false,
+                cmp_derived_op = null,
+                is_ref_form = false,
+                spec_id = null,
+                lhs_hops = 0u32,
+                rhs_hops = 0u32,
+            },
+        )
         note_pending(self, idx.span, true, &p)
         record_open_range_len(self, idx, rbase, p.hops)
         return p.ret
@@ -7718,7 +7735,7 @@ fn index_operator(
     index_ty: Ty,
     span: SourceSpan,
 ) OverloadPick? {
-    let args: List(Ty) = list(2, self.allocator)
+    let args: List(Ty) = list(2)
     args.push(self_ty)
     args.push(index_ty)
     let pick = operator_pick(self, name, &args, span)
@@ -7953,7 +7970,7 @@ fn check_tuple_lit(self: &Checker, t: &TupleLiteralExpr) Ty {
     if t.elements.len == 0 {
         return TY_VOID
     }
-    let elems = list(t.elements.len, self.allocator)
+    let elems = list(t.elements.len)
     for &e in t.elements {
         elems.push(check_expr(self, e))
     }
@@ -8029,7 +8046,7 @@ fn string_type(self: &Checker) Ty {
     if id.is_none() {
         return TY_ERROR
     }
-    let empty: List(Ty) = list(0, self.allocator)
+    let empty: List(Ty) = list(0)
     return mk_nominal(self, id.unwrap(), empty)
 }
 
@@ -8038,7 +8055,7 @@ fn option_of_fresh(self: &Checker) Ty {
     if id.is_none() {
         return TY_ERROR
     }
-    let args: List(Ty) = list(1, self.allocator)
+    let args: List(Ty) = list(1)
     args.push(self.engine.fresh_var())
     return mk_nominal(self, id.unwrap(), args)
 }
@@ -8072,7 +8089,7 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
     let chit = self.constants.lookup_entry(id.name, &vis)
     if chit.is_some() {
         let h = chit.unwrap()
-        let stable = self.results.add_synth_string(from_view(h.fqn, self.allocator))
+        let stable = self.results.add_synth_string(from_view(h.fqn))
         self.results.record_target(self.node_of(id.span), ResolvedTarget.RtConst(stable))
         return h.value
     }
@@ -8151,7 +8168,7 @@ fn reified_type_of(self: &Checker, t: Ty) Ty {
     if id.is_none() {
         return t
     }
-    let args: List(Ty) = list(1, self.allocator)
+    let args: List(Ty) = list(1)
     args.push(t)
     return mk_nominal(self, id.unwrap(), args)
 }
@@ -8168,7 +8185,7 @@ fn nominal_with_fresh_args(self: &Checker, id: NominalId) Ty {
         NomStruct(s) => s.type_params.len
         NomEnum(e) => e.type_params.len
     }
-    let args = list(n, self.allocator)
+    let args = list(n)
     for k in 0..n { args.push(self.engine.fresh_var()) }
     return mk_nominal(self, id, args)
 }
@@ -8218,7 +8235,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     // anything below it is a capture.
     self.env.push_scope()
     let boundary = self.env.depth() - 1
-    let caps: List(CaptureRec) = list(0, self.allocator)
+    let caps: List(CaptureRec) = list(0)
     self.lambda_frames.push(LambdaFrame {
         boundary = boundary,
         lam_span = lam.span,
@@ -8228,7 +8245,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     // Parameters: an annotation resolves; a bare name (the projector records its type as
     // `TypeExpr.Error`) mints a fresh var the surrounding context - or an instantiation's body
     // re-check - pins.
-    let params: List(Ty) = list(lam.params.len, self.allocator)
+    let params: List(Ty) = list(lam.params.len)
     let moves = 0usize
     for &p in lam.params {
         let unannotated = p.type_expr match { Error(_) => true, _ => false }
@@ -8237,12 +8254,10 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
         moves = moves | move_bit_of(self, params.len, p.is_move, ty, p.span)
         const p_node = self.node_of(p.span)
         self.results.record_type(p_node, ty)
-        self.env.bind(p.name, Binding {
-            scheme = mono(ty, self.allocator),
-            decl = p_node,
-            is_const = false,
-            is_type_param = false,
-        })
+        self.env.bind(
+            p.name,
+            Binding { scheme = mono(ty), decl = p_node, is_const = false, is_type_param = false },
+        )
         params.push(ty)
     }
     let ret = lam.return_type match {
@@ -8275,16 +8290,19 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     if frame.captures.len == 0 {
         // Bare function pointer: the body lowers as a module-level function under `symbol`; the
         // literal is its address.
-        let fn_params: List(Ty) = list(params.len, self.allocator)
+        let fn_params: List(Ty) = list(params.len)
         fn_params.push_all(params.as_slice())
-        self.results.record_lambda(node, LambdaInfo {
-            span = lam.span,
-            params = move params,
-            ret = ret,
-            captures = move frame.captures,
-            closure_id = null,
-            symbol = $"__flang_lambda_{lid}",
-        })
+        self.results.record_lambda(
+            node,
+            LambdaInfo {
+                span = lam.span,
+                params = move params,
+                ret = ret,
+                captures = move frame.captures,
+                closure_id = null,
+                symbol = $"__flang_lambda_{lid}",
+            },
+        )
         return self.engine.mk_func(fn_params, ret, moves)
     }
 
@@ -8292,7 +8310,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     // and record how to call it. The literal's type is the anonymous nominal - it can never unify
     // with a bare fn type (E2111); it travels through generic `$F` slots instead.
     let module_name = self.current_module.unwrap_or("__synthetic")
-    let fields: List(Field) = list(frame.captures.len, self.allocator)
+    let fields: List(Field) = list(frame.captures.len)
     for i in 0..frame.captures.len {
         fields.push(Field {
             name = frame.captures[i].name,
@@ -8301,13 +8319,13 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
             owned = false,
         })
     }
-    let empty_tps: List(VarId) = list(0, self.allocator)
+    let empty_tps: List(VarId) = list(0)
     let sd = StructDef {
         fqn = "",
         module = module_name,
         is_pub = true,
         type_params = move empty_tps,
-        assoc_params = list(0, self.allocator),
+        assoc_params = list(0),
         fields = move fields,
         decl_span = lam.span,
         deprecation = null,
@@ -8323,23 +8341,29 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr) Ty {
     )
 
     let sym = $"__flang_closure_call_{lid}"
-    let sig_params: List(Ty) = list(params.len, self.allocator)
+    let sig_params: List(Ty) = list(params.len)
     sig_params.push_all(params.as_slice())
-    self.closures.set(nid, ClosureSig {
-        params = move sig_params,
-        ret = ret,
-        symbol = from_view(sym.view),
-        lambda_node = node,
-    })
-    self.results.record_lambda(node, LambdaInfo {
-        span = lam.span,
-        params = move params,
-        ret = ret,
-        captures = move frame.captures,
-        closure_id = Some(nid),
-        symbol = move sym,
-    })
-    let no_args: List(Ty) = list(0, self.allocator)
+    self.closures.set(
+        nid,
+        ClosureSig {
+            params = move sig_params,
+            ret = ret,
+            symbol = from_view(sym.view),
+            lambda_node = node,
+        },
+    )
+    self.results.record_lambda(
+        node,
+        LambdaInfo {
+            span = lam.span,
+            params = move params,
+            ret = ret,
+            captures = move frame.captures,
+            closure_id = Some(nid),
+            symbol = move sym,
+        },
+    )
+    let no_args: List(Ty) = list(0)
     return mk_nominal(self, nid, no_args)
 }
 
@@ -8450,12 +8474,10 @@ fn check_for(self: &Checker, fs: &ForStmt) {
     // goto-definition on a read inside the body lands on the name.
     const var_node = self.node_of(fs.var_span)
     self.results.record_type(var_node, elem)
-    self.env.bind(fs.var_name, Binding {
-        scheme = mono(elem, self.allocator),
-        decl = var_node,
-        is_const = true,
-        is_type_param = false,
-    })
+    self.env.bind(
+        fs.var_name,
+        Binding { scheme = mono(elem), decl = var_node, is_const = true, is_type_param = false },
+    )
     let _b = check_block(self, fs.body)
     self.env.pop_scope()
 }
@@ -8476,7 +8498,7 @@ fn check_iterable_element(self: &Checker, fs: &ForStmt) Ty {
 // two hooks `lower_for_iter` reads. When the protocol does not resolve, the loop variable stays a
 // fresh var and the `for` refuses at lowering (the state of the world before this).
 fn protocol_pick(self: &Checker, name: String, arg: Ty, span: SourceSpan) OverloadPick? {
-    let args = list(1, self.allocator)
+    let args = list(1)
     args.push(arg)
     let pick = operator_pick(self, name, &args, span)
     args.deinit()
@@ -8489,7 +8511,7 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     // the method call `for` desugars to (`xs.iter()`): the iterable as written, by reference, or
     // through `op_deref`, with the hop chain recorded beside the pick on the body node.
     const iter_name = if fs.by_ref { "iter_ref" } else { "iter" }
-    let no_args: List(Ty) = list(0, self.allocator)
+    let no_args: List(Ty) = list(0)
     let ip = receiver_pick(self, iter_name, z, &no_args, expr_span(fs.iterable), fs.body.span)
     if ip.is_none() {
         // An unresolved iterable may still become something iterable; a concrete one without `iter`
@@ -8506,15 +8528,18 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     }
     let p = ip.unwrap()
     check_consuming_receiver(self, &p, iter_name, Some(z), expr_span(fs.iterable))
-    self.results.record_operator(self.node_of(fs.body.span), ResolvedOperator {
-        function_id = p.id,
-        negate_result = false,
-        cmp_derived_op = null,
-        is_ref_form = false,
-        spec_id = null,
-        lhs_hops = 0u32,
-        rhs_hops = 0u32,
-    })
+    self.results.record_operator(
+        self.node_of(fs.body.span),
+        ResolvedOperator {
+            function_id = p.id,
+            negate_result = false,
+            cmp_derived_op = null,
+            is_ref_form = false,
+            spec_id = null,
+            lhs_hops = 0u32,
+            rhs_hops = 0u32,
+        },
+    )
     note_pending(self, fs.body.span, true, &p)
 
     let state = self.engine.resolve(p.ret)
@@ -8536,15 +8561,18 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         return self.engine.fresh_var()
     }
     let n = np.unwrap()
-    self.results.record_operator(self.node_of(fs.span), ResolvedOperator {
-        function_id = n.id,
-        negate_result = false,
-        cmp_derived_op = null,
-        is_ref_form = false,
-        spec_id = null,
-        lhs_hops = 0u32,
-        rhs_hops = 0u32,
-    })
+    self.results.record_operator(
+        self.node_of(fs.span),
+        ResolvedOperator {
+            function_id = n.id,
+            negate_result = false,
+            cmp_derived_op = null,
+            is_ref_form = false,
+            spec_id = null,
+            lhs_hops = 0u32,
+            rhs_hops = 0u32,
+        },
+    )
     note_pending(self, fs.span, true, &n)
     const borrows = p.hops == 0 and p.params.len > 0 and is_ref_ty(self, p.params[0])
     record_iter_release(self, fs, iter_owned(self, fs, z, state, borrows))
@@ -8592,7 +8620,7 @@ fn record_iter_release(self: &Checker, fs: &ForStmt, owned: Ty?) {
         return
     }
     const state = owned.unwrap()
-    let no_args: List(Ty) = list(0, self.allocator)
+    let no_args: List(Ty) = list(0)
     defer no_args.deinit()
     const dp = receiver_pick(self, "deinit", state, &no_args, fs.span, fs.var_span)
     if dp.is_none() {
@@ -8605,15 +8633,18 @@ fn record_iter_release(self: &Checker, fs: &ForStmt, owned: Ty?) {
         return
     }
     const d = dp.unwrap()
-    self.results.record_operator(self.node_of(fs.var_span), ResolvedOperator {
-        function_id = d.id,
-        negate_result = false,
-        cmp_derived_op = null,
-        is_ref_form = false,
-        spec_id = null,
-        lhs_hops = 0u32,
-        rhs_hops = 0u32,
-    })
+    self.results.record_operator(
+        self.node_of(fs.var_span),
+        ResolvedOperator {
+            function_id = d.id,
+            negate_result = false,
+            cmp_derived_op = null,
+            is_ref_form = false,
+            spec_id = null,
+            lhs_hops = 0u32,
+            rhs_hops = 0u32,
+        },
+    )
     note_pending(self, fs.var_span, true, &d)
 }
 
@@ -8720,12 +8751,15 @@ fn check_let(self: &Checker, ls: &LetStmt) {
     self.results.record_type(self.node_of(ls.span), bound_ty)
     const name_node = self.node_of(ls.name_span)
     self.results.record_type(name_node, bound_ty)
-    self.env.bind(ls.name, Binding {
-        scheme = mono(bound_ty, self.allocator),
-        decl = name_node,
-        is_const = ls.is_const,
-        is_type_param = false,
-    })
+    self.env.bind(
+        ls.name,
+        Binding {
+            scheme = mono(bound_ty),
+            decl = name_node,
+            is_const = ls.is_const,
+            is_type_param = false,
+        },
+    )
 }
 
 fn is_empty_array_literal(e: &Expr) bool {
@@ -9036,17 +9070,17 @@ fn operator_match(
 // nothing matched.
 fn binary_dispatch(self: &Checker, bin: &BinaryExpr, l: Ty, r: Ty, is_cmp: bool) Ty? {
     const direct = operator_match(self, bin.op, bin.span, l, r, is_cmp)
-    let lc: List(OverloadPick) = list(0, self.allocator)
+    let lc: List(OverloadPick) = list(0)
     defer lc.deinit()
-    let rc: List(OverloadPick) = list(0, self.allocator)
+    let rc: List(OverloadPick) = list(0)
     defer rc.deinit()
     if direct.is_some() {
         const __direct_v = direct.unwrap()
         return Some(commit_binary(self, bin, &__direct_v, &lc, 0usize, &rc, 0usize))
     }
-    let lt: List(Ty) = list(0, self.allocator)
+    let lt: List(Ty) = list(0)
     defer lt.deinit()
-    let rt: List(Ty) = list(0, self.allocator)
+    let rt: List(Ty) = list(0)
     defer rt.deinit()
     operand_chain(self, l, bin.span, &lc, &lt)
     operand_chain(self, r, bin.span, &rc, &rt)
@@ -9107,7 +9141,7 @@ fn operand_chain(
         if !is_nominal {
             return
         }
-        let dargs: List(Ty) = list(1, self.allocator)
+        let dargs: List(Ty) = list(1)
         dargs.push(self.engine.mk_ref(current))
         const dpick = resolve_overload(self, &dc, &dargs, span)
         dargs.deinit()
@@ -9139,7 +9173,7 @@ fn commit_binary(
 ) Ty {
     const node = self.node_of(bin.span)
     if li + ri > 0 {
-        let targets: List(ResolvedTarget) = list(li + ri, self.allocator)
+        let targets: List(ResolvedTarget) = list(li + ri)
         for i in 0..li {
             targets.push(ResolvedTarget.RtFunction(lc[i].id))
         }
@@ -9154,15 +9188,18 @@ fn commit_binary(
             note_pending(self, bin.span, false, &rc[i], Some(li + i))
         }
     }
-    self.results.record_operator(node, ResolvedOperator {
-        function_id = m.pick.id,
-        negate_result = m.negate,
-        cmp_derived_op = m.derived,
-        is_ref_form = false,
-        spec_id = null,
-        lhs_hops = li as u32,
-        rhs_hops = ri as u32,
-    })
+    self.results.record_operator(
+        node,
+        ResolvedOperator {
+            function_id = m.pick.id,
+            negate_result = m.negate,
+            cmp_derived_op = m.derived,
+            is_ref_form = false,
+            spec_id = null,
+            lhs_hops = li as u32,
+            rhs_hops = ri as u32,
+        },
+    )
     note_pending(self, bin.span, true, &m.pick)
     return m.ret
 }
@@ -9190,7 +9227,7 @@ fn bod_of(op: BinaryOp) BinaryOpDerived {
 }
 
 fn operator_pick_2(self: &Checker, name: String, l: Ty, r: Ty, span: SourceSpan) OverloadPick? {
-    let args = list(2, self.allocator)
+    let args = list(2)
     args.push(l)
     args.push(r)
     let pick = operator_pick(self, name, &args, span)
@@ -9244,13 +9281,13 @@ fn arith_result(self: &Checker, lhs: Ty, rhs: Ty, span: SourceSpan) Ty {
 }
 
 fn check_call(self: &Checker, call: &CallExpr, expected: Ty? = null) Ty {
-    let pos_tys = list(call.args.len, self.allocator)
-    let pos_exprs: List(&Expr) = list(call.args.len, self.allocator)
+    let pos_tys = list(call.args.len)
+    let pos_exprs: List(&Expr) = list(call.args.len)
     // Filled as locals, then moved into the bundle: growing a list THROUGH a struct field of a
     // local copies the header and loses the push (docs/known-issues.md, two-hop mutation).
-    let nnames: List(String) = list(0, self.allocator)
-    let ntys: List(Ty) = list(0, self.allocator)
-    let nvalues: List(&Expr) = list(0, self.allocator)
+    let nnames: List(String) = list(0)
+    let ntys: List(Ty) = list(0)
+    let nvalues: List(&Expr) = list(0)
     for &a in call.args {
         a.* match {
             Positional(e) => {
@@ -9365,7 +9402,7 @@ fn named_param_slots(
         return null
     }
     let decl = &dp.unwrap().params
-    let out: List(usize) = list(named.names.len, self.allocator)
+    let out: List(usize) = list(named.names.len)
     for i in 0..named.names.len {
         let found: usize? = null
         for p in ufcs_offset..decl.len {
@@ -9429,7 +9466,7 @@ fn resolve_direct_call(
     if cands.is_some() {
         let candidates = cands.unwrap()
         self.overload_deferred = false
-        let chain: List(OverloadPick) = list(0, self.allocator)
+        let chain: List(OverloadPick) = list(0)
         defer chain.deinit()
         let ctx = PeelCtx { vis = &vis, chain = &chain }
         let spans = arg_span_list(self, pos_exprs, null)
@@ -9455,9 +9492,16 @@ fn resolve_direct_call(
         if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
             return Some(self.engine.fresh_var())
         }
-        return Some(
-            commit_pick(self, pick, ide.name, arg_tys.len, call.span, 0usize, pos_exprs, named),
-        )
+        return Some(commit_pick(
+            self,
+            pick,
+            ide.name,
+            arg_tys.len,
+            call.span,
+            0usize,
+            pos_exprs,
+            named,
+        ))
     }
     // A named argument cannot address a parameter of a function VALUE (no declaration, so no
     // parameter names) - leave the call for the caller's fallback rather than dropping the names
@@ -9521,20 +9565,18 @@ fn resolve_method_call(
     // it resolves after the body's drain, when the receiver is known.
     if self.engine.is_var(self.engine.resolve(recv_ty)) {
         candidates.deinit()
-        let full: List(Ty) = list(arg_tys.len + 1, self.allocator)
+        let full: List(Ty) = list(arg_tys.len + 1)
         full.push(recv_ty)
         full.push_all(arg_tys.as_slice())
-        return Some(
-            park_call(
-                self,
-                call,
-                ma.member,
-                &full,
-                pos_exprs,
-                1usize,
-                Some(self.engine.mk_ref(recv_ty)),
-            ),
-        )
+        return Some(park_call(
+            self,
+            call,
+            ma.member,
+            &full,
+            pos_exprs,
+            1usize,
+            Some(self.engine.mk_ref(recv_ty)),
+        ))
     }
 
     // Receiver adaptation: a value receiver also matches `&T` overloads and a reference receiver
@@ -9546,7 +9588,7 @@ fn resolve_method_call(
         _ => self.engine.mk_ref(r)
     }
     // The receiver's `op_deref` targets compete in that same set, as more receiver shapes.
-    let chain: List(OverloadPick) = list(0, self.allocator)
+    let chain: List(OverloadPick) = list(0)
     defer chain.deinit()
     let ctx = PeelCtx { vis = &vis, chain = &chain }
     self.overload_deferred = false
@@ -9569,7 +9611,7 @@ fn resolve_method_call(
     candidates.deinit()
     if pick.is_none() and self.overload_deferred {
         self.overload_deferred = false
-        let full: List(Ty) = list(arg_tys.len + 1, self.allocator)
+        let full: List(Ty) = list(arg_tys.len + 1)
         full.push(recv_ty)
         full.push_all(arg_tys.as_slice())
         return Some(park_call(self, call, ma.member, &full, pos_exprs, 1usize, Some(adapted)))
@@ -9577,19 +9619,17 @@ fn resolve_method_call(
     if pick.is_none() and closure_arg_hint(self, arg_tys, call.span) {
         return Some(self.engine.fresh_var())
     }
-    return Some(
-        commit_pick(
-            self,
-            pick,
-            ma.member,
-            arg_tys.len,
-            call.span,
-            1usize,
-            pos_exprs,
-            named,
-            Some(recv_ty),
-        ),
-    )
+    return Some(commit_pick(
+        self,
+        pick,
+        ma.member,
+        arg_tys.len,
+        call.span,
+        1usize,
+        pos_exprs,
+        named,
+        Some(recv_ty),
+    ))
 }
 
 // One overload-resolution attempt with `recv` prepended as the first argument. `alt_recv` is its
@@ -9605,7 +9645,7 @@ fn receiver_overload(
     peel: &PeelCtx? = null,
     arg_spans: &List(SourceSpan)? = null,
 ) OverloadPick? {
-    let full = list(arg_tys.len + 1, self.allocator)
+    let full = list(arg_tys.len + 1)
     full.push(recv)
     full.push_all(arg_tys.as_slice())
     let pick = resolve_overload(
@@ -9640,7 +9680,7 @@ fn receiver_pick(
     span: SourceSpan,
     record_span: SourceSpan,
 ) OverloadPick? {
-    let chain: List(OverloadPick) = list(0, self.allocator)
+    let chain: List(OverloadPick) = list(0)
     defer chain.deinit()
     let pick = receiver_pick_into(self, name, recv, extra, span, &chain)
     if pick.is_some() {
@@ -9660,7 +9700,7 @@ fn satisfy_pick(
     extra: &List(Ty),
     span: SourceSpan,
 ) OverloadPick? {
-    let chain: List(OverloadPick) = list(0, self.allocator)
+    let chain: List(OverloadPick) = list(0)
     defer chain.deinit()
     return receiver_pick_into(self, name, recv, extra, span, &chain, false)
 }
@@ -9718,7 +9758,7 @@ fn commit_deref_chain(
     if hops == 0 {
         return
     }
-    let targets: List(ResolvedTarget) = list(hops, self.allocator)
+    let targets: List(ResolvedTarget) = list(hops)
     for i in 0..hops {
         targets.push(ResolvedTarget.RtFunction(chain[i].id))
     }
@@ -9750,11 +9790,11 @@ fn note_pending(
     }
     // The pick is lent, so the pending copy takes its own tables.
     let inst = pick.inst.unwrap_ref()
-    let binds: Dict(VarId, Ty) = dict(inst.tp_binds.len(), self.allocator)
+    let binds: Dict(VarId, Ty) = dict(inst.tp_binds.len())
     for e in inst.tp_binds {
         binds.set(e.key, e.value)
     }
-    let inst_params: List(Ty) = list(inst.params.len, self.allocator)
+    let inst_params: List(Ty) = list(inst.params.len)
     inst_params.push_all(inst.params.as_slice())
     let p = PendingSpec {
         span = span,
@@ -9814,7 +9854,7 @@ fn commit_pick(
             ret
         }
         None => {
-            let sb = string_builder(96, self.allocator)
+            let sb = string_builder(96)
             sb.append($"no matching overload for `{name}` with {n_args} argument(s)")
             recv match {
                 Some(r) => {
@@ -9859,7 +9899,7 @@ fn check_consuming_receiver(
     if !through_ref and p.hops == 0 {
         return
     }
-    let sb = string_builder(128, self.allocator)
+    let sb = string_builder(128)
     sb.append(
         $"`{name}` takes ownership of its receiver, which is reached through a reference here - the value stays with its owner",
     )
@@ -9905,9 +9945,9 @@ fn park_call(
     recv_extra: usize,
     alt_recv: Ty?,
 ) Ty {
-    let args: List(Ty) = list(arg_tys.len, self.allocator)
+    let args: List(Ty) = list(arg_tys.len)
     args.push_all(arg_tys.as_slice())
-    let pes: List(&Expr) = list(pos_exprs.len, self.allocator)
+    let pes: List(&Expr) = list(pos_exprs.len)
     pes.push_all(pos_exprs.as_slice())
     self.pending_calls.push(PendingCall {
         span = call.span,
@@ -9926,7 +9966,7 @@ fn park_call(
 // and commits exactly as it would have at the call site; one still undecided is the genuinely
 // ambiguous case and reports (E2011) rather than picking by declaration order.
 fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
-    let parked: List(PendingCall) = list(self.pending_calls.len - from, self.allocator)
+    let parked: List(PendingCall) = list(self.pending_calls.len - from)
     while self.pending_calls.len > from {
         parked.push(self.pending_calls.pop().unwrap())
     }
@@ -9946,7 +9986,7 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
         if cands.is_some() {
             let candidates = cands.unwrap()
             self.overload_deferred = false
-            let pchain: List(OverloadPick) = list(0, self.allocator)
+            let pchain: List(OverloadPick) = list(0)
             defer pchain.deinit()
             const pctx = PeelCtx { vis = &vis, chain = &pchain }
             const recv_span: SourceSpan? = if pc.recv_extra > 0 { Some(pc.span) } else { null }
@@ -10072,7 +10112,7 @@ fn materialize_arg_list(
     }
 
     self.default_depth = self.default_depth + 1
-    let exprs: List(&Expr) = list(decl_params.len - recv_extra, self.allocator)
+    let exprs: List(&Expr) = list(decl_params.len - recv_extra)
     let n_named = named match { Some(n) => n.names.len, None => 0usize }
     let used_named = 0usize
     let next_pos = 0usize
@@ -10085,9 +10125,10 @@ fn materialize_arg_list(
         // literal - the reference's `BuildResolvedArguments` builds the same node, and the array
         // decays to the parameter's slice at the call.
         if decl_params[pi].is_variadic {
-            exprs.push(
-                synth_box(self, synth_variadic_pack(self, pos_exprs, next_pos, p.params[pi], span)),
-            )
+            exprs.push(synth_box(
+                self,
+                synth_variadic_pack(self, pos_exprs, next_pos, p.params[pi], span),
+            ))
             next_pos = pos_exprs.len
             continue
         }
@@ -10148,7 +10189,7 @@ fn synth_variadic_pack(
     span: SourceSpan,
 ) Expr {
     // The pack shares the argument nodes the module arena owns.
-    let elems: List(Expr) = list(pos_exprs.len - from, self.allocator)
+    let elems: List(Expr) = list(pos_exprs.len - from)
     for e in pos_exprs.as_slice()[from..pos_exprs.len] {
         elems.push(e.*)
     }
@@ -10161,9 +10202,10 @@ fn synth_variadic_pack(
     // settle (an empty pack leaves `T` to the declaration, which already fixed it).
     let want = self.engine.resolve(param_ty)
     let elem = ty_node(self, want) match {
-        NNominal(nn) => if nn.args.len == 1 { Some(
-            self.engine.interner.child_at(nn.args, 0),
-        ) } else { null }
+        NNominal(nn) => if nn.args.len == 1 { Some(self.engine.interner.child_at(
+            nn.args,
+            0,
+        )) } else { null }
         _ => null
     }
     if elem.is_some() {
@@ -10212,7 +10254,7 @@ fn materialize_default_args(self: &Checker, p: &OverloadPick, supplied: usize, s
     }
 
     self.default_depth = self.default_depth + 1
-    let exprs: List(&Expr) = list(p.params.len - supplied, self.allocator)
+    let exprs: List(&Expr) = list(p.params.len - supplied)
     let ok = true
     for i in supplied..decl_params.len {
         if !ok {
@@ -10423,7 +10465,7 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
         return TY_ERROR
     }
     if self.engine.is_var(z) {
-        let ps = list(arg_tys.len, self.allocator)
+        let ps = list(arg_tys.len)
         ps.push_all(arg_tys.as_slice())
         let ret = self.engine.fresh_var()
         const o = self.engine.unify(callee_ty, self.engine.mk_func(ps, ret))
@@ -10465,7 +10507,7 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
 
     // `op_call(&T, …)`, `op_call(T, …)` and the receiver's `op_deref` targets compete in one
     // ranked set.
-    let chain: List(OverloadPick) = list(0, self.allocator)
+    let chain: List(OverloadPick) = list(0)
     defer chain.deinit()
     let ctx = PeelCtx { vis = &vis, chain = &chain }
     let pick = receiver_overload(
@@ -10486,10 +10528,10 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
     if hops == 0 {
         // The chain record, even empty, is lowering's signal that this plain-looking callee is an
         // `op_call` dispatch (the AST shows no receiver).
-        let none: List(ResolvedTarget) = list(0, self.allocator)
+        let none: List(ResolvedTarget) = list(0)
         self.results.record_receiver_deref(self.node_of(span), none)
     }
-    let no_exprs: List(&Expr) = list(0, self.allocator)
+    let no_exprs: List(&Expr) = list(0)
     defer no_exprs.deinit()
     return Some(commit_pick(self, pick, "op_call", arg_tys.len, span, 1usize, &no_exprs, null))
 }
@@ -10524,7 +10566,7 @@ fn deref_alternatives(
             return
         }
 
-        let dargs = list(1, self.allocator)
+        let dargs = list(1)
         dargs.push(self.engine.mk_ref(peeled))
         let dpick = resolve_overload(self, &dc, &dargs, span)
         dargs.deinit()
@@ -10641,16 +10683,16 @@ fn resolve_overload(
     // one that needs `&x` or a hop, however specific. `st[ci].used` is 0 for as written, else 1 +
     // the index into `alts`. Both lists allocate only once a shape is pushed: a plain direct call
     // never pays for them.
-    let alts: List(RecvAlt) = list(0, self.allocator)
+    let alts: List(RecvAlt) = list(0)
     defer alts.deinit()
-    let alt_args: List(List(Ty)) = list(0, self.allocator)
+    let alt_args: List(List(Ty)) = list(0)
     defer alt_args.deinit()
     if alt_recv.is_some() and arg_tys.len > 0 {
         alts.push(RecvAlt { ty = alt_recv.unwrap(), penalty = 1u32, hops = 0usize })
         alt_args.push(args_with_recv(self, arg_tys, alt_recv.unwrap()))
     }
 
-    let st: List(CandProbe) = list(candidates.len, self.allocator)
+    let st: List(CandProbe) = list(candidates.len)
     defer st.deinit()
     // The first candidate the arguments fit, in some receiver shape, but whose bounds refused them:
     // picked when nothing else fits, so the drain names the requirement that failed (E2134) rather
@@ -10683,13 +10725,11 @@ fn resolve_overload(
                 bound_refused = Some((ci, 1usize))
             }
             if ap.is_some() {
-                st[ci].cost = Some(
-                    ProbeCost {
-                        coercions = ap.unwrap().coercions,
-                        penalty = ap.unwrap().penalty + alts[0].penalty,
-                        held = ap.unwrap().held,
-                    },
-                )
+                st[ci].cost = Some(ProbeCost {
+                    coercions = ap.unwrap().coercions,
+                    penalty = ap.unwrap().penalty + alts[0].penalty,
+                    held = ap.unwrap().held,
+                })
                 st[ci].used = 1usize
                 st[ci].spec = scheme_specificity(self, &candidates[ci].signature, arg_tys)
             }
@@ -10721,13 +10761,11 @@ fn resolve_overload(
                     bound_refused = Some((ci, ai + 1))
                 }
                 if ap.is_some() {
-                    st[ci].cost = Some(
-                        ProbeCost {
-                            coercions = ap.unwrap().coercions,
-                            penalty = ap.unwrap().penalty + alts[ai].penalty,
-                            held = ap.unwrap().held,
-                        },
-                    )
+                    st[ci].cost = Some(ProbeCost {
+                        coercions = ap.unwrap().coercions,
+                        penalty = ap.unwrap().penalty + alts[ai].penalty,
+                        held = ap.unwrap().held,
+                    })
                     st[ci].used = ai + 1
                     st[ci].spec = scheme_specificity(self, &candidates[ci].signature, arg_tys)
                     break
@@ -10831,7 +10869,7 @@ fn resolve_overload(
     }
 
     let w = candidates[best.unwrap()]
-    let binds: Dict(VarId, Ty) = dict(self.allocator)
+    let binds: Dict(VarId, Ty) = dict()
     let inst_ty = self.engine.resolve(self.engine.specialize_capture(&w.signature, &binds))
     let ft = ty_node(self, inst_ty) match {
         NFunc(x) => Some(x)
@@ -10844,7 +10882,7 @@ fn resolve_overload(
     let f = ft.unwrap()
     // A scratch copy of the instantiated parameter window: it rides on the pick for
     // default-argument unification and the pending spec.
-    let fparams: List(Ty) = list(f.params.len, self.allocator)
+    let fparams: List(Ty) = list(f.params.len)
     for i in 0..f.params.len {
         fparams.push(self.engine.interner.child_at(f.params, i))
     }
@@ -10892,7 +10930,7 @@ fn resolve_overload(
     // The pick and its instantiation each carry their own copy of the parameter window.
     let inst: PickInst? = null
     if w.signature.quantified.len() > 0 {
-        let inst_params: List(Ty) = list(fparams.len, self.allocator)
+        let inst_params: List(Ty) = list(fparams.len)
         inst_params.push_all(fparams.as_slice())
         install(
             &inst,
@@ -10909,16 +10947,14 @@ fn resolve_overload(
             _ => Some(ReceiverAdapt.ByValue)
         }
     }
-    return Some(
-        OverloadPick {
-            id = w.id,
-            ret = f.ret,
-            params = move fparams,
-            inst = move inst,
-            hops = hops,
-            adapt = adapt,
-        },
-    )
+    return Some(OverloadPick {
+        id = w.id,
+        ret = f.ret,
+        params = move fparams,
+        inst = move inst,
+        hops = hops,
+        adapt = adapt,
+    })
 }
 
 // Commits a winning argument's `op_deref` hops: unifies through the chain and records it on the
@@ -10942,7 +10978,7 @@ fn commit_arg_peel(
     if index >= spans.len {
         return false
     }
-    let chain: List(OverloadPick) = list(2, self.allocator)
+    let chain: List(OverloadPick) = list(2)
     defer chain.deinit()
     const ctx = PeelCtx { vis = peel.unwrap().vis, chain = &chain }
     const hops = peel_arg(self, arg, param, span, &ctx, Some(&chain))
@@ -10983,7 +11019,7 @@ fn arity_accepts(c: &FunctionScheme, n_params: usize, supplied: usize) bool {
 // `op_deref` chain is recorded on the argument's own node. `recv` is the receiver's span for a UFCS
 // call, which occupies the first slot.
 fn arg_span_list(self: &Checker, pos_exprs: &List(&Expr), recv: SourceSpan?) List(SourceSpan) {
-    let out: List(SourceSpan) = list(pos_exprs.len + 1, self.allocator)
+    let out: List(SourceSpan) = list(pos_exprs.len + 1)
     if recv.is_some() {
         out.push(recv.unwrap())
     }
@@ -10995,7 +11031,7 @@ fn arg_span_list(self: &Checker, pos_exprs: &List(&Expr), recv: SourceSpan?) Lis
 
 // `arg_tys` with its first entry - the receiver - replaced by `recv`.
 fn args_with_recv(self: &Checker, arg_tys: &List(Ty), recv: Ty) List(Ty) {
-    let out: List(Ty) = list(arg_tys.len, self.allocator)
+    let out: List(Ty) = list(arg_tys.len)
     out.push(recv)
     for i in 1..arg_tys.len {
         out.push(arg_tys[i])
@@ -11187,7 +11223,7 @@ fn peel_arg(
         if !nominal {
             return null
         }
-        let dargs = list(1, self.allocator)
+        let dargs = list(1)
         dargs.push(self.engine.mk_ref(peeled))
         const dpick = resolve_overload(self, &dc, &dargs, span)
         dargs.deinit()
@@ -11248,7 +11284,7 @@ fn probe_candidate(
     // A bounded candidate keeps its instantiation, to test its bounds against what the arguments
     // bound.
     const bounded = self.fn_bounds.get_ref(c.id).is_some()
-    let binds: Dict(VarId, Ty) = dict(self.allocator)
+    let binds: Dict(VarId, Ty) = dict()
     defer binds.deinit()
     const fn_ty = if bounded { self.engine.specialize_capture(&c.signature, &binds) } else {
         self.engine.specialize(&c.signature)
@@ -11422,9 +11458,10 @@ fn scheme_fn_ty(self: &Checker, s: &Scheme) NFuncNode? {
 // nominal.
 fn variadic_elem(self: &Checker, param: Ty) Ty? {
     return ty_node(self, self.engine.resolve(param)) match {
-        NNominal(nn) => if nn.args.len == 1 { Some(
-            self.engine.interner.child_at(nn.args, 0),
-        ) } else { null }
+        NNominal(nn) => if nn.args.len == 1 { Some(self.engine.interner.child_at(
+            nn.args,
+            0,
+        )) } else { null }
         _ => null
     }
 }
@@ -11514,7 +11551,7 @@ fn type_instantiation_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List(
     }
     // The arguments are TYPE names, so each already arrived reified (`i32` types as `Type(i32)`);
     // the instantiation wants the types themselves, and the RESULT is what gets reified.
-    let args = list(arg_tys.len, self.allocator)
+    let args = list(arg_tys.len)
     for i in 0..arg_tys.len {
         args.push(unreify_type(self, arg_tys[i]))
     }
@@ -11581,7 +11618,7 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
         // parameter). Field constraints can't apply until that binding exists, so the initializers
         // are parked and `resolve_anon_literals` unifies them against the nominal's field types
         // once inference settles.
-        let recs: List(AnonFieldRec) = list(lit.fields.len, self.allocator)
+        let recs: List(AnonFieldRec) = list(lit.fields.len)
         for &fi in lit.fields {
             let v = check_field_value(self, fi)
             recs.push(AnonFieldRec { name = fi.name, ty = v, span = fi.span })
@@ -11647,7 +11684,7 @@ fn check_struct_lit(self: &Checker, lit: &StructLiteralExpr) Ty {
             report_unify(self, &o, E_TYPE_MISMATCH, fi.span)
         }
     }
-    let present: List(String) = list(lit.fields.len, self.allocator)
+    let present: List(String) = list(lit.fields.len)
     defer present.deinit()
     for &fi2 in lit.fields {
         present.push(fi2.name)
@@ -11779,7 +11816,7 @@ fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
 // since the drain is what pins a lambda parameter; a receiver still open afterwards stays parked
 // (its placeholder a var, which whatever needed it reports) until the scope discards it.
 fn resolve_pending_members(self: &Checker) {
-    let parked = replace(&self.pending_members, list(0, self.allocator))
+    let parked = replace(&self.pending_members, list(0))
     for &pm in parked {
         const z = self.engine.zonk(pm.recv)
         if self.engine.is_var(z) {
@@ -11873,7 +11910,7 @@ fn member_deref_retry_at(self: &Checker, member: String, span: SourceSpan, recv_
     let dc = dcands.unwrap()
     defer dc.deinit()
 
-    let chain: List(OverloadPick) = list(1, self.allocator)
+    let chain: List(OverloadPick) = list(1)
     defer chain.deinit()
 
     let current = self.engine.resolve(recv_ty)
@@ -11893,7 +11930,7 @@ fn member_deref_retry_at(self: &Checker, member: String, span: SourceSpan, recv_
             return null
         }
 
-        let dargs = list(1, self.allocator)
+        let dargs = list(1)
         dargs.push(self.engine.mk_ref(peeled))
         let dpick = resolve_overload(self, &dc, &dargs, span)
         dargs.deinit()
@@ -12004,7 +12041,7 @@ fn enum_receiver(self: &Checker, recv: &Expr) NominalId? {
 }
 
 fn construct_nullary(self: &Checker, id: NominalId, vname: String, span: SourceSpan) Ty? {
-    let empty = list(0, self.allocator)
+    let empty = list(0)
     let out = construct_variant(self, id, vname, &empty, span, self.node_of(span))
     empty.deinit()
     return out
@@ -12047,8 +12084,8 @@ fn construct_variant(
         return null
     }
 
-    let subst = dict(self.allocator)
-    let args = list(e.type_params.len, self.allocator)
+    let subst = dict()
+    let args = list(e.type_params.len)
     for k in 0..e.type_params.len {
         let fresh = self.engine.fresh_var()
         subst.set(e.type_params[k], fresh)
@@ -12151,12 +12188,12 @@ fn ty_node(self: &Checker, t: Ty) TyNode {
 // Zonk a lambda record's types once inference settled; a still-open parameter or return type means
 // nothing anywhere pinned the lambda - the reference's "no-context lambda" error (E2001 here).
 fn zonk_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
-    let ps: List(Ty) = list(info.params.len, self.allocator)
+    let ps: List(Ty) = list(info.params.len)
     for i in 0..info.params.len {
         ps.push(self.engine.zonk(info.params[i]))
     }
     let ret = self.engine.zonk(info.ret)
-    let caps: List(CaptureRec) = list(info.captures.len, self.allocator)
+    let caps: List(CaptureRec) = list(info.captures.len)
     for i in 0..info.captures.len {
         caps.push(CaptureRec {
             name = info.captures[i].name,
@@ -12190,7 +12227,7 @@ fn zonk_lambda_table(self: &Checker) {
     if self.results.lambdas.len() == 0 {
         return
     }
-    let zl: Dict(NodeId, LambdaInfo) = dict(self.allocator)
+    let zl: Dict(NodeId, LambdaInfo) = dict()
     for e in self.results.lambdas {
         // The entry is lent: `zonk_lambda_info` copies the symbol buffer it carries over, and the
         // old table is abandoned to the allocator whole.
@@ -12206,27 +12243,30 @@ fn zonk_closures(self: &Checker) {
     if self.closures.len() == 0 {
         return
     }
-    let zc: Dict(NominalId, ClosureSig) = dict(self.allocator)
+    let zc: Dict(NominalId, ClosureSig) = dict()
     for e in self.closures {
         // Lent, like the lambda table: the zonked copy takes its own symbol buffer.
         const key: NominalId = e.key
         const cs: &ClosureSig = &e.value
-        let ps: List(Ty) = list(cs.params.len, self.allocator)
+        let ps: List(Ty) = list(cs.params.len)
         for i in 0..cs.params.len {
             ps.push(self.engine.zonk(cs.params[i]))
         }
-        zc.set(key, ClosureSig {
-            params = move ps,
-            ret = self.engine.zonk(cs.ret),
-            symbol = from_view(cs.symbol.view),
-            lambda_node = cs.lambda_node,
-        })
+        zc.set(
+            key,
+            ClosureSig {
+                params = move ps,
+                ret = self.engine.zonk(cs.ret),
+                symbol = from_view(cs.symbol.view),
+                lambda_node = cs.lambda_node,
+            },
+        )
 
         // Registry fields: rebuild the struct def with zonked capture types.
         let d = self.nominals.get(key)
         d.* match {
             NomStruct(sd) => {
-                let zfields: List(Field) = list(sd.fields.len, self.allocator)
+                let zfields: List(Field) = list(sd.fields.len)
                 for i in 0..sd.fields.len {
                     zfields.push(Field {
                         name = sd.fields[i].name,
@@ -12235,9 +12275,9 @@ fn zonk_closures(self: &Checker) {
                         owned = sd.fields[i].owned,
                     })
                 }
-                let tps: List(VarId) = list(sd.type_params.len, self.allocator)
+                let tps: List(VarId) = list(sd.type_params.len)
                 tps.push_all(sd.type_params.as_slice())
-                let aps: List(VarId) = list(sd.assoc_params.len, self.allocator)
+                let aps: List(VarId) = list(sd.assoc_params.len)
                 aps.push_all(sd.assoc_params.as_slice())
                 let updated = StructDef {
                     fqn = sd.fqn,
@@ -12264,7 +12304,7 @@ fn zonk_closures(self: &Checker) {
 // Func shape picks the overload those parameter types select, records the winner on the node, and
 // unifies the return. A slot nothing pinned stays a fresh var - its consumer refuses at lowering.
 fn resolve_fn_name_values(self: &Checker) {
-    let pend = replace(&self.pending_fn_names, list(0, self.allocator))
+    let pend = replace(&self.pending_fn_names, list(0))
     for &pn in pend {
         let z = self.engine.resolve(pn.ty)
         let ft = ty_node(self, z) match {
@@ -12275,7 +12315,7 @@ fn resolve_fn_name_values(self: &Checker) {
             continue
         }
         let f = ft.unwrap()
-        let fparams: List(Ty) = list(f.params.len, self.allocator)
+        let fparams: List(Ty) = list(f.params.len)
         for i in 0..f.params.len {
             fparams.push(self.engine.interner.child_at(f.params, i))
         }
@@ -12340,7 +12380,7 @@ fn solve_all_instances(self: &Checker, zonked: &Dict(NodeId, Ty)) {
     if !any_assoc_defs(self) {
         return
     }
-    let work: List(Ty) = list(zonked.len(), self.allocator)
+    let work: List(Ty) = list(zonked.len())
     defer work.deinit()
     for e in zonked {
         work.push(e.value)
@@ -12357,7 +12397,7 @@ fn solve_all_instances(self: &Checker, zonked: &Dict(NodeId, Ty)) {
             work.push(e.value)
         }
     }
-    let seen: Set(Ty) = set(self.allocator)
+    let seen: Set(Ty) = set()
     defer seen.deinit()
     loop {
         const t = work.pop()
@@ -12383,10 +12423,10 @@ fn solve_within(self: &Checker, t: Ty) {
     if !self.assoc_defs {
         return
     }
-    let work: List(Ty) = list(4, self.allocator)
+    let work: List(Ty) = list(4)
     defer work.deinit()
     work.push(self.engine.zonk(t))
-    let seen: Set(Ty) = set(self.allocator)
+    let seen: Set(Ty) = set()
     defer seen.deinit()
     loop {
         const next = work.pop()
@@ -12469,7 +12509,7 @@ fn zonk_specializations(self: &Checker) {
         if sp.harvested {
             continue
         }
-        let ps: List(Ty) = list(sp.concrete_params.len, self.allocator)
+        let ps: List(Ty) = list(sp.concrete_params.len)
         let changed = false
         for k in 0..sp.concrete_params.len {
             const z = self.engine.zonk(sp.concrete_params[k])
@@ -12484,7 +12524,7 @@ fn zonk_specializations(self: &Checker) {
         // a lambda parameter's field, settled only by the callee's own instantiation), and a var
         // left there reaches layout. Re-zonk the body under the settled engine.
         if changed {
-            let zonked: Dict(NodeId, Ty) = dict(sp.overlay.node_types.len(), self.allocator)
+            let zonked: Dict(NodeId, Ty) = dict(sp.overlay.node_types.len())
             for entry in sp.overlay.node_types {
                 zonked.set(entry.key, self.engine.zonk(entry.value))
             }
@@ -12618,8 +12658,8 @@ type BorrowedRec = struct {
 // `params` are the body's parameters, null for a `test {}` block; `returns` says whether the body's
 // trailing expression is the function's value.
 fn own_check_body(self: &Checker, body: &BlockExpr, params: FunctionParam[]?, returns: bool) {
-    let lent: List(NodeId) = list(0, self.allocator)
-    let slots: List(NodeId) = list(0, self.allocator)
+    let lent: List(NodeId) = list(0)
+    let slots: List(NodeId) = list(0)
     params match {
         Some(ps) => {
             own_collect_lent(self, &lent, ps)
@@ -12627,7 +12667,7 @@ fn own_check_body(self: &Checker, body: &BlockExpr, params: FunctionParam[]?, re
         }
         None => {}
     }
-    own_run(self, body, lent, list(0, self.allocator), returns, slots)
+    own_run(self, body, lent, list(0), returns, slots)
 }
 
 fn own_collect_slots(self: &Checker, slots: &List(NodeId), params: FunctionParam[]) {
@@ -12671,23 +12711,23 @@ fn own_run(
 ) {
     // `slots` is moved into the pass below; its span is the body's, for the exit check.
     let p = OwnPass {
-        moved = list(0, self.allocator),
-        paths = list(0, self.allocator),
-        defers = list(0, self.allocator),
-        escaped = list(0, self.allocator),
-        continued = list(0, self.allocator),
+        moved = list(0),
+        paths = list(0),
+        defers = list(0),
+        escaped = list(0),
+        continued = list(0),
         scope = 0usize,
         loop_scope = 0usize,
         in_loop = false,
         diverged = false,
         report = true,
         firing = false,
-        seen = set(self.allocator),
+        seen = set(),
         lent = move lent,
         captured = move captured,
         slots = move slots,
-        borrowed = list(0, self.allocator),
-        uncertain = list(0, self.allocator),
+        borrowed = list(0),
+        uncertain = list(0),
         taker = "",
     }
     own_block(self, &p, body, if returns { own_returning() } else { own_read() })
@@ -12727,8 +12767,8 @@ fn own_lambda(self: &Checker, p: &OwnPass, lam: &LambdaExpr) {
     if !own_claim(p, self.node_of(lam.span)) {
         return
     }
-    let lent: List(NodeId) = list(captures.len, self.allocator)
-    let captured: List(NodeId) = list(captures.len, self.allocator)
+    let lent: List(NodeId) = list(captures.len)
+    let captured: List(NodeId) = list(captures.len)
     own_collect_lent(self, &lent, lam.params)
     for &cap in captures {
         if own_is_lent(p, cap.decl) {
@@ -12738,8 +12778,7 @@ fn own_lambda(self: &Checker, p: &OwnPass, lam: &LambdaExpr) {
         }
     }
     const ret = self.engine.resolve(info.unwrap().ret)
-    own_run(self, lam.body, lent, captured, ret != TY_VOID
-        and ret != TY_NEVER, list(0, self.allocator))
+    own_run(self, lam.body, lent, captured, ret != TY_VOID and ret != TY_NEVER, list(0))
 }
 
 fn own_deinit(p: move OwnPass) {
@@ -12810,7 +12849,7 @@ fn own_mark_field(self: &Checker, p: &OwnPass, decl: NodeId, path: String) {
         return
     }
     own_unmark_field(p, decl, path)
-    let stored = from_view(path, self.allocator)
+    let stored = from_view(path)
     p.moved.push(MovedRec { decl = decl, path = stored.view })
     p.paths.push(stored)
 }
@@ -12951,20 +12990,20 @@ fn own_unowned_scrutinee(self: &Checker, p: &OwnPass, e: &Expr) BorrowedRec? {
         Some(id) => id.name
         None => ""
     }
-    return Some(
-        BorrowedRec { decl = self.node_of(expr_span(e)), from = from, read_only = lent.is_some() },
-    )
+    return Some(BorrowedRec {
+        decl = self.node_of(expr_span(e)),
+        from = from,
+        read_only = lent.is_some(),
+    })
 }
 
 fn own_borrow_pattern(self: &Checker, p: &OwnPass, pat: &Pattern, from: BorrowedRec) {
     pat.* match {
-        Variable(v) => p.borrowed.push(
-            BorrowedRec {
-                decl = self.node_of(v.span),
-                from = from.from,
-                read_only = from.read_only,
-            },
-        )
+        Variable(v) => p.borrowed.push(BorrowedRec {
+            decl = self.node_of(v.span),
+            from = from.from,
+            read_only = from.read_only,
+        })
         EnumVariant(ev) => {
             for &sub in ev.payloads {
                 own_borrow_pattern(self, p, sub, from)
@@ -12979,13 +13018,11 @@ fn own_borrow_pattern(self: &Checker, p: &OwnPass, pat: &Pattern, from: Borrowed
             for &f in st.fields {
                 f.binding match {
                     Some(sub) => own_borrow_pattern(self, p, sub, from)
-                    None => p.borrowed.push(
-                        BorrowedRec {
-                            decl = self.node_of(f.span),
-                            from = from.from,
-                            read_only = from.read_only,
-                        },
-                    )
+                    None => p.borrowed.push(BorrowedRec {
+                        decl = self.node_of(f.span),
+                        from = from.from,
+                        read_only = from.read_only,
+                    })
                 }
             }
         }
@@ -12999,7 +13036,7 @@ fn own_borrow_pattern(self: &Checker, p: &OwnPass, pat: &Pattern, from: Borrowed
 }
 
 fn own_snapshot(self: &Checker, src: &List(MovedRec)) List(MovedRec) {
-    let out: List(MovedRec) = list(src.len, self.allocator)
+    let out: List(MovedRec) = list(src.len)
     out.push_all(src.as_slice())
     return out
 }
@@ -13095,7 +13132,7 @@ fn own_copy_site(self: &Checker, p: &OwnPass, span: SourceSpan, name: String) {
     if !own_claim(p, self.node_of(span)) {
         return
     }
-    let sb = string_builder(160, self.allocator)
+    let sb = string_builder(160)
     if name.len > 0 {
         sb.append($"`{name}` cannot be copied here - write `move {name}`")
     } else {
@@ -13117,7 +13154,7 @@ fn own_lent_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr, what: String
         own_borrowed_error(self, p, id, b.unwrap(), what)
         return
     }
-    let sb = string_builder(160, self.allocator)
+    let sb = string_builder(160)
     sb.append($"`{id.name}` is not owned here: {what}; declare `{id.name}: move ")
     own_type(self, id.span) match {
         Some(ty) => format_with_names(
@@ -13141,7 +13178,7 @@ fn own_borrowed_error(
     b: BorrowedRec,
     what: String,
 ) {
-    let sb = string_builder(160, self.allocator)
+    let sb = string_builder(160)
     if b.from.len > 0 {
         sb.append($"`{id.name}` names part of `{b.from}`, which is not owned here")
     } else {
@@ -13157,7 +13194,7 @@ fn own_captured_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr) {
     if !own_claim(p, self.node_of(id.span)) {
         return
     }
-    let sb = string_builder(160, self.allocator)
+    let sb = string_builder(160)
     sb.append(
         $"`{id.name}` is captured by reference: the closure cannot take its value out of the enclosing binding",
     )
@@ -13191,7 +13228,7 @@ fn own_temporary(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) {
     if !temporary or own_is_copyable(self, span) or !own_claim(p, self.node_of(span)) {
         return
     }
-    let sb = string_builder(160, self.allocator)
+    let sb = string_builder(160)
     sb.append("this value reaches no owner and is never released - bind it to a variable")
     own_blame(self, span, &sb)
     own_report(self, span, E_RVALUE_NO_OWNER, sb.to_string())
@@ -13429,7 +13466,7 @@ fn own_no_place(self: &Checker, p: &OwnPass, span: SourceSpan, why: String) {
     if !own_claim(p, self.node_of(span)) {
         return
     }
-    let sb = string_builder(160, self.allocator)
+    let sb = string_builder(160)
     sb.append($"cannot take ownership of this value: {why}")
     own_taker_note(p, &sb)
     own_report(self, span, E_MOVE_NOT_LVALUE, sb.to_string())
@@ -13461,7 +13498,7 @@ fn own_field_move(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr, e: &Expr) 
     if own_through_owned_field(self, e) or !own_claim(p, node) {
         return
     }
-    let sb = string_builder(160, self.allocator)
+    let sb = string_builder(160)
     sb.append(
         $"field `{ma.member}` cannot be moved out: its base is not owned here - a value reached through a reference, or a parameter without `move`, keeps its fields",
     )
@@ -13789,7 +13826,7 @@ const USE_MOVE: u8 = 2
 // reads. The receiver follows the first parameter.
 fn own_call(self: &Checker, p: &OwnPass, c: &CallExpr) {
     const callee = own_callee(self, c)
-    let uses: List(OwnUse) = list(0, self.allocator)
+    let uses: List(OwnUse) = list(0)
     defer uses.deinit()
     c.callee.* match {
         MemberAccess(ma) => {
@@ -13929,9 +13966,10 @@ fn own_slice_elem_copyable(self: &Checker, span: SourceSpan) bool {
         return true
     }
     const elem = ty_node(self, peel_refs(self, t.unwrap())) match {
-        NNominal(n) => if n.args.len == 1 { Some(
-            self.engine.interner.child_at(n.args, 0),
-        ) } else { null }
+        NNominal(n) => if n.args.len == 1 { Some(self.engine.interner.child_at(
+            n.args,
+            0,
+        )) } else { null }
         _ => null
     }
     return elem.is_none() or ty_copyable(self, elem.unwrap())
@@ -14089,9 +14127,9 @@ fn own_pair_reported_from(a: &OwnUse, b: &OwnUse, i: usize, j: usize) bool {
 }
 
 fn own_overlap(self: &Checker, p: &OwnPass, a: &OwnUse, b: &OwnUse) {
-    let ha: List(OwnHop) = list(2, self.allocator)
+    let ha: List(OwnHop) = list(2)
     defer ha.deinit()
-    let hb: List(OwnHop) = list(2, self.allocator)
+    let hb: List(OwnHop) = list(2)
     defer hb.deinit()
     const ra = own_place(self, a.expr, &ha)
     const rb = own_place(self, b.expr, &hb)
@@ -14141,16 +14179,18 @@ fn own_place(self: &Checker, e: &Expr, hops: &List(OwnHop)) NodeId? {
     return e.* match {
         Identifier(id) => own_place_root(self, &id)
         AddressOf(a) => own_place(self, a.operand, hops)
-        MemberAccess(ma) => own_place_step(self, ma.receiver, hops, OwnHop {
-            field = ma.member,
-            owned = own_field_owned(self, &ma),
-            index = null,
-        })
-        Index(ix) => own_place_step(self, ix.receiver, hops, OwnHop {
-            field = "",
-            owned = !own_is_array(self, ix.receiver),
-            index = Some(ix.index),
-        })
+        MemberAccess(ma) => own_place_step(
+            self,
+            ma.receiver,
+            hops,
+            OwnHop { field = ma.member, owned = own_field_owned(self, &ma), index = null },
+        )
+        Index(ix) => own_place_step(
+            self,
+            ix.receiver,
+            hops,
+            OwnHop { field = "", owned = !own_is_array(self, ix.receiver), index = Some(ix.index) },
+        )
         _ => null
     }
 }
@@ -14300,7 +14340,7 @@ fn own_assign_field(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr, span: So
     }
     const shown = place_text(root.unwrap().name, path.view)
     defer shown.deinit()
-    let sb = string_builder(160, self.allocator)
+    let sb = string_builder(160)
     sb.append($"`{shown.view}` is live - assigning over it leaks the value it holds")
     own_blame(self, ma.span, &sb)
     own_report(self, span, E_ASSIGN_OVER_LIVE, sb.to_string())
@@ -14369,7 +14409,7 @@ fn own_assign_binding(self: &Checker, p: &OwnPass, id: &IdentifierExpr, span: So
     if !own_claim(p, node) {
         return
     }
-    let sb = string_builder(160, self.allocator)
+    let sb = string_builder(160)
     sb.append($"`{id.name}` is live - assigning over it leaks the value it holds")
     own_blame(self, id.span, &sb)
     own_report(self, span, E_ASSIGN_OVER_LIVE, sb.to_string())
@@ -14605,7 +14645,7 @@ fn own_match(self: &Checker, p: &OwnPass, m: &MatchExpr, slot: OwnSlot) {
     defer entry.deinit()
     // Seeded empty, not from `entry`: an arm that reinitializes a moved binding leaves it live, and
     // starting from the entry state would carry the move past every arm that undid it.
-    let merged: List(MovedRec) = list(entry.len, self.allocator)
+    let merged: List(MovedRec) = list(entry.len)
     defer merged.deinit()
 
     let reached = false
@@ -14685,7 +14725,7 @@ pub fn check_all(
     // A module the caller kept is already registered from the demand that last collected it. The
     // rest are retired before any of them registers, so a name on its way out is gone from the
     // registry by the time the module declaring it again reaches the duplicate check.
-    let retiring: Set(String) = set(self.allocator)
+    let retiring: Set(String) = set()
     for i in seq {
         if !needs_collect(recollect, i) {
             continue
@@ -14699,8 +14739,8 @@ pub fn check_all(
     // re-registered.
     let old_aliases = snapshot_aliases(self, &retiring)
     let old_defs = snapshot_nominal_defs(self, &retiring)
-    let old_consts = snapshot_types(&self.constants, &retiring, fn(t) { t }, self.allocator)
-    let old_ctx = snapshot_types(&self.ctx_fields, &retiring, fn(f) { f.ty }, self.allocator)
+    let old_consts = snapshot_types(&self.constants, &retiring, fn(t) { t })
+    let old_ctx = snapshot_types(&self.ctx_fields, &retiring, fn(f) { f.ty })
     for i in seq {
         if needs_collect(recollect, i) {
             self.aliases.evict_module(paths[i])
@@ -14900,17 +14940,16 @@ pub fn check_all(
     zonk_lambda_table(self)
     zonk_closures(self)
     // A nested instantiation can finish before its CALLER's body pins a type argument it inherited
-    // (`list(0, allocator)` inside `to_list`, whose `$T` the enclosing `for item in it` settles
-    // afterwards). Its own end-of-`instantiate` re-key ran too early, so each stored signature is
-    // zonked once more here, now that inference is over - this is what the reference gets for free
-    // by mangling at codegen. Scoped to the entries this demand instantiated; carried ones are
-    // final already.
+    // (`list(0)` inside `to_list`, whose `$T` the enclosing `for item in it` settles afterwards).
+    // Its own end-of-`instantiate` re-key ran too early, so each stored signature is zonked once
+    // more here, now that inference is over - this is what the reference gets for free by mangling
+    // at codegen. Scoped to the entries this demand instantiated; carried ones are final already.
     zonk_specializations(self)
 
     // Zonk every node-type entry so the result is final. Interned on the way (RFC-024): equal
     // shapes share one canonical tree. Presized: the zonked table holds exactly one entry per
     // source entry.
-    let zonked: Dict(NodeId, Ty) = dict(self.results.node_types.len(), self.allocator)
+    let zonked: Dict(NodeId, Ty) = dict(self.results.node_types.len())
     for entry in self.results.node_types {
         zonked.set(entry.key, self.engine.zonk(entry.value))
     }
@@ -14932,7 +14971,7 @@ pub fn check_all(
     let out_resolved_ops = self.results.take_resolved_ops()
     let out_resolved_targets = self.results.take_resolved_targets()
     let out_instantiated_types = self.results.take_instantiated_types()
-    let out_specializations = replace(&self.specs, specialization_registry(self.allocator))
+    let out_specializations = replace(&self.specs, specialization_registry())
     let out_desugars = self.results.take_desugars()
     let out_synth_strings = self.results.take_synth_strings()
     let out_default_args = self.results.take_default_args()
@@ -14941,20 +14980,20 @@ pub fn check_all(
     let out_arg_derefs = self.results.take_arg_derefs()
     let out_receiver_adapts = self.results.take_receiver_adapts()
     // The snapshot takes the original; the checker keeps a deep copy (see below).
-    const kept_nominals = self.nominals.carried_copy(self.allocator)
+    const kept_nominals = self.nominals.carried_copy()
     let out_nominals = replace(&self.nominals, kept_nominals)
-    const kept_functions = self.functions.carried_copy(self.allocator)
+    const kept_functions = self.functions.carried_copy()
     let out_functions = replace(&self.functions, kept_functions)
     let out_lambdas = self.results.take_lambdas()
     let out_spans = self.results.take_spans()
-    let out_closures = replace(&self.closures, dict(self.allocator))
+    let out_closures = replace(&self.closures, dict())
     // The snapshot's tables share the interner's canonical storage, so the interner travels with
     // them; the next demand starts one afresh.
     let out_interner = self.engine.take_interner()
 
     // Owned copies, so the snapshot names the file of any span it holds without the caller's path
     // list. An empty `file_paths` leaves `path_of` reporting every file as unknown.
-    let out_paths: List(OwnedString) = list(file_paths.len, self.allocator)
+    let out_paths: List(OwnedString) = list(file_paths.len)
     for &fp in file_paths {
         out_paths.push(from_view(fp.view))
     }
@@ -15114,15 +15153,18 @@ fn module_diags_entry(
             return null
         }
         const idx = self.nominal_diag_keys.len
-        self.nominal_diag_keys.push(from_view(path, self.allocator))
-        self.nominal_diags.set(self.nominal_diag_keys[idx].view, ModuleNomDiags {
-            collect = list(0, self.allocator),
-            resolve = list(0, self.allocator),
-            signatures = list(0, self.allocator),
-            bodies = list(0, self.allocator),
-            resolve_burn = null,
-            resolve_refs = list(0, self.allocator),
-        })
+        self.nominal_diag_keys.push(from_view(path))
+        self.nominal_diags.set(
+            self.nominal_diag_keys[idx].view,
+            ModuleNomDiags {
+                collect = list(0),
+                resolve = list(0),
+                signatures = list(0),
+                bodies = list(0),
+                resolve_burn = null,
+                resolve_refs = list(0),
+            },
+        )
     }
     return self.nominal_diags.get_ref(path)
 }
@@ -15137,7 +15179,7 @@ fn stash_resolve_burn(self: &Checker, path: String, minted: u32, params: u32) {
     if found.is_some() {
         let entry = found.unwrap()
         entry.resolve_burn = if extra { Some(minted) } else { null }
-        install(&entry.resolve_refs, replace(&self.ref_log, list(0, self.allocator)))
+        install(&entry.resolve_refs, replace(&self.ref_log, list(0)))
     }
 }
 
@@ -15271,8 +15313,8 @@ fn finish_sig_capture(
         and self.pending_anons.len == w.pending_anons
         and self.pending_members.len == w.pending_members
 
-    let facts = replace(&self.sig_nodes, list(0, self.allocator))
-    let lit_tys: List(Ty) = list(0, self.allocator)
+    let facts = replace(&self.sig_nodes, list(0))
+    let lit_tys: List(Ty) = list(0)
     for k in w.lits..self.pending_literals.len {
         lit_tys.push(self.pending_literals[k].ty)
     }
@@ -15281,7 +15323,7 @@ fn finish_sig_capture(
         var_burn = (self.engine.var_counter - w.vars) as usize,
         vars_at_start = w.vars,
         lit_tys = move lit_tys,
-        refs = replace(&self.ref_log, list(0, self.allocator)),
+        refs = replace(&self.ref_log, list(0)),
         default_texts = move default_texts,
         cacheable = clean,
         fresh = true,
@@ -15290,7 +15332,7 @@ fn finish_sig_capture(
     const found = self.sig_caches.get_ref(path)
     if found.is_none() {
         const idx = self.sig_cache_keys.len
-        self.sig_cache_keys.push(from_view(path, self.allocator))
+        self.sig_cache_keys.push(from_view(path))
         self.sig_caches.set(self.sig_cache_keys[idx].view, cache)
         return
     }
@@ -15351,11 +15393,7 @@ fn harvest_sig_caches(self: &Checker, zonked: &Dict(NodeId, Ty)) {
         entry.fresh = false
         for j in 0..entry.facts.len {
             const f = entry.facts[j]
-            entry.facts[j] = SigNodeFact {
-                node = f.node,
-                span = f.span,
-                ty = zonked.get(f.node),
-            }
+            entry.facts[j] = SigNodeFact { node = f.node, span = f.span, ty = zonked.get(f.node) }
         }
         for t in entry.lit_tys {
             const z = self.engine.zonk(t)
@@ -15479,7 +15517,7 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
     drain_pending_specs(self)
     self.slot_log_on = false
     self.site_log_on = false
-    let picks = replace(&self.slot_picks, list(0, self.allocator))
+    let picks = replace(&self.slot_picks, list(0))
     validate_literals(self, lit0, self.pending_literals.len)
     // The window's literal verdicts cannot be replayed - a flagged one keeps the module running.
     // Decided here, where the verdicts are final (nothing after the slot can pin its literals), so
@@ -15492,34 +15530,10 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
     }
     mark_flagged_slot_specs(self, lit_window)
     seal_slot(self, lit0)
-    let sites = replace(&self.slot_sites, list(0, self.allocator))
+    let sites = replace(&self.slot_sites, list(0))
 
-    let cache = ModuleBodyCache {
-        vars_at_start = vars0,
-        var_burn = var_burn,
-        synth_at_start = synth0,
-        synth_burn = synth_burn,
-        lambda_at_start = lambda0,
-        lambda_burn = lambda_burn,
-        keys = move keys,
-        types = list(0, self.allocator),
-        spans = list(0, self.allocator),
-        targets = list(0, self.allocator),
-        ops = list(0, self.allocator),
-        desugars = list(0, self.allocator),
-        lambdas = list(0, self.allocator),
-        closures = list(0, self.allocator),
-        default_args = list(0, self.allocator),
-        arg_lists = list(0, self.allocator),
-        derefs = list(0, self.allocator),
-        arg_derefs = list(0, self.allocator),
-        adapts = list(0, self.allocator),
-        picks = move picks,
-        calls = move calls,
-        spec_sites = move sites,
-        cacheable = self.slot_uninferable == 0 and lits_clean and members_clean,
-        fresh = true,
-    }
+    let cache = ModuleBodyCache { vars_at_start = vars0, var_burn = var_burn, synth_at_start = synth0, synth_burn = synth_burn, lambda_at_start = lambda0, lambda_burn = lambda_burn, keys = move keys, types = list(0), spans = list(0), targets = list(0), ops = list(0), desugars = list(0), lambdas = list(0), closures = list(0), default_args = list(0), arg_lists = list(0), derefs = list(0), arg_derefs = list(0), adapts = list(0), picks = move picks, calls = move calls, spec_sites = move sites, cacheable = self.slot_uninferable == 0
+        and lits_clean and members_clean, fresh = true }
     store_body_cache(self, path, cache)
     return .{ bodies_ns = bodies_ns, settle_ns = elapsed_ns(settle_start) }
 }
@@ -15565,25 +15579,25 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
         replay_closure(self, f)
     }
     for &f in c.lambdas {
-        self.results.record_lambda(f.node, copy_lambda(&f.info, self.allocator))
+        self.results.record_lambda(f.node, copy_lambda(&f.info))
     }
     for &f in c.default_args {
-        let exprs: List(&Expr) = list(f.exprs.len, self.allocator)
+        let exprs: List(&Expr) = list(f.exprs.len)
         exprs.push_all(f.exprs.as_slice())
         self.results.record_default_args(f.node, exprs)
     }
     for &f in c.arg_lists {
-        let exprs: List(&Expr) = list(f.exprs.len, self.allocator)
+        let exprs: List(&Expr) = list(f.exprs.len)
         exprs.push_all(f.exprs.as_slice())
         self.results.record_arg_list(f.node, exprs)
     }
     for &f in c.derefs {
-        let chain: List(ResolvedTarget) = list(f.chain.len, self.allocator)
+        let chain: List(ResolvedTarget) = list(f.chain.len)
         chain.push_all(f.chain.as_slice())
         self.results.record_receiver_deref(f.node, chain)
     }
     for &f in c.arg_derefs {
-        let chain: List(ResolvedTarget) = list(f.chain.len, self.allocator)
+        let chain: List(ResolvedTarget) = list(f.chain.len)
         chain.push_all(f.chain.as_slice())
         self.results.record_arg_deref(f.node, chain)
     }
@@ -15608,8 +15622,8 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
             deref_index = cp.deref_index,
             deref_on_arg = cp.deref_on_arg,
             function_id = cp.function_id,
-            tp_binds = dict(self.allocator),
-            inst_params = list(0, self.allocator),
+            tp_binds = dict(),
+            inst_params = list(0),
             inst_ret = cp.inst_ret,
             from_parked = false,
             caller_module = cp.caller_module,
@@ -15674,9 +15688,9 @@ fn mark_flagged_slot_specs(self: &Checker, from: usize) {
 fn seal_slot(self: &Checker, lit_floor: usize) {
     self.pending_anons.clear()
     self.pending_members.clear()
-    let names = replace(&self.pending_fn_names, list(0, self.allocator))
+    let names = replace(&self.pending_fn_names, list(0))
     names.deinit()
-    let calls = replace(&self.pending_calls, list(0, self.allocator))
+    let calls = replace(&self.pending_calls, list(0))
     for pc in calls.drain() {
         pc.arg_tys.deinit()
         pc.pos_exprs.deinit()
@@ -15691,11 +15705,11 @@ fn clear_pick_log(self: &Checker) {
 
 // Log one processed top-level pick for the module's cache, its types zonked to this moment.
 fn log_pick(self: &Checker, p: &PendingSpec, params: &List(Ty), ret: Ty) {
-    let binds: Dict(VarId, Ty) = dict(self.allocator)
+    let binds: Dict(VarId, Ty) = dict()
     for e in p.tp_binds {
         binds.set(e.key, self.engine.zonk(e.value))
     }
-    let ps: List(Ty) = list(params.len, self.allocator)
+    let ps: List(Ty) = list(params.len)
     ps.push_all(params.as_slice())
     self.slot_picks.push(CapturedPick {
         span = p.span,
@@ -15714,7 +15728,7 @@ fn log_pick(self: &Checker, p: &PendingSpec, params: &List(Ty), ret: Ty) {
 // end - the state resolution starts from. A type still open here re-pins during the replayed drains
 // exactly as it did cold, over the same burned variable ids.
 fn copy_parked_calls(self: &Checker, from: usize) List(PendingCall) {
-    let out: List(PendingCall) = list(self.pending_calls.len - from, self.allocator)
+    let out: List(PendingCall) = list(self.pending_calls.len - from)
     for k in from..self.pending_calls.len {
         out.push(copy_pending_call(self, &self.pending_calls[k], true))
     }
@@ -15722,11 +15736,11 @@ fn copy_parked_calls(self: &Checker, from: usize) List(PendingCall) {
 }
 
 fn copy_pending_call(self: &Checker, pc: &PendingCall, zonk_args: bool) PendingCall {
-    let ats: List(Ty) = list(pc.arg_tys.len, self.allocator)
+    let ats: List(Ty) = list(pc.arg_tys.len)
     for t in pc.arg_tys {
         ats.push(if zonk_args { self.engine.zonk(t) } else { t })
     }
-    let pes: List(&Expr) = list(pc.pos_exprs.len, self.allocator)
+    let pes: List(&Expr) = list(pc.pos_exprs.len)
     pes.push_all(pc.pos_exprs.as_slice())
     const recv = pc.alt_recv match {
         Some(a) => Some(if zonk_args { self.engine.zonk(a) } else { a })
@@ -15747,15 +15761,15 @@ fn copy_pending_call(self: &Checker, pc: &PendingCall, zonk_args: bool) PendingC
 // Register a cached closure environment again at the id it held (its retirement is in `recycled`,
 // keyed by the synthesized FQN) and restore its dispatch record.
 fn replay_closure(self: &Checker, f: &ClosureFact) {
-    let fields: List(Field) = list(f.fields.len, self.allocator)
+    let fields: List(Field) = list(f.fields.len)
     fields.push_all(f.fields.as_slice())
-    let empty_tps: List(VarId) = list(0, self.allocator)
+    let empty_tps: List(VarId) = list(0)
     let sd = StructDef {
         fqn = "",
         module = f.module,
         is_pub = true,
         type_params = move empty_tps,
-        assoc_params = list(0, self.allocator),
+        assoc_params = list(0),
         fields = move fields,
         decl_span = f.decl_span,
         deprecation = null,
@@ -15763,14 +15777,14 @@ fn replay_closure(self: &Checker, f: &ClosureFact) {
         is_foreign = false,
     }
     const nid = register_collected(self, NominalDef.NomStruct(move sd), from_view(f.fqn.view))
-    self.closures.set(nid, copy_sig(&f.sig, self.allocator))
+    self.closures.set(nid, copy_sig(&f.sig))
 }
 
 fn store_body_cache(self: &Checker, path: String, cache: move ModuleBodyCache) {
     const found = self.body_caches.get_ref(path)
     if found.is_none() {
         const idx = self.body_cache_keys.len
-        self.body_cache_keys.push(from_view(path, self.allocator))
+        self.body_cache_keys.push(from_view(path))
         self.body_caches.set(self.body_cache_keys[idx].view, cache)
         return
     }
@@ -15792,7 +15806,7 @@ fn harvest_body_caches(self: &Checker, zonked: &Dict(NodeId, Ty)) {
 }
 
 fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty)) {
-    let seen: Set(NodeId) = set(self.allocator)
+    let seen: Set(NodeId) = set()
     for n in c.keys.spans {
         if seen.contains(n) {
             continue
@@ -15858,7 +15872,7 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
             continue
         }
         let info = found.unwrap()
-        c.lambdas.push(NodeLambdaFact { node = n, info = copy_lambda(info, self.allocator) })
+        c.lambdas.push(NodeLambdaFact { node = n, info = copy_lambda(info) })
         info.closure_id match {
             Some(nid) => harvest_closure(self, c, nid)
             None => {}
@@ -15872,7 +15886,7 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
         seen.add(n)
         const found = self.results.default_args.get_ref(n)
         if found.is_some() {
-            let exprs: List(&Expr) = list(found.unwrap().len, self.allocator)
+            let exprs: List(&Expr) = list(found.unwrap().len)
             exprs.push_all(found.unwrap().as_slice())
             c.default_args.push(NodeExprsFact { node = n, exprs = move exprs })
         }
@@ -15885,7 +15899,7 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
         seen.add(n)
         const found = self.results.arg_lists.get_ref(n)
         if found.is_some() {
-            let exprs: List(&Expr) = list(found.unwrap().len, self.allocator)
+            let exprs: List(&Expr) = list(found.unwrap().len)
             exprs.push_all(found.unwrap().as_slice())
             c.arg_lists.push(NodeExprsFact { node = n, exprs = move exprs })
         }
@@ -15898,7 +15912,7 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
         seen.add(n)
         const found = self.results.receiver_derefs.get_ref(n)
         if found.is_some() {
-            let chain: List(ResolvedTarget) = list(found.unwrap().len, self.allocator)
+            let chain: List(ResolvedTarget) = list(found.unwrap().len)
             chain.push_all(found.unwrap().as_slice())
             c.derefs.push(NodeDerefsFact { node = n, chain = move chain })
         }
@@ -15911,7 +15925,7 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
         seen.add(n)
         const found = self.results.arg_derefs.get_ref(n)
         if found.is_some() {
-            let chain: List(ResolvedTarget) = list(found.unwrap().len, self.allocator)
+            let chain: List(ResolvedTarget) = list(found.unwrap().len)
             chain.push_all(found.unwrap().as_slice())
             c.arg_derefs.push(NodeDerefsFact { node = n, chain = move chain })
         }
@@ -15929,7 +15943,7 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
     }
     seen.deinit()
 
-    install(&c.keys, captured_keys(self.allocator))
+    install(&c.keys, captured_keys())
 }
 
 // One closure environment's registry definition and dispatch record, copied for the cache. Runs
@@ -15957,15 +15971,15 @@ fn closure_fact_of(self: &Checker, nid: NominalId) ClosureFact? {
         NomStruct(s) => move s
         _ => return null
     }
-    let fields: List(Field) = list(sd.fields.len, self.allocator)
+    let fields: List(Field) = list(sd.fields.len)
     fields.push_all(sd.fields.as_slice())
     return Some(ClosureFact {
         id = nid,
-        fqn = from_view(nominal_fqn(def), self.allocator),
+        fqn = from_view(nominal_fqn(def)),
         module = sd.module,
         fields = move fields,
         decl_span = sd.decl_span,
-        sig = copy_sig(sig.unwrap(), self.allocator),
+        sig = copy_sig(sig.unwrap()),
     })
 }
 
@@ -15998,7 +16012,7 @@ fn harvest_spec_caches(self: &Checker) {
         if sp.harvested {
             continue
         }
-        let facts: List(ClosureFact) = list(0, self.allocator)
+        let facts: List(ClosureFact) = list(0)
         for e in sp.overlay.lambdas {
             e.value.closure_id match {
                 Some(nid) => {
@@ -16028,13 +16042,9 @@ fn harvest_spec_caches(self: &Checker) {
 // The retiring modules' entries of `map` (the constants, the context fields), name id -> the type
 // `ty_of` reads off each. An unannotated constant's type is its variable, which the aligned stream
 // re-mints at the same id, so handle equality holds exactly when the entry re-registers the same.
-fn snapshot_types(
-    map: &FqnMap($V),
-    retiring: &Set(String),
-    ty_of: $F,
-    allocator: &Allocator,
-) Dict(StrId, Ty) where F: fn(V) Ty {
-    let out: Dict(StrId, Ty) = dict(allocator)
+fn snapshot_types(map: &FqnMap($V), retiring: &Set(String), ty_of: $F) Dict(StrId, Ty)
+where F: fn(V) Ty {
+    let out: Dict(StrId, Ty) = dict()
     for entry in map.entries {
         const fqn = map.name(entry.key)
         if retiring.contains(module_of(fqn, last_dot(fqn))) {
@@ -16081,17 +16091,17 @@ fn cmp_ctx_row(a: CtxRow, b: CtxRow) Ord {
 // the context's. Returns the fields' FQNs in that order. Checking never reads these fields -
 // `context.f` resolves through `ctx_fields` - so no module's check depends on the assembly.
 fn assemble_context(self: &Checker) List(OwnedString) {
-    let rows: List(CtxRow) = list(0, self.allocator)
+    let rows: List(CtxRow) = list(0)
     defer rows.deinit()
     for entry in self.ctx_fields.entries {
         const fqn = self.ctx_fields.name(entry.key)
         rows.push(CtxRow { fqn = fqn, module = module_of(fqn, last_dot(fqn)), field = entry.value })
     }
     rows.sort(cmp_ctx_row)
-    let fqns: List(OwnedString) = list(rows.len, self.allocator)
-    let fields: List(Field) = list(rows.len, self.allocator)
+    let fqns: List(OwnedString) = list(rows.len)
+    let fields: List(Field) = list(rows.len)
     for &r in rows {
-        fqns.push(from_view(r.fqn, self.allocator))
+        fqns.push(from_view(r.fqn))
         fields.push(Field {
             name = r.field.name,
             ty = r.field.ty,
@@ -16109,8 +16119,8 @@ fn assemble_context(self: &Checker) List(OwnedString) {
             fqn = sd.fqn,
             module = sd.module,
             is_pub = sd.is_pub,
-            type_params = list(0, self.allocator),
-            assoc_params = list(0, self.allocator),
+            type_params = list(0),
+            assoc_params = list(0),
             fields = move fields,
             decl_span = sd.decl_span,
             deprecation = sd.deprecation,
@@ -16142,7 +16152,7 @@ fn any_open_constant(self: &Checker) bool {
 // frees the bodies. Compared after re-resolution: a changed field or variant re-types every body
 // that touches the nominal (member access bakes field indices, patterns bake variant shapes).
 fn snapshot_nominal_defs(self: &Checker, retiring: &Set(String)) Dict(String, OwnedString) {
-    let out: Dict(String, OwnedString) = dict(self.allocator)
+    let out: Dict(String, OwnedString) = dict()
     for i in 0..(self.nominals.next_id as usize) {
         const found = self.nominals.find(i as NominalId)
         if found.is_none() {
@@ -16152,7 +16162,7 @@ fn snapshot_nominal_defs(self: &Checker, retiring: &Set(String)) Dict(String, Ow
         if !retiring.contains(nominal_module(def)) {
             continue
         }
-        let sb = string_builder(64, self.allocator)
+        let sb = string_builder(64)
         render_def_fingerprint(def, &sb)
         out.set(nominal_fqn(def), sb.to_string())
     }
@@ -16160,7 +16170,7 @@ fn snapshot_nominal_defs(self: &Checker, retiring: &Set(String)) Dict(String, Ow
 }
 
 fn nominal_defs_differ(self: &Checker, old: &Dict(String, OwnedString)) bool {
-    let sb = string_builder(64, self.allocator)
+    let sb = string_builder(64)
     defer sb.deinit()
     for entry in old {
         const id = self.nominals.lookup_fqn(entry.key)
@@ -16236,7 +16246,7 @@ fn collect_default_texts(
     module: &Module,
     sources: &List(OwnedString),
 ) List(OwnedString) {
-    let out: List(OwnedString) = list(0, self.allocator)
+    let out: List(OwnedString) = list(0)
     if sources.len == 0 {
         return out
     }
@@ -16245,9 +16255,7 @@ fn collect_default_texts(
             Function(fd) => {
                 for &p in fd.params {
                     p.default_value match {
-                        Some(d) => out.push(
-                            from_view(default_text_of(sources, expr_span(d)), self.allocator),
-                        )
+                        Some(d) => out.push(from_view(default_text_of(sources, expr_span(d))))
                         None => {}
                     }
                 }
@@ -16296,14 +16304,14 @@ fn default_texts_differ(old: &List(OwnedString), new: &List(OwnedString)) bool {
 // no canonical spelling is left out; `aliases_differ` then counts its re-registration as a change,
 // which is the safe direction.
 fn snapshot_aliases(self: &Checker, retiring: &Set(String)) Dict(StrId, OwnedString) {
-    let out: Dict(StrId, OwnedString) = dict(self.allocator)
+    let out: Dict(StrId, OwnedString) = dict()
     for entry in self.aliases.entries {
         const fqn = self.aliases.name(entry.key)
         const dot = last_dot(fqn)
         if !retiring.contains(module_of(fqn, dot)) {
             continue
         }
-        let sb = string_builder(32, self.allocator)
+        let sb = string_builder(32)
         const body = &entry.value
         if !render_alias_body(body, &sb) {
             sb.deinit()
@@ -16329,7 +16337,7 @@ fn aliases_differ(self: &Checker, old: &Dict(StrId, OwnedString), retiring: &Set
         if prev.is_none() {
             return true
         }
-        let sb = string_builder(32, self.allocator)
+        let sb = string_builder(32)
         defer sb.deinit()
         const body = &entry.value
         if !render_alias_body(body, &sb) {
@@ -16480,14 +16488,14 @@ fn render_array_len(e: &Expr, sb: &StringBuilder) bool {
 // order is filtered to the modules that exist and backfilled, so a stale or partial order can never
 // drop a module from the check.
 fn visit_sequence(self: &Checker, n: usize, order: &List(usize)?) List(usize) {
-    let seq = list(n, self.allocator)
+    let seq = list(n)
     if order.is_none() {
         for i in 0..n {
             seq.push(i)
         }
         return seq
     }
-    let seen = list(n, self.allocator)
+    let seen = list(n)
     defer seen.deinit()
     for _i in 0..n {
         seen.push(false)

@@ -83,8 +83,8 @@ pub type LayoutCache = struct {
     entries: List(Layout)
 }
 
-pub fn layout_cache(allocator: &Allocator = context.allocator) LayoutCache {
-    return .{ entries = list(0, allocator) }
+pub fn layout_cache() LayoutCache {
+    return .{ entries = list(0) }
 }
 
 pub fn deinit(self: move LayoutCache) {
@@ -126,9 +126,8 @@ pub fn layout_of(
     ty: Ty,
     reg: &NominalRegistry,
     cache: &LayoutCache? = null,
-    allocator: &Allocator = context.allocator,
 ) Layout {
-    return layout_rec(it, ty, reg, cache, allocator)
+    return layout_rec(it, ty, reg, cache)
 }
 
 // Layout of a struct instantiation: `args` substitutes the struct's type parameters (empty for
@@ -139,9 +138,8 @@ pub fn struct_layout(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache? = null,
-    allocator: &Allocator = context.allocator,
 ) StructLayout {
-    return struct_layout_impl(it, def, args, reg, cache, allocator)
+    return struct_layout_impl(it, def, args, reg, cache)
 }
 
 // Layout of an enum instantiation. Recognises the `Option(&T)` niche.
@@ -151,9 +149,8 @@ pub fn enum_layout(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache? = null,
-    allocator: &Allocator = context.allocator,
 ) EnumLayout {
-    return enum_layout_impl(it, def, args, reg, cache, allocator)
+    return enum_layout_impl(it, def, args, reg, cache)
 }
 
 // The declared type of field `index` with the instantiation's type arguments substituted in (the
@@ -232,13 +229,7 @@ fn member_ty(
 
 // Core walk
 
-fn layout_rec(
-    it: &TypeInterner,
-    ty: Ty,
-    reg: &NominalRegistry,
-    cache: &LayoutCache?,
-    alloc: &Allocator,
-) Layout {
+fn layout_rec(it: &TypeInterner, ty: Ty, reg: &NominalRegistry, cache: &LayoutCache?) Layout {
     let hit = cache_get(cache, ty)
     if hit.is_some() {
         return hit.unwrap()
@@ -251,10 +242,10 @@ fn layout_rec(
         NPrim(p) => prim_layout(p)
         NRef(_) => lay(8, 8)
         NFunc(_) => lay(8, 8)
-        NArray(a) => array_layout(it, &a, reg, cache, alloc)
-        NTuple(span) => span_size(it, span, reg, cache, alloc)
-        NRecord(rec) => span_size(it, rec.tys, reg, cache, alloc)
-        NNominal(nn) => nominal_layout(it, &nn, reg, cache, alloc)
+        NArray(a) => array_layout(it, &a, reg, cache)
+        NTuple(span) => span_size(it, span, reg, cache)
+        NRecord(rec) => span_size(it, rec.tys, reg, cache)
+        NNominal(nn) => nominal_layout(it, &nn, reg, cache)
         NNever => lay(0, 1)
         NVoid => lay(0, 1)
         NError => lay(0, 1)
@@ -287,9 +278,8 @@ fn array_layout(
     a: &NArrayNode,
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator,
 ) Layout {
-    let el = layout_rec(it, a.elem, reg, cache, alloc)
+    let el = layout_rec(it, a.elem, reg, cache)
     return lay(el.size * a.length, el.align)
 }
 
@@ -302,22 +292,21 @@ fn fields_layout(
     repr: Repr,
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator,
 ) StructLayout {
     let n = tys.len
-    let fls: List(Layout) = list(n, alloc)
+    let fls: List(Layout) = list(n)
     let max_align: usize = 1
     for i in 0..n {
-        let fl = layout_rec(it, tys[i], reg, cache, alloc)
+        let fl = layout_rec(it, tys[i], reg, cache)
         fls.push(fl)
         if fl.align > max_align {
             max_align = fl.align
         }
     }
 
-    let order = field_order(&fls, repr, max_align, alloc)
+    let order = field_order(&fls, repr, max_align)
 
-    let offsets: List(usize) = list(n, alloc)
+    let offsets: List(usize) = list(n)
     for i in 0..n { offsets.push(0) }
     let cursor: usize = 0
     for di in order {
@@ -337,9 +326,9 @@ fn fields_layout(
 // of its own alignment, this packs each field at its natural offset with zero internal padding -
 // the minimal-size layout. Alignments are powers of two, so a halving scan from `max_align` down to
 // 1 buckets them without a sort.
-fn field_order(fls: &List(Layout), repr: Repr, max_align: usize, alloc: &Allocator) List(usize) {
+fn field_order(fls: &List(Layout), repr: Repr, max_align: usize) List(usize) {
     let n = fls.len
-    let order: List(usize) = list(n, alloc)
+    let order: List(usize) = list(n)
     let is_c = repr match { C => true, Auto => false }
     if is_c {
         for i in 0..n { order.push(i) }
@@ -368,23 +357,16 @@ pub fn tuple_layout(
     elems: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache? = null,
-    allocator: &Allocator = context.allocator,
 ) StructLayout {
-    return fields_layout(it, elems, Repr.Auto, reg, cache, allocator)
+    return fields_layout(it, elems, Repr.Auto, reg, cache)
 }
 
 // Size/align of a positional tuple or anonymous record's child window (offsets discarded). These
 // have no declaration to lock them, so they take the default auto layout.
-fn span_size(
-    it: &TypeInterner,
-    span: ChildSpan,
-    reg: &NominalRegistry,
-    cache: &LayoutCache?,
-    alloc: &Allocator,
-) Layout {
-    let tys: List(Ty) = list(span.len, alloc)
+fn span_size(it: &TypeInterner, span: ChildSpan, reg: &NominalRegistry, cache: &LayoutCache?) Layout {
+    let tys: List(Ty) = list(span.len)
     for i in 0..span.len { tys.push(it.child_at(span, i)) }
-    let r = aggregate_size(it, &tys, reg, cache, alloc)
+    let r = aggregate_size(it, &tys, reg, cache)
     tys.deinit()
     return r
 }
@@ -394,9 +376,8 @@ fn aggregate_size(
     elems: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator,
 ) Layout {
-    let sl = fields_layout(it, elems, Repr.Auto, reg, cache, alloc)
+    let sl = fields_layout(it, elems, Repr.Auto, reg, cache)
     let r = lay(sl.size, sl.align)
     sl.offsets.deinit()
     return r
@@ -407,9 +388,8 @@ fn nominal_layout(
     nn: &NNominalNode,
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator,
 ) Layout {
-    let args: List(Ty) = list(nn.args.len, alloc)
+    let args: List(Ty) = list(nn.args.len)
     defer args.deinit()
     for i in 0..nn.args.len { args.push(it.child_at(nn.args, i)) }
     let def = reg.get(nn.id)
@@ -423,8 +403,8 @@ fn nominal_layout(
                     let tdef = reg.get(ti.unwrap())
                     tdef.* match {
                         NomStruct(ts) => {
-                            let none: List(Ty) = list(0, alloc)
-                            let r = struct_size(it, &ts, &none, reg, cache, alloc)
+                            let none: List(Ty) = list(0)
+                            let r = struct_size(it, &ts, &none, reg, cache)
                             none.deinit()
                             return r
                         }
@@ -432,9 +412,9 @@ fn nominal_layout(
                     }
                 }
             }
-            struct_size(it, &s, &args, reg, cache, alloc)
+            struct_size(it, &s, &args, reg, cache)
         }
-        NomEnum(e) => enum_size(it, &e, &args, reg, cache, alloc)
+        NomEnum(e) => enum_size(it, &e, &args, reg, cache)
     }
 }
 
@@ -444,9 +424,8 @@ fn struct_size(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator,
 ) Layout {
-    let sl = struct_layout_impl(it, def, args, reg, cache, alloc)
+    let sl = struct_layout_impl(it, def, args, reg, cache)
     let r = lay(sl.size, sl.align)
     sl.offsets.deinit()
     return r
@@ -458,9 +437,8 @@ fn enum_size(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator,
 ) Layout {
-    let el = enum_layout_impl(it, def, args, reg, cache, alloc)
+    let el = enum_layout_impl(it, def, args, reg, cache)
     return lay(el.size, el.align)
 }
 
@@ -472,23 +450,20 @@ fn struct_layout_impl(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator,
 ) StructLayout {
-    let tys: List(Ty) = list(def.fields.len, alloc)
+    let tys: List(Ty) = list(def.fields.len)
     for i in 0..def.fields.len {
-        tys.push(
-            member_ty(
-                it,
-                reg,
-                def.fqn,
-                &def.type_params,
-                &def.assoc_params,
-                args,
-                def.fields[i].ty,
-            ),
-        )
+        tys.push(member_ty(
+            it,
+            reg,
+            def.fqn,
+            &def.type_params,
+            &def.assoc_params,
+            args,
+            def.fields[i].ty,
+        ))
     }
-    let sl = fields_layout(it, &tys, repr_of(def), reg, cache, alloc)
+    let sl = fields_layout(it, &tys, repr_of(def), reg, cache)
     tys.deinit()
     if def.is_simd {
         return simd_layout(sl)
@@ -507,19 +482,24 @@ pub fn variant_payload_offsets(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache? = null,
-    allocator: &Allocator = context.allocator,
 ) List(usize) {
-    let el = enum_layout(it, def, args, reg, cache, allocator)
+    let el = enum_layout(it, def, args, reg, cache)
     let v = &def.variants[vnum]
-    let ptys: List(Ty) = list(v.payloads.len, allocator)
+    let ptys: List(Ty) = list(v.payloads.len)
     for j in 0..v.payloads.len {
-        ptys.push(
-            member_ty(it, reg, def.fqn, &def.type_params, &def.assoc_params, args, v.payloads[j]),
-        )
+        ptys.push(member_ty(
+            it,
+            reg,
+            def.fqn,
+            &def.type_params,
+            &def.assoc_params,
+            args,
+            v.payloads[j],
+        ))
     }
-    let pl = fields_layout(it, &ptys, Repr.Auto, reg, cache, allocator)
+    let pl = fields_layout(it, &ptys, Repr.Auto, reg, cache)
     ptys.deinit()
-    let out: List(usize) = list(pl.offsets.len, allocator)
+    let out: List(usize) = list(pl.offsets.len)
     for j in 0..pl.offsets.len {
         out.push(el.payload_offset + pl.offsets[j])
     }
@@ -539,7 +519,6 @@ fn enum_layout_impl(
     args: &List(Ty),
     reg: &NominalRegistry,
     cache: &LayoutCache?,
-    alloc: &Allocator,
 ) EnumLayout {
     if is_option_niche(it, def, args) {
         return .{ size = 8, align = 8, tag_size = 0, payload_offset = 0, is_niche = true }
@@ -555,21 +534,19 @@ fn enum_layout_impl(
             continue
         }
         any_payload = true
-        let ptys: List(Ty) = list(v.payloads.len, alloc)
+        let ptys: List(Ty) = list(v.payloads.len)
         for j in 0..v.payloads.len {
-            ptys.push(
-                member_ty(
-                    it,
-                    reg,
-                    def.fqn,
-                    &def.type_params,
-                    &def.assoc_params,
-                    args,
-                    v.payloads[j],
-                ),
-            )
+            ptys.push(member_ty(
+                it,
+                reg,
+                def.fqn,
+                &def.type_params,
+                &def.assoc_params,
+                args,
+                v.payloads[j],
+            ))
         }
-        let pl = fields_layout(it, &ptys, Repr.Auto, reg, cache, alloc)
+        let pl = fields_layout(it, &ptys, Repr.Auto, reg, cache)
         ptys.deinit()
         pl.offsets.deinit()
         if pl.size > largest {
@@ -769,30 +746,24 @@ test "auto layout reorders fields by alignment to minimise padding" {
     let reg = nominal_registry()
     defer reg.deinit()
     let fields: List(Field) = list(3)
-    fields.push(
-        Field {
-            name = "a",
-            ty = prim_of(PrimitiveKind.I8),
-            decl_span = none_span(),
-            owned = false,
-        },
-    ) // decl 0, align 1
-    fields.push(
-        Field {
-            name = "b",
-            ty = prim_of(PrimitiveKind.I64),
-            decl_span = none_span(),
-            owned = false,
-        },
-    ) // decl 1, align 8
-    fields.push(
-        Field {
-            name = "c",
-            ty = prim_of(PrimitiveKind.I16),
-            decl_span = none_span(),
-            owned = false,
-        },
-    ) // decl 2, align 2
+    fields.push(Field {
+        name = "a",
+        ty = prim_of(PrimitiveKind.I8),
+        decl_span = none_span(),
+        owned = false,
+    }) // decl 0, align 1
+    fields.push(Field {
+        name = "b",
+        ty = prim_of(PrimitiveKind.I64),
+        decl_span = none_span(),
+        owned = false,
+    }) // decl 1, align 8
+    fields.push(Field {
+        name = "c",
+        ty = prim_of(PrimitiveKind.I16),
+        decl_span = none_span(),
+        owned = false,
+    }) // decl 2, align 2
     let def = StructDef {
         fqn = "T",
         module = "",
@@ -821,30 +792,24 @@ test "C repr keeps declaration order and C padding" {
     let reg = nominal_registry()
     defer reg.deinit()
     let fields: List(Field) = list(3)
-    fields.push(
-        Field {
-            name = "a",
-            ty = prim_of(PrimitiveKind.I8),
-            decl_span = none_span(),
-            owned = false,
-        },
-    )
-    fields.push(
-        Field {
-            name = "b",
-            ty = prim_of(PrimitiveKind.I64),
-            decl_span = none_span(),
-            owned = false,
-        },
-    )
-    fields.push(
-        Field {
-            name = "c",
-            ty = prim_of(PrimitiveKind.I16),
-            decl_span = none_span(),
-            owned = false,
-        },
-    )
+    fields.push(Field {
+        name = "a",
+        ty = prim_of(PrimitiveKind.I8),
+        decl_span = none_span(),
+        owned = false,
+    })
+    fields.push(Field {
+        name = "b",
+        ty = prim_of(PrimitiveKind.I64),
+        decl_span = none_span(),
+        owned = false,
+    })
+    fields.push(Field {
+        name = "c",
+        ty = prim_of(PrimitiveKind.I16),
+        decl_span = none_span(),
+        owned = false,
+    })
     let def = StructDef {
         fqn = "T",
         module = "",

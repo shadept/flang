@@ -104,21 +104,19 @@ pub type NominalRegistry = struct {
     // A ground instantiation of a definition with `assoc_params` -> the types they solve to there,
     // in `assoc_params` order. Filled by the checker, read by every field substitution.
     assoc_solved: Dict(Ty, List(Ty))
-    allocator: &Allocator
 }
 
-pub fn nominal_registry(allocator: &Allocator = context.allocator) NominalRegistry {
-    let defs: Dict(NominalId, NominalDef) = dict(allocator)
-    let by_fqn: Dict(String, NominalId) = dict(allocator)
-    let owned_fqns: List(OwnedString) = list(0, allocator)
-    let solved: Dict(Ty, List(Ty)) = dict(allocator)
+pub fn nominal_registry() NominalRegistry {
+    let defs: Dict(NominalId, NominalDef) = dict()
+    let by_fqn: Dict(String, NominalId) = dict()
+    let owned_fqns: List(OwnedString) = list(0)
+    let solved: Dict(Ty, List(Ty)) = dict()
     return .{
         defs = move defs,
         next_id = 0 as NominalId,
         by_fqn = move by_fqn,
         owned_fqns = move owned_fqns,
         assoc_solved = move solved,
-        allocator = allocator,
     }
 }
 
@@ -141,9 +139,8 @@ pub fn instance_subst(
     assoc: &List(VarId),
     args: ChildSpan,
     it: &TypeInterner,
-    alloc: &Allocator,
 ) Dict(VarId, Ty) {
-    let subst: Dict(VarId, Ty) = dict(params.len + assoc.len, alloc)
+    let subst: Dict(VarId, Ty) = dict(params.len + assoc.len)
     for i in 0..params.len {
         if i >= args.len {
             break
@@ -175,11 +172,7 @@ pub fn clear_solved(self: &NominalRegistry) {
 //
 // Caller is responsible for checking duplicates first - registering an FQN twice overwrites the
 // index and leaks the previous definition.
-pub fn register(
-    self: &NominalRegistry,
-    def: move NominalDef,
-    fqn_owned: move OwnedString,
-) NominalId {
+pub fn register(self: &NominalRegistry, def: move NominalDef, fqn_owned: move OwnedString) NominalId {
     let id: NominalId = self.next_id
     self.next_id = id + 1
     let idx = self.owned_fqns.len
@@ -224,12 +217,7 @@ fn with_fqn(def: move NominalDef, new_fqn: String) NominalDef {
 // Re-register a definition under an id the registry handed out before, using the FQN view it
 // already owns. `next_id` is untouched, so an id retired by `evict` and put back here keeps naming
 // the same declaration.
-pub fn register_at(
-    self: &NominalRegistry,
-    id: NominalId,
-    def: move NominalDef,
-    fqn_stable: String,
-) {
+pub fn register_at(self: &NominalRegistry, id: NominalId, def: move NominalDef, fqn_stable: String) {
     let fixed = with_fqn(def, fqn_stable)
     self.defs.set(id, fixed)
     self.by_fqn.set(fqn_stable, id)
@@ -239,18 +227,15 @@ pub fn register_at(
 // ids stay monotone across the copy. Field and variant lists are cloned; the `Ty` handles inside
 // them stay valid as long as the type table they index does. Used to hand a demand's registry to
 // the next one while the previous demand's snapshot keeps its own.
-pub fn carried_copy(
-    self: &NominalRegistry,
-    allocator: &Allocator = context.allocator,
-) NominalRegistry {
-    let out = nominal_registry(allocator)
+pub fn carried_copy(self: &NominalRegistry) NominalRegistry {
+    let out = nominal_registry()
     // Through a reference: a mutating call on a field of a local value struct mutates a copy (see
     // docs/known-issues.md, mutation through a field chain).
-    fill_carried(&out, self, allocator)
+    fill_carried(&out, self)
     return out
 }
 
-fn fill_carried(out: &NominalRegistry, src: &NominalRegistry, allocator: &Allocator) {
+fn fill_carried(out: &NominalRegistry, src: &NominalRegistry) {
     for i in 0..(src.next_id as usize) {
         const id = i as NominalId
         const found = src.defs.get_ref(id)
@@ -258,22 +243,22 @@ fn fill_carried(out: &NominalRegistry, src: &NominalRegistry, allocator: &Alloca
             continue
         }
         const idx = out.owned_fqns.len
-        out.owned_fqns.push(from_view(nominal_fqn(found.unwrap()), allocator))
+        out.owned_fqns.push(from_view(nominal_fqn(found.unwrap())))
         const __found_v = found.unwrap()
-        out.register_at(id, clone_def(__found_v, allocator), out.owned_fqns[idx].view)
+        out.register_at(id, clone_def(__found_v), out.owned_fqns[idx].view)
     }
     out.next_id = src.next_id
 }
 
-fn clone_def(def: &NominalDef, allocator: &Allocator) NominalDef {
+fn clone_def(def: &NominalDef) NominalDef {
     return def.* match {
         NomStruct(s) => NominalDef.NomStruct(StructDef {
             fqn = s.fqn,
             module = s.module,
             is_pub = s.is_pub,
-            type_params = clone_list(&s.type_params, allocator),
-            assoc_params = clone_list(&s.assoc_params, allocator),
-            fields = clone_list(&s.fields, allocator),
+            type_params = clone_list(&s.type_params),
+            assoc_params = clone_list(&s.assoc_params),
+            fields = clone_list(&s.fields),
             decl_span = s.decl_span,
             deprecation = s.deprecation,
             is_simd = s.is_simd,
@@ -283,38 +268,38 @@ fn clone_def(def: &NominalDef, allocator: &Allocator) NominalDef {
             fqn = e.fqn,
             module = e.module,
             is_pub = e.is_pub,
-            type_params = clone_list(&e.type_params, allocator),
-            assoc_params = clone_list(&e.assoc_params, allocator),
-            variants = clone_variants(&e.variants, allocator),
-            tag_values = clone_tags(&e.tag_values, allocator),
+            type_params = clone_list(&e.type_params),
+            assoc_params = clone_list(&e.assoc_params),
+            variants = clone_variants(&e.variants),
+            tag_values = clone_tags(&e.tag_values),
             decl_span = e.decl_span,
             deprecation = e.deprecation,
         })
     }
 }
 
-fn clone_list(xs: &List($T), allocator: &Allocator) List(T) where T: copyable {
-    let out: List(T) = list(xs.len, allocator)
+fn clone_list(xs: &List($T)) List(T) where T: copyable {
+    let out: List(T) = list(xs.len)
     out.push_all(xs.as_slice())
     return out
 }
 
-fn clone_variants(xs: &List(VariantDef), allocator: &Allocator) List(VariantDef) {
-    let out: List(VariantDef) = list(xs.len, allocator)
+fn clone_variants(xs: &List(VariantDef)) List(VariantDef) {
+    let out: List(VariantDef) = list(xs.len)
     for &v in xs {
         out.push(VariantDef {
             name = v.name,
-            payloads = clone_list(&v.payloads, allocator),
+            payloads = clone_list(&v.payloads),
             decl_span = v.decl_span,
         })
     }
     return out
 }
 
-fn clone_tags(tags: &Option(Dict(String, i64)), allocator: &Allocator) Dict(String, i64)? {
+fn clone_tags(tags: &Option(Dict(String, i64))) Dict(String, i64)? {
     return tags.* match {
         Some(t) => {
-            let out: Dict(String, i64) = dict(allocator)
+            let out: Dict(String, i64) = dict()
             for e in t {
                 out.set(e.key, e.value)
             }

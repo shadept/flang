@@ -86,10 +86,7 @@ pub type BuildOptions = struct {
     profile_nodes: u32
     profile_depth: u32
     profile_out: String?
-
-    // Allocator used for everything the backend allocates on behalf of
-    // the call (temp strings, argv lists, the result struct, …). Null
-    // means the global allocator, resolved at each allocating leaf.
+    // The option lists grow and free through it.
     allocator: &Allocator
 }
 
@@ -97,9 +94,7 @@ pub type BuildOptions = struct {
 // empty. Nothing allocates until the first `add_*`.
 //
 // - `output_path`: borrowed; the caller keeps it alive through `compile()`.
-// - `allocator`: used for everything the backend allocates on the call's behalf. Null is the
-//   global allocator.
-pub fn build_options(output_path: String, allocator: &Allocator = context.allocator) BuildOptions {
+pub fn build_options(output_path: String) BuildOptions {
     // A zero-initialised unmanaged list is the empty list; nothing allocates until the first add,
     // and each field gets its own.
     let c_files: UnmanagedList(String)
@@ -125,7 +120,7 @@ pub fn build_options(output_path: String, allocator: &Allocator = context.alloca
         profile_nodes = 0,
         profile_depth = 0,
         profile_out = null,
-        allocator = allocator,
+        allocator = context.allocator,
     }
 }
 
@@ -296,7 +291,6 @@ pub type CompilerInfo = struct {
     path: OwnedString
     extra_env_keys: List(OwnedString)
     extra_env_vals: List(OwnedString)
-    allocator: &Allocator
 }
 
 pub fn deinit(self: move CompilerInfo) {

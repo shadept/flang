@@ -164,7 +164,6 @@ pub type TypeInterner = struct {
     // ponytail: measurement scaffolding for the RFC-024 key rework; drop once the numbers land.
     n_calls: usize
     n_hits: usize
-    allocator: &Allocator
 }
 
 // Default capacity of the per-node arrays, from measured checks: a stdlib-bound check of a trivial
@@ -176,27 +175,26 @@ const SEED_CAPACITY: usize = 32768
 // The fixed leaves `type_interner` seeds: void, never, <error>, 14 prims.
 const SEED_LEN: usize = 17
 
-pub fn type_interner(allocator: &Allocator = context.allocator) TypeInterner {
-    return type_interner(allocator, SEED_CAPACITY)
+pub fn type_interner() TypeInterner {
+    return type_interner(SEED_CAPACITY)
 }
 
 // `capacity` sizes the per-node arrays. The one-argument form uses a default that fits a real
 // check; pass 0 for a table that only stands in for one (an empty result, an engine that has handed
 // its table away).
-pub fn type_interner(allocator: &Allocator, capacity: usize) TypeInterner {
+pub fn type_interner(capacity: usize) TypeInterner {
     let self = TypeInterner {
-        nodes = list(capacity, allocator),
-        children = list(capacity, allocator),
-        ground = list(capacity, allocator),
-        rec_names = list(0, allocator),
-        rec_spans = list(0, allocator),
-        by_key = dict(capacity, allocator),
-        kids = dict(capacity, allocator),
-        field_kids = dict(0, allocator),
+        nodes = list(capacity),
+        children = list(capacity),
+        ground = list(capacity),
+        rec_names = list(0),
+        rec_spans = list(0),
+        by_key = dict(capacity),
+        kids = dict(capacity),
+        field_kids = dict(0),
         kids_next = 1,
         n_calls = 0,
         n_hits = 0,
-        allocator = allocator,
     }
     seed_leaf(&self, TyNode.NVoid)
     seed_leaf(&self, TyNode.NNever)
@@ -452,69 +450,49 @@ pub fn nominal_of(self: &TypeInterner, id: NominalId, args: &List(Ty)) Ty {
 
 // `ty` with every variable in `subst` replaced by its mapping, re-interned. Variables not in the
 // map stay; a type citing none is returned as is.
-pub fn substitute(self: &TypeInterner, ty: Ty, subst: &Dict(VarId, Ty), alloc: &Allocator) Ty {
+pub fn substitute(self: &TypeInterner, ty: Ty, subst: &Dict(VarId, Ty)) Ty {
     return self.node(ty) match {
         NVar(v) => subst.get(v.id) match {
             Some(rep) => rep
             None => ty
         }
-        NRef(inner) => self.ref_of(self.substitute(inner, subst, alloc))
-        NArray(arr) => self.array_of(self.substitute(arr.elem, subst, alloc), arr.length)
-        NFunc(f) => substitute_func(self, &f, subst, alloc)
-        NTuple(span) => substitute_tuple(self, span, subst, alloc)
-        NRecord(rec) => substitute_record(self, &rec, subst, alloc)
-        NNominal(nn) => substitute_nominal(self, &nn, subst, alloc)
+        NRef(inner) => self.ref_of(self.substitute(inner, subst))
+        NArray(arr) => self.array_of(self.substitute(arr.elem, subst), arr.length)
+        NFunc(f) => substitute_func(self, &f, subst)
+        NTuple(span) => substitute_tuple(self, span, subst)
+        NRecord(rec) => substitute_record(self, &rec, subst)
+        NNominal(nn) => substitute_nominal(self, &nn, subst)
         _ => ty
     }
 }
 
-fn substitute_span(
-    self: &TypeInterner,
-    span: ChildSpan,
-    subst: &Dict(VarId, Ty),
-    alloc: &Allocator,
-) List(Ty) {
-    let out: List(Ty) = list(span.len, alloc)
+fn substitute_span(self: &TypeInterner, span: ChildSpan, subst: &Dict(VarId, Ty)) List(Ty) {
+    let out: List(Ty) = list(span.len)
     for i in 0..span.len {
-        out.push(self.substitute(self.child_at(span, i), subst, alloc))
+        out.push(self.substitute(self.child_at(span, i), subst))
     }
     return out
 }
 
-fn substitute_func(
-    self: &TypeInterner,
-    f: &NFuncNode,
-    subst: &Dict(VarId, Ty),
-    alloc: &Allocator,
-) Ty {
-    let ps = substitute_span(self, f.params, subst, alloc)
+fn substitute_func(self: &TypeInterner, f: &NFuncNode, subst: &Dict(VarId, Ty)) Ty {
+    let ps = substitute_span(self, f.params, subst)
     defer ps.deinit()
-    return self.func_of(&ps, f.moves, self.substitute(f.ret, subst, alloc))
+    return self.func_of(&ps, f.moves, self.substitute(f.ret, subst))
 }
 
-fn substitute_tuple(
-    self: &TypeInterner,
-    span: ChildSpan,
-    subst: &Dict(VarId, Ty),
-    alloc: &Allocator,
-) Ty {
-    let es = substitute_span(self, span, subst, alloc)
+fn substitute_tuple(self: &TypeInterner, span: ChildSpan, subst: &Dict(VarId, Ty)) Ty {
+    let es = substitute_span(self, span, subst)
     defer es.deinit()
     return self.tuple_of(&es)
 }
 
-fn substitute_record(
-    self: &TypeInterner,
-    rec: &NRecordNode,
-    subst: &Dict(VarId, Ty),
-    alloc: &Allocator,
-) Ty {
-    let fs: List(Field) = list(rec.tys.len, alloc)
+fn substitute_record(self: &TypeInterner, rec: &NRecordNode, subst: &Dict(VarId, Ty)) Ty {
+    let fs: List(Field) = list(rec.tys.len)
     defer fs.deinit()
     for i in 0..rec.tys.len {
         fs.push(Field {
             name = self.rec_name(rec, i),
-            ty = self.substitute(self.rec_ty(rec, i), subst, alloc),
+            ty = self.substitute(self.rec_ty(rec, i), subst),
             decl_span = self.rec_span(rec, i),
             owned = false,
         })
@@ -522,13 +500,8 @@ fn substitute_record(
     return self.record_of(&fs)
 }
 
-fn substitute_nominal(
-    self: &TypeInterner,
-    nn: &NNominalNode,
-    subst: &Dict(VarId, Ty),
-    alloc: &Allocator,
-) Ty {
-    let as_ = substitute_span(self, nn.args, subst, alloc)
+fn substitute_nominal(self: &TypeInterner, nn: &NNominalNode, subst: &Dict(VarId, Ty)) Ty {
+    let as_ = substitute_span(self, nn.args, subst)
     defer as_.deinit()
     return self.nominal_of(nn.id, &as_)
 }
@@ -740,25 +713,27 @@ test "format renders through the node graph" {
 test "a duplicate allocates nothing lasting; teardown returns the storage" {
     let c = counting_allocator(context.allocator)
     let a = c.allocator()
-    let it = type_interner(&a)
-
     let fields: List(Field) = list(1)
-    fields.push(Field {
-        name = "x",
-        ty = it.ref_of(prim_of(PrimitiveKind.I64)),
-        decl_span = none_span(),
-        owned = false,
-    })
     defer fields.deinit()
 
-    const first = it.record_of(&fields)
-    const after_first = c.live_bytes
-    assert_true(after_first > 0, "the table is on the heap")
-    for _i in 0usize..100usize {
-        assert_eq(it.record_of(&fields), first, "same shape, same id")
-    }
-    assert_eq(c.live_bytes, after_first, "100 duplicates added no lasting byte")
+    context(allocator = &a) {
+        let it = type_interner()
+        fields.push(Field {
+            name = "x",
+            ty = it.ref_of(prim_of(PrimitiveKind.I64)),
+            decl_span = none_span(),
+            owned = false,
+        })
 
-    it.deinit()
-    assert_true(c.live_bytes < after_first, "teardown returned the table's storage")
+        const first = it.record_of(&fields)
+        const after_first = c.live_bytes
+        assert_true(after_first > 0usize, "the table is on the heap")
+        for _i in 0usize..100usize {
+            assert_eq(it.record_of(&fields), first, "same shape, same id")
+        }
+        assert_eq(c.live_bytes, after_first, "100 duplicates added no lasting byte")
+
+        it.deinit()
+        assert_true(c.live_bytes < after_first, "teardown returned the table's storage")
+    }
 }

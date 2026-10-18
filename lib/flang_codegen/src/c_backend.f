@@ -240,11 +240,10 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = nul
 // the pipeline stops after the write: no toolchain is discovered or run, and the result carries the
 // .c path but no produced executable.
 pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildError) {
-    const alloc = options.allocator
 
     // 1. Lower FIR to C text.
     const translate_start = monotonic_ns()
-    let sb = string_builder(4096, alloc)
+    let sb = string_builder(4096)
     defer sb.deinit()
     translate(m, &sb, Some(options))
 
@@ -253,13 +252,13 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     let keep_c = options.keep_temps or options.emit_c_path.is_some()
     // Built once: assigning a second buffer over a live one would leak the first (E2126).
     const c_path_owned = options.emit_c_path match {
-        Some(p) => from_view(p, alloc)
+        Some(p) => from_view(p)
         None => {
-            let p = path(options.output_path, alloc)
+            let p = path(options.output_path)
             defer p.deinit()
             let q = p.with_extension("c")
             defer q.deinit()
-            from_view(q.as_view(), alloc)
+            from_view(q.as_view())
         }
     }
 
@@ -267,10 +266,10 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     //    does not exist on a fresh checkout - create it rather than failing
     //    the whole build with an opaque I/O error. Errors here are left to
     //    the write below, which reports against a concrete path.
-    ensure_parent_dir(c_path_owned.view, alloc)
-    ensure_parent_dir(options.output_path, alloc)
+    ensure_parent_dir(c_path_owned.view)
+    ensure_parent_dir(options.output_path)
 
-    const write_status = write_c_file(c_path_owned.view, sb.as_view(), alloc)
+    const write_status = write_c_file(c_path_owned.view, sb.as_view())
     if write_status.is_err() {
         c_path_owned.deinit()
         return Err(BuildError.IOError)
@@ -279,7 +278,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
 
     if options.emit_only {
         return Ok(BuildResult {
-            executable_path = from_view(options.output_path, alloc),
+            executable_path = from_view(options.output_path),
             c_source_path = Some(move c_path_owned),
             lower_ns = 0,
             translate_ns = translate_ns,
@@ -289,7 +288,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
 
     // 4. Discover (or accept override of) the compiler. A missing toolchain costs one wasted
     //    translate; failing before it would cost every emit-only caller a pointless discovery.
-    let info_r = discover_or_override(options, alloc)
+    let info_r = discover_or_override(options)
     if info_r.is_err() {
         if !keep_c {
             remove_file_quiet(c_path_owned.view)
@@ -303,7 +302,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     // MSVC writes one .obj per translation unit into the per-target objs directory (see
     // `objs_dir_for`); the compiler does not create it. Unix-style compile-and-link leaves no
     // objects, so the directory stays empty and the cleanup below removes it either way.
-    let objs_dir = objs_dir_for(options.output_path, alloc)
+    let objs_dir = objs_dir_for(options.output_path)
     defer objs_dir.deinit()
     if info.is_msvc() {
         let _c = create_dir_all(objs_dir.view)
@@ -314,13 +313,13 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     defer argv.deinit()
 
     const cc_start = monotonic_ns()
-    let cc_out = string_builder(0, alloc)
+    let cc_out = string_builder(0)
     defer cc_out.deinit()
-    let spawn_r = run_compiler(&info, &argv, &cc_out, alloc)
+    let spawn_r = run_compiler(&info, &argv, &cc_out)
     if spawn_r.is_err() {
         if !keep_c {
             remove_file_quiet(c_path_owned.view)
-            let _r = remove_dir_all(objs_dir.view, alloc)
+            let _r = remove_dir_all(objs_dir.view)
         }
         c_path_owned.deinit()
         return Err(spawn_r.unwrap_err())
@@ -331,18 +330,18 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
         println(cc_out.as_view())
         if !keep_c {
             remove_file_quiet(c_path_owned.view)
-            let _r = remove_dir_all(objs_dir.view, alloc)
+            let _r = remove_dir_all(objs_dir.view)
         }
         c_path_owned.deinit()
         return Err(BuildError.CompilerFailed(exit_code))
     }
     const cc_ns = elapsed_ns(cc_start)
     if !keep_c {
-        let _r = remove_dir_all(objs_dir.view, alloc)
+        let _r = remove_dir_all(objs_dir.view)
     }
 
     // 6. Build the result. Retain the c_source_path if requested.
-    let exe_path = linked_artifact_path(options.output_path, alloc)
+    let exe_path = linked_artifact_path(options.output_path)
     // Bound once: the kept path moves into the result, and the dropped one is released here.
     const c_kept: OwnedString? = if keep_c {
         Some(move c_path_owned)
@@ -1695,27 +1694,23 @@ fn c_hex_nibble(n: u8) u8 {
 
 // Try discovery unless the caller overrode the compiler. Override skips env synthesis (caller is
 // responsible).
-fn discover_or_override(
-    options: &BuildOptions,
-    allocator: &Allocator,
-) Result(CompilerInfo, BuildError) {
+fn discover_or_override(options: &BuildOptions) Result(CompilerInfo, BuildError) {
     options.compiler_override match {
         Some(p) => {
-            let env_keys: List(OwnedString) = list(0, allocator)
-            let env_vals: List(OwnedString) = list(0, allocator)
+            let env_keys: List(OwnedString) = list(0)
+            let env_vals: List(OwnedString) = list(0)
             let kind = guess_kind_from_name(p)
             return Ok(CompilerInfo {
                 kind = kind,
-                name = from_view(p, allocator),
-                path = from_view(p, allocator),
+                name = from_view(p),
+                path = from_view(p),
                 extra_env_keys = move env_keys,
                 extra_env_vals = move env_vals,
-                allocator = allocator,
             })
         }
         None => {}
     }
-    return discover_compiler(allocator)
+    return discover_compiler()
 }
 
 fn guess_kind_from_name(name: String) CompilerKind {
@@ -1732,35 +1727,32 @@ fn guess_kind_from_name(name: String) CompilerKind {
 }
 
 // Pick the first toolchain that exists, in platform-preferred order.
-pub fn discover_compiler(
-    allocator: &Allocator = context.allocator,
-) Result(CompilerInfo, BuildError) {
+pub fn discover_compiler() Result(CompilerInfo, BuildError) {
     #if platform.os == "windows" {
         // 1. MSVC via vswhere (sets INCLUDE/LIB/PATH so the spawn works
         //    outside a developer prompt).
-        const msvc_r = discover_msvc(allocator)
+        const msvc_r = discover_msvc()
         if msvc_r.is_some() {
             return Ok(msvc_r.unwrap())
         }
         // 2. cl.exe already on PATH (e.g. running inside a VS dev prompt).
-        if can_spawn("cl.exe", allocator) {
-            let env_keys: List(OwnedString) = list(0, allocator)
-            let env_vals: List(OwnedString) = list(0, allocator)
+        if can_spawn("cl.exe") {
+            let env_keys: List(OwnedString) = list(0)
+            let env_vals: List(OwnedString) = list(0)
             return Ok(CompilerInfo {
                 kind = CompilerKind.Msvc,
-                name = from_view("cl.exe", allocator),
-                path = from_view("cl.exe", allocator),
+                name = from_view("cl.exe"),
+                path = from_view("cl.exe"),
                 extra_env_keys = move env_keys,
                 extra_env_vals = move env_vals,
-                allocator = allocator,
             })
         }
         // 3. Fall back to clang / gcc on PATH.
-        if can_spawn("clang", allocator) {
-            return Ok(make_simple_info(CompilerKind.Clang, "clang", allocator))
+        if can_spawn("clang") {
+            return Ok(make_simple_info(CompilerKind.Clang, "clang"))
         }
-        if can_spawn("gcc", allocator) {
-            return Ok(make_simple_info(CompilerKind.Gcc, "gcc", allocator))
+        if can_spawn("gcc") {
+            return Ok(make_simple_info(CompilerKind.Gcc, "gcc"))
         }
         return Err(BuildError.NoCompilerFound)
     }
@@ -1769,46 +1761,45 @@ pub fn discover_compiler(
     const cc_opt = env("CC")
     cc_opt match {
         Some(cc) => {
-            if cc.len > 0 and can_spawn(cc, allocator) {
-                return Ok(make_simple_info(guess_kind_from_name(cc), cc, allocator))
+            if cc.len > 0 and can_spawn(cc) {
+                return Ok(make_simple_info(guess_kind_from_name(cc), cc))
             }
         }
         None => {}
     }
     #if platform.os == "macos" {
-        if can_spawn("xcrun", allocator) {
-            return Ok(make_simple_info(CompilerKind.XcrunClang, "xcrun", allocator))
+        if can_spawn("xcrun") {
+            return Ok(make_simple_info(CompilerKind.XcrunClang, "xcrun"))
         }
     }
-    if can_spawn("clang", allocator) {
-        return Ok(make_simple_info(CompilerKind.Clang, "clang", allocator))
+    if can_spawn("clang") {
+        return Ok(make_simple_info(CompilerKind.Clang, "clang"))
     }
-    if can_spawn("cc", allocator) {
-        return Ok(make_simple_info(CompilerKind.Clang, "cc", allocator))
+    if can_spawn("cc") {
+        return Ok(make_simple_info(CompilerKind.Clang, "cc"))
     }
-    if can_spawn("gcc", allocator) {
-        return Ok(make_simple_info(CompilerKind.Gcc, "gcc", allocator))
+    if can_spawn("gcc") {
+        return Ok(make_simple_info(CompilerKind.Gcc, "gcc"))
     }
     return Err(BuildError.NoCompilerFound)
 }
 
-fn make_simple_info(kind: CompilerKind, name: String, allocator: &Allocator) CompilerInfo {
-    let env_keys: List(OwnedString) = list(0, allocator)
-    let env_vals: List(OwnedString) = list(0, allocator)
+fn make_simple_info(kind: CompilerKind, name: String) CompilerInfo {
+    let env_keys: List(OwnedString) = list(0)
+    let env_vals: List(OwnedString) = list(0)
     return CompilerInfo {
         kind = kind,
-        name = from_view(name, allocator),
-        path = from_view(name, allocator),
+        name = from_view(name),
+        path = from_view(name),
         extra_env_keys = move env_keys,
         extra_env_vals = move env_vals,
-        allocator = allocator,
     }
 }
 
 // Spawn `prog --version`, redirect stdio to Null, wait. exit==0 means the binary is on PATH and
 // runnable.
-fn can_spawn(prog: String, allocator: &Allocator) bool {
-    let cmd = command(prog, allocator)
+fn can_spawn(prog: String) bool {
+    let cmd = command(prog)
     defer cmd.deinit()
     cmd.arg("--version")
     cmd.stdin_mode(Stdio.Null)
@@ -1837,10 +1828,10 @@ fn can_spawn(prog: String, allocator: &Allocator) bool {
 // install (2017+). We use it to locate the active VS install dir, then walk the toolset layout to
 // find cl.exe + matching INCLUDE / LIB directories.
 
-fn discover_msvc(allocator: &Allocator) CompilerInfo? {
+fn discover_msvc() CompilerInfo? {
     // ProgramFiles(x86) is the conventional location; fall back to the hard-coded path when the env
     // var is missing (some CI shells don't forward it).
-    let pf86_buf = string_builder(64, allocator)
+    let pf86_buf = string_builder(64)
     defer pf86_buf.deinit()
     const pf86_env = env("ProgramFiles(x86)")
     pf86_env match {
@@ -1848,7 +1839,7 @@ fn discover_msvc(allocator: &Allocator) CompilerInfo? {
         None => pf86_buf.append("C:\\Program Files (x86)")
     }
 
-    let vswhere_sb = string_builder(pf86_buf.len + 80, allocator)
+    let vswhere_sb = string_builder(pf86_buf.len + 80)
     defer vswhere_sb.deinit()
     vswhere_sb.append(pf86_buf.as_view())
     vswhere_sb.append("\\Microsoft Visual Studio\\Installer\\vswhere.exe")
@@ -1861,14 +1852,14 @@ fn discover_msvc(allocator: &Allocator) CompilerInfo? {
     }
 
     // Capture vswhere output to find the latest VS install dir.
-    let install_opt = run_vswhere(vswhere, allocator)
+    let install_opt = run_vswhere(vswhere)
     if install_opt.is_none() {
         return null
     }
     let install = install_opt.unwrap()
     defer install.deinit()
 
-    let tools = string_builder(install.len + 32, allocator)
+    let tools = string_builder(install.len + 32)
     defer tools.deinit()
     tools.append(install.view)
     tools.append("\\VC\\Tools\\MSVC")
@@ -1878,20 +1869,20 @@ fn discover_msvc(allocator: &Allocator) CompilerInfo? {
     }
 
     // Latest toolset version = dir name with the largest lexicographic value.
-    let toolset_opt = newest_subdir(tools.as_view(), allocator)
+    let toolset_opt = newest_subdir(tools.as_view())
     if toolset_opt.is_none() {
         return null
     }
     let toolset = toolset_opt.unwrap()
     defer toolset.deinit()
 
-    let toolset_dir = string_builder(tools.len + toolset.len + 2, allocator)
+    let toolset_dir = string_builder(tools.len + toolset.len + 2)
     defer toolset_dir.deinit()
     toolset_dir.append(tools.as_view())
     toolset_dir.append("\\")
     toolset_dir.append(toolset.view)
 
-    let cl = string_builder(toolset_dir.len + 32, allocator)
+    let cl = string_builder(toolset_dir.len + 32)
     defer cl.deinit()
     cl.append(toolset_dir.as_view())
     cl.append("\\bin\\Hostx64\\x64\\cl.exe")
@@ -1900,12 +1891,12 @@ fn discover_msvc(allocator: &Allocator) CompilerInfo? {
         return null
     }
 
-    let include_dir = string_builder(toolset_dir.len + 16, allocator)
+    let include_dir = string_builder(toolset_dir.len + 16)
     defer include_dir.deinit()
     include_dir.append(toolset_dir.as_view())
     include_dir.append("\\include")
 
-    let lib_dir = string_builder(toolset_dir.len + 16, allocator)
+    let lib_dir = string_builder(toolset_dir.len + 16)
     defer lib_dir.deinit()
     lib_dir.append(toolset_dir.as_view())
     lib_dir.append("\\lib\\x64")
@@ -1913,19 +1904,19 @@ fn discover_msvc(allocator: &Allocator) CompilerInfo? {
     // Windows SDK paths: pick the latest sub-version under "C:\Program Files (x86)\Windows
     // Kits\10\Include".
     let sdk_root = "C:\\Program Files (x86)\\Windows Kits\\10"
-    let sdk_include_root = string_builder(64, allocator)
+    let sdk_include_root = string_builder(64)
     defer sdk_include_root.deinit()
     sdk_include_root.append(sdk_root)
     sdk_include_root.append("\\Include")
     nul_term(&sdk_include_root)
 
     const sdk_ver_opt: OwnedString? = if dir_exists(sdk_include_root.as_view()) {
-        newest_subdir(sdk_include_root.as_view(), allocator)
+        newest_subdir(sdk_include_root.as_view())
     } else {
         null
     }
 
-    let include_paths = string_builder(256, allocator)
+    let include_paths = string_builder(256)
     defer include_paths.deinit()
     include_paths.append(include_dir.as_view())
     sdk_ver_opt match {
@@ -1947,7 +1938,7 @@ fn discover_msvc(allocator: &Allocator) CompilerInfo? {
         None => {}
     }
 
-    let lib_paths = string_builder(256, allocator)
+    let lib_paths = string_builder(256)
     defer lib_paths.deinit()
     lib_paths.append(lib_dir.as_view())
     sdk_ver_opt match {
@@ -1967,7 +1958,7 @@ fn discover_msvc(allocator: &Allocator) CompilerInfo? {
 
     // cl.exe relies on linker tools in its own bin dir - prepend it to PATH so the spawned child
     // finds link.exe / mspdbcore.dll.
-    let path_with_bin = string_builder(256, allocator)
+    let path_with_bin = string_builder(256)
     defer path_with_bin.deinit()
     path_with_bin.append(toolset_dir.as_view())
     path_with_bin.append("\\bin\\Hostx64\\x64")
@@ -1980,14 +1971,14 @@ fn discover_msvc(allocator: &Allocator) CompilerInfo? {
         None => {}
     }
 
-    let env_keys: List(OwnedString) = list(3, allocator)
-    let env_vals: List(OwnedString) = list(3, allocator)
-    env_keys.push(from_view("INCLUDE", allocator))
-    env_vals.push(from_view(include_paths.as_view(), allocator))
-    env_keys.push(from_view("LIB", allocator))
-    env_vals.push(from_view(lib_paths.as_view(), allocator))
-    env_keys.push(from_view("PATH", allocator))
-    env_vals.push(from_view(path_with_bin.as_view(), allocator))
+    let env_keys: List(OwnedString) = list(3)
+    let env_vals: List(OwnedString) = list(3)
+    env_keys.push(from_view("INCLUDE"))
+    env_vals.push(from_view(include_paths.as_view()))
+    env_keys.push(from_view("LIB"))
+    env_vals.push(from_view(lib_paths.as_view()))
+    env_keys.push(from_view("PATH"))
+    env_vals.push(from_view(path_with_bin.as_view()))
 
     sdk_ver_opt match {
         Some(v) => {
@@ -1999,17 +1990,16 @@ fn discover_msvc(allocator: &Allocator) CompilerInfo? {
 
     return Some(CompilerInfo {
         kind = CompilerKind.Msvc,
-        name = from_view("cl.exe", allocator),
-        path = from_view(cl.as_view(), allocator),
+        name = from_view("cl.exe"),
+        path = from_view(cl.as_view()),
         extra_env_keys = move env_keys,
         extra_env_vals = move env_vals,
-        allocator = allocator,
     })
 }
 
 // Spawn `vswhere -latest ... -property installationPath` and capture the first line of stdout.
-fn run_vswhere(vswhere_path: String, allocator: &Allocator) OwnedString? {
-    let cmd = command(vswhere_path, allocator)
+fn run_vswhere(vswhere_path: String) OwnedString? {
+    let cmd = command(vswhere_path)
     defer cmd.deinit()
     cmd.arg("-latest")
     cmd.arg("-products")
@@ -2033,7 +2023,7 @@ fn run_vswhere(vswhere_path: String, allocator: &Allocator) OwnedString? {
         return null
     }
     let s = stdout_opt.unwrap()
-    let raw = read_all(s.reader(), allocator)
+    let raw = read_all(s.reader())
     const w = child.wait()
     if w.is_err() {
         raw.deinit()
@@ -2045,7 +2035,7 @@ fn run_vswhere(vswhere_path: String, allocator: &Allocator) OwnedString? {
         raw.deinit()
         return null
     }
-    let result = from_view(trimmed, allocator)
+    let result = from_view(trimmed)
     raw.deinit()
     return Some(move result)
 }
@@ -2069,10 +2059,10 @@ fn dir_exists(p: String) bool {
 
 // Returns the lexicographically largest subdirectory name, which for MSVC toolset versions and
 // Windows SDK versions corresponds to the most recent install.
-fn newest_subdir(parent: String, allocator: &Allocator) OwnedString? {
+fn newest_subdir(parent: String) OwnedString? {
     // read_dir's C shim wants a NUL-terminated path. Copy into a builder we control so callers can
     // pass plain views.
-    let pbuf = string_builder(parent.len + 1, allocator)
+    let pbuf = string_builder(parent.len + 1)
     defer pbuf.deinit()
     pbuf.append(parent)
     nul_term(&pbuf)
@@ -2105,7 +2095,7 @@ fn newest_subdir(parent: String, allocator: &Allocator) OwnedString? {
         }
         let previous = move best
         previous.deinit()
-        best = Some(from_view(e.name, allocator))
+        best = Some(from_view(e.name))
     }
     return best
 }
@@ -2116,8 +2106,8 @@ fn newest_subdir(parent: String, allocator: &Allocator) OwnedString? {
 
 // Best-effort creation of the directory `file_path` will be written into. Silent by design: the
 // caller's write reports the real, path-bearing error if this could not help.
-fn ensure_parent_dir(file_path: String, allocator: &Allocator) {
-    let p = path(file_path, allocator)
+fn ensure_parent_dir(file_path: String) {
+    let p = path(file_path)
     defer p.deinit()
     p.parent() match {
         Some(dir) => {
@@ -2129,9 +2119,9 @@ fn ensure_parent_dir(file_path: String, allocator: &Allocator) {
     }
 }
 
-fn write_c_file(path: String, contents: String, allocator: &Allocator) Result((), FileError) {
+fn write_c_file(path: String, contents: String) Result((), FileError) {
     // open() expects a NUL-terminated path; copy into a builder we control.
-    let pbuf = string_builder(path.len + 1, allocator)
+    let pbuf = string_builder(path.len + 1)
     defer pbuf.deinit()
     pbuf.append(path)
     nul_term(&pbuf)
@@ -2162,22 +2152,22 @@ fn remove_file_quiet(path: String) {
 // the output path it was handed. On Windows `/Fe:` appends `.exe` when the name has no extension,
 // so the reported path has to as well - a caller that runs what it just built (`flang test`) needs
 // a path that exists, not the one requested.
-fn linked_artifact_path(output_path: String, allocator: &Allocator) OwnedString {
+fn linked_artifact_path(output_path: String) OwnedString {
     #if platform.os == "windows" {
         if !ends_with(output_path, ".exe") {
             return $"{output_path}.exe"
 
         }
     }
-    return from_view(output_path, allocator)
+    return from_view(output_path)
 }
 
-fn objs_dir_for(output_path: String, allocator: &Allocator) OwnedString {
-    let p = path(output_path, allocator)
+fn objs_dir_for(output_path: String) OwnedString {
+    let p = path(output_path)
     defer p.deinit()
     let q = p.with_extension("objs")
     defer q.deinit()
-    return from_view(q.as_view(), allocator)
+    return from_view(q.as_view())
 }
 
 // Build the argv passed to the compiler. Layout differs between MSVC and Unix-style; both layouts
@@ -2187,32 +2177,31 @@ fn build_compiler_argv(
     c_path: String,
     options: &BuildOptions,
 ) List(OwnedString) {
-    let alloc = options.allocator
-    let argv: List(OwnedString) = list(16, alloc)
+    let argv: List(OwnedString) = list(16)
 
     if info.is_xcrun() {
-        argv.push(from_view("clang", alloc))
+        argv.push(from_view("clang"))
     }
 
     let release = options.mode match { Release => true, _ => false }
 
     if info.is_msvc() {
-        argv.push(from_view("/nologo", alloc))
-        argv.push(from_view("/W3", alloc))
+        argv.push(from_view("/nologo"))
+        argv.push(from_view("/W3"))
         // /std:c11 plus /experimental:c11atomics enable <stdatomic.h>,
         // which stdlib/std/atomic.c includes; without the second flag MSVC's own header hard-errors
         // with "C atomic support is not enabled".
-        argv.push(from_view("/std:c11", alloc))
-        argv.push(from_view("/experimental:c11atomics", alloc))
-        argv.push(from_view("/Z7", alloc))
+        argv.push(from_view("/std:c11"))
+        argv.push(from_view("/experimental:c11atomics"))
+        argv.push(from_view("/Z7"))
         if release {
-            argv.push(from_view("/O2", alloc))
+            argv.push(from_view("/O2"))
         }
         for i in 0..options.cflags.len {
-            argv.push(from_view(options.cflags[i], alloc))
+            argv.push(from_view(options.cflags[i]))
         }
         for i in 0..options.include_paths.len {
-            let sb = string_builder(2 + options.include_paths[i].len, alloc)
+            let sb = string_builder(2 + options.include_paths[i].len)
             sb.append("/I")
             sb.append(options.include_paths[i])
             argv.push(sb.to_string())
@@ -2221,83 +2210,83 @@ fn build_compiler_argv(
         // backslash makes it a directory form). Without /Fo, cl drops one .obj per translation unit
         // into the process working directory - littering the source tree and colliding when two
         // builds share a cwd.
-        let fe = string_builder(4 + options.output_path.len, alloc)
+        let fe = string_builder(4 + options.output_path.len)
         fe.append("/Fe:")
         fe.append(options.output_path)
         argv.push(fe.to_string())
-        let objs = objs_dir_for(options.output_path, alloc)
+        let objs = objs_dir_for(options.output_path)
         defer objs.deinit()
         const od = objs.view
-        let fo = string_builder(4 + od.len, alloc)
+        let fo = string_builder(4 + od.len)
         fo.append("/Fo")
         for i in 0..od.len {
             fo.append_byte(if od[i] == '/' { '\\' as u8 } else { od[i] })
         }
         fo.append('\\')
         argv.push(fo.to_string())
-        argv.push(from_view(c_path, alloc))
+        argv.push(from_view(c_path))
         for i in 0..options.extra_c_files.len {
-            argv.push(from_view(options.extra_c_files[i], alloc))
+            argv.push(from_view(options.extra_c_files[i]))
         }
         for i in 0..options.extra_obj_files.len {
-            argv.push(from_view(options.extra_obj_files[i], alloc))
+            argv.push(from_view(options.extra_obj_files[i]))
         }
         // MSVC linker options are positional after a `/link` separator. Incremental linking is off:
         // a one-shot compile-and-link never reuses the state, and the `.ilk` it would write next to
         // the executable is several MB per link.
-        argv.push(from_view("/link", alloc))
-        argv.push(from_view("/INCREMENTAL:NO", alloc))
+        argv.push(from_view("/link"))
+        argv.push(from_view("/INCREMENTAL:NO"))
         for i in 0..options.libs.len {
-            argv.push(from_view(options.libs[i], alloc))
+            argv.push(from_view(options.libs[i]))
         }
         for i in 0..options.ldflags.len {
-            push_ldflag_words(&argv, options.ldflags[i], alloc)
+            push_ldflag_words(&argv, options.ldflags[i])
         }
         return argv
     }
 
     // Unix-style (clang / gcc / xcrun clang).
-    argv.push(from_view("-Werror", alloc))
-    argv.push(from_view("-Wno-pointer-sign", alloc))
+    argv.push(from_view("-Werror"))
+    argv.push(from_view("-Wno-pointer-sign"))
     if release {
-        argv.push(from_view("-O2", alloc))
+        argv.push(from_view("-O2"))
     } else {
-        argv.push(from_view("-g", alloc))
+        argv.push(from_view("-g"))
     }
     for i in 0..options.cflags.len {
-        argv.push(from_view(options.cflags[i], alloc))
+        argv.push(from_view(options.cflags[i]))
     }
     for i in 0..options.include_paths.len {
-        let sb = string_builder(3 + options.include_paths[i].len, alloc)
+        let sb = string_builder(3 + options.include_paths[i].len)
         sb.append("-I")
         sb.append(options.include_paths[i])
         argv.push(sb.to_string())
     }
-    argv.push(from_view("-o", alloc))
-    argv.push(from_view(options.output_path, alloc))
-    argv.push(from_view(c_path, alloc))
+    argv.push(from_view("-o"))
+    argv.push(from_view(options.output_path))
+    argv.push(from_view(c_path))
     for i in 0..options.extra_c_files.len {
-        argv.push(from_view(options.extra_c_files[i], alloc))
+        argv.push(from_view(options.extra_c_files[i]))
     }
     for i in 0..options.extra_obj_files.len {
-        argv.push(from_view(options.extra_obj_files[i], alloc))
+        argv.push(from_view(options.extra_obj_files[i]))
     }
-    argv.push(from_view("-lm", alloc))
+    argv.push(from_view("-lm"))
     for i in 0..options.libs.len {
         // Absolute path -> verbatim; bare name -> "-lNAME".
         const lib = options.libs[i]
         if lib.len > 0 and (lib[0] == '/' or lib.starts_with("./") or lib.contains(".a")
             or lib.contains(".so")) {
-                argv.push(from_view(lib, alloc))
+                argv.push(from_view(lib))
             } else {
-                let sb = string_builder(3 + lib.len, alloc)
+                let sb = string_builder(3 + lib.len)
                 sb.append("-l")
                 sb.append(lib)
                 argv.push(sb.to_string())
             }
     }
     for i in 0..options.ldflags.len {
-        push_ldflag_words(&argv, options.ldflags[i], alloc)
+        push_ldflag_words(&argv, options.ldflags[i])
     }
     return argv
 }
@@ -2308,12 +2297,12 @@ fn build_compiler_argv(
 //
 // ponytail: space-separated, so a path with a space in it cannot be spelled here. Take a nested
 // array in the manifest if one ever needs to be.
-fn push_ldflag_words(argv: &List(OwnedString), flag: String, alloc: &Allocator) {
+fn push_ldflag_words(argv: &List(OwnedString), flag: String) {
     const words = split(flag, ' ')
     defer words.deinit()
     for w in words {
         if w.len > 0 {
-            argv.push(from_view(w, alloc))
+            argv.push(from_view(w))
         }
     }
 }
@@ -2374,9 +2363,8 @@ fn run_compiler(
     info: &CompilerInfo,
     argv: &List(OwnedString),
     out: &StringBuilder,
-    allocator: &Allocator,
 ) Result(i32, BuildError) {
-    let cmd = command(info.path.view, allocator)
+    let cmd = command(info.path.view)
     defer cmd.deinit()
     for i in 0..argv.len {
         cmd.arg(argv[i].view)
@@ -2400,13 +2388,13 @@ fn run_compiler(
     let so = child.stdout()
     if so.is_some() {
         let s = so.unwrap()
-        out.append(read_all(s.reader(), allocator))
+        out.append(read_all(s.reader()))
         s.close()
     }
     let se = child.stderr()
     if se.is_some() {
         let s = se.unwrap()
-        out.append(read_all(s.reader(), allocator))
+        out.append(read_all(s.reader()))
         s.close()
     }
     const w = child.wait()

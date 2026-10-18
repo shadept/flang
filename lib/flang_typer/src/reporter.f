@@ -47,33 +47,20 @@ pub fn report_ctx(code: String, span: SourceSpan, nominals: &NominalRegistry? = 
 // Emit zero or one diagnostic depending on the outcome. `Unified` produces nothing. Every other
 // variant produces exactly one diagnostic on `out`. Caller owns the message strings appended to the
 // diagnostic - they aren't reclaimed by anything in this file.
-pub fn report(
-    outcome: &UnifyOutcome,
-    ctx: &ReportCtx,
-    it: &TypeInterner,
-    out: &List(Diagnostic),
-    allocator: &Allocator = context.allocator,
-) {
-    let alloc = allocator
+pub fn report(outcome: &UnifyOutcome, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic)) {
     outcome.* match {
         Unified(_) => {}
-        UniMismatch(m) => report_mismatch(&m, ctx, it, out, alloc)
-        UniOccursCheck(o) => report_occurs(&o, ctx, it, out, alloc)
-        UniArityMismatch(a) => report_arity(&a, ctx, out, alloc)
-        UniPrimConstraint(p) => report_prim_constraint(&p, ctx, it, out, alloc)
+        UniMismatch(m) => report_mismatch(&m, ctx, it, out)
+        UniOccursCheck(o) => report_occurs(&o, ctx, it, out)
+        UniArityMismatch(a) => report_arity(&a, ctx, out)
+        UniPrimConstraint(p) => report_prim_constraint(&p, ctx, it, out)
     }
 }
 
-fn report_mismatch(
-    m: &Mismatch,
-    ctx: &ReportCtx,
-    it: &TypeInterner,
-    out: &List(Diagnostic),
-    alloc: &Allocator,
-) {
+fn report_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic)) {
     let message = ctx.message_override match {
         Some(msg) => move msg
-        None => format_mismatch(m, ctx, it, alloc)
+        None => format_mismatch(m, ctx, it)
     }
     let empty_hint: OwnedString
     let diag = Diagnostic {
@@ -86,14 +73,8 @@ fn report_mismatch(
     out.push(diag)
 }
 
-fn report_occurs(
-    o: &OccursDetails,
-    ctx: &ReportCtx,
-    it: &TypeInterner,
-    out: &List(Diagnostic),
-    alloc: &Allocator,
-) {
-    let sb = string_builder(64, alloc)
+fn report_occurs(o: &OccursDetails, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic)) {
+    let sb = string_builder(64)
     sb.append("recursive type: variable ?")
     sb.append(o.var_id)
     sb.append(" occurs inside ")
@@ -109,8 +90,8 @@ fn report_occurs(
     out.push(diag)
 }
 
-fn report_arity(a: &ArityDetails, ctx: &ReportCtx, out: &List(Diagnostic), alloc: &Allocator) {
-    let sb = string_builder(64, alloc)
+fn report_arity(a: &ArityDetails, ctx: &ReportCtx, out: &List(Diagnostic)) {
+    let sb = string_builder(64)
     sb.append(arity_label(a.what))
     sb.append(" mismatch: expected ")
     sb.append(a.expected)
@@ -135,9 +116,8 @@ fn report_prim_constraint(
     ctx: &ReportCtx,
     it: &TypeInterner,
     out: &List(Diagnostic),
-    alloc: &Allocator,
 ) {
-    let sb = string_builder(64, alloc)
+    let sb = string_builder(64)
     sb.append("type mismatch: expected one of ")
     let written = 0usize
     for i in 0..14u32 {
@@ -168,13 +148,8 @@ fn report_prim_constraint(
     out.push(diag)
 }
 
-fn format_mismatch(
-    m: &Mismatch,
-    ctx: &ReportCtx,
-    it: &TypeInterner,
-    alloc: &Allocator,
-) OwnedString {
-    let sb = string_builder(64, alloc)
+fn format_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner) OwnedString {
+    let sb = string_builder(64)
     sb.append("type mismatch: expected `")
     format_with_names(it, m.expected, &sb, ctx.nominals)
     sb.append("`, got `")
