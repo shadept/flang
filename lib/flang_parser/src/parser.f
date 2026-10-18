@@ -1129,7 +1129,8 @@ fn is_bare_return_terminator(self: &Parser) bool {
         return true
     }
     return self.current_kind() match {
-        CloseBrace | Eof | Semicolon | Let | Const | Return | Break | Continue | Defer => true
+        CloseBrace | CloseParenthesis | CloseBracket | Comma | Eof | Semicolon | Let | Const
+            | Return | Break | Continue | Defer => true
         _ => false
     }
 }
@@ -1487,7 +1488,7 @@ fn parse_binary_expression(self: &Parser, parent_precedence: i32) CstNodeId {
             b.start = self.tree.nodes[left].start as usize
             self.push_node_into(&b, left)
             self.eat_into(&b)
-            const rhs = self.parse_binary_expression(prec - 1i32)
+            const rhs = self.parse_coalesce_rhs(prec - 1i32)
             self.push_node_into(&b, rhs)
             left = self.finish(b)
             continue
@@ -1502,6 +1503,15 @@ fn parse_binary_expression(self: &Parser, parent_precedence: i32) CstNodeId {
     }
 
     return left
+}
+
+// The right side of `??` is a match-arm body (RFC-040): `return`, `break` and `continue` leave from
+// the fallback.
+fn parse_coalesce_rhs(self: &Parser, precedence: i32) CstNodeId {
+    return self.current_kind() match {
+        Return | Break | Continue => self.parse_arm_body()
+        _ => self.parse_binary_expression(precedence)
+    }
 }
 
 fn parse_unary_expression(self: &Parser) CstNodeId {

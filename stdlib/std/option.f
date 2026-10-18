@@ -106,24 +106,6 @@ pub fn filter(self: move Option($T), pred: $F) Option(T) where F: fn(T) bool {
     }
 }
 
-// Null-coalescing operator: Option(T) ?? T -> T
-// Returns the inner value if present, otherwise returns the fallback value.
-pub fn op_coalesce(opt: move Option($T), fallback: move T) T {
-    return opt match {
-        Some(v) => v
-        None => fallback
-    }
-}
-
-// Null-coalescing operator: Option(T) ?? Option(T) -> Option(T) Returns the first option if it has
-// a value, otherwise returns the second.
-pub fn op_coalesce(first: move Option($T), second: move Option(T)) Option(T) {
-    return first match {
-        Some(_) => first
-        None => second
-    }
-}
-
 test "map transforms a present value and passes None through" {
     let some: Option(i32) = Some(21)
     let none: Option(i32) = null

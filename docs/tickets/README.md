@@ -49,4 +49,5 @@ Type: language, compiler, stdlib, tooling.
 | [037](037-callable-values.md) | Function types as callable values | language | draft | 2026-10-11 |  |
 | [038](038-runtime-context.md) | Runtime context | language | implemented | 2026-10-17 | 2026-10-18 |
 | [039](039-lambda-syntax.md) | Lambda syntax | language | implemented | 2026-10-17 | 2026-10-18 |
+| [040](040-coalesce-via-op-try.md) | `??` through `op_try` | language | implemented | 2026-10-18 | 2026-10-18 |
 | [099](099-stack-only-types-and-bindings.md) | `#stack` types and stack-only bindings | language | deferred | 2026-08-27 |  |

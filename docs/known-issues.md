@@ -735,6 +735,41 @@ in its fixtures so the assertions are no longer vacuous.
 
 ## Open Issues
 
+### An `if` or `while` Condition Is Not Checked to Be `bool`
+
+**Status:** Open
+**Affected:** `lib/flang_typer/src/checker.f` (`if` / `while` condition checking)
+
+`if roll() % 2 { ... }`, `let z = if roll() { 1 } else { 2 }` and `while roll() { ... }` with
+`roll() i32` build with no diagnostic. `docs/syntax.md` requires a `bool` condition, and `and`, `or`
+and `!` already enforce it (E2046), so an integer condition is silently C's truthiness.
+
+**Solution:** unify each `if` / `while` condition with `bool` and report a type mismatch, as the
+logical operators do.
+
+**Related tests:** none yet.
+
+---
+
+### `release` Skips the `deinit` of a Copyable Type
+
+**Status:** Open
+**Affected:** `stdlib/core/deinit.f` (`release`), every container and construct releasing through it
+
+`release(value: move T)` calls `deinit` only when `type_info(T).copyable` is false. A copyable type
+that declares `deinit` anyway (a handle wrapping a raw pointer or descriptor with no `owned` field)
+is skipped silently: a container holding it, or a construct releasing it, leaks what the `deinit`
+would have freed, and nothing reports it. `NoCopy` (core.deinit) is the remedy today, a zero-size
+`owned` field that makes the type non-copyable, but nothing points the author to it.
+
+**Solution:** diagnose a `deinit(self: move T)` declared on a copyable `T` (it can never run
+through `release`, and copies make consuming it meaningless), suggesting an `owned` field or
+`NoCopy`.
+
+**Related tests:** none yet.
+
+---
+
 ### LSP Rename: What the First Cut Leaves Out
 
 **Status:** Open

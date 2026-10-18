@@ -5358,6 +5358,10 @@ fn prim_cast(bb: &BlockBuilder, s: PrimitiveKind, d: PrimitiveKind, v: Operand) 
 // Option(T)`) yields the Option itself. The niche form needs no payload addressing: the pointer IS
 // the payload, and the chain result is the same pointer either way.
 fn lower_coalesce(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CoalesceExpr) Operand {
+    const top = ctx_operator(ctx, node_id_of(c.span))
+    if top.is_some() {
+        return lower_try_coalesce(ctx, bb, env, c, top.unwrap())
+    }
     let lty = node_ty(ctx, expr_span(c.lhs))
     let t = resolve_enum(ctx, &lty, &ctx.result.nominals)
     if t.is_none() {
@@ -5399,11 +5403,75 @@ fn lower_coalesce(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CoalesceExpr
     bb.br_arg(join.label(), kept)
 
     bb.move_to(&else_bb)
-    let rhs = lower_expr(ctx, bb, env, c.rhs)
-    bb.br_arg(join.label(), rhs)
+    let r = lower_arm_body(ctx, bb, env, c.rhs)
+    join_from(ctx, bb, join.label(), true, &r)
 
     bb.move_to(&join)
     return join.param(0)
+}
+
+// `a ?? b` over a non-Option (RFC-040): call `op_try(a)`, yield the `Continue` payload, or release
+// the residual (the checker's `deinit` pick on the `??` token, when it is not copyable) and lower
+// `b`, which may leave with `return`, `break` or `continue`.
+fn lower_try_coalesce(
+    ctx: &LowerCtx,
+    bb: &BlockBuilder,
+    env: &Env,
+    c: &CoalesceExpr,
+    o: ResolvedOperator,
+) Operand {
+    let want = node_ty(ctx, c.span)
+    let shape = try_shape(ctx, &o, &want)
+    if shape.is_none() {
+        return unlowerable_why(ctx, "`??` without a lowerable op_try")
+    }
+    let sh = shape.unwrap()
+
+    let a = lower_expr(ctx, bb, env, c.lhs)
+    let fb = bb.fb
+    let cont_bb = fb.block(fb.fresh_label("co_cont"))
+    let else_bb = fb.block(fb.fresh_label("co_else"))
+    let join = fb.block(fb.fresh_label("co_join"), ir_of(ctx, want))
+    let payload = emit_try_call(ctx, bb, &sh, a, cont_bb.label(), else_bb.label())
+
+    bb.move_to(&cont_bb)
+    bb.br_arg(join.label(), payload_value(ctx, bb, payload, &sh.cont_ty))
+
+    bb.move_to(&else_bb)
+    release_residual(ctx, bb, c, payload, &sh.res_ty)
+    let r = lower_arm_body(ctx, bb, env, c.rhs)
+    join_from(ctx, bb, join.label(), true, &r)
+
+    bb.move_to(&join)
+    return join.param(0)
+}
+
+fn release_residual(ctx: &LowerCtx, bb: &BlockBuilder, c: &CoalesceExpr, addr: Operand, ty: &Ty) {
+    const dop = ctx_operator(ctx, node_id_of(c.op_span))
+    if dop.is_none() {
+        return
+    }
+    const d = dop.unwrap()
+    const sym = op_symbol(ctx, &d)
+    const sig = op_sig(ctx, &d)
+    if sym.is_none() or sig.is_none() {
+        let _u = unlowerable_why(ctx, "`??` without its residual's deinit symbol")
+        return
+    }
+    const state = payload_value(ctx, bb, addr, ty)
+    emit_release(
+        ctx,
+        bb,
+        .{ sym = sym.unwrap(), sig = sig.unwrap(), state = state, cx = ctx.cur_ctx },
+    )
+}
+
+// A payload at `addr` as an operand: the address itself for a by-reference type, else its value.
+fn payload_value(ctx: &LowerCtx, bb: &BlockBuilder, addr: Operand, ty: &Ty) Operand {
+    if is_by_ref(ctx, ty) {
+        return addr
+    }
+    return bb.load(ir_of(ctx, ty.*), addr)
 }
 
 // `a?.b` (RFC-010) - the receiver is `Option(T)` with `T` a struct (checker-enforced, so the
@@ -5520,81 +5588,88 @@ fn lower_try(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, t: &TryExpr) Operand 
     if op.is_none() {
         return unlowerable_why(ctx, "`?` without a recorded op_try")
     }
-    let o = op.unwrap()
-    let sym = op_symbol(ctx, &o)
-    let sig_opt = op_sig(ctx, &o)
-    if sym.is_none() {
-        return unlowerable_why(ctx, "op_try without symbol")
-    }
-    if sig_opt.is_none() {
-        return unlowerable_why(ctx, "op_try without sig")
-    }
-    let sig = sig_opt.unwrap()
-    if sig.params.len != 1 {
-        return unlowerable(ctx)
-    }
-
-    // The TryResult instantiation comes from the callee's declared return - the memory's truth for
-    // the tag test and payload access. TryResult is never niche, so the tagged layout always
-    // applies.
-    let tr = resolve_enum(ctx, &sig.ret, &ctx.result.nominals)
-    if tr.is_none() {
-        return unlowerable(ctx)
-    }
-    let et = tr.unwrap()
-    if et.def.fqn != FQN_TRY_RESULT {
-        return unlowerable(ctx)
-    }
-    if et.args.len != 2 {
-        return unlowerable(ctx)
-    }
-    let el = en_layout(ctx, &et.def, &et.args)
-
-    let cont_ty = et.args[0]
-    let ret_ty = et.args[1]
     let want = node_ty(ctx, t.span)
-    if !repr_compatible(ctx, &cont_ty, &want) {
-        return unlowerable(ctx)
+    let shape = try_shape(ctx, &op.unwrap(), &want)
+    if shape.is_none() {
+        return unlowerable_why(ctx, "`?` without a lowerable op_try")
     }
+    let sh = shape.unwrap()
     // An aggregate early return needs the sret buffer; its absence means the checker already
     // reported the return mismatch.
-    if is_by_ref(ctx, &ret_ty) and ctx.sret.is_none() {
+    if is_by_ref(ctx, &sh.res_ty) and ctx.sret.is_none() {
         return unlowerable(ctx)
     }
 
-    let v = lower_expr(ctx, bb, env, t.operand)
-    let args: List(Operand) = list(2)
-    args.push(v)
-    let res = emit_call(ctx, bb, sym.unwrap(), sig, args)
-
-    let tag = bb.load(IrType.I32, res)
-    let is_cont = bb.icmp_eq(IrType.I32, tag, Operand.IntConst(0))
+    let a = lower_expr(ctx, bb, env, t.operand)
     let fb = bb.fb
     let cont_bb = fb.block(fb.fresh_label("try_cont"))
     let ret_bb = fb.block(fb.fresh_label("try_ret"))
-    bb.br_if(is_cont, cont_bb.label(), ret_bb.label())
+    let payload = emit_try_call(ctx, bb, &sh, a, cont_bb.label(), ret_bb.label())
 
     // The early return, mirroring `lower_return`'s sret/scalar split - including the defer flush:
     // `?` escapes every open scope, so the value materializes first, then all active defers fire.
-    // Both variants' single payloads sit at the shared payload offset.
     bb.move_to(&ret_bb)
-    let raddr = bb.gep(res, Operand.IntConst(el.payload_offset as i64))
     if ctx.sret.is_some() {
-        bb.memcpy(ctx.sret.unwrap(), raddr, Operand.IntConst(ctx.ret_size as i64))
+        bb.memcpy(ctx.sret.unwrap(), payload, Operand.IntConst(ctx.ret_size as i64))
         emit_defers_down_to(ctx, bb, env, 0)
         bb.ret_void()
     } else {
-        let rv = bb.load(ir_of(ctx, ret_ty), raddr)
+        let rv = bb.load(ir_of(ctx, sh.res_ty), payload)
         emit_defers_down_to(ctx, bb, env, 0)
         bb.ret(rv)
     }
 
     bb.move_to(&cont_bb)
-    let paddr = bb.gep(res, Operand.IntConst(el.payload_offset as i64))
-    if is_by_ref(ctx, &cont_ty) {
-        return paddr
+    return payload_value(ctx, bb, payload, &sh.cont_ty)
+}
+
+// A checked `op_try` call: the callee, the `TryResult(T, R)` layout from its declared return - the
+// memory's truth for the tag test and payload access, never niche - and `T` and `R`.
+type TryShape = struct {
+    sym: String
+    sig: &FnSig
+    el: EnumLayout
+    cont_ty: Ty
+    res_ty: Ty
+}
+
+// The call `o` names, when it is a one-parameter `op_try` returning `TryResult(T, R)` with `T`
+// fitting `want`.
+fn try_shape(ctx: &LowerCtx, o: &ResolvedOperator, want: &Ty) TryShape? {
+    const sym = op_symbol(ctx, o)?
+    const sig = op_sig(ctx, o)?
+    const et = resolve_enum(ctx, &sig.ret, &ctx.result.nominals)?
+    const fits = sig.params.len == 1 and et.def.fqn == FQN_TRY_RESULT and et.args.len == 2
+    if !fits or !repr_compatible(ctx, &et.args[0], want) {
+        return null
     }
-    return bb.load(ir_of(ctx, cont_ty), paddr)
+    return Some(.{
+        sym = sym,
+        sig = sig,
+        el = en_layout(ctx, &et.def, &et.args),
+        cont_ty = et.args[0],
+        res_ty = et.args[1],
+    })
+}
+
+// Calls `op_try(operand)` and branches to `cont` on `Continue`, else to `other`. Returns the
+// payload's address, the same for both variants. The operand is lowered before the branch targets
+// are created: blocks print in creation order, and its own blocks must precede them.
+fn emit_try_call(
+    ctx: &LowerCtx,
+    bb: &BlockBuilder,
+    sh: &TryShape,
+    operand: Operand,
+    cont: String,
+    other: String,
+) Operand {
+    let args: List(Operand) = list(1)
+    args.push(operand)
+    let res = emit_call(ctx, bb, sh.sym, sh.sig, args)
+    let tag = bb.load(IrType.I32, res)
+    let payload = bb.gep(res, Operand.IntConst(sh.el.payload_offset as i64))
+    bb.br_if(bb.icmp_eq(IrType.I32, tag, Operand.IntConst(0)), cont, other)
+    return payload
 }
 
 // Assignment and address-of

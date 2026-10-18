@@ -6842,18 +6842,7 @@ fn check_pattern(self: &Checker, pat: &Pattern, expected: Ty, is_sub: bool = fal
                 )
                 if pick.is_some() {
                     let p = pick.unwrap()
-                    self.results.record_operator(
-                        self.node_of(l.span),
-                        ResolvedOperator {
-                            function_id = p.id,
-                            negate_result = false,
-                            cmp_derived_op = null,
-                            is_ref_form = false,
-                            spec_id = null,
-                            lhs_hops = 0u32,
-                            rhs_hops = 0u32,
-                        },
-                    )
+                    self.results.record_operator(self.node_of(l.span), op_record(p.id))
                     note_pending(self, l.span, true, &p)
                 }
             }
@@ -7464,10 +7453,8 @@ fn option_inner(self: &Checker, ty: Ty) Ty? {
     return Some(self.engine.interner.child_at(nn.args, 0))
 }
 
-// `a ?? b` - `a` must be `Option(T)`. Two result shapes, matching the reference checker: `Option(T)
-// ?? Option(T)` chains and keeps the Option; `Option(T) ?? T` unwraps to `T`. The stdlib's
-// `op_coalesce` overloads exist only for Option and are shadowed by these built-in paths, so no
-// operator dispatch happens here (the reference resolves the same way).
+// `a ?? b` (RFC-040). An Option is built in, two result shapes: `Option(T) ?? Option(T)` chains and
+// keeps the Option; `Option(T) ?? T` unwraps to `T`. Any other `a` goes through `op_try`.
 fn check_coalesce(self: &Checker, c: &CoalesceExpr) Ty {
     let lhs = self.engine.resolve(check_expr(self, c.lhs))
     // Poison absorbs: the operand's error is already reported.
@@ -7477,14 +7464,7 @@ fn check_coalesce(self: &Checker, c: &CoalesceExpr) Ty {
     }
     let inner = option_inner(self, lhs)
     if inner.is_none() {
-        let _r = check_expr(self, c.rhs)
-        push_diag_e(
-            self,
-            c.span,
-            E_TYPE_MISMATCH,
-            from_view("left operand of `??` must be an Option"),
-        )
-        return self.engine.fresh_var()
+        return check_try_coalesce(self, c, lhs)
     }
     let t = inner.unwrap()
     let rhs = check_expr(self, c.rhs)
@@ -7496,6 +7476,53 @@ fn check_coalesce(self: &Checker, c: &CoalesceExpr) Ty {
     }
     unify_expected(self, rhs, t, E_TYPE_MISMATCH, c.span)
     return t
+}
+
+// `a ?? b` over a non-Option (RFC-040): `op_try(a) match { Continue(v) => v, Return(r) => {
+// release(r); b } }`. Nothing reads the residual, so `?`'s pin - the function's return type - is
+// missing; it unifies with `a`'s type instead (`Result($U, E)` with `Result(T, E)`) for a layout.
+// `never` would not do: a generic body instantiated with it leaves the variables it meets unbound.
+fn check_try_coalesce(self: &Checker, c: &CoalesceExpr, lhs: Ty) Ty {
+    const nr = try_protocol(
+        self,
+        lhs,
+        c.span,
+        "`??` needs an Option, a Result, or a type with `op_try`",
+    )
+    if nr.is_none() {
+        let _r = check_expr(self, c.rhs)
+        return self.engine.fresh_var()
+    }
+    const n = nr.unwrap()
+    const t = self.engine.interner.child_at(n.args, 0)
+    const residual = self.engine.interner.child_at(n.args, 1)
+    let _u = self.engine.unify(residual, lhs)
+    record_residual_release(self, c, residual)
+    unify_expected(self, check_expr(self, c.rhs), t, E_TYPE_MISMATCH, c.span)
+    return t
+}
+
+// `??` owns the residual it drops: a non-copyable one is released with its `deinit`, recorded on
+// the `??` token's node.
+fn record_residual_release(self: &Checker, c: &CoalesceExpr, residual: Ty) {
+    if ty_copyable(self, residual) {
+        return
+    }
+    let no_args: List(Ty) = list(0)
+    defer no_args.deinit()
+    const dp = receiver_pick(self, "deinit", residual, &no_args, c.span, c.op_span)
+    if dp.is_none() {
+        push_diag_e(
+            self,
+            c.span,
+            E_NO_OVERLOAD,
+            from_view("`??` drops a residual that is not copyable and declares no `deinit`"),
+        )
+        return
+    }
+    const d = dp.unwrap()
+    self.results.record_operator(self.node_of(c.op_span), op_record(d.id))
+    note_pending(self, c.op_span, true, &d)
 }
 
 // `a?.b` (RFC-010) - the receiver must be `Option(T)` with `T` a struct carrying field `b`. Types
@@ -7570,32 +7597,13 @@ fn check_try(self: &Checker, t: &TryExpr) Ty {
         return self.engine.fresh_var()
     }
 
-    let args: List(Ty) = list(1)
-    args.push(operand)
-    let pick = operator_pick(self, "op_try", &args, t.span)
-    args.deinit()
-    if pick.is_none() {
-        push_diag_e(
-            self,
-            t.span,
-            E_NO_OP_TRY,
-            from_view("the `?` operator requires an `op_try` overload for the operand type"),
-        )
-        return self.engine.fresh_var()
-    }
-    let p = pick.unwrap()
-
-    let nr = ty_node(self, self.engine.resolve(p.ret)) match {
-        NNominal(n) => Some(n)
-        _ => null
-    }
-    let tr_id = self.nominals.by_fqn.get(FQN_TRY_RESULT)
-    let ok = nr.is_some() and tr_id.is_some()
-    if ok {
-        ok = nr.unwrap().id == tr_id.unwrap() and nr.unwrap().args.len == 2
-    }
-    if !ok {
-        push_diag_e(self, t.span, E_NO_OP_TRY, from_view("`op_try` must return `TryResult(T, R)`"))
+    const nr = try_protocol(
+        self,
+        operand,
+        t.span,
+        "the `?` operator requires an `op_try` overload for the operand type",
+    )
+    if nr.is_none() {
         return self.engine.fresh_var()
     }
     let n = nr.unwrap()
@@ -7610,21 +7618,50 @@ fn check_try(self: &Checker, t: &TryExpr) Ty {
         E_RETURN_MISMATCH,
         t.span,
     )
-
-    self.results.record_operator(
-        self.node_of(t.span),
-        ResolvedOperator {
-            function_id = p.id,
-            negate_result = false,
-            cmp_derived_op = null,
-            is_ref_form = false,
-            spec_id = null,
-            lhs_hops = 0u32,
-            rhs_hops = 0u32,
-        },
-    )
-    note_pending(self, t.span, true, &p)
     return self.engine.interner.child_at(n.args, 0)
+}
+
+// The `TryResult(T, R)` instance `op_try(operand)` returns, its pick recorded on `span`'s node.
+// Null after reporting E2092 with `missing` when no `op_try` takes the operand.
+fn try_protocol(self: &Checker, operand: Ty, span: SourceSpan, missing: String) NNominalNode? {
+    let args: List(Ty) = list(1)
+    args.push(operand)
+    let pick = operator_pick(self, "op_try", &args, span)
+    args.deinit()
+    if pick.is_none() {
+        push_diag_e(self, span, E_NO_OP_TRY, from_view(missing))
+        return null
+    }
+    let p = pick.unwrap()
+
+    let nr = ty_node(self, self.engine.resolve(p.ret)) match {
+        NNominal(n) => Some(n)
+        _ => null
+    }
+    let tr_id = self.nominals.by_fqn.get(FQN_TRY_RESULT)
+    let ok = nr.is_some() and tr_id.is_some()
+    if ok {
+        ok = nr.unwrap().id == tr_id.unwrap() and nr.unwrap().args.len == 2
+    }
+    if !ok {
+        push_diag_e(self, span, E_NO_OP_TRY, from_view("`op_try` must return `TryResult(T, R)`"))
+        return null
+    }
+    self.results.record_operator(self.node_of(span), op_record(p.id))
+    note_pending(self, span, true, &p)
+    return nr
+}
+
+fn op_record(function_id: u32) ResolvedOperator {
+    return .{
+        function_id = function_id,
+        negate_result = false,
+        cmp_derived_op = null,
+        is_ref_form = false,
+        spec_id = null,
+        lhs_hops = 0u32,
+        rhs_hops = 0u32,
+    }
 }
 
 // `operand.*` - peels one reference. A nominal operand dispatches to its `op_deref(&X) &T` (the
@@ -7808,18 +7845,7 @@ fn check_index(self: &Checker, idx: &IndexExpr) Ty {
             let pick = operator_pick_2(self, "op_index", rbase, rindex, idx.span)
             if pick.is_some() {
                 let p = pick.unwrap()
-                self.results.record_operator(
-                    self.node_of(idx.span),
-                    ResolvedOperator {
-                        function_id = p.id,
-                        negate_result = false,
-                        cmp_derived_op = null,
-                        is_ref_form = false,
-                        spec_id = null,
-                        lhs_hops = 0u32,
-                        rhs_hops = 0u32,
-                    },
-                )
+                self.results.record_operator(self.node_of(idx.span), op_record(p.id))
                 note_pending(self, idx.span, true, &p)
                 return p.ret
             }
@@ -7937,18 +7963,7 @@ fn user_index(self: &Checker, idx: &IndexExpr, base_ty: Ty, rbase: Ty, index_ty:
     let value_pick = receiver_pick(self, "op_index", base_ty, &extra, idx.span, idx.span)
     if value_pick.is_some() {
         let p = value_pick.unwrap()
-        self.results.record_operator(
-            self.node_of(idx.span),
-            ResolvedOperator {
-                function_id = p.id,
-                negate_result = false,
-                cmp_derived_op = null,
-                is_ref_form = false,
-                spec_id = null,
-                lhs_hops = 0u32,
-                rhs_hops = 0u32,
-            },
-        )
+        self.results.record_operator(self.node_of(idx.span), op_record(p.id))
         note_pending(self, idx.span, true, &p)
         record_open_range_len(self, idx, rbase, p.hops)
         return p.ret
@@ -8778,18 +8793,7 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     }
     let p = ip.unwrap()
     check_consuming_receiver(self, &p, iter_name, Some(z), expr_span(fs.iterable))
-    self.results.record_operator(
-        self.node_of(fs.body.span),
-        ResolvedOperator {
-            function_id = p.id,
-            negate_result = false,
-            cmp_derived_op = null,
-            is_ref_form = false,
-            spec_id = null,
-            lhs_hops = 0u32,
-            rhs_hops = 0u32,
-        },
-    )
+    self.results.record_operator(self.node_of(fs.body.span), op_record(p.id))
     note_pending(self, fs.body.span, true, &p)
 
     let state = self.engine.resolve(p.ret)
@@ -8811,18 +8815,7 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         return self.engine.fresh_var()
     }
     let n = np.unwrap()
-    self.results.record_operator(
-        self.node_of(fs.span),
-        ResolvedOperator {
-            function_id = n.id,
-            negate_result = false,
-            cmp_derived_op = null,
-            is_ref_form = false,
-            spec_id = null,
-            lhs_hops = 0u32,
-            rhs_hops = 0u32,
-        },
-    )
+    self.results.record_operator(self.node_of(fs.span), op_record(n.id))
     note_pending(self, fs.span, true, &n)
     const borrows = p.hops == 0 and p.params.len > 0 and is_ref_ty(self, p.params[0])
     record_iter_release(self, fs, iter_owned(self, fs, z, state, borrows))
@@ -8883,18 +8876,7 @@ fn record_iter_release(self: &Checker, fs: &ForStmt, owned: Ty?) {
         return
     }
     const d = dp.unwrap()
-    self.results.record_operator(
-        self.node_of(fs.var_span),
-        ResolvedOperator {
-            function_id = d.id,
-            negate_result = false,
-            cmp_derived_op = null,
-            is_ref_form = false,
-            spec_id = null,
-            lhs_hops = 0u32,
-            rhs_hops = 0u32,
-        },
-    )
+    self.results.record_operator(self.node_of(fs.var_span), op_record(d.id))
     note_pending(self, fs.var_span, true, &d)
 }
 
@@ -13696,10 +13678,15 @@ fn own_expr(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) {
         }
         Unary(u) => own_expr(self, p, u.operand, own_read())
         Cast(c) => own_expr(self, p, c.operand, own_read())
-        // `a ?? b` hands out `a`'s payload: a kept result consumes `a`, with no marker, as an
-        // operand of a `move` parameter would be; a result only read leaves `a` in place.
+        // `a ?? b` over an Option hands out `a`'s payload: a kept result consumes `a`, with no
+        // marker, as an operand of a `move` parameter would be; a result only read leaves `a` in
+        // place. Any other `a` flows into `op_try`, as for `a?`.
         Coalesce(c) => {
-            own_expr(self, p, c.lhs, if own_needs_value(slot) { own_consuming() } else { slot })
+            if self.results.resolved_ops.get(self.node_of(c.span)).is_some() {
+                own_protocol(self, p, c.span, c.lhs)
+            } else {
+                own_expr(self, p, c.lhs, if own_needs_value(slot) { own_consuming() } else { slot })
+            }
             own_expr(self, p, c.rhs, slot)
         }
         Try(t) => own_protocol(self, p, t.span, t.operand)

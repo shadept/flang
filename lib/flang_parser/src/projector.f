@@ -1931,9 +1931,22 @@ fn project_assignment(self: &Projector, cst: CstNode) Expr {
     })
 }
 
+// A statement in expression position (`X => return v`, `a ?? break`) as a single-statement block.
+fn stmt_block(self: &Projector, cst: CstNode) Expr? {
+    const st = self.project_stmt(cst)?
+    let stmts: List(Stmt) = list(1, self.alloc)
+    stmts.push(st)
+    return Some(Expr.Block(BlockExpr {
+        span = self.span_from(cst),
+        stmts = frozen(stmts),
+        trailing = null,
+    }))
+}
+
 fn project_coalesce(self: &Projector, cst: CstNode) Expr {
     let lhs: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
     let rhs: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
+    let op_span = self.span_from(cst)
     let saw_lhs = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -1946,13 +1959,26 @@ fn project_coalesce(self: &Projector, cst: CstNode) Expr {
                     else {
                         install(&rhs, self.project_expr(child))
                     }
+                    continue
+                }
+                // `a ?? return v` (RFC-040): the statement fallback, as a match-arm body.
+                if saw_lhs {
+                    self.stmt_block(child) match {
+                        Some(blk) => install(&rhs, blk)
+                        None => {}
+                    }
                 }
             }
-            TokenChild(_) => {}
+            TokenChild(tok) => {
+                if tok.kind == TokenKind.QuestionQuestion {
+                    op_span = self.span_from_token(tok)
+                }
+            }
         }
     }
     return Expr.Coalesce(CoalesceExpr {
         span = self.span_from(cst),
+        op_span = op_span,
         lhs = self.boxed(lhs),
         rhs = self.boxed(rhs),
     })
@@ -2564,18 +2590,8 @@ fn project_match_arm(self: &Projector, cst: CstNode) MatchArm {
                 // single-statement block - leaving it `Error` made the arm silently unlowerable
                 // (the checker types Error as a fresh var).
                 if saw_arrow {
-                    let st = self.project_stmt(child)
-                    st match {
-                        Some(stv) => {
-                            let stmts: List(Stmt) = list(1, self.alloc)
-                            stmts.push(stv)
-                            const __body_next = Expr.Block(BlockExpr {
-                                span = self.span_from(child),
-                                stmts = frozen(stmts),
-                                trailing = null,
-                            })
-                            install(&body, __body_next)
-                        }
+                    self.stmt_block(child) match {
+                        Some(blk) => install(&body, blk)
                         None => {}
                     }
                 }

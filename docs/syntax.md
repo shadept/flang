@@ -281,14 +281,14 @@ An `if` without an `else` is not an expression and yields no value; only `if`/`e
 - `and`/`or` are keywords, short-circuit, bool only
 - `!expr` logical NOT, `~expr` bitwise NOT, `&expr` address-of (all prefix unary)
 - `~` is integer-only (error on `bool` and floats); `!` is `bool`-only
-- `a ?? b` unwraps optional or uses fallback
+- `a ?? b` unwraps through `op_try` (Option, Result, user types) or evaluates the fallback; the fallback may be `return [expr]`, `break` or `continue` (RFC-040)
 - `a?.field` optional chaining
 - `expr?` postfix early-return — desugars to `op_try(expr) match { Continue(v) => v, Return(r) => return r }`. `?.` (single token) always wins over `?` followed by `.`; use `(expr?).field` for "early-return then access". Forbidden inside `defer`. See RFC-009.
 - `expr as Type` casting (numeric, pointer, String/u8[])
 
 ### Operator Overloading
 
-All operators desugar to function calls: `op_add`, `op_sub`, `op_multiply`, `op_divide`, `op_modulo`, `op_band`, `op_bor`, `op_bxor`, `op_bnot`, `op_eq`, `op_ne`, `op_lt`, `op_gt`, `op_le`, `op_ge`, `op_index`, `op_set_index`, `op_coalesce`, `op_assign`, `op_add_assign`, `op_deref`, `op_try`.
+All operators desugar to function calls: `op_add`, `op_sub`, `op_multiply`, `op_divide`, `op_modulo`, `op_band`, `op_bor`, `op_bxor`, `op_bnot`, `op_eq`, `op_ne`, `op_lt`, `op_gt`, `op_le`, `op_ge`, `op_index`, `op_set_index`, `op_assign`, `op_add_assign`, `op_deref`, `op_try` (also behind `??`).
 
 `op_eq` auto-derives `op_ne`. `op_cmp(a, b) Ord` auto-derives all six comparison operators.
 

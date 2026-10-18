@@ -376,7 +376,7 @@ This is transparent — source code reads as pass-by-value, but large structs av
 
 `&` in a signature communicates intent to mutate or retain. `fn f(s: S)` and `fn f(s: &S)` emit the same code for a read-only body, because everything already crosses by pointer.
 
-The elision is observable: the address of a read-only parameter equals the caller's. Section 5.4 closes the only way that guarantee could be defeated.
+The guarantee is value semantics: a parameter reads as a value, and the callee never mutates the caller's. Crossing by address and eliding the copy is how the compiler meets it, not part of it. Whether a read-only parameter shares the caller's storage is unspecified, and how an argument crosses is the backend's choice (RFC-041 passes small aggregates in registers). Section 5.4 refuses the one cast that could break the copy-on-write analysis: a reference fabricated from an integer could write through a laundered parameter address.
 
 **Parameter modes (RFC-033).** A function states ownership in its signature, never at its call sites:
 
@@ -664,7 +664,7 @@ An operator and its `op_*` function below are one thing: `a == b` is `op_eq(a, b
 | `&` `\|` `^`                                      | `op_band` `op_bor` `op_bxor`                    |
 | `[]` (ref-form)                                   | `op_index_ref`                                  |
 | `[]` read (value-form) / `[]=` write (value-form) | `op_index` / `op_set_index`                     |
-| `??`                                              | `op_coalesce`                                   |
+| `??` (§5.3)                                       | `op_try`                                        |
 | postfix `?`                                       | `op_try`                                        |
 | `=`                                               | `op_assign`                                     |
 | `+=`                                              | `op_add_assign`                                 |
@@ -706,7 +706,35 @@ An operator and its `op_*` function below are one thing: `a == b` is `op_eq(a, b
 
 ### 5.3 Null Operators
 
-**Null-coalescing `??`**: If `a` is `Option(T)` with a value, yields unwrapped `T`; otherwise yields `b`. Right-associative, chainable: `a ?? b ?? c`. It hands out `a`'s payload, so a result that is kept - bound, stored, passed to a `move` parameter, returned - consumes `a` with no marker, as an argument to a `move` parameter is consumed; a result only read (`(a ?? b).len`) leaves `a` in place. A non-copyable `a` the function does not own cannot be consumed (E2131).
+**Coalescing `??`** (RFC-040): `a ?? b` yields `a`'s happy-path value, else `b`, through the protocol `?` uses:
+
+```
+a ?? b   :=   op_try(a) match { Continue(v) => v, Return(r) => { release(r); b } }
+```
+
+`b` is evaluated only when `a` does not continue. The right side is a match-arm body: any expression - a block or `if` may yield `T` or leave (`o ?? { log(); return Err(e) }`) - or a bare `return [expr]`, `break` or `continue` (`let id = map.get(k) ?? return TY_ERROR`, `let v = o ?? continue`), with their statement rules (E1006 / E1007, E1054); `return` takes the rest of the expression. Right-associative: `a ?? b ?? c`. Where `?` returns the residual, `??` owns it and releases it before `b` - an owned error is freed, a copyable one costs nothing. A left side with no `op_try` is E2092.
+
+- **Option** is read in place: a result that is kept - bound, stored, passed to a `move` parameter, returned - consumes `a` with no marker, as an argument to a `move` parameter is consumed; a result only read (`(a ?? b).len`) leaves `a` in place. A non-copyable `a` the function does not own cannot be consumed (E2131).
+- **Option chain**: `Option(T) ?? Option(T)` yields `Option(T)`, `a` when present, else `b`. Option only.
+- **Every other `op_try` type** consumes `a`, as `a?` does: `r ?? 0` on a `Result` hands `r` to `op_try`.
+
+**Why.** `?` leaves when the function returns the operand's family; `??` covers every other way out of "the value is missing", in one expression and without restating the test:
+
+```
+let id = map[k] ?? return TY_ERROR                     // early exit, any return type
+let user = cache[id] ?? db.load(id) ?? return Err(NotFound)
+for line in lines {
+    return parse(line) ?? continue                     // the first parseable line
+}
+loop {
+    let job = queue.pop() ?? break
+    run(job)
+}
+```
+
+An error type's `deinit` runs exactly when `??` drops it, so a type can report its own swallowing (log, count, assert) while `?` still hands it on untouched.
+
+**Limits.** `op_try` is for a value that may be absent or have failed: `Continue` carries the payload the caller wants. A type whose `Continue` payload is always discarded - a deadline check, a budget token - is a condition dressed as a value, and `let _ = deadline.check() ?? return Timeout` is an `if` written backwards. Write the `if`.
 
 **Safe member access `?.`**: `opt?.field` yields `Option(field_type)` — the field value if present, `null` otherwise. Chainable: `a?.b?.c`.
 

@@ -10,6 +10,14 @@ pub type Result = enum(T, E) {
     Err(E)
 }
 
+// Releases whichever payload the result holds, as `Option`'s `deinit` does.
+pub fn deinit(self: move Result($T, $E)) {
+    self match {
+        Ok(v) => { release(v) }
+        Err(e) => { release(e) }
+    }
+}
+
 // `?` on Result(T, E) works inside any fn returning Result(U, E): success type can differ, error
 // type must match.
 pub fn op_try(self: move Result($T, $E)) TryResult(T, Result($U, E)) {

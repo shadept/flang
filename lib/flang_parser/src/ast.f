@@ -690,9 +690,11 @@ pub type RangeExpr = struct {
     inclusive: bool
 }
 
-// `lhs ?? rhs` - null-coalescing. Yields `lhs` if non-null, else `rhs`.
+// `lhs ?? rhs` - yields `lhs`'s payload when `op_try(lhs)` continues, else `rhs` (RFC-040).
+// `op_span` is the `??` token's: no other node carries it, so it keys the residual's release.
 pub type CoalesceExpr = struct {
     span: SourceSpan
+    op_span: SourceSpan
     lhs: &Expr
     rhs: &Expr
 }

@@ -4164,14 +4164,14 @@ Mutate through the defining type's own API. In the example, `Stack.pop` should d
 
 ---
 
-### E2092: `?` Has No Matching `op_try`
+### E2092: `?` or `??` Has No Matching `op_try`
 
 **Category**: Type Checking
 **Severity**: Error
 
 #### Description
 
-The postfix `?` operator desugars to `op_try(operand) match { ... }`. The compiler reports E2092 when no `op_try` overload in scope accepts the operand's type.
+The postfix `?` operator desugars to `op_try(operand) match { ... }`, and so does `a ?? b` when `a` is not an Option (RFC-040). The compiler reports E2092 when no `op_try` overload in scope accepts the operand's type, or when the one it picks does not return `TryResult(T, R)`.
 
 #### Example
 
