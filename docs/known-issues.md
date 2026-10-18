@@ -2600,6 +2600,15 @@ C passes such a struct by value, while a FLang body reads every aggregate parame
 
 ---
 
+### An Unconsumed `move` Parameter Is Never Released
+
+**Status:** Open (found 2026-10-18)
+**Affected:** functions and lambdas whose body leaves a non-copyable `move` parameter unconsumed
+
+`fn len_of(s: move OwnedString) usize { return s.len }` leaks `s`: the caller gave ownership away, and nothing releases a `move` parameter the body neither moves nor releases, nor reports it. The same holds for a lambda parameter that inherits `move` from its slot (`opt.map { it.len }`). Release it in the body (`defer s.deinit()`) or take it without `move`.
+
+---
+
 ### Function Values: A Call Through an Index or a Dereference Does Not Type
 
 **Status:** Open (found 2026-10-18)

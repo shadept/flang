@@ -94,6 +94,8 @@ pub type CaptureRec = struct {
 pub type LambdaInfo = struct {
     span: SourceSpan
     params: List(Ty)
+    // The `move` bit of each parameter, as written or taken from the slot the lambda fills.
+    moves: usize
     ret: Ty
     captures: List(CaptureRec)
     closure_id: NominalId?
@@ -114,6 +116,7 @@ pub fn deinit(self: move LambdaInfo) {
 // body. `params` excludes the `self` env pointer.
 pub type ClosureSig = struct {
     params: List(Ty)
+    moves: usize
     ret: Ty
     symbol: OwnedString
     lambda_node: NodeId
@@ -538,6 +541,7 @@ pub fn copy_lambda(info: &LambdaInfo) LambdaInfo {
     return LambdaInfo {
         span = info.span,
         params = move ps,
+        moves = info.moves,
         ret = info.ret,
         captures = move caps,
         closure_id = info.closure_id,
@@ -553,6 +557,7 @@ pub fn copy_sig(sig: &ClosureSig) ClosureSig {
     ps.push_all(sig.params.as_slice())
     return ClosureSig {
         params = move ps,
+        moves = sig.moves,
         ret = sig.ret,
         symbol = from_view(sig.symbol.view),
         lambda_node = sig.lambda_node,

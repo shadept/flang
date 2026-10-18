@@ -53,9 +53,10 @@ env:  &u8?, the callable's state, or null
 ```
 
 Calling it calls `code(args, ctx, env)`. Parameter modes stay part of the type: `fn(T)` and
-`fn(move T)` remain distinct, and a callable converts only to a function type its own signature
-fits, by RFC-035's subsumption rules (a reading parameter fits a `move` slot; a `move` parameter
-fits only a `move` slot).
+`fn(move T)` remain distinct. A reading parameter fits a `move` slot only when its type is
+copyable: under erasure the callee cannot release what a `move` caller hands it, so a non-copyable
+reader would leak. A `move` parameter fits only a `move` slot: a reading caller lends its own
+storage. An unannotated lambda parameter takes the slot's mode.
 
 ### Calling convention
 

@@ -8574,7 +8574,10 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
         } else {
             self.engine.fresh_var()
         }
-        moves = moves | move_bit_of(self, params.len, p.is_move, ty, p.span)
+        // An unannotated parameter takes the slot's mode too: the body owns what it is handed.
+        const inherits = unannotated and expected.is_some()
+            and moves_at(&expected.unwrap(), params.len)
+        moves = moves | move_bit_of(self, params.len, p.is_move or inherits, ty, p.span)
         const p_node = self.node_of(p.span)
         self.results.record_type(p_node, ty)
         self.env.bind(
@@ -8631,6 +8634,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
             LambdaInfo {
                 span = lam.span,
                 params = move params,
+                moves = moves,
                 ret = ret,
                 captures = move frame.captures,
                 closure_id = null,
@@ -8682,6 +8686,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
         nid,
         ClosureSig {
             params = move sig_params,
+            moves = moves,
             ret = ret,
             symbol = from_view(sym.view),
             lambda_node = node,
@@ -8692,6 +8697,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
         LambdaInfo {
             span = lam.span,
             params = move params,
+            moves = moves,
             ret = ret,
             captures = move frame.captures,
             closure_id = Some(nid),
@@ -12655,6 +12661,7 @@ fn zonk_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
     return LambdaInfo {
         span = info.span,
         params = move ps,
+        moves = info.moves,
         ret = ret,
         captures = move caps,
         closure_id = info.closure_id,
@@ -12698,6 +12705,7 @@ fn zonk_closures(self: &Checker) {
             key,
             ClosureSig {
                 params = move ps,
+                moves = cs.moves,
                 ret = self.engine.zonk(cs.ret),
                 symbol = from_view(cs.symbol.view),
                 lambda_node = cs.lambda_node,
@@ -13104,7 +13112,7 @@ fn own_check_body(self: &Checker, body: &BlockExpr, params: FunctionParam[]?, re
     let slots: List(NodeId) = list(0)
     params match {
         Some(ps) => {
-            own_collect_lent(self, &lent, ps)
+            own_collect_lent(self, &lent, ps, 0usize)
             own_collect_slots(self, &slots, ps)
         }
         None => {}
@@ -13179,9 +13187,12 @@ fn own_run(
     own_deinit(p)
 }
 
-fn own_collect_lent(self: &Checker, lent: &List(NodeId), params: FunctionParam[]) {
-    for &prm in params {
-        if !prm.is_move and !prm.is_variadic {
+// `moves` adds the modes a lambda's parameters take from the slot it fills.
+fn own_collect_lent(self: &Checker, lent: &List(NodeId), params: FunctionParam[], moves: usize) {
+    for i in 0..params.len {
+        const prm = &params[i]
+        const owns = prm.is_move or (i < MAX_MOVE_PARAMS and (moves & move_bit(i)) != 0usize)
+        if !owns and !prm.is_variadic {
             lent.push(self.node_of(prm.span))
         }
     }
@@ -13211,7 +13222,7 @@ fn own_lambda(self: &Checker, p: &OwnPass, lam: &LambdaExpr) {
     }
     let lent: List(NodeId) = list(captures.len)
     let captured: List(NodeId) = list(captures.len)
-    own_collect_lent(self, &lent, lam.params_at(info.unwrap().params.len))
+    own_collect_lent(self, &lent, lam.params_at(info.unwrap().params.len), info.unwrap().moves)
     for &cap in captures {
         if own_is_lent(p, cap.decl) {
             lent.push(cap.decl)

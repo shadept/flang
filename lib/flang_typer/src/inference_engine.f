@@ -737,6 +737,10 @@ fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
             if r11.is_some() {
                 return r11
             }
+            let r12 = try_fn_subsume(self, from, to, reg)
+            if r12.is_some() {
+                return r12
+            }
         }
         None => {}
     }
@@ -744,8 +748,7 @@ fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
 }
 
 // A capturing closure converts to a function type with its own parameter and return types
-// (RFC-037). A closure's parameters only read, so it fits a `move` slot too: the side-unification
-// takes the slot's `move` marks.
+// (RFC-037); a mode difference is left to `try_fn_subsume`.
 fn try_closure_to_fn(self: &Engine, from: Ty, to: Ty) Coercion? {
     const table = self.closures match {
         Some(t) => t
@@ -771,9 +774,42 @@ fn try_closure_to_fn(self: &Engine, from: Ty, to: Ty) Coercion? {
     }
     let ps: List(Ty) = list(sig.params.len)
     ps.push_all(sig.params.as_slice())
-    const have = self.mk_func(ps, sig.ret, want.moves, FnConv.ConvFlang)
+    const have = self.mk_func(ps, sig.ret, sig.moves, FnConv.ConvFlang)
     let side: List(Constraint) = list(1)
     side.push(Constraint { a = have, b = to })
+    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
+}
+
+// A function value whose reading parameters sit where the slot says `move` converts when each such
+// parameter's type is copyable: the caller hands over a value the callee may simply drop (RFC-037).
+fn try_fn_subsume(self: &Engine, from: Ty, to: Ty, reg: &NominalRegistry) Coercion? {
+    const have = self.interner.node(from) match {
+        NFunc(f) => f
+        _ => return null
+    }
+    const want = self.interner.node(to) match {
+        NFunc(f) => f
+        _ => return null
+    }
+    const same_shape = have.conv == want.conv and have.params.len == want.params.len
+    const only_relaxes = (have.moves & want.moves) == have.moves
+    if !same_shape or have.moves == want.moves or !only_relaxes {
+        return null
+    }
+    for i in 0..have.params.len {
+        const relaxed = moves_at(&want, i) and !moves_at(&have, i)
+        const p = self.zonk(self.interner.child_at(have.params, i))
+        if relaxed and (self.is_var(p) or !is_copyable_ty(&self.interner, reg, p)) {
+            return null
+        }
+    }
+    let ps: List(Ty) = list(have.params.len)
+    for i in 0..have.params.len {
+        ps.push(self.interner.child_at(have.params, i))
+    }
+    const relaxed_ty = self.mk_func(ps, have.ret, want.moves, have.conv)
+    let side: List(Constraint) = list(1)
+    side.push(Constraint { a = relaxed_ty, b = to })
     return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
 }
 
