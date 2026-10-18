@@ -1052,13 +1052,15 @@ pub type TupleType = struct {
 
 // `fn(P1, move P2) R` - function type. `return_type` is None for void. `param_names[i]` is the
 // optional `name:` before `params[i]` ("" when unnamed) and `param_moves[i]` whether it is declared
-// `move`; both always the same length as `params`.
+// `move`; both always the same length as `params`. `foreign` marks `#foreign fn(...)`, one C code
+// pointer.
 pub type FunctionType = struct {
     span: SourceSpan
     params: TypeExpr[]
     param_names: String[]
     param_moves: bool[]
     return_type: &TypeExpr?
+    foreign: bool
 }
 
 // `struct(T1, T2) { field: T, ... }` - generics are optional and live on the type expression

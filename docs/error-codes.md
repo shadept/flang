@@ -614,39 +614,10 @@ pub fn main() i32 {
 
 ---
 
-### E2006: Break Statement Outside Loop
+### E2006: Reference to a Function Type (retired)
 
-**Category**: Control Flow
-**Severity**: Error
-
-#### Description
-
-A `break` statement was used outside of a loop context. The `break` statement can only be used inside `for` loops to
-exit the loop early.
-
-#### Example
-
-```flang
-pub fn main() i32 {
-    break  // ERROR: `break` statement outside of loop
-    return 0
-}
-```
-
-#### Solution
-
-Remove the `break` statement or move it inside a loop:
-
-```flang
-pub fn main() i32 {
-    for (i in 0..10) {
-        if (i == 5) {
-            break  // OK: inside loop
-        }
-    }
-    return 0
-}
-```
+Retired by RFC-037. A `&fn(...)` or `&#foreign fn(...)` is an ordinary reference to storage holding
+a function value, such as one slot of an array of callbacks. `break` outside a loop is E1006.
 
 ---
 
@@ -2960,7 +2931,7 @@ Report the issue with sample code that reproduces the error.
 | **E2003** | Name Resolution   | Cannot find type in scope                    |
 | **E2004** | Name Resolution   | Cannot find value in scope                   |
 | **E2005** | Name Resolution   | Variable already declared                    |
-| **E2006** | Control Flow      | Break statement outside loop                 |
+| **E2006** | Type Checking     | Reference to a function type (retired)       |
 | **E2007** | Control Flow      | Continue statement outside loop              |
 | **E2008** | Control Flow      | Range expression outside loop                |
 | **E2009** | Iterators         | For loop only supports ranges                |
@@ -3050,6 +3021,7 @@ Report the issue with sample code that reproduces the error.
 | **E2154** | Type Checking     | A lambda without `=>` where the expected callable takes more than one parameter, or none is known |
 | **E2155** | Semantic Analysis | A type named lowercase, or a function named uppercase |
 | **E2156** | Type Checking     | A trailing lambda on a call with no parameter it can fill |
+| **E2157** | Type Checking     | A `#foreign struct` field of a FLang function type |
 
 ### E2115: Unsupported Pattern Form
 
@@ -3490,10 +3462,34 @@ return r.map(fn(u) u.name).ok()
 
 ---
 
-### E2111: Capturing Closure Cannot Coerce to Bare Function Pointer (retired)
+### E2111: Not Convertible to `#foreign fn`
 
-Retired by RFC-037. A function type is a `{ code, env }` pair, so a capturing closure converts to
-one whose signature it fits.
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A `#foreign fn(...)` is one C code pointer, called with the arguments alone (RFC-037). A capturing
+lambda has nowhere to keep its captures, and a FLang function or `fn` value takes the context and
+`env` C does not pass, so neither fills a `#foreign fn` parameter. A plain `fn(...)` slot takes all
+of them.
+
+#### Example
+
+```flang
+#foreign fn qsort(base: &u8, n: usize, size: usize, cmp: #foreign fn(&u8, &u8) i32)
+
+fn by_score(a: &u8, b: &u8) i32 { return (b as &Player).score - (a as &Player).score }
+
+qsort(base, n, size, by_score)                                  // error[E2111]
+qsort(base, n, size, { a, b => dir * cmp(a, b) })               // error[E2111]: captures `dir`
+```
+
+#### Solution
+
+Declare the callback in the C convention, `#foreign fn by_score(a: &u8, b: &u8) i32 { ... }`, or
+pass a lambda that captures nothing. State the callback needs goes through C's own user-data
+pointer where the API has one.
 
 ---
 
@@ -4017,6 +4013,30 @@ apply(3) { x => x }                     // error[E2156]: `x` follows `f` without
 
 Pass the lambda inside the parentheses (`apply({ x => x }, 3)`), or move the callable parameter
 last.
+
+---
+
+### E2157: A `#foreign struct` Field of a FLang Function Type
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A `fn(...)` value is a `{ code, env }` pair, which no C declaration lays out (RFC-037). A field of
+a `#foreign struct` that holds a callback is a `#foreign fn(...)`, one C code pointer.
+
+#### Example
+
+```flang
+type Callbacks = #foreign struct {
+    on_key: fn(&u8, i32)                // error[E2157]
+}
+```
+
+#### Solution
+
+`on_key: #foreign fn(&u8, i32)`.
 
 ---
 

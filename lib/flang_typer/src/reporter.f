@@ -201,6 +201,9 @@ pub fn format_with_names(
             sb.append("]")
         }
         NFunc(f) => {
+            if f.conv == FnConv.ConvC {
+                sb.append("#foreign ")
+            }
             sb.append("fn(")
             for i in 0..f.params.len {
                 if i > 0 {

@@ -325,8 +325,8 @@ pub fn mk_array(self: &Engine, elem: Ty, length: usize) Ty {
     return self.interner.array_of(elem, length)
 }
 
-pub fn mk_func(self: &Engine, params: move List(Ty), ret: Ty, moves: usize = 0usize) Ty {
-    const t = self.interner.func_of(&params, moves, ret)
+pub fn mk_func(self: &Engine, params: move List(Ty), ret: Ty, moves: usize, conv: FnConv) Ty {
+    const t = self.interner.func_of(&params, moves, ret, conv)
     params.deinit()
     return t
 }
@@ -397,7 +397,7 @@ fn zonk_span(self: &Engine, span: ChildSpan) List(Ty) {
 fn zonk_func(self: &Engine, f: &NFuncNode) Ty {
     let ps = zonk_span(self, f.params)
     defer ps.deinit()
-    return self.interner.func_of(&ps, f.moves, self.zonk(f.ret))
+    return self.interner.func_of(&ps, f.moves, self.zonk(f.ret), f.conv)
 }
 
 fn zonk_tuple(self: &Engine, span: ChildSpan) Ty {
@@ -759,6 +759,9 @@ fn try_closure_to_fn(self: &Engine, from: Ty, to: Ty) Coercion? {
         NFunc(f) => f
         _ => return null
     }
+    if want.conv != FnConv.ConvFlang {
+        return null
+    }
     const sig = table.get_ref(id) match {
         Some(s) => s
         None => return null
@@ -768,7 +771,7 @@ fn try_closure_to_fn(self: &Engine, from: Ty, to: Ty) Coercion? {
     }
     let ps: List(Ty) = list(sig.params.len)
     ps.push_all(sig.params.as_slice())
-    const have = self.mk_func(ps, sig.ret, want.moves)
+    const have = self.mk_func(ps, sig.ret, want.moves, FnConv.ConvFlang)
     let side: List(Constraint) = list(1)
     side.push(Constraint { a = have, b = to })
     return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
@@ -994,7 +997,7 @@ fn unify_func(self: &Engine, fa: &NFuncNode, fb: &NFuncNode, a: Ty, b: Ty) Unify
             actual = fa.params.len,
         })
     }
-    if fa.moves != fb.moves {
+    if fa.moves != fb.moves or fa.conv != fb.conv {
         return UnifyOutcome.UniMismatch(Mismatch { actual = a, expected = b })
     }
     for i in 0..fa.params.len {

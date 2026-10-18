@@ -98,6 +98,8 @@ pub type LambdaInfo = struct {
     captures: List(CaptureRec)
     closure_id: NominalId?
     symbol: OwnedString
+    // `ConvC` for a lambda filling a `#foreign fn` slot: its body is a C function.
+    conv: FnConv
 }
 
 pub fn deinit(self: move LambdaInfo) {
@@ -540,6 +542,7 @@ pub fn copy_lambda(info: &LambdaInfo) LambdaInfo {
         captures = move caps,
         closure_id = info.closure_id,
         symbol = from_view(info.symbol.view),
+        conv = info.conv,
     }
 }
 

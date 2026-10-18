@@ -44,11 +44,12 @@ pub type NArrayNode = struct {
 }
 
 // `moves` has bit i set when parameter i is declared `move` (RFC-033). Part of the identity:
-// `fn(T)` and `fn(move T)` are distinct types.
+// `fn(T)` and `fn(move T)` are distinct types, and so are `fn(T)` and `#foreign fn(T)`.
 pub type NFuncNode = struct {
     params: ChildSpan
     moves: usize
     ret: Ty
+    conv: FnConv
 }
 
 // Whether parameter `i` of `f` is declared `move`.
@@ -101,6 +102,7 @@ pub type TyNode = enum {
 //   TAG_REF      a = elem
 //   TAG_ARRAY    a = elem              b = length
 //   TAG_FUNC     a = return type       b = move bits  kids = params
+//   TAG_CFUNC    a = return type       b = move bits  kids = params
 //   TAG_TUPLE                                        kids = elements
 //   TAG_RECORD                                       kids = (name, type) fields
 //   TAG_NOMINAL  a = NominalId                       kids = type arguments
@@ -145,6 +147,7 @@ const TAG_FUNC: u32 = 4
 const TAG_TUPLE: u32 = 5
 const TAG_RECORD: u32 = 6
 const TAG_NOMINAL: u32 = 7
+const TAG_CFUNC: u32 = 8
 
 pub type TypeInterner = struct {
     nodes: List(TyNode)
@@ -384,8 +387,12 @@ pub fn array_of(self: &TypeInterner, elem: Ty, length: usize) Ty {
     return add(self, key, node, self.is_ground(elem))
 }
 
-pub fn func_of(self: &TypeInterner, params: &List(Ty), moves: usize, ret: Ty) Ty {
-    const key = TyKey { tag = TAG_FUNC, a = ret, b = moves, kids = self.intern_kids(params) }
+pub fn func_of(self: &TypeInterner, params: &List(Ty), moves: usize, ret: Ty, conv: FnConv) Ty {
+    const tag = conv match {
+        ConvFlang => TAG_FUNC
+        ConvC => TAG_CFUNC
+    }
+    const key = TyKey { tag = tag, a = ret, b = moves, kids = self.intern_kids(params) }
     const hit = self.probe(key)
     if hit.is_some() {
         return hit.unwrap()
@@ -393,7 +400,7 @@ pub fn func_of(self: &TypeInterner, params: &List(Ty), moves: usize, ret: Ty) Ty
 
     const g = all_ground(self, params) and self.is_ground(ret)
     const span = push_children(self, params)
-    const node = TyNode.NFunc(.{ params = span, moves = moves, ret = ret })
+    const node = TyNode.NFunc(.{ params = span, moves = moves, ret = ret, conv = conv })
     return add(self, key, node, g)
 }
 
@@ -477,7 +484,7 @@ fn substitute_span(self: &TypeInterner, span: ChildSpan, subst: &Dict(VarId, Ty)
 fn substitute_func(self: &TypeInterner, f: &NFuncNode, subst: &Dict(VarId, Ty)) Ty {
     let ps = substitute_span(self, f.params, subst)
     defer ps.deinit()
-    return self.func_of(&ps, f.moves, self.substitute(f.ret, subst))
+    return self.func_of(&ps, f.moves, self.substitute(f.ret, subst), f.conv)
 }
 
 fn substitute_tuple(self: &TypeInterner, span: ChildSpan, subst: &Dict(VarId, Ty)) Ty {
@@ -552,6 +559,9 @@ pub fn format(self: &TypeInterner, id: Ty, sb: &StringBuilder) {
             sb.append("]")
         }
         NFunc(f) => {
+            if f.conv == FnConv.ConvC {
+                sb.append("#foreign ")
+            }
             sb.append("fn(")
             const ps = self.child_ids(f.params)
             for i in 0..ps.len {
@@ -703,7 +713,7 @@ test "format renders through the node graph" {
     let ps: List(Ty) = list(1)
     ps.push(it.ref_of(prim_of(PrimitiveKind.U8)))
     defer ps.deinit()
-    const f = it.func_of(&ps, 0usize, TY_VOID)
+    const f = it.func_of(&ps, 0usize, TY_VOID, FnConv.ConvFlang)
     let sb = string_builder(16)
     defer sb.deinit()
     it.format(f, &sb)

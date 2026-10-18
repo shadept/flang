@@ -363,6 +363,7 @@ fn member_spellable(it: &TypeInterner, ty: Ty, reg: &NominalRegistry) bool {
         NNominal(_) => agg_abi_safe(it, ty, reg)
         NPrim(_) => true
         NRef(_) => true
+        NFunc(f) => f.conv == FnConv.ConvC
         _ => false
     }
 }
@@ -406,6 +407,7 @@ fn is_scalar_ty(it: &TypeInterner, ty: Ty) bool {
     return it.node(ty) match {
         NPrim(_) => true
         NRef(_) => true
+        NFunc(f) => f.conv == FnConv.ConvC
         _ => false
     }
 }

@@ -240,8 +240,8 @@ fn layout_rec(it: &TypeInterner, ty: Ty, reg: &NominalRegistry, cache: &LayoutCa
         NVar(_) => panic("unresolved type variable reached layout - checker bug")
         NPrim(p) => prim_layout(p)
         NRef(_) => lay(8, 8)
-        // `{ code, env }` (RFC-037).
-        NFunc(_) => lay(16, 8)
+        // `{ code, env }`, or one C code pointer (RFC-037).
+        NFunc(f) => if f.conv == FnConv.ConvC { lay(8, 8) } else { lay(16, 8) }
         NArray(a) => array_layout(it, &a, reg, cache)
         NTuple(span) => span_size(it, span, reg, cache)
         NRecord(rec) => span_size(it, rec.tys, reg, cache)
@@ -663,7 +663,7 @@ fn subst_nominal(it: &TypeInterner, nn: &NNominalNode, params: &List(VarId), arg
 fn subst_func(it: &TypeInterner, f: &NFuncNode, params: &List(VarId), args: &List(Ty)) Ty {
     let ps = subst_span(it, f.params, params, args)
     defer ps.deinit()
-    return it.func_of(&ps, f.moves, subst(it, f.ret, params, args))
+    return it.func_of(&ps, f.moves, subst(it, f.ret, params, args), f.conv)
 }
 
 // Helpers
@@ -689,10 +689,10 @@ fn next_pow2(v: usize) usize {
 // Whether a type is SPELLED as an aggregate. Purely syntactic - the pointer-niche `Option(&T)` is
 // nominal and so counts, even though its runtime value is a bare pointer. Use `is_by_ref` for the
 // runtime classification; this stays the right test for `ir_of`, where the niche form is `ptr`
-// either way. A function value is the `{ code, env }` pair (RFC-037).
+// either way. A function value is the `{ code, env }` pair (RFC-037); a `#foreign fn` is a pointer.
 pub fn is_aggregate(it: &TypeInterner, ty: Ty) bool {
     return it.node(ty) match {
-        NFunc(_) => true
+        NFunc(f) => f.conv == FnConv.ConvFlang
         NNominal(_) => true
         NRecord(_) => true
         NTuple(_) => true

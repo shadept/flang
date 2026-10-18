@@ -518,6 +518,9 @@ fn is_runtime_provided_symbol(name: String) bool {
     if name == "getenv" {
         return true
     }
+    if name == "qsort" {
+        return true
+    }
     // <stdio.h>. The stdlib declares printf as several fixed-arity overloads that all keep the bare
     // C name; the real prototype is variadic, and clang rejects any redeclaration of it.
     if name == "printf" {

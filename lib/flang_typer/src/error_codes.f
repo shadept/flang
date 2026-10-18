@@ -36,10 +36,12 @@ pub const E_NOT_INDEXABLE: String = "E2028"
 pub const E_TRY_OUTSIDE_FN: String = "E2090"
 pub const E_NO_OP_TRY: String = "E2092"
 
-// RFC-014 closures: a capturing closure has an anonymous nominal type and cannot decay to a bare
-// `fn` pointer. E2112 and E2113 are retired: captures are by reference (RFC-033), so a capture may
-// be assigned, and a nested closure takes its capture from the enclosing environment.
+// RFC-037: a capturing closure, or a value of a FLang function type, where a `#foreign fn` is
+// expected; and a `#foreign struct` field holding a `{ code, env }` pair. E2112 and E2113 are
+// retired: captures are by reference (RFC-033), so a capture may be assigned, and a nested closure
+// takes its capture from the enclosing environment.
 pub const E_CLOSURE_TO_FN: String = "E2111"
+pub const E_FOREIGN_PAIR_FIELD: String = "E2157"
 
 // Duplicate declarations the reference rejects at their declaration site: a struct field name twice
 // (E2076), an enum tag value twice (E2048), a `let`/`const`/global re-declared in the same scope
@@ -91,8 +93,6 @@ pub const E_BARE_GENERIC: String = "E2104"
 pub const E_DEFAULT_PARAM_TYPE: String = "E2070"
 // An operator applied to operands with no `op_*` implementation.
 pub const E_OP_NO_IMPL: String = "E2017"
-// `&fn(...)` - function types are already pointer-sized.
-pub const E_REF_TO_FN: String = "E2006"
 // Iterator protocol (spec 4.6): the iterable has no `iter` (E2021), the state has no `next`
 // (E2023), or `next` does not return `Option(T)` (E2025).
 pub const E_NO_ITER: String = "E2021"

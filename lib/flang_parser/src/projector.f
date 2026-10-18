@@ -3160,6 +3160,7 @@ fn project_function_signature(self: &Projector, cst: CstNode) FunctionType {
     let depth: i32 = 0
     let pending_name: String = ""
     let pending_move = false
+    let foreign = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -3189,6 +3190,10 @@ fn project_function_signature(self: &Projector, cst: CstNode) FunctionType {
                 }
             }
             NodeChild(child) => {
+                if child.kind == NodeKind.Directive {
+                    foreign = true
+                    continue
+                }
                 if !is_type_kind(child.kind) {
                     continue
                 }
@@ -3215,6 +3220,7 @@ fn project_function_signature(self: &Projector, cst: CstNode) FunctionType {
         param_names = frozen(param_names),
         param_moves = frozen(param_moves),
         return_type = ret_ref,
+        foreign = foreign,
     }
 }
 

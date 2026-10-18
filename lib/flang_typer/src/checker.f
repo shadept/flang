@@ -1355,20 +1355,6 @@ fn resolve_generic_args(self: &Checker, n: &NamedType) List(Ty) {
 
 fn resolve_reference(self: &Checker, r: &ReferenceType) Ty {
     let inner = resolve_type_expr(self, r.inner)
-    // A function type is already pointer-sized; `&fn(...)` would be a pointer to a pointer nothing
-    // can produce (E2006).
-    let is_fn = ty_node(self, inner) match { NFunc(_) => true, _ => false }
-    if is_fn {
-        push_diag_e(
-            self,
-            r.span,
-            E_REF_TO_FN,
-            from_view(
-                "cannot take a reference to a function type - function types are already pointer-sized",
-            ),
-        )
-        return TY_ERROR
-    }
     return self.engine.mk_ref(inner)
 }
 
@@ -1451,7 +1437,8 @@ fn resolve_function(self: &Checker, f: &FunctionType) Ty {
         Some(rt) => resolve_type_expr(self, rt)
         None => TY_VOID
     }
-    return self.engine.mk_func(params, ret, moves)
+    const conv = if f.foreign { FnConv.ConvC } else { FnConv.ConvFlang }
+    return self.engine.mk_func(params, ret, moves, conv)
 }
 
 // Parameter `i`'s bit in a function type's `move` mask: zero unless it is declared `move`. A `move`
@@ -2073,6 +2060,9 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
         })
     }
     self.env.pop_scope()
+    if is_foreign_directive(td.directives) {
+        check_foreign_fields(self, &fields)
+    }
     let assoc_params: List(VarId) = list(0)
     for &f in fields {
         collect_assoc_vars(self, f.ty, &assoc_params)
@@ -2100,6 +2090,24 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
         _ => {}
     }
     check_recursive_nominal(self, id, td.name, td.span)
+}
+
+// E2157: a C layout has no `{ code, env }` pair; a callback field is a `#foreign fn`.
+fn check_foreign_fields(self: &Checker, fields: &List(Field)) {
+    for &f in fields {
+        const is_pair = ty_node(self, self.engine.resolve(f.ty)) match {
+            NFunc(fn_ty) => fn_ty.conv == FnConv.ConvFlang
+            _ => false
+        }
+        if is_pair {
+            push_diag_e(
+                self,
+                f.decl_span,
+                E_FOREIGN_PAIR_FIELD,
+                $"field `{f.name}` of a `#foreign struct` is a FLang function value; a C callback is `#foreign fn(...)`",
+            )
+        }
+    }
 }
 
 // E2035: a struct or enum that contains itself BY VALUE has no finite size. References break the
@@ -2625,7 +2633,8 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     atoms.deinit()
     atoms = move implied
     const trailing = trailing_slot(self, fd, &params, &atoms)
-    let fn_ty = self.engine.mk_func(params, ret, moves)
+    const conv = if is_foreign_directive(fd.directives) { FnConv.ConvC } else { FnConv.ConvFlang }
+    let fn_ty = self.engine.mk_func(params, ret, moves, conv)
 
     self.engine.exit_level()
     let scheme = self.engine.generalize(fn_ty)
@@ -2776,6 +2785,60 @@ fn report_no_trailing_slot(self: &Checker, name: String, span: SourceSpan) Ty {
         $"`{name}` takes no trailing lambda: it needs a parameter of function type with only defaulted parameters after it",
     )
     return self.engine.fresh_var()
+}
+
+// E2111: the first argument holding a FLang function where a candidate takes a `#foreign fn`.
+fn c_slot_misfit(
+    self: &Checker,
+    candidates: &List(&FunctionScheme),
+    pos_exprs: &List(&Expr),
+    arg_tys: &List(Ty),
+) &Expr? {
+    for i in 0..arg_tys.len {
+        if i >= pos_exprs.len or !is_flang_callable(self, arg_tys[i]) {
+            continue
+        }
+        for c in candidates {
+            if takes_c_fn_at(self, c, i) {
+                return Some(pos_exprs[i])
+            }
+        }
+    }
+    return null
+}
+
+fn is_flang_callable(self: &Checker, t: Ty) bool {
+    return ty_node(self, self.engine.resolve(t)) match {
+        NFunc(f) => f.conv == FnConv.ConvFlang
+        NNominal(nn) => self.closures.get_ref(nn.id).is_some()
+        _ => false
+    }
+}
+
+fn takes_c_fn_at(self: &Checker, c: &FunctionScheme, i: usize) bool {
+    const f = ty_node(self, c.signature.body) match {
+        NFunc(x) => x
+        _ => return false
+    }
+    if i >= f.params.len {
+        return false
+    }
+    return ty_node(self, self.engine.interner.child_at(f.params, i)) match {
+        NFunc(p) => p.conv == FnConv.ConvC
+        _ => false
+    }
+}
+
+fn report_c_slot_misfit(self: &Checker, arg: &Expr) Ty {
+    push_diag_e(
+        self,
+        expr_span(arg),
+        E_CLOSURE_TO_FN,
+        from_view(
+            "a FLang function is no `#foreign fn`: C calls it without the context it takes - declare it `#foreign fn name(...) { ... }`, or pass a non-capturing lambda",
+        ),
+    )
+    return TY_ERROR
 }
 
 // Whether the call's last positional argument is a trailing lambda (RFC-039).
@@ -6569,10 +6632,6 @@ fn synth_int_lit(self: &Checker, text: String) Expr {
     })
 }
 
-fn synth_null(self: &Checker) Expr {
-    return Expr.Lit(LiteralExpr { span = synth_span(self), value = LiteralValue.Null })
-}
-
 fn synth_string_lit(self: &Checker, text: String) Expr {
     const sp = synth_span(self)
     return Expr.Lit(LiteralExpr {
@@ -8552,6 +8611,15 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
     let node = self.node_of(lam.span)
     let lid = self.next_lambda
     self.next_lambda = lid + 1u32
+    const conv = if expected.is_some() { expected.unwrap().conv } else { FnConv.ConvFlang }
+    if conv == FnConv.ConvC and frame.captures.len > 0 {
+        push_diag_e(
+            self,
+            lam.span,
+            E_CLOSURE_TO_FN,
+            $"a lambda passed as `#foreign fn` cannot capture: one C code pointer has no room for `{frame.captures[0].name}`",
+        )
+    }
 
     if frame.captures.len == 0 {
         // Bare function pointer: the body lowers as a module-level function under `symbol`; the
@@ -8567,9 +8635,10 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
                 captures = move frame.captures,
                 closure_id = null,
                 symbol = $"__flang_lambda_{lid}",
+                conv = conv,
             },
         )
-        return self.engine.mk_func(fn_params, ret, moves)
+        return self.engine.mk_func(fn_params, ret, moves, conv)
     }
 
     // Capturing closure: synthesize the environment struct (one `&T` field per capture, RFC-033)
@@ -8627,8 +8696,12 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
             captures = move frame.captures,
             closure_id = Some(nid),
             symbol = move sym,
+            conv = FnConv.ConvFlang,
         },
     )
+    if conv == FnConv.ConvC {
+        return TY_ERROR
+    }
     let no_args: List(Ty) = list(0)
     return mk_nominal(self, nid, no_args)
 }
@@ -9823,10 +9896,17 @@ fn resolve_direct_call(
             ends_trailing(pos_exprs),
         )
         const no_slot = ends_trailing(pos_exprs) and !any_trailing_slot(self, &candidates)
+        let misfit: &Expr? = null
+        if pick.is_none() {
+            misfit = c_slot_misfit(self, &candidates, pos_exprs, arg_tys)
+        }
         candidates.deinit()
         if pick.is_none() and self.overload_deferred {
             self.overload_deferred = false
             return Some(park_call(self, call, ide.name, arg_tys, pos_exprs, 0usize, null))
+        }
+        if misfit.is_some() {
+            return Some(report_c_slot_misfit(self, misfit.unwrap()))
         }
         if pick.is_none() and no_slot {
             return Some(report_no_trailing_slot(self, ide.name, call.span))
@@ -10805,7 +10885,10 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
         let ps = list(arg_tys.len)
         ps.push_all(arg_tys.as_slice())
         let ret = self.engine.fresh_var()
-        const o = self.engine.unify(callee_ty, self.engine.mk_func(ps, ret))
+        const o = self.engine.unify(
+            callee_ty,
+            self.engine.mk_func(ps, ret, 0usize, FnConv.ConvFlang),
+        )
         report_unify(self, &o, E_TYPE_MISMATCH, span)
         return ret
     }
@@ -12576,6 +12659,7 @@ fn zonk_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
         captures = move caps,
         closure_id = info.closure_id,
         symbol = from_view(info.symbol.view),
+        conv = info.conv,
     }
 }
 

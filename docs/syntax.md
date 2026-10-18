@@ -43,6 +43,7 @@ listed here, it does not exist in FLang.
 | `(A, B)` | Tuple (sugar for `{ _0: A, _1: B }`) |
 | `()` | Unit |
 | `fn(T1, T2) R` | Function type; `fn(move T) R` takes ownership of its argument |
+| `#foreign fn(T1, T2) R` | C function type: one code pointer in the C convention |
 | `Type(T)` | Runtime type descriptor |
 
 ## Literals
@@ -120,9 +121,11 @@ fn close(h: move File) {}                   // takes ownership: `h.close()` move
 
 **Bounds:** `fn max(s: $T[]) T? where T: copyable`, `where I: Iterator, F: fn(I.Item) bool`, `where T: Eq + Hash`, `where I: Iterator, I.Item: Hash` - a bound is a contract (see Contracts); `where` is contextual. A trailing comma after the last bound is allowed. A struct's, enum's or contract's bounds sit on its parameter list instead (see Structs).
 
-**Foreign:** `#foreign fn malloc(size: usize) &u8?` — no body, C calling convention, not mangled.
+**Foreign:** `#foreign fn malloc(size: usize) &u8?` — no body, C calling convention, not mangled. With a body, `#foreign fn by_score(a: &u8, b: &u8) i32 { ... }` is a FLang function C calls by that name (RFC-037).
 
-**Lambda:** `{ x, y => x + y }`, `{ p: &u8 => ... }`, `{ => work() }`, arrow-less `{ it * 2 }` (RFC-039). No return-type slot, and no `return` inside (E1054): the value is the body's last expression. In a call's parentheses a `{` always opens a lambda; elsewhere only when `=>`, `ident =>`, `ident ,` or `ident :` follows it. A trailing lambda follows a call's `)` or a lowercase name on the same line (`xs.fold(0i32) { a, b => a + b }`, `run { 7 }`) and fills the last callable parameter, every later one defaulted; in an `if`/`while`/`for` header parenthesize it. Captures enclosing names by reference (RFC-033): the body reads and writes the enclosing bindings. Capturing lambdas synthesise an anonymous callable type and cannot decay into a bare `fn(...) Ret` slot — pass them through a generic parameter (`fn apply(f: $F, ...)`) instead. Parameter types inferred when context available. The `fn(x: i32) i32 { ... }` expression was removed (E1053).
+**Return type:** shares the line of the parameters' `)`; a type opening the next line starts the next declaration.
+
+**Lambda:** `{ x, y => x + y }`, `{ p: &u8 => ... }`, `{ => work() }`, arrow-less `{ it * 2 }` (RFC-039). No return-type slot, and no `return` inside (E1054): the value is the body's last expression. In a call's parentheses a `{` always opens a lambda; elsewhere only when `=>`, `ident =>`, `ident ,` or `ident :` follows it. A trailing lambda follows a call's `)` or a lowercase name on the same line (`xs.fold(0i32) { a, b => a + b }`, `run { 7 }`) and fills the last callable parameter, every later one defaulted; in an `if`/`while`/`for` header parenthesize it. Captures enclosing names by reference (RFC-033): the body reads and writes the enclosing bindings. Capturing lambdas synthesise an anonymous callable type that converts to a `fn(...) Ret` slot it fits (RFC-037), but not to a `#foreign fn` (E2111). Parameter types inferred when context available. The `fn(x: i32) i32 { ... }` expression was removed (E1053).
 
 ## Type Aliases
 

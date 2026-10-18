@@ -9,9 +9,9 @@ relates: [RFC-014, RFC-033, RFC-035, RFC-038, RFC-041]
 
 ## Summary
 
-A function type `fn(T) R` becomes the type of any callable of that shape: a named function, a
-lambda, a capturing closure, or a value with a matching `op_call`. Each converts to it where it is
-passed, and the callee is compiled once:
+A function type `fn(T) R` becomes the type of any function or closure of that shape: a named
+function, a lambda, or a capturing closure. Each converts to it where it is passed, and the callee
+is compiled once:
 
 ```flang
 pub fn sort(s: $T[], cmp: fn(T, T) Ord)
@@ -112,11 +112,10 @@ initializer, an assignment, a field.
 |---|---|---|
 | A named function, a non-capturing lambda | the function itself | null |
 | A capturing closure | the closure's body, reading its captures through `env` | the closure's address |
-| A value with `op_call(self: &Self, ...)` | a thunk passing `env` as `self` | the value's address |
 | A `fn` value | unchanged | unchanged |
 
-An overloaded name converts to the overload whose signature is the function type it fills. A thunk
-is emitted once per `op_call` type that is converted.
+An overloaded name converts to the overload whose signature is the function type it fills. A value
+with `op_call` does not convert: wrap it in a closure, `{ v(it) }`, or pass it through `$F`.
 
 ### Borrowing
 
@@ -137,7 +136,7 @@ The two forms coexist, and the declaration chooses the dispatch strategy:
 | `f: $F where F: fn(T) R` | per callable type | direct, inlinable |
 
 The default is erasure. The monomorphized form gives a capturing closure or an `op_call` type its
-own instantiation and a direct call; a named function or a non-capturing lambda has the type
+own instantiation and a direct call, and is the only form an `op_call` value fills; a named function or a non-capturing lambda has the type
 `fn(T) R` itself, so it erases under either form, as it does today. It suits an inner loop where a
 benchmark shows the inlined call matters, and a struct that must own a stateful `op_call` value
 rather than borrow it.
@@ -159,33 +158,47 @@ rather than borrow it.
 
 ### Foreign code
 
-C calls a single code pointer in its own convention. The thin form spells that convention the way
-a declaration does, with `#foreign` in type position as `#foreign struct` already is:
-`#foreign(conv) fn(P...) R` is one code pointer with no context and no `env`. A bare `#foreign`
-is `#foreign(c)`, for types and declarations alike, and the argument names any other convention
-in both places (`#foreign(stdcall) fn MessageBoxA(...)`).
+Every function has a calling convention. `flang` is the default: the context and `env` follow the
+arguments. `#foreign` names another, on a declaration and on a function type alike, and a bare
+`#foreign` is `#foreign(c)`. A `#foreign fn` type is one code pointer in that convention, with no
+context and no `env`.
 
 ```flang
-#foreign fn malloc(size: usize) &u8?                        // = #foreign(c)
 #foreign fn qsort(base: &u8, n: usize, size: usize, cmp: #foreign fn(&u8, &u8) i32)
 
-type CCompare = #foreign fn(&u8, &u8) i32
-type WndProc = #foreign(stdcall) fn(&u8, u32, usize, isize) isize
+// Defined in FLang, called by C.
+#foreign fn by_score(a: &u8, b: &u8) i32 {
+    return (b as &Player).score - (a as &Player).score
+}
+
+type Compare = #foreign fn(&u8, &u8) i32
 
 type Callbacks = #foreign struct {
     on_key: #foreign fn(&u8, i32, i32, i32, i32)
 }
+
+qsort(base, n, size, by_score)
+qsort(base, n, size, { a, b => (a as &Player).score - (b as &Player).score })
 ```
 
-- **Conversion.** A `#foreign` function of that convention converts as itself. A named FLang
-  function or a non-capturing lambda converts through a thunk in that convention that supplies the
-  root context and a null `env` (RFC-038), emitted once per function and convention. A capturing
-  closure does not convert: a single pointer has no slot for its environment (E2111).
-- **Calls.** A call through a `#foreign(conv) fn` is a plain call in that convention.
-- **`#foreign struct` fields.** A function-typed field names its convention; a plain `fn(...)`
-  field, a two-word pair inside a C layout, is an error at the declaration.
-- **The other direction.** A `#foreign` function is no `fn(...)` value, as today. A reverse thunk
-  dropping the context and `env` would make one; not until something needs it.
+- **Bodies.** A `#foreign fn` with a body is a FLang function in that convention: C calls it by its
+  C name, and it runs under the root context (RFC-038). FLang calls it directly, as it calls any
+  `#foreign` function.
+- **Conversion.** No thunk: a value already in the convention converts as itself. That is a
+  `#foreign` function, with or without a body, and a non-capturing lambda written where a
+  `#foreign fn` is expected, which is emitted in that convention. A capturing closure has nowhere
+  to keep its environment, and a `flang` function or `fn` value takes the context C does not pass;
+  neither converts (E2111).
+- **Calls.** A call through a `#foreign fn` value is a plain call in its convention.
+- **`#foreign struct` fields.** A function-typed field is a `#foreign fn`; a plain `fn(...)`
+  field, a two-word pair inside a C layout, is an error at the declaration (E2157).
+- **The other direction.** A `#foreign fn` is no `fn(...)` value. A closure calling it,
+  `{ cmp(it, x) }`, is one.
+- **Conventions.** `c` is the one implemented. `#foreign(stdcall)`, `#foreign(rust)` and the like
+  are later conventions on the same mechanism, each a function type of its own, so other languages
+  call FLang bodies declared in theirs.
+- **Aggregates by value.** A `#foreign fn` body or call through a `#foreign fn` value with a struct
+  parameter or return passed by value is refused in lowering (known-issues).
 
 ### TypeInfo
 
@@ -195,23 +208,22 @@ pair.
 ## Errors
 
 - E2111 (a capturing closure to a bare function pointer) is withdrawn for `fn(...)`, and keeps its
-  code for `#foreign(conv) fn(...)`.
-- New, numbered when the step lands: a `#foreign struct` field of a plain `fn(...)` type.
+  code for `#foreign fn(...)`: a capturing closure, a `flang` function or a `fn` value passed as
+  one.
+- E2157: a `#foreign struct` field of a plain `fn(...)` type.
 - New, numbered when the checker step lands: a callable whose signature does not fit the function
   type it converts to, reported at the conversion with both signatures.
 
 ## Plan
 
-Steps 1 to 4 landed on 2026-10-18, without the `op_call` and `#foreign` thunks (known-issues,
-"Function Values: `op_call` Types and C Callbacks Do Not Convert").
+Steps 1 to 4 landed on 2026-10-18, and the `#foreign fn` type the same day.
 
 1. **Linkage.** Generated functions `static`, with the exceptions above.
 2. **Calling convention.** `ctx` moves from first to after the user's parameters, and `env` is
    added after it, on every `flang` function, closure body and test block (RFC-038's ABI).
-3. **Lowering and the C backend.** The pair type, calls through it, and the `op_call` and
-   `#foreign` thunks.
+3. **Lowering and the C backend.** The pair type, calls through it, and `#foreign fn`.
 4. **Checker.** The conversions in the coercion ladder, the subsumption check at each, and the
-   thin form for `#foreign` signatures.
+   `#foreign fn` type.
 5. **Harness**, then **promote**.
 6. **Measure.** Sorting `i32` and `String`, and an iterator chain, erased against monomorphized,
    with the C compiler's specialization of a constant `code` in view. The numbers decide whether
@@ -258,6 +270,12 @@ clang 21, arm64, three runs:
 - **Hidden parameters first, `(ctx, env, args)`**, as C++ `this` and Clang Blocks. Fixed
   registers for both, but every direct call gives up two argument registers to state only closure
   bodies read: two left for the user on Win64.
+- **`op_call` values convert through a thunk** passing `env` as `self`, emitted once per converted
+  type. Dropped: the closure `{ v(it) }` does the same at the call site with no thunk, and `$F`
+  keeps the direct call.
+- **A C-convention thunk per FLang function** passed as `#foreign fn`, supplying the root context
+  and a null `env`. Dropped: a body declared `#foreign` is that function with no second symbol,
+  and the same mechanism carries the later conventions.
 - **A one-word value, Go's layout.** A pointer to `{code, captures...}`, the value itself passed as
   `env`; a named function becomes a static `{code}` record. Half the size, one extra load per
   call, and the closure struct must begin with its code.
@@ -265,11 +283,10 @@ clang 21, arm64, three runs:
 ## Open questions
 
 - **Equality of `fn` values:** by `code` and `env`, or not comparable?
-- **`op_call` values:** a thunk per converted type, or emit `op_call` with `self` in the `env`
-  slot so it converts without one?
 - **The vtable structs:** pairs, doubling each slot, or the thin form?
-- **An external `pub fn` of a library** takes the hidden parameters: a C caller supplies a context,
-  or the library exports C-convention thunks?
+- **An external `pub fn` of a library** takes the hidden parameters. A function meant for C callers
+  is declared `#foreign fn` with a body; whether a `kind = "lib"` build also exports its `flang`
+  functions is open.
 - **An owning callable** (a closure that outlives its frame, boxed with an allocator): out of scope
   here; RFC-033 notes closures that own their captures as future work.
 - **A caller-side opt-in:** the callee's author picks erased or monomorphized, not the caller who

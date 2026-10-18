@@ -12,7 +12,6 @@
 // Resolution is flat and path-only: no transitive deps, no lockfile. Paths are normalised to
 // forward slashes before any prefix comparison.
 
-import std.allocator
 import std.collections.list
 import std.io.file
 import std.io.fs

@@ -49,7 +49,8 @@ FLang is a statically-typed compiled language designed for explicit control, str
 | `&T?`          | Nullable reference — sugar for `Option(&T)`           |
 | `(A, B)`       | Tuple — sugar for anonymous struct `{ _0: A, _1: B }` |
 | `()`           | Unit (empty tuple)                                    |
-| `fn(T1, T2) R` | Function type                                         |
+| `fn(T1, T2) R` | Function type: a `{ code, env }` pair (§7.3)          |
+| `#foreign fn(T1) R` | C function type: one C code pointer (§7.6)       |
 | `Type(T)`      | Runtime type descriptor                               |
 
 **Tuples** desugar to anonymous structs with a double-underscore prefix to avoid collisions with user fields: `(A, B)` → `{ __0: A, __1: B }`, access via `t.0` → `t.__0`. User-defined fields named `_0`, `_1`, etc. remain valid. Trailing comma distinguishes single-element tuple `(x,)` from grouped expression `(x)`.
@@ -574,7 +575,7 @@ fn handle(req: &Request) {
 4. **Generics are unaffected.** The context is not part of an instantiation.
 5. **Entry.** `main`, the constant initializers and every `test {}` block run under the root context: every field at its default.
 
-**ABI.** Every FLang function, closure body and test block takes two hidden parameters after its own, and after the result buffer of an aggregate return: the address of the current context (`const Context *`), then `env`, the state of the function being called (RFC-037). Every call passes both; a direct call passes a null `env`, which only a closure body reads. `#foreign` functions take neither. A `fn` value calls through the same convention, and a `#foreign` function is no `fn` value (lowering refuses it). A rebind builds the new context in the caller's frame and passes its address within the body; leaving the body needs no code. The layout of `Context` holds every field of the program, ordered by module FQN then declaration order.
+**ABI.** Every FLang function, closure body and test block takes two hidden parameters after its own, and after the result buffer of an aggregate return: the address of the current context (`const Context *`), then `env`, the state of the function being called (RFC-037). Every call passes both; a direct call passes a null `env`, which only a closure body reads. `#foreign` functions take neither, a body declared `#foreign` included: it runs under the root context. A `fn` value calls through the same convention; a `#foreign fn` value is one C code pointer called with the arguments alone (§7.6). A rebind builds the new context in the caller's frame and passes its address within the body; leaving the body needs no code. The layout of `Context` holds every field of the program, ordered by module FQN then declaration order.
 
 ---
 
@@ -1000,13 +1001,39 @@ Prefixed with `#`, precede declarations:
 
 | Directive            | Purpose                                                         |
 | -------------------- | --------------------------------------------------------------- |
-| `#foreign`           | C FFI function (no body, not mangled) or C-layout-locked struct |
+| `#foreign`           | C calling convention: an imported or C-callable function (not mangled), a C function type, or a C-layout-locked struct |
 | `#deprecated("msg")` | Deprecation warning on usage                                    |
 | `#inline`            | Inlining hint                                                   |
 | `#intrinsic`         | Compiler-recognized stdlib intrinsic                            |
 | `#simd`              | SIMD-aligned struct (16+ byte alignment)                        |
 
 Unknown directives produce warning W2003.
+
+#### `#foreign` on functions and function types
+
+Every function has a calling convention; `flang` is the default, and `#foreign` is the C one. A
+body-less `#foreign fn` imports a C function. A `#foreign fn` with a body is a FLang function in
+the C convention: C calls it by its unmangled name, it takes no context or `env`, and it runs under
+the root context (§4.4). FLang calls either directly.
+
+`#foreign fn(P...) R` in type position is one C code pointer. A `#foreign` function converts to
+it as itself, and so does a lambda written where one is expected that captures nothing: its body
+is emitted in the C convention. A capturing lambda, a FLang function and a `fn` value do not
+convert (E2111), and a `#foreign fn` is no `fn` value. A call through one is a plain C call.
+
+```
+#foreign fn qsort(base: &u8, n: usize, size: usize, cmp: #foreign fn(&u8, &u8) i32)
+
+#foreign fn by_score(a: &u8, b: &u8) i32 {
+    return (b as &Player).score - (a as &Player).score
+}
+
+qsort(base, n, size, by_score)
+qsort(base, n, size, { a, b => (a as &Player).score - (b as &Player).score })
+```
+
+A struct passed by value as a parameter or return of a `#foreign fn` body or value is not
+supported yet (known-issues).
 
 #### `#foreign` on structs
 
@@ -1025,7 +1052,7 @@ pub type Color = #foreign struct {
 }
 ```
 
-Note: `#foreign` and `#simd` must appear inline after `=` in type declarations (not as detached directives above the declaration).
+Note: `#foreign` and `#simd` must appear inline after `=` in type declarations (not as detached directives above the declaration). A field holding a callback is a `#foreign fn`; a `fn(...)` field is E2157.
 
 ### 7.6.1 C FFI Binding Generation
 

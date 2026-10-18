@@ -1412,8 +1412,9 @@ fn const_struct(
 }
 
 // A function name in value position is a `{ code, env }` pair (RFC-037): `code` is the function's
-// address, a relocation, and `env` stays zero. Only names the checker resolved to a function
-// qualify - a local shadows one, and a const read names storage rather than code.
+// address, a relocation, and `env` stays zero; a `#foreign` function is that address alone. Only
+// names the checker resolved to a function qualify - a local shadows one, and a const read names
+// storage rather than code.
 fn const_fn_ref(ctx: &LowerCtx, ty: &Ty, id: &IdentifierExpr, rel: &List(Reloc), at: usize) bool {
     const is_fn = tn(ctx, ty.*) match {
         NFunc(_) => true
@@ -1427,8 +1428,7 @@ fn const_fn_ref(ctx: &LowerCtx, ty: &Ty, id: &IdentifierExpr, rel: &List(Reloc),
         return false
     }
     let sym = tgt.unwrap() match {
-        // A `#foreign` function takes no context, so it is no fn value (RFC-038).
-        RtFunction(f) => if ctx.syms.is_foreign(f) { null } else { ctx.syms.lookup_symbol(f) }
+        RtFunction(f) => ctx.syms.lookup_symbol(f)
         _ => null
     }
     if sym.is_none() {
@@ -1753,7 +1753,10 @@ fn lower_function(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl) {
         return
     }
     let sig = sig_opt.unwrap()
-    lower_function_body(m, ctx, decl, sym, sig, null, ctx.exporting and decl.is_pub)
+    const foreign = ctx.syms.is_foreign(fid.unwrap())
+    const conv = if foreign { FnConv.ConvC } else { FnConv.ConvFlang }
+    const exported = foreign or (ctx.exporting and decl.is_pub)
+    lower_function_body(m, ctx, decl, sym, sig, conv, null, exported)
 }
 
 // Lower every specialization the checker instantiated (M10): the template's declaration re-lowers
@@ -1791,7 +1794,7 @@ fn lower_specializations(m: &IrModule, ctx: &LowerCtx, skip_modules: &Set(String
         emitted.add(sym.unwrap())
         let g = sig.unwrap()
         ctx.overlay = Some(&s.overlay)
-        lower_function_body(m, ctx, s.decl, sym.unwrap(), g)
+        lower_function_body(m, ctx, s.decl, sym.unwrap(), g, FnConv.ConvFlang)
         ctx.overlay = null
     }
     emitted.deinit()
@@ -1829,7 +1832,7 @@ fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
     sig_params.push_all(pl.info.params.as_slice())
     let sig = FnSig { params = move sig_params, ret = pl.info.ret }
     if pl.info.captures.len == 0 {
-        lower_function_body(m, ctx, &decl, pl.info.symbol.view, &sig)
+        lower_function_body(m, ctx, &decl, pl.info.symbol.view, &sig, pl.info.conv)
         return
     }
     let cid = pl.info.closure_id.unwrap()
@@ -1842,6 +1845,7 @@ fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
         &decl,
         pl.info.symbol.view,
         &sig,
+        FnConv.ConvFlang,
         Some(LoweredClosure { ty = cty, captures = &pl.info.captures }),
     )
 }
@@ -1877,12 +1881,18 @@ fn lower_function_body(
     decl: &FunctionDecl,
     sym: String,
     sig: &FnSig,
+    conv: FnConv,
     closure: LoweredClosure? = null,
     exported: bool = false,
 ) {
     // The scheme and the decl are two views of one declaration; a length mismatch is a violated
     // contract, not a case to paper over.
     if sig.params.len != decl.params.len {
+        return
+    }
+    if conv == FnConv.ConvC and crosses_by_ref(ctx, sig) {
+        m.skipped.push(sym)
+        m.skip_notes.push($"{sym}: body refused (an aggregate by value in a C-convention function)")
         return
     }
 
@@ -1908,9 +1918,9 @@ fn lower_function_body(
     }
     // Every FLang function takes the caller's context and then `env` after its own parameters
     // (RFC-037, RFC-038); a closure's `env` is its capture struct, any other function ignores it.
-    // `main` takes neither: the C entry point calls it, and it runs under the root.
+    // `main` and a `#foreign` function take neither: C calls them, and they run under the root.
     let self_op: Operand? = null
-    if sym == "main" {
+    if sym == "main" or conv == FnConv.ConvC {
         ctx.cur_ctx = Operand.GlobalRef(ROOT_CONTEXT_SYM)
     } else {
         fb.set_cc(CallConv.Flang)
@@ -2022,6 +2032,14 @@ fn lower_function_body(
         return
     }
     m.add_function(fb.finish())
+}
+
+// Whether a parameter or the return crosses by address, which a C caller does not do.
+fn crosses_by_ref(ctx: &LowerCtx, sig: &FnSig) bool {
+    if is_by_ref(ctx, &sig.ret) {
+        return true
+    }
+    return sig.params.as_slice().any { is_by_ref(ctx, &it) }
 }
 
 // What lowering a block produced: whether it ended in a terminator (so the caller must not append
@@ -2969,6 +2987,9 @@ fn lower_lambda(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lam: &LambdaExpr) 
     }
     let info = info_opt.unwrap()
     ctx.pending_lambdas.push(PendingLambda { lam = lam, info = info, overlay = ctx.overlay })
+    if info.conv == FnConv.ConvC {
+        return Operand.FuncRef(info.symbol.view)
+    }
     if info.captures.len == 0 {
         return fn_value(bb, Operand.FuncRef(info.symbol.view), Operand.NullPtr)
     }
@@ -4123,7 +4144,7 @@ fn closure_fn_value(
     want: &Ty,
 ) Operand? {
     const to_fn = tn(ctx, want.*) match {
-        NFunc(_) => true
+        NFunc(f) => f.conv == FnConv.ConvFlang
         _ => false
     }
     if !to_fn {
@@ -4206,13 +4227,26 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
         }
     }
     let f = ft.unwrap()
-    let pair = lower_expr(ctx, bb, env, call.callee)
-    let fn_ptr = bb.load(IrType.Ptr, pair)
-    let fn_env = bb.load(IrType.Ptr, bb.gep(pair, Operand.IntConst(8)))
+    // A `#foreign fn` is one C code pointer, called with the arguments alone.
+    const is_c = f.conv == FnConv.ConvC
     let n_fparams = f.params.len
     let ptys: List(IrType) = list(n_fparams + 3)
+    let by_ref = is_by_ref(ctx, &f.ret)
     for i in 0..n_fparams {
-        ptys.push(ir_of(ctx, tyit(ctx).child_at(f.params, i)))
+        const pt = tyit(ctx).child_at(f.params, i)
+        by_ref = by_ref or is_by_ref(ctx, &pt)
+        ptys.push(ir_of(ctx, pt))
+    }
+    if is_c and by_ref {
+        ptys.deinit()
+        return unlowerable_why(ctx, "an aggregate by value through a #foreign fn")
+    }
+    let pair = lower_expr(ctx, bb, env, call.callee)
+    let fn_ptr = pair
+    let fn_env = Operand.NullPtr
+    if !is_c {
+        fn_ptr = bb.load(IrType.Ptr, pair)
+        fn_env = bb.load(IrType.Ptr, bb.gep(pair, Operand.IntConst(8)))
     }
     let args: List(Operand) = list(call.args.len + 3)
     for i in 0..call.args.len {
@@ -4241,20 +4275,23 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
     }
     // A fn value is a FLang function: the context and `env` follow the arguments (RFC-037,
     // RFC-038).
-    args.push(ctx.cur_ctx)
-    ptys.push(IrType.Ptr)
-    args.push(fn_env)
-    ptys.push(IrType.Ptr)
+    if !is_c {
+        args.push(ctx.cur_ctx)
+        ptys.push(IrType.Ptr)
+        args.push(fn_env)
+        ptys.push(IrType.Ptr)
+    }
+    const cc = if is_c { CallConv.C } else { CallConv.Flang }
     if tmp.is_some() {
-        bb.call_indirect_void(fn_ptr, ptys, args, CallConv.Flang)
+        bb.call_indirect_void(fn_ptr, ptys, args, cc)
         return tmp.unwrap()
     }
     let returns_value = !(f.ret == TY_VOID or f.ret == TY_NEVER)
     if !returns_value {
-        bb.call_indirect_void(fn_ptr, ptys, args, CallConv.Flang)
+        bb.call_indirect_void(fn_ptr, ptys, args, cc)
         return Operand.IntConst(0)
     }
-    return bb.call_indirect(fn_ptr, ptys, ir_of(ctx, f.ret), args, CallConv.Flang)
+    return bb.call_indirect(fn_ptr, ptys, ir_of(ctx, f.ret), args, cc)
 }
 
 // Structs and member access (M4, minimal)
@@ -6985,16 +7022,10 @@ fn lower_identifier(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, id: &Identifie
         if tgt.is_some() {
             tgt.unwrap() match {
                 RtFunction(f) => {
-                    // A `#foreign` function takes no context, so a call through the value would
-                    // hand it one it does not expect (RFC-038).
-                    if ctx.syms.is_foreign(f) {
-                        return unlowerable_about(
-                            ctx,
-                            "a #foreign function used as a value",
-                            id.name,
-                        )
-                    }
                     let s = ctx.syms.lookup_symbol(f)
+                    if s.is_some() and ctx.syms.is_foreign(f) {
+                        return Operand.FuncRef(s.unwrap())
+                    }
                     if s.is_some() {
                         return fn_value(bb, Operand.FuncRef(s.unwrap()), Operand.NullPtr)
                     }
@@ -7614,6 +7645,7 @@ fn ty_to_ir(ctx: &LowerCtx, ty: Ty) IrType {
     return tn(ctx, ty) match {
         NPrim(p) => prim_ir(p)
         NRef(_) => IrType.Ptr
+        NFunc(_) => IrType.Ptr
         NVar(_) => panic("unresolved type variable reached lowering - checker bug")
         _ => IrType.I64
     }

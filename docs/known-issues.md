@@ -2591,12 +2591,30 @@ A bare overloaded name passed to a `fn(...)` parameter picks the overload whose 
 
 ---
 
-### Function Values: `op_call` Types and C Callbacks Do Not Convert
+### `#foreign fn`: Aggregates by Value
 
-**Status:** Open (RFC-037 plan step 3 leftovers)
-**Affected:** `fn(...)` slots filled by a value with `op_call`; `#foreign` signatures naming a function type
+**Status:** Open
+**Affected:** `#foreign fn` bodies and calls through `#foreign fn` values whose parameters or return are structs passed by value
 
-A named function, a lambda and a capturing closure convert to a function type. A user type with `op_call(self: &Self, ...)` does not yet: RFC-037 converts it through a thunk passing `env` as `self`, which is not emitted. Pass it through a generic `$F` parameter meanwhile. A `#foreign` signature that takes or returns a function type is not lowerable (`ty_lowerable` refuses the pair at a C boundary); RFC-037's thin form, a thunk supplying the root context, is not built either. No stdlib foreign takes a callback today.
+C passes such a struct by value, while a FLang body reads every aggregate parameter through its address and returns one through a result buffer. Lowering refuses the body (`body refused (an aggregate by value in a C-convention function)`) and the call (`an aggregate by value through a #foreign fn`) rather than emit a mismatched signature. Scalars, references and `#foreign fn` values cross. Body-less `#foreign` declarations are unaffected: their direct calls already pass `#foreign struct` arguments by value.
+
+---
+
+### Function Values: A Call Through an Index or a Dereference Does Not Type
+
+**Status:** Open (found 2026-10-18)
+**Affected:** calls whose callee is `hs[i]`, `p.*` or another non-name place of function type
+
+A callee that is a local, a parameter or a struct field calls through its `fn` value; `hs[1](5)` and `p.*(3)` do not resolve, and the call reports only E2001 on its literal arguments. Bind the value first: `const g = hs[1]` then `g(5)`.
+
+---
+
+### Function Values: `op_call` Types Do Not Convert
+
+**Status:** By design (RFC-037)
+**Affected:** `fn(...)` slots filled by a value with `op_call`
+
+A value with `op_call` does not convert to `fn(...)`: wrap it in a closure, `{ v(it) }`, or pass it through `$F`.
 
 ---
 

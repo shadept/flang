@@ -43,6 +43,14 @@ pub type NominalId = u32
 // never reused, and a carried entry keeps its id across demands.
 pub type SpecId = u32
 
+// How a function value is called (RFC-037). `ConvFlang` is a `{ code, env }` pair called with the
+// context and `env` after the arguments; `ConvC` is one C code pointer called with the arguments
+// alone.
+pub type FnConv = enum {
+    ConvFlang
+    ConvC
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Inference variables
 // ─────────────────────────────────────────────────────────────────────

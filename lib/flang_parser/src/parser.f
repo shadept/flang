@@ -581,7 +581,10 @@ fn parse_function_into(self: &Parser, b: &NodeBuilder) {
         self.record_expected(TokenKind.Identifier, "E1002")
     }
     self.parse_function_params(b)
-    if self.can_start_type(self.current_kind()) and !self.at_where_clause() {
+    // The return type shares the `)`'s line: a body-less `#foreign fn` ends there, and a type
+    // opening the next line starts the next declaration.
+    const at_ret = self.can_start_type(self.current_kind()) and !self.at_line_start()
+    if at_ret and !self.at_where_clause() {
         const t = self.parse_type()
         self.push_node_into(b, t)
     }
@@ -708,8 +711,18 @@ fn can_start_type(self: &Parser, k: TokenKind) bool {
     return k match {
         Identifier | Ampersand | Dollar | OpenBracket | OpenParenthesis | Fn | Struct | Enum
             | Contract => true
+        Hash => !self.at_line_start() and self.at_foreign_fn_type()
         _ => false
     }
+}
+
+// `#foreign fn` at the cursor: a C function type (RFC-037). A `#foreign fn` opening a line is the
+// next declaration.
+fn at_foreign_fn_type(self: &Parser) bool {
+    const at = self.position + 1
+    const named = at < self.tree.tokens.len and self.tree.tokens[at].kind == TokenKind.Identifier
+        and self.tree.tokens[at].text == "foreign"
+    return named and self.peek_kind(2) == TokenKind.Fn
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -785,8 +798,9 @@ fn parse_type_decl_with_directives(self: &Parser, leading: move List(CstNodeId))
         self.record_expected(TokenKind.Identifier, "E1002")
     }
     self.expect_into(&b, TokenKind.Equals, "E1002")
-    // Inline directives on the rhs (e.g. `type X = #foreign struct {...}`).
-    while self.current_kind() == TokenKind.Hash {
+    // Inline directives on the rhs (e.g. `type X = #foreign struct {...}`). `#foreign fn` is a type
+    // of its own and stays with it.
+    while self.current_kind() == TokenKind.Hash and !self.at_foreign_fn_type() {
         const d = self.parse_directive()
         self.push_node_into(&b, d)
     }
@@ -2171,6 +2185,15 @@ fn parse_primary_type(self: &Parser) CstNodeId {
         Fn => {
             let b = self.open(NodeKind.FunctionType)
             self.eat_into(&b)
+            self.parse_fn_type_tail_into(&b)
+            self.finish(b)
+        }
+        // `#foreign fn(P...) R`: the directive rides inside the function type's node.
+        Hash => {
+            let b = self.open(NodeKind.FunctionType)
+            const d = self.parse_directive()
+            self.push_node_into(&b, d)
+            self.expect_into(&b, TokenKind.Fn, "E1002")
             self.parse_fn_type_tail_into(&b)
             self.finish(b)
         }
