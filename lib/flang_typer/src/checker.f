@@ -9858,7 +9858,11 @@ fn resolve_call(
             expected,
         )
         MemberAccess(ma) => resolve_method_call(self, call, &ma, arg_tys, pos_exprs, named)
-        _ => null
+        _ => if named.is_some() {
+            null
+        } else {
+            Some(indirect_call(self, check_expr(self, call.callee), arg_tys, call.span))
+        }
     }
 }
 

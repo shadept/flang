@@ -2620,12 +2620,12 @@ A `fn` value borrows the closure it came from (RFC-037), and the closure holds r
 
 ---
 
-### Function Values: A Call Through an Index or a Dereference Does Not Type
+### Function Values: A Call Through an Index or a Dereference Does Not Type - RESOLVED
 
-**Status:** Open (found 2026-10-18)
-**Affected:** calls whose callee is `hs[i]`, `p.*` or another non-name place of function type
+**Status:** Resolved 2026-10-19
+**Affected:** calls whose callee is `hs[i]`, `p.*` or another non-name expression of function type
 
-A callee that is a local, a parameter or a struct field calls through its `fn` value; `hs[1](5)` and `p.*(3)` do not resolve, and the call reports only E2001 on its literal arguments. Bind the value first: `const g = hs[1]` then `g(5)`.
+`resolve_call` matched only an identifier or member-access callee; any other expression was checked but the call never typed, leaving its arguments unpinned (E2001). Every other callee now calls through its value (`indirect_call`). Tests: `function_types/fn_call_through_place.f`, `function_types/foreign_fn_call_through_place.f`.
 
 ---
 
