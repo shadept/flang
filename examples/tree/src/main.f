@@ -77,6 +77,8 @@ fn append_join(sb: &StringBuilder, base: String, name: String) {
     sb.append(name)
 }
 
+const units = "KMGTPE"
+
 // Human-readable size: <1024 → raw bytes, otherwise scaled to K/M/G/T/P/E
 // with one fractional digit. Matches tree's `-h` output shape.
 fn append_human_size(sb: &StringBuilder, n: u64) {
@@ -86,29 +88,12 @@ fn append_human_size(sb: &StringBuilder, n: u64) {
     }
     let value = n as f64 / 1024.0
     let unit_idx = 0u8
-    while value >= 1024.0 and unit_idx < 5 {
+    while value >= 1024.0 and unit_idx < units.len {
         value = value / 1024.0
         unit_idx = unit_idx + 1
     }
     sb.append(value, ".1")
-    if unit_idx == 0 {
-        sb.append("K")
-    }
-    else if unit_idx == 1 {
-        sb.append("M")
-    }
-    else if unit_idx == 2 {
-        sb.append("G")
-    }
-    else if unit_idx == 3 {
-        sb.append("T")
-    }
-    else if unit_idx == 4 {
-        sb.append("P")
-    }
-    else {
-        sb.append("E")
-    }
+    sb.append(units[min(unit_idx as usize, units.len)])
 }
 
 // -----------------------------------------------------------------------------
@@ -378,8 +363,8 @@ pub fn main() i32 {
                 return 2
             }
             NonOpt(s) => { if s.len > 0 {
-                    roots.push(s)
-                } }
+                roots.push(s)
+            } }
             _ => {}
         }
     }
