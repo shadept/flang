@@ -94,7 +94,7 @@ pub fn commit(self: &Journal($T)) {
 //   state every later entry left behind. It must not `record` or open a checkpoint on this journal.
 //
 // Panics when no checkpoint is open.
-pub fn rollback(self: &Journal($T), undo: $F) where T: copyable, F: fn(T) {
+pub fn rollback(self: &Journal($T), undo: fn(T)) where T: copyable {
     const mark = self.marks.pop().expect("journal: rollback with no open checkpoint")
     for entry in self.entries[mark..].iter_rev() {
         undo(entry)

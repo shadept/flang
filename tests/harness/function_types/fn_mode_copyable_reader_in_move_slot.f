@@ -1,4 +1,4 @@
-//! TEST: fn_type_move_subsume
+//! TEST: fn_mode_copyable_reader_in_move_slot
 //! EXIT: 0
 
 // A function reading a copyable parameter fills a `move` slot: the value handed over needs no

@@ -1,4 +1,4 @@
-//! TEST: fn_type_lambda_inherits_move
+//! TEST: fn_mode_lambda_inherits_move
 //! EXIT: 0
 
 // An unannotated lambda parameter takes the `move` of the slot it fills, so the body owns the value

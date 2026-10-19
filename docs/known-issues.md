@@ -1258,7 +1258,9 @@ close the first defect without touching defer lowering.
 **Status:** Parameter side resolved 2026-10-18 (RFC-039): every callback is bounded
 (`where F: fn(T) U`), and a lambda argument is checked after its call resolves, its unannotated
 parameters typed from the bound before the body is checked, so `xs.map { s => s.view }` no longer
-depends on what is imported. The return side below is still open. Original report follows.
+depends on what is imported. The return side below is still open for a user-written `$F`
+callback, including the five `Option`/`Result` combinators that keep `$F` for ownership; the rest
+of the stdlib takes `fn(T) $U` (RFC-037), so the signature pins both sides. Original report follows.
 **Affected:** `lib/flang_typer/src/checker.f` (overload resolution), every `$F` stdlib combinator
 
 Combinators used to type their callback as `fn(T) $U`, which unified the
@@ -2597,6 +2599,15 @@ A bare overloaded name passed to a `fn(...)` parameter picks the overload whose 
 **Affected:** `#foreign fn` bodies and calls through `#foreign fn` values whose parameters or return are structs passed by value
 
 C passes such a struct by value, while a FLang body reads every aggregate parameter through its address and returns one through a result buffer. Lowering refuses the body (`body refused (an aggregate by value in a C-convention function)`) and the call (`an aggregate by value through a #foreign fn`) rather than emit a mismatched signature. Scalars, references and `#foreign fn` values cross. Body-less `#foreign` declarations are unaffected: their direct calls already pass `#foreign struct` arguments by value.
+
+---
+
+### A `fn` Value That Outlives Its Closure Dangles
+
+**Status:** Open (found 2026-10-19)
+**Affected:** `fn(...)` values made from capturing closures and kept past the frame that made the closure: `std.iter` adapters, struct fields, returned values
+
+A `fn` value borrows the closure it came from (RFC-037), and the closure holds references to the creator's bindings (RFC-033). Nothing checks that the value dies first: `fn evens(xs: &List(i32), k: i32) FilterIter(...) { return xs.iter().filter { it % k == 0 } }` returns an adapter whose `env` points into the returned-from frame, as a returned `&local` does (spec 3.6). Adapters release only their inner iterator; the closure's captures are released by their owners in the creating frame.
 
 ---
 

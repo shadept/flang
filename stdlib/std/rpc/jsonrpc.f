@@ -316,7 +316,7 @@ pub fn respond_error(self: &RpcWriter, id: &Value, code: i64, message: String) {
 }
 
 // One frame: the envelope object with its version, the members `body` writes, closed.
-fn send(self: &RpcWriter, body: $F) where F: fn(&Encoder) {
+fn send(self: &RpcWriter, body: fn(&Encoder)) {
     let sb = string_builder(256)
     defer sb.deinit()
     let jenc = json_encoder(sb.writer(), self.options)

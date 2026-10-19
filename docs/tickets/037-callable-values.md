@@ -1,7 +1,8 @@
 ---
-status: accepted
+status: implemented
 type: language
 created: 2026-10-11
+implemented: 2026-10-19
 relates: [RFC-014, RFC-033, RFC-035, RFC-038, RFC-041]
 ---
 
@@ -144,12 +145,17 @@ rather than borrow it.
 
 ### The standard library
 
-- Callback parameters take function types: `filter(keep: fn(T) bool)`, `fold(f: fn(A, T) A)`,
+- Callback parameters take function types: `filter(keep: fn(T) bool)`, `fold(f: fn(move A, T) A)`,
   `sort(cmp: fn(T, T) Ord)`, `sort_by(key: fn(T) $K)`, `get_or_insert_with(make: fn() V)`.
-- No stdlib function takes `$F where F: fn(...)` for now. The choice between the forms sits in
+- No stdlib function takes `$F where F: fn(...)` for speed. The choice between the forms sits in
   the callee's signature, ahead of any caller, and a library cannot know which of its callers run
   a capturing closure in a hot loop. `sort(s) where T: Ordered` compares through a non-capturing
   lambda, which erases under either form.
+- `Option`'s `map` and `flat_map` and `Result`'s `map`, `map_err` and `and_then` keep
+  `$F where F: fn(move T) U` for ownership. They hand the payload over, and a non-copyable reader
+  such as `opt.map(extract)` fits a `move` slot only through an adapter that releases the payload
+  after the call. The instantiation sees the callback's own mode instead, until `move` parameters
+  are released at scope end.
 - The `std.iter` adapters store their callback as a `fn` value, so `FilterIter(I: Iterator)` holds
   `f: fn(I.Item) bool` and takes no callable type parameter. Each chain instantiates per iterator
   type only.
@@ -217,7 +223,8 @@ pair.
 
 ## Plan
 
-Steps 1 to 4 landed on 2026-10-18, and the `#foreign fn` type the same day.
+Steps 1 to 6 landed on 2026-10-18, with the `#foreign fn` type; steps 7 and 8 on 2026-10-19,
+after the copyable `move`-slot rule and the seed promote they needed.
 
 1. **Linkage.** Generated functions `static`, with the exceptions above.
 2. **Calling convention.** `ctx` moves from first to after the user's parameters, and `env` is

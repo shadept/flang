@@ -113,7 +113,7 @@ pub fn last(s: $T[]) T? where T: copyable {
 // =============================================================================
 // Search and query
 //
-// Predicate forms take any callable `$F` usable as `fn(T) bool`; value forms compare with `==`.
+// Predicate forms take a `fn(T) bool`; value forms compare with `==`.
 // =============================================================================
 
 // Returns true if the slice contains `value`.
@@ -160,7 +160,7 @@ pub fn count(s: $T[], value: T) usize {
 }
 
 // Returns how many elements satisfy `pred`. `count` counts occurrences of a value.
-pub fn count_if(s: $T[], pred: $F) usize where F: fn(T) bool {
+pub fn count_if(s: $T[], pred: fn(T) bool) usize {
     let n: usize = 0
     for i in 0..s.len {
         if pred(s[i]) {
@@ -171,7 +171,7 @@ pub fn count_if(s: $T[], pred: $F) usize where F: fn(T) bool {
 }
 
 // Returns the first element satisfying `pred`, or null.
-pub fn find(s: $T[], pred: $F) T? where T: copyable, F: fn(T) bool {
+pub fn find(s: $T[], pred: fn(T) bool) T? where T: copyable {
     for i in 0..s.len {
         if pred(s[i]) {
             return Some(s[i])
@@ -181,7 +181,7 @@ pub fn find(s: $T[], pred: $F) T? where T: copyable, F: fn(T) bool {
 }
 
 // Returns the index of the first element satisfying `pred`, or null.
-pub fn find_index(s: $T[], pred: $F) usize? where F: fn(T) bool {
+pub fn find_index(s: $T[], pred: fn(T) bool) usize? {
     for i in 0..s.len {
         if pred(s[i]) {
             return Some(i)
@@ -191,12 +191,12 @@ pub fn find_index(s: $T[], pred: $F) usize? where F: fn(T) bool {
 }
 
 // Returns whether any element satisfies `pred`. False when empty.
-pub fn any(s: $T[], pred: $F) bool where F: fn(T) bool {
+pub fn any(s: $T[], pred: fn(T) bool) bool {
     return s.find_index(pred).is_some()
 }
 
 // Returns whether every element satisfies `pred`. True when empty.
-pub fn all(s: $T[], pred: $F) bool where F: fn(T) bool {
+pub fn all(s: $T[], pred: fn(T) bool) bool {
     for i in 0..s.len {
         let ok: bool = pred(s[i])
         if !ok {
@@ -212,7 +212,7 @@ pub fn all(s: $T[], pred: $F) bool where F: fn(T) bool {
 //   checked. `lower_bound`, `upper_bound` and `binary_search` are built on this.
 //
 // Returns `s.len` when `pred` holds everywhere and 0 when it holds nowhere.
-pub fn partition_point(s: $T[], pred: $F) usize where F: fn(T) bool {
+pub fn partition_point(s: $T[], pred: fn(T) bool) usize {
     let lo: usize = 0
     let hi: usize = s.len
     while lo < hi {
@@ -309,7 +309,7 @@ pub fn max(s: $T[]) T? where T: copyable {
 }
 
 // Returns the element with the smallest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn min_by(s: $T[], key: $F) T? where T: copyable, F: fn(T) $K, K: copyable + Ordered {
+pub fn min_by(s: $T[], key: fn(T) $K) T? where T: copyable, K: copyable + Ordered {
     if s.len == 0 {
         return null
     }
@@ -326,7 +326,7 @@ pub fn min_by(s: $T[], key: $F) T? where T: copyable, F: fn(T) $K, K: copyable +
 }
 
 // Returns the element with the largest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn max_by(s: $T[], key: $F) T? where T: copyable, F: fn(T) $K, K: copyable + Ordered {
+pub fn max_by(s: $T[], key: fn(T) $K) T? where T: copyable, K: copyable + Ordered {
     if s.len == 0 {
         return null
     }
@@ -347,14 +347,14 @@ pub fn max_by(s: $T[], key: $F) T? where T: copyable, F: fn(T) $K, K: copyable +
 // =============================================================================
 
 // Calls `f` on every element, in order. To accumulate, use `fold`, or assign a captured name.
-pub fn each(s: $T[], f: $F) where F: fn(T) {
+pub fn each(s: $T[], f: fn(T)) {
     for i in 0..s.len {
         f(s[i])
     }
 }
 
 // Combines left to right: `f(f(f(init, x0), x1), x2)`.
-pub fn fold(s: $T[], init: move $A, f: $F) A where F: fn(A, T) A {
+pub fn fold(s: $T[], init: move $A, f: fn(move A, T) A) A {
     let acc = move init
     for i in 0..s.len {
         acc = f(acc, s[i])
@@ -363,7 +363,7 @@ pub fn fold(s: $T[], init: move $A, f: $F) A where F: fn(A, T) A {
 }
 
 // Combines right to left: `f(x0, f(x1, f(x2, init)))`. The accumulator is `f`'s second argument.
-pub fn fold_right(s: $T[], init: move $A, f: $F) A where F: fn(T, A) A {
+pub fn fold_right(s: $T[], init: move $A, f: fn(T, move A) A) A {
     let acc = move init
     let i = s.len
     while i > 0 {

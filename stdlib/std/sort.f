@@ -3,7 +3,7 @@
 // All algorithms share the same generalized signature:
 //
 //     pub fn <algo>(s: $T[]) where T: Ordered                -- uses op_cmp
-//     pub fn <algo>(s: $T[], cmp: $F) where F: fn(T, T) Ord   -- custom comparator
+//     pub fn <algo>(s: $T[], cmp: fn(T, T) Ord)               -- custom comparator
 //
 // Comparison reads: `op_cmp` and the comparator take both elements in read mode (spec 3.2), so an
 // owning element is compared where it lies, never copied or consumed.
@@ -35,14 +35,14 @@ pub fn insertion_sort(s: $T[]) where T: Ordered {
     _insertion_sort_range(s, 0, s.len) { a, b => op_cmp(a, b) }
 }
 
-pub fn insertion_sort(s: $T[], cmp: $F) where F: fn(T, T) Ord {
+pub fn insertion_sort(s: $T[], cmp: fn(T, T) Ord) {
     _insertion_sort_range(s, 0, s.len, cmp)
 }
 
 // Stable in-place insertion sort over `s[lo..hi]` (hi exclusive). Uses shifts rather than swaps:
 // one write per displaced element instead of three - materially faster for any T larger than a
 // register.
-fn _insertion_sort_range(s: $T[], lo: usize, hi: usize, cmp: $F) where F: fn(T, T) Ord {
+fn _insertion_sort_range(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) {
     if hi - lo < 2 {
         return
     }
@@ -76,13 +76,13 @@ pub fn quicksort(s: $T[]) where T: Ordered {
     _quicksort_range(s, 0, s.len) { a, b => op_cmp(a, b) }
 }
 
-pub fn quicksort(s: $T[], cmp: $F) where F: fn(T, T) Ord {
+pub fn quicksort(s: $T[], cmp: fn(T, T) Ord) {
     _quicksort_range(s, 0, s.len, cmp)
 }
 
 // Iterative on the larger side, recursive on the smaller - keeps stack depth bounded to O(log n)
 // even on adversarial inputs.
-fn _quicksort_range(s: $T[], lo: usize, hi: usize, cmp: $F) where F: fn(T, T) Ord {
+fn _quicksort_range(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) {
     let l = lo
     let h = hi
     while h - l >= INSERTION_CUTOFF {
@@ -109,7 +109,7 @@ fn _quicksort_range(s: $T[], lo: usize, hi: usize, cmp: $F) where F: fn(T, T) Or
 //
 // Median-of-three leaves sentinels in place: s[lo] <= pivot and s[hi-1] >= pivot, plus pivot itself
 // at `pivot_slot`. These let the inner scans run without explicit bounds checks.
-fn _partition(s: $T[], lo: usize, hi: usize, cmp: $F) usize where F: fn(T, T) Ord {
+fn _partition(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) usize {
     const mid = lo + (hi - lo) / 2
     const last = hi - 1
     _sort3(s, lo, mid, last, cmp)
@@ -179,7 +179,7 @@ pub fn powersort(s: $T[]) where T: Ordered {
     _powersort_impl(s) { a, b => op_cmp(a, b) }
 }
 
-pub fn powersort(s: $T[], cmp: $F) where F: fn(T, T) Ord {
+pub fn powersort(s: $T[], cmp: fn(T, T) Ord) {
     _powersort_impl(s, cmp)
 }
 
@@ -191,7 +191,7 @@ const STACK_SCRATCH_WORDS: usize = 512
 // `STACK_SCRATCH_WORDS` words and `T` needs at most word alignment, on the global allocator
 // otherwise, freed before returning. Inputs below `INSERTION_CUTOFF` are insertion-sorted and take
 // no scratch at all.
-fn _powersort_impl(s: $T[], cmp: $F) where F: fn(T, T) Ord {
+fn _powersort_impl(s: $T[], cmp: fn(T, T) Ord) {
     const n = s.len
     if n < 2 {
         return
@@ -209,7 +209,7 @@ fn _powersort_impl(s: $T[], cmp: $F) where F: fn(T, T) Ord {
 
 // An owning element cannot be staged in scratch: the order is found over indices, then applied in
 // place by swaps, so every element keeps exactly one slot throughout.
-fn _powersort_owning(s: $T[], cmp: $F) where F: fn(T, T) Ord {
+fn _powersort_owning(s: $T[], cmp: fn(T, T) Ord) {
     const n = s.len
     const alloc = context.allocator
     const bytes = alloc.alloc(n * size_of(usize), align_of(usize))
@@ -238,7 +238,7 @@ fn _apply_order(s: $T[], order: usize[]) {
     }
 }
 
-fn _powersort_staged(s: $T[], cmp: $F) where T: copyable, F: fn(T, T) Ord {
+fn _powersort_staged(s: $T[], cmp: fn(T, T) Ord) where T: copyable {
     const n = s.len
 
     // The merges stage the left run in `scratch`, sized to the input. On this frame when it fits
@@ -266,7 +266,7 @@ fn _powersort_staged(s: $T[], cmp: $F) where T: copyable, F: fn(T, T) Ord {
 //
 // - `scratch`: at least `s.len` elements of storage the caller owns; its contents on entry are
 //   ignored and on exit unspecified.
-fn _powersort_with(s: $T[], scratch: T[], cmp: $F) where T: copyable, F: fn(T, T) Ord {
+fn _powersort_with(s: $T[], scratch: T[], cmp: fn(T, T) Ord) where T: copyable {
     const n = s.len
 
     // Run stack. Bounded by the number of distinct powers, which for any practical n fits in ~40
@@ -316,7 +316,7 @@ fn _powersort_with(s: $T[], scratch: T[], cmp: $F) where T: copyable, F: fn(T, T
 // Detect the next natural run starting at `lo`. Ascending runs (non-strict, to preserve stability
 // on equal keys) are kept; strictly descending runs are reversed. Short runs are padded up to
 // INSERTION_CUTOFF with insertion sort. Returns the exclusive end index of the finalised run.
-fn _next_run(s: $T[], lo: usize, hi: usize, cmp: $F) usize where F: fn(T, T) Ord {
+fn _next_run(s: $T[], lo: usize, hi: usize, cmp: fn(T, T) Ord) usize {
     if hi - lo <= 1 {
         return hi
     }
@@ -383,8 +383,8 @@ fn _node_power(n: usize, start_a: usize, start_b: usize, end_b: usize) u32 {
 }
 
 // Stable merge of s[lo..mid] and s[mid..hi] using `scratch` as staging.
-fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: $F)
-where T: copyable, F: fn(T, T) Ord {
+fn _merge(s: $T[], scratch: $T[], lo: usize, mid: usize, hi: usize, cmp: fn(T, T) Ord)
+where T: copyable {
     if lo >= mid or mid >= hi {
         return
     }
@@ -422,12 +422,12 @@ pub fn sort(s: $T[]) where T: Ordered {
     powersort(s)
 }
 
-pub fn sort(s: $T[], cmp: $F) where F: fn(T, T) Ord {
+pub fn sort(s: $T[], cmp: fn(T, T) Ord) {
     powersort(s, cmp)
 }
 
 // Sorts `s` in place by `key(x)` ascending, keeping the order of equal keys.
-pub fn sort_by(s: $T[], key: $F) where F: fn(T) $K, K: Ordered {
+pub fn sort_by(s: $T[], key: fn(T) $K) where K: Ordered {
     sort(s) { a, b =>
         let ka = key(a)
         let kb = key(b)

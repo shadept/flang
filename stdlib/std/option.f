@@ -66,7 +66,7 @@ pub fn unwrap_or(self: move Option($T), fallback: move T) T {
 }
 
 // The payload, or the result of calling `make`. `make` runs only when the option is empty.
-pub fn unwrap_or_else(self: move Option($T), make: $F) T where F: fn() T {
+pub fn unwrap_or_else(self: move Option($T), make: fn() T) T {
     return self match {
         Some(v) => v
         None => make()
@@ -99,7 +99,7 @@ pub fn flat_map(self: move Option($T), f: $F) Option($U) where F: fn(move T) Opt
 //
 // Chains where each step is a separate reason to give up read as one expression rather than a stack
 // of early returns.
-pub fn filter(self: move Option($T), pred: $F) Option(T) where F: fn(T) bool {
+pub fn filter(self: move Option($T), pred: fn(T) bool) Option(T) {
     return self match {
         Some(v) => if pred(v) { self } else { None }
         None => None

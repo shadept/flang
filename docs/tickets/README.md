@@ -46,7 +46,7 @@ Type: language, compiler, stdlib, tooling.
 | [034](034-typed-slice-intrinsics.md) | Typed slice intrinsics | language | implemented | 2026-10-10 | 2026-10-10 |
 | [035](035-contracts.md) | Contracts | language | provisional | 2026-10-11 | 2026-10-11 |
 | [036](036-associated-types-and-type-parameter-bounds.md) | Associated types, projection, and bounds on type parameters | language | provisional | 2026-10-11 | 2026-10-11 |
-| [037](037-callable-values.md) | Function types as callable values | language | accepted | 2026-10-11 |  |
+| [037](037-callable-values.md) | Function types as callable values | language | implemented | 2026-10-11 | 2026-10-19 |
 | [038](038-runtime-context.md) | Runtime context | language | implemented | 2026-10-17 | 2026-10-18 |
 | [039](039-lambda-syntax.md) | Lambda syntax | language | implemented | 2026-10-17 | 2026-10-18 |
 | [040](040-coalesce-via-op-try.md) | `??` through `op_try` | language | implemented | 2026-10-18 | 2026-10-18 |

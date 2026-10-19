@@ -386,12 +386,12 @@ pub fn sort(list: &UnmanagedList($T)) where T: Ordered {
 }
 
 // Sorts in place by `cmp`.
-pub fn sort(list: &UnmanagedList($T), cmp: $F) where F: fn(T, T) Ord {
+pub fn sort(list: &UnmanagedList($T), cmp: fn(T, T) Ord) {
     sort(list.as_slice(), cmp)
 }
 
 // Sorts in place by `key(x)` ascending, keeping the order of equal keys.
-pub fn sort_by(self: &UnmanagedList($T), key: $F) where F: fn(T) $K, K: Ordered {
+pub fn sort_by(self: &UnmanagedList($T), key: fn(T) $K) where K: Ordered {
     self.as_slice().sort_by(key)
 }
 
@@ -509,32 +509,32 @@ pub fn last_index_of(self: &UnmanagedList($T), value: T) usize? where T: Eq {
 }
 
 // Returns the first element satisfying `pred`, or null.
-pub fn find(self: &UnmanagedList($T), pred: $F) T? where T: copyable, F: fn(T) bool {
+pub fn find(self: &UnmanagedList($T), pred: fn(T) bool) T? where T: copyable {
     return self.as_slice().find(pred)
 }
 
 // Returns the index of the first element satisfying `pred`, or null.
-pub fn find_index(self: &UnmanagedList($T), pred: $F) usize? where F: fn(T) bool {
+pub fn find_index(self: &UnmanagedList($T), pred: fn(T) bool) usize? {
     return self.as_slice().find_index(pred)
 }
 
 // Returns whether any element satisfies `pred`. False when empty.
-pub fn any(self: &UnmanagedList($T), pred: $F) bool where F: fn(T) bool {
+pub fn any(self: &UnmanagedList($T), pred: fn(T) bool) bool {
     return self.as_slice().any(pred)
 }
 
 // Returns whether every element satisfies `pred`. True when empty.
-pub fn all(self: &UnmanagedList($T), pred: $F) bool where F: fn(T) bool {
+pub fn all(self: &UnmanagedList($T), pred: fn(T) bool) bool {
     return self.as_slice().all(pred)
 }
 
 // Calls `f` on every element, in order.
-pub fn each(self: &UnmanagedList($T), f: $F) where F: fn(T) {
+pub fn each(self: &UnmanagedList($T), f: fn(T)) {
     self.as_slice().each(f)
 }
 
 // Returns how many elements satisfy `pred`.
-pub fn count(self: &UnmanagedList($T), pred: $F) usize where F: fn(T) bool {
+pub fn count(self: &UnmanagedList($T), pred: fn(T) bool) usize {
     return self.as_slice().count_if(pred)
 }
 
@@ -549,24 +549,22 @@ pub fn max(self: &UnmanagedList($T)) T? where T: copyable {
 }
 
 // Returns the element with the smallest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn min_by(self: &UnmanagedList($T), key: $F) T?
-where T: copyable, F: fn(T) $K, K: copyable + Ordered {
+pub fn min_by(self: &UnmanagedList($T), key: fn(T) $K) T? where T: copyable, K: copyable + Ordered {
     return self.as_slice().min_by(key)
 }
 
 // Returns the element with the largest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn max_by(self: &UnmanagedList($T), key: $F) T?
-where T: copyable, F: fn(T) $K, K: copyable + Ordered {
+pub fn max_by(self: &UnmanagedList($T), key: fn(T) $K) T? where T: copyable, K: copyable + Ordered {
     return self.as_slice().max_by(key)
 }
 
 // Combines left to right: `f(f(f(init, x0), x1), x2)`.
-pub fn fold(self: &UnmanagedList($T), init: move $A, f: $F) A where F: fn(A, T) A {
+pub fn fold(self: &UnmanagedList($T), init: move $A, f: fn(move A, T) A) A {
     return self.as_slice().fold(init, f)
 }
 
 // Combines right to left: `f(x0, f(x1, f(x2, init)))`. The accumulator is `f`'s second argument.
-pub fn fold_right(self: &UnmanagedList($T), init: move $A, f: $F) A where F: fn(T, A) A {
+pub fn fold_right(self: &UnmanagedList($T), init: move $A, f: fn(T, move A) A) A {
     return self.as_slice().fold_right(init, f)
 }
 
@@ -610,8 +608,7 @@ pub fn iter_rev(l: &UnmanagedList($T)) SliceRevIterator(T) {
 // =============================================================================
 
 // Returns a new list of `f(x)` for every element, in order, allocated through `allocator`.
-pub fn map(s: &UnmanagedList($T), f: $F, allocator: &Allocator) UnmanagedList($U)
-where F: fn(T) U {
+pub fn map(s: &UnmanagedList($T), f: fn(T) $U, allocator: &Allocator) UnmanagedList(U) {
     let out: UnmanagedList(U) = unmanaged_list(s.len, allocator)
     for i in 0..s.len {
         out.push(f(s[i]), allocator)
@@ -620,8 +617,8 @@ where F: fn(T) U {
 }
 
 // Returns a new list of the elements `keep` accepts, in order.
-pub fn filter(s: &UnmanagedList($T), keep: $F, allocator: &Allocator) UnmanagedList(T)
-where T: copyable, F: fn(T) bool {
+pub fn filter(s: &UnmanagedList($T), keep: fn(T) bool, allocator: &Allocator) UnmanagedList(T)
+where T: copyable {
     let out: UnmanagedList(T) = unmanaged_list(s.len, allocator)
     for i in 0..s.len {
         if keep(s[i]) {
@@ -632,8 +629,8 @@ where T: copyable, F: fn(T) bool {
 }
 
 // Returns a new list of the elements `drop` rejects, in order: `filter` with the predicate negated.
-pub fn remove(s: &UnmanagedList($T), drop: $F, allocator: &Allocator) UnmanagedList(T)
-where T: copyable, F: fn(T) bool {
+pub fn remove(s: &UnmanagedList($T), drop: fn(T) bool, allocator: &Allocator) UnmanagedList(T)
+where T: copyable {
     let out: UnmanagedList(T) = unmanaged_list(s.len, allocator)
     for i in 0..s.len {
         let dropped: bool = drop(s[i])
@@ -695,10 +692,10 @@ where T: copyable, B: copyable {
 // Splits into two new lists, (accepted, rejected) by `pred`, each in order.
 pub fn partition(
     s: &UnmanagedList($T),
-    pred: $F,
+    pred: fn(T) bool,
     allocator: &Allocator,
 ) (UnmanagedList(T), UnmanagedList(T))
-where T: copyable, F: fn(T) bool {
+where T: copyable {
     let yes: UnmanagedList(T) = unmanaged_list(0, allocator)
     let no: UnmanagedList(T) = unmanaged_list(0, allocator)
     for i in 0..s.len {
@@ -847,20 +844,20 @@ pub fn deinit(self: move Drain($T)) {
     }
 
     // Returns a new list of `f(x)` for every element, in order.
-    pub fn map(self: &#(Name)($T), f: $F, allocator: &Allocator? = null) List($U) where F: fn(T) U {
+    pub fn map(self: &#(Name)($T), f: fn(T) $U, allocator: &Allocator? = null) List(U) {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.map(f, alloc), allocator = alloc }
     }
 
     // Returns a new list of the elements `keep` accepts, in order.
-    pub fn filter(self: &#(Name)($T), keep: $F, allocator: &Allocator? = null) List(T) where T: copyable, F: fn(T) bool {
+    pub fn filter(self: &#(Name)($T), keep: fn(T) bool, allocator: &Allocator? = null) List(T) where T: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.filter(keep, alloc), allocator = alloc }
     }
 
     // Returns a new list of the elements `drop` rejects, in order: `filter` with the predicate
     // negated.
-    pub fn remove(self: &#(Name)($T), drop: $F, allocator: &Allocator? = null) List(T) where T: copyable, F: fn(T) bool {
+    pub fn remove(self: &#(Name)($T), drop: fn(T) bool, allocator: &Allocator? = null) List(T) where T: copyable {
         const alloc = allocator ?? self.allocator
         return .{ __storage = self.__storage.remove(drop, alloc), allocator = alloc }
     }
@@ -892,8 +889,8 @@ pub fn deinit(self: move Drain($T)) {
         }
 
     // Splits into two new lists, (accepted, rejected) by `pred`, each in order.
-    pub fn partition(self: &#(Name)($T), pred: $F,
-        allocator: &Allocator? = null) (List(T), List(T)) where T: copyable, F: fn(T) bool {
+    pub fn partition(self: &#(Name)($T), pred: fn(T) bool,
+        allocator: &Allocator? = null) (List(T), List(T)) where T: copyable {
             const alloc = allocator ?? self.allocator
             let parts = self.__storage.partition(pred, alloc)
             return (.{ __storage = move parts.0, allocator = alloc }, .{ __storage = move parts.1,
@@ -939,8 +936,7 @@ pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
 // per call, so the intermediates are bump allocations reclaimed in one shot; better still, let `f`
 // append directly into `out` and drop the intermediates entirely. Both need an API decision about
 // the callback's shape, not just an implementation change - see docs/known-issues.md.
-pub fn flat_map(self: &List($T), f: $F, allocator: &Allocator? = null) List($U)
-where F: fn(T) List(U) {
+pub fn flat_map(self: &List($T), f: fn(T) List($U), allocator: &Allocator? = null) List(U) {
     let out: List(U) = list(self.len, allocator ?? self.allocator)
     for i in 0..self.len {
         let part = f(self[i])
@@ -1192,8 +1188,6 @@ test "fold and fold_right differ in association" {
     // Subtraction is not associative, so the two directions disagree:
     // left  ((0-1)-2)-3 = -6
     // right 1-(2-(3-0)) = 2
-    // The seed pins the accumulator type ($A): a bare `0` won't default, because `f` is duck-typed
-    // ($F) and only constrains A at instantiation.
     let l = xs.fold(0i32) { acc, v => acc - v }
     let r = xs.fold_right(0i32) { v, acc => v - acc }
     assert_eq(l, -6i32, "left-associated")

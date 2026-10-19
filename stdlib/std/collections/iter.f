@@ -17,16 +17,14 @@
 // to iterators only. A call such as `xs.last()` on a `List` therefore resolves to `List`'s own
 // `last`.
 //
-// A callback parameter is declared `$F` with a function-type bound, such as:
+// A callback parameter is a function value, such as `f: fn(I.Item) bool` (RFC-037). It accepts a
+// named function, a lambda or a capturing closure, and supplies the parameter types of an
+// unannotated lambda. An adapter stores it, so each chain instantiates per iterator type only:
 //
-//     F: fn(I.Item) bool
+//     type FilterIter = struct(I: Iterator) { it: I, f: fn(I.Item) bool }
 //
-// It accepts a named function, a lambda or a capturing closure, and the bound supplies the
-// parameter types of an unannotated lambda. Each adapter declares its bounds on its struct:
-//
-//     type FilterIter = struct(I: Iterator, F: fn(I.Item) bool)
-//
-// The adapter's constructor and its `next` require the same bounds by naming the struct.
+// The stored value borrows the closure it came from: an adapter must not outlive the frame that
+// built its closure.
 
 import std.allocator
 import std.collections.dict
@@ -58,21 +56,20 @@ pub type Iterable = contract {
 // Filter
 // =============================================================================
 
-type FilterIter = struct(I: Iterator, F: fn(I.Item) bool) {
+type FilterIter = struct(I: Iterator) {
     it: I
-    f: F
+    f: fn(I.Item) bool
 }
 
-pub fn iter(self: move FilterIter($I, $F)) FilterIter(I, F) {
+pub fn iter(self: move FilterIter($I)) FilterIter(I) {
     return self
 }
 
-pub fn deinit(self: move FilterIter($I, $F)) {
+pub fn deinit(self: move FilterIter($I)) {
     release(self.it)
-    release(self.f)
 }
 
-pub fn next(self: &FilterIter($I, $F)) I.Item? {
+pub fn next(self: &FilterIter($I)) I.Item? {
     loop {
         let v = self.it.next()
         if v.is_none() {
@@ -85,29 +82,28 @@ pub fn next(self: &FilterIter($I, $F)) I.Item? {
     }
 }
 
-pub fn filter(it: move $I, f: move $F) FilterIter(I, F) {
-    return .{ it = move it, f = move f }
+pub fn filter(it: move $I, f: fn(I.Item) bool) FilterIter(I) where I: Iterator {
+    return .{ it = move it, f = f }
 }
 
 // =============================================================================
 // Map
 // =============================================================================
 
-type MapIter = struct(I: Iterator, F) {
+type MapIter = struct(I: Iterator, U) {
     it: I
-    f: F
+    f: fn(move I.Item) U
 }
 
-pub fn iter(self: move MapIter($I, $F)) MapIter(I, F) {
+pub fn iter(self: move MapIter($I, $U)) MapIter(I, U) {
     return self
 }
 
-pub fn deinit(self: move MapIter($I, $F)) {
+pub fn deinit(self: move MapIter($I, $U)) {
     release(self.it)
-    release(self.f)
 }
 
-pub fn next(self: &MapIter($I, $F)) U? where F: fn(I.Item) $U {
+pub fn next(self: &MapIter($I, $U)) U? {
     let v = self.it.next()
     if v.is_none() {
         return null
@@ -115,8 +111,8 @@ pub fn next(self: &MapIter($I, $F)) U? where F: fn(I.Item) $U {
     return Some(self.f(v.unwrap()))
 }
 
-pub fn map(it: move $I, f: move $F) MapIter(I, F) where F: fn(I.Item) $U {
-    return .{ it = move it, f = move f }
+pub fn map(it: move $I, f: fn(move I.Item) $U) MapIter(I, U) where I: Iterator {
+    return .{ it = move it, f = f }
 }
 
 // =============================================================================
@@ -213,22 +209,21 @@ pub fn skip(it: move $I, n: usize) SkipIter(I) {
 // Take-while / Skip-while
 // =============================================================================
 
-type TakeWhileIter = struct(I: Iterator, F: fn(I.Item) bool) {
+type TakeWhileIter = struct(I: Iterator) {
     it: I
-    f: F
+    f: fn(I.Item) bool
     done: bool
 }
 
-pub fn iter(self: move TakeWhileIter($I, $F)) TakeWhileIter(I, F) {
+pub fn iter(self: move TakeWhileIter($I)) TakeWhileIter(I) {
     return self
 }
 
-pub fn deinit(self: move TakeWhileIter($I, $F)) {
+pub fn deinit(self: move TakeWhileIter($I)) {
     release(self.it)
-    release(self.f)
 }
 
-pub fn next(self: &TakeWhileIter($I, $F)) I.Item? {
+pub fn next(self: &TakeWhileIter($I)) I.Item? {
     if self.done {
         return null
     }
@@ -247,26 +242,25 @@ pub fn next(self: &TakeWhileIter($I, $F)) I.Item? {
 }
 
 // Elements until the first one `f` rejects; nothing after it.
-pub fn take_while(it: move $I, f: move $F) TakeWhileIter(I, F) {
-    return .{ it = move it, f = move f, done = false }
+pub fn take_while(it: move $I, f: fn(I.Item) bool) TakeWhileIter(I) where I: Iterator {
+    return .{ it = move it, f = f, done = false }
 }
 
-type SkipWhileIter = struct(I: Iterator, F: fn(I.Item) bool) {
+type SkipWhileIter = struct(I: Iterator) {
     it: I
-    f: F
+    f: fn(I.Item) bool
     skipping: bool
 }
 
-pub fn iter(self: move SkipWhileIter($I, $F)) SkipWhileIter(I, F) {
+pub fn iter(self: move SkipWhileIter($I)) SkipWhileIter(I) {
     return self
 }
 
-pub fn deinit(self: move SkipWhileIter($I, $F)) {
+pub fn deinit(self: move SkipWhileIter($I)) {
     release(self.it)
-    release(self.f)
 }
 
-pub fn next(self: &SkipWhileIter($I, $F)) I.Item? {
+pub fn next(self: &SkipWhileIter($I)) I.Item? {
     if self.skipping {
         self.skipping = false
         loop {
@@ -285,8 +279,8 @@ pub fn next(self: &SkipWhileIter($I, $F)) I.Item? {
 }
 
 // Drops the leading run `f` accepts; yields everything from the first rejected element on.
-pub fn skip_while(it: move $I, f: move $F) SkipWhileIter(I, F) {
-    return .{ it = move it, f = move f, skipping = true }
+pub fn skip_while(it: move $I, f: fn(I.Item) bool) SkipWhileIter(I) where I: Iterator {
+    return .{ it = move it, f = f, skipping = true }
 }
 
 // =============================================================================
@@ -514,67 +508,68 @@ pub fn peekable(it: move $I) PeekableIter(I) {
 // Tap
 // =============================================================================
 
-type TapIter = struct(I: Iterator, F: fn(I.Item)) {
+type TapIter = struct(I: Iterator) {
     it: I
-    f: F
+    f: fn(I.Item)
 }
 
-pub fn iter(self: move TapIter($I, $F)) TapIter(I, F) {
+pub fn iter(self: move TapIter($I)) TapIter(I) {
     return self
 }
 
-pub fn deinit(self: move TapIter($I, $F)) {
+pub fn deinit(self: move TapIter($I)) {
     release(self.it)
-    release(self.f)
 }
 
-pub fn next(self: &TapIter($I, $F)) I.Item? {
+pub fn next(self: &TapIter($I)) I.Item? {
     const v = self.it.next()
-    if v.is_some() {
-        self.f(v.unwrap())
+    v match {
+        Some(x) => self.f(x)
+        None => {}
     }
     return v
 }
 
 // Calls `f` on every element as it passes through, yielding the element unchanged: a look at what
 // an adapter chain produces without breaking the chain.
-pub fn tap(it: move $I, f: move $F) TapIter(I, F) {
-    return .{ it = move it, f = move f }
+pub fn tap(it: move $I, f: fn(I.Item)) TapIter(I) where I: Iterator {
+    return .{ it = move it, f = f }
 }
 
 // =============================================================================
 // Scan
 // =============================================================================
 
-type ScanIter = struct(I: Iterator, A, F: fn(A, I.Item) A) {
+type ScanIter = struct(I: Iterator, A) {
     it: I
     acc: A
-    f: F
+    f: fn(A, I.Item) A
 }
 
-pub fn iter(self: move ScanIter($I, $A, $F)) ScanIter(I, A, F) {
+pub fn iter(self: move ScanIter($I, $A)) ScanIter(I, A) {
     return self
 }
 
-pub fn deinit(self: move ScanIter($I, $A, $F)) {
+pub fn deinit(self: move ScanIter($I, $A)) {
     release(self.it)
     release(self.acc)
-    release(self.f)
 }
 
-pub fn next(self: &ScanIter($I, $A, $F)) A? where A: copyable {
+pub fn next(self: &ScanIter($I, $A)) A? where A: copyable {
     const v = self.it.next()
     if v.is_none() {
         return null
     }
-    self.acc = self.f(self.acc, v.unwrap())
+    const x = v.unwrap()
+    self.acc = self.f(self.acc, x)
+    release(x)
     return Some(self.acc)
 }
 
 // A running fold: yields `f(acc, x)` for every element, starting from `init`, so the last value is
 // what `fold` would return. `init` itself is not yielded.
-pub fn scan(it: move $I, init: move $A, f: move $F) ScanIter(I, A, F) {
-    return .{ it = move it, acc = move init, f = move f }
+pub fn scan(it: move $I, init: move $A, f: fn(A, I.Item) A) ScanIter(I, A) where I: Iterator {
+    return .{ it = move it, acc = move init, f = f }
 }
 
 // =============================================================================
@@ -677,7 +672,7 @@ pub fn repeat(value: move $T) RepeatIter(T) {
 // =============================================================================
 
 // Combine left to right: `f(f(f(init, x0), x1), x2)`.
-pub fn fold(it: move $I, init: move $A, f: move $F) A where I: Iterator, F: fn(A, I.Item) A {
+pub fn fold(it: move $I, init: move $A, f: fn(move A, I.Item) A) A where I: Iterator {
     let acc = move init
     for item in it {
         acc = f(acc, item)
@@ -686,7 +681,7 @@ pub fn fold(it: move $I, init: move $A, f: move $F) A where I: Iterator, F: fn(A
 }
 
 // Fold seeded with the first element; null when empty.
-pub fn reduce(it: move $I, f: move $F) I.Item? where I: Iterator, F: fn(I.Item, I.Item) I.Item {
+pub fn reduce(it: move $I, f: fn(move I.Item, I.Item) I.Item) I.Item? where I: Iterator {
     return it.next() match {
         Some(first) => Some(fold(it, first, f))
         None => null
@@ -694,7 +689,7 @@ pub fn reduce(it: move $I, f: move $F) I.Item? where I: Iterator, F: fn(I.Item, 
 }
 
 // Call `f` on every element, in order.
-pub fn each(it: move $I, f: move $F) where I: Iterator, F: fn(I.Item) {
+pub fn each(it: move $I, f: fn(I.Item)) where I: Iterator {
     for item in it {
         f(item)
     }
@@ -710,7 +705,7 @@ pub fn count(it: move Iterator) usize {
 }
 
 // Number of elements `pred` accepts.
-pub fn count(it: move $I, pred: $F) usize where I: Iterator, F: fn(I.Item) bool {
+pub fn count(it: move $I, pred: fn(I.Item) bool) usize where I: Iterator {
     let n: usize = 0
     for item in it {
         if pred(item) {
@@ -721,7 +716,7 @@ pub fn count(it: move $I, pred: $F) usize where I: Iterator, F: fn(I.Item) bool 
 }
 
 // Whether any element satisfies `pred`. False for an empty iterator. Stops at the first match.
-pub fn any(it: move $I, pred: $F) bool where I: Iterator, F: fn(I.Item) bool {
+pub fn any(it: move $I, pred: fn(I.Item) bool) bool where I: Iterator {
     for item in it {
         if pred(item) {
             return true
@@ -732,7 +727,7 @@ pub fn any(it: move $I, pred: $F) bool where I: Iterator, F: fn(I.Item) bool {
 
 // Whether every element satisfies `pred`. True for an empty iterator. Stops at the first
 // counterexample.
-pub fn all(it: move $I, pred: $F) bool where I: Iterator, F: fn(I.Item) bool {
+pub fn all(it: move $I, pred: fn(I.Item) bool) bool where I: Iterator {
     for item in it {
         let ok: bool = pred(item)
         if !ok {
@@ -743,7 +738,7 @@ pub fn all(it: move $I, pred: $F) bool where I: Iterator, F: fn(I.Item) bool {
 }
 
 // First element satisfying `pred`, or null.
-pub fn find(it: move $I, pred: $F) I.Item? where I: Iterator, F: fn(I.Item) bool {
+pub fn find(it: move $I, pred: fn(I.Item) bool) I.Item? where I: Iterator {
     for item in it {
         if pred(item) {
             return Some(move item)
@@ -753,7 +748,7 @@ pub fn find(it: move $I, pred: $F) I.Item? where I: Iterator, F: fn(I.Item) bool
 }
 
 // 0-based position of the first element satisfying `pred`, or null.
-pub fn position(it: move $I, pred: $F) usize? where I: Iterator, F: fn(I.Item) bool {
+pub fn position(it: move $I, pred: fn(I.Item) bool) usize? where I: Iterator {
     let i: usize = 0
     for item in it {
         if pred(item) {
@@ -819,8 +814,8 @@ pub fn max(it: move $I) I.Item? where I: Iterator(Item: copyable + Ordered) {
 }
 
 // Element with the smallest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn min_by(it: move $I, key: $F) I.Item?
-where I: Iterator(Item: copyable), F: fn(I.Item) $K, K: copyable + Ordered {
+pub fn min_by(it: move $I, key: fn(I.Item) $K) I.Item?
+where I: Iterator(Item: copyable), K: copyable + Ordered {
     let first = it.next()
     if first.is_none() {
         return null
@@ -838,8 +833,8 @@ where I: Iterator(Item: copyable), F: fn(I.Item) $K, K: copyable + Ordered {
 }
 
 // Element with the largest `key(x)`, or null when empty. Ties keep the earliest.
-pub fn max_by(it: move $I, key: $F) I.Item?
-where I: Iterator(Item: copyable), F: fn(I.Item) $K, K: copyable + Ordered {
+pub fn max_by(it: move $I, key: fn(I.Item) $K) I.Item?
+where I: Iterator(Item: copyable), K: copyable + Ordered {
     let first = it.next()
     if first.is_none() {
         return null
@@ -892,8 +887,12 @@ where I: Iterator {
 
 // Collect into a fresh Dict keyed by `key(item)`. A later item with the same key overwrites the
 // earlier one.
-pub fn to_dict(it: move $I, key: $F, allocator: &Allocator = context.allocator) Dict(K, I.Item)
-where I: Iterator, F: fn(I.Item) $K {
+pub fn to_dict(
+    it: move $I,
+    key: fn(I.Item) $K,
+    allocator: &Allocator = context.allocator,
+) Dict(K, I.Item)
+where I: Iterator {
     let out: Dict(K, I.Item) = dict(allocator)
     for item in it {
         out.set(key(item), item)
