@@ -177,6 +177,7 @@ type Vec128 = #simd struct { _data: [u8; 16] }               // SIMD-aligned
 let p = Point { x = 10, y = 20 }                // construction (= not :)
 let a = .{ x = 10, y = 20 }                     // anonymous (type from context)
 let p2 = Point { x, y = 20 }                    // shorthand: x = x
+let h2 = Holder { move h }                      // shorthand: h = move h
 ```
 
 Commas between fields optional. Field assignment uses `=`. A parameter's bound sits on it (`T: Bound`); `where` after a type's parameter list is E2145. The legacy `struct Name { ... }` declaration form has been removed (E1050) — see RFC-008.

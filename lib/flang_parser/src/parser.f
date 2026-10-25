@@ -1845,9 +1845,14 @@ fn parse_struct_construction_body(self: &Parser, b: &NodeBuilder) {
         return
     }
     while !self.at_eof() and self.current_kind() != TokenKind.CloseBrace {
+        // `move field` is shorthand for `field = move field`, and takes no `=`.
+        const moved = self.current_kind() == TokenKind.Move
+        if moved {
+            self.eat_into(b)
+        }
         if self.current_kind() == TokenKind.Identifier {
             self.eat_into(b)
-            if self.current_kind() == TokenKind.Equals {
+            if !moved and self.current_kind() == TokenKind.Equals {
                 self.eat_into(b)
                 const value = self.parse_expression()
                 self.push_node_into(b, value)

@@ -2151,13 +2151,15 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
     if nominal {
         install(&type_expr_opt, self.struct_construction_type(cst))
     }
-    // Field walk: identifier (= expr)?, comma. Names without `=` are shorthand (`Point { x, y }`).
+    // Field walk: `move`? identifier (= expr)?, comma. Names without `=` are shorthand (`Point { x,
+    // y }`); `move x` is `x = move x`.
     let pending_name: String = ""
     let pending_span = self.span_from(cst)
     let pending_value: Expr? = null
     let pending_active = false
     let saw_equals = false
     let saw_open_brace = false
+    let move_span: SourceSpan? = null
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -2166,6 +2168,10 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
                     continue
                 }
                 if !saw_open_brace {
+                    continue
+                }
+                if tok.kind == TokenKind.Move {
+                    move_span = Some(self.span_from_token(tok))
                     continue
                 }
                 if tok.kind == TokenKind.Identifier {
@@ -2180,6 +2186,22 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
                     pending_name = tok.text
                     pending_span = self.span_from_token(tok)
                     install(&pending_value, null)
+                    move_span match {
+                        Some(ms) => {
+                            const name_span = pending_span
+                            pending_span = .{
+                                file_id = ms.file_id,
+                                start = ms.start,
+                                length = name_span.start + name_span.length - ms.start,
+                            }
+                            install(
+                                &pending_value,
+                                Some(moved_name(self, tok.text, name_span, pending_span)),
+                            )
+                        }
+                        None => {}
+                    }
+                    move_span = null
                     pending_active = true
                     saw_equals = false
                     continue
@@ -2241,6 +2263,11 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
         type_expr = type_ref,
         fields = frozen(fields),
     })
+}
+
+fn moved_name(self: &Projector, name: String, name_span: SourceSpan, span: SourceSpan) Expr {
+    const id = Expr.Identifier(IdentifierExpr { span = name_span, name = name })
+    return Expr.Move(MoveExpr { span = span, operand = self.boxed(id) })
 }
 
 fn make_struct_field_init(

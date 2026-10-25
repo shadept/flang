@@ -166,7 +166,7 @@ Structs are always declared as a `type` alias whose RHS is a `struct(...) { ... 
 - **Layout is the compiler's, not the declaration's** — see *Memory layout* below.
 - Construction: `Point { x = 10, y = 20 }` (uses `=`, not `:`).
 - Anonymous construction: `.{ x = 10, y = 20 }` (type from context).
-- Field shorthand: `.{ x, y = 20 }` equivalent to `.{ x = x, y = 20 }`.
+- Field shorthand: `.{ x, y = 20 }` equivalent to `.{ x = x, y = 20 }`, and `.{ move h }` to `.{ h = move h }`. Shorthand copies like any value slot, so a non-copyable binding is written `move h` (E2124).
 - **Strict construction**: every field must be assigned. `Point { x = 10 }` errors with E2050 ("struct literal missing field `<name>`") if `Point` has more fields. `Marker { }` is valid only when `Marker` has zero fields. Context-less `.{}` is invalid.
 - **Bounded parameters**: `struct(I: Iterator, F: fn(I.Item) bool)` - see §2.3, *Where a type's bounds hold*. A field may name a parameter's associated type: `type Peekable = struct(I: Iterator) { it: I, peeked: I.Item? }` stores an `i64?` in `Peekable(Counter)` when `Counter` yields `i64`. Each instance's associated types are solved from its arguments, as a call solves a function's.
 - **`Self`** inside a named struct or enum body is the type applied to its own parameters: in `type Node = struct(T) { value: T, next: &Self? }`, `Self` is `Node(T)`. By value it is the infinite-size error a by-value self-reference is (E2035). `Self` is a predeclared type name, not a keyword: valid only inside a named struct, enum or contract body (E2139), and nothing may be declared with it - a type, a `$Self`, a generic parameter (E2140).
