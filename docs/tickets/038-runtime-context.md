@@ -12,7 +12,8 @@ relates: [RFC-005, RFC-014, RFC-037, RFC-041]
 
 Every FLang function runs under one current `Context`: a struct the compiler assembles from
 `context` field declarations across the whole program, passed to every FLang function as a hidden
-first parameter. Code reads it, copies it and rebinds it for a scope; it never mutates it.
+first parameter. Code reads its fields and rebinds them for a scope; it never mutates it, and it
+is not a value (revised 2026-10-25, below).
 
 ```flang
 // std/allocator.f
@@ -24,7 +25,7 @@ context span_depth: u32 = 0             // module-private
 
 fn handle(req: &Request) {
     context.logger.info("start")
-    let saved = context                 // a copy, type `Context`
+    const log = context.logger          // a field, read as any value
 }
 ```
 
@@ -53,52 +54,53 @@ isolation and, later, structured concurrency one mechanism, and moves RFC-005 §
 - Top-level only. The type annotation and the default are required; there is no zero-init.
 - The default is a constant initializer (literal, address of a global), so the root context is a
   static and exists before constant initialization runs.
-- The field type is `copyable`: the language copies a context (on `let c = context`, a capture, a
-  `defer`, a rebind, a detached spawn), and an owned field would gain a second owner. Shared or
-  owned state goes in by reference (`&T`), owned by the scope that rebinds.
+- The field type is `copyable`: a rebind copies its parent's fields into the new link, and nothing
+  releases a link's fields, so an owned field would gain a second owner. Shared or owned state goes
+  in by reference (`&T`), owned by a binding of the scope that rebinds.
 - Visibility is `pub` or module-private, as for any declaration; it covers read and rebind.
 
 ### Use
 
 - `context.<name>` reads a field. A field resolves among the context fields visible from the
   module; two visible fields of one name are an ambiguity error.
-- `context` alone is a value of type `Context`: a copy of the current context. `ctx.<name>` reads
-  a saved copy the same way.
+- `context` is not a value: no `let c = context`, no method taking it. A field of function type
+  is called through it (`context.f(...)`).
 - The current context is never mutated in place and its address is never taken (`&context` is an
-  error). Only copies escape.
+  error). Nothing escapes it but the values read from its fields.
 
 ### Rebinding
 
-`context(args) { body }` runs `body` under a new context. It is a block construct like `for`,
-`loop` and `match`, not a call: `return`, `?`, `break` and `defer` in the body act as in any
-block. The change lasts exactly as long as the body; there is no form without one.
+`context(args) { body }` runs `body` under a new context: a link to the current one with the named
+fields replaced. It is a block construct like `for`, `loop` and `match`, not a call: `return`,
+`?`, `break` and `defer` in the body act as in any block. The change lasts exactly as long as the
+body; there is no form without one.
 
 ```flang
 context(allocator = &req.arena) { handle(req) }
-context(saved) { run(job) }
-context(saved, logger = &req.log) { run(job) }
+context(logger = &req.log, span_depth = context.span_depth + 1) { run(job) }
 
 const mesh = context(allocator = &frame) {
     build_mesh(data)
 }
 ```
 
-- The arguments follow the call rule, as in `$(cap, allocator = &a)"..."`: an optional positional
-  `Context` is the base (the current context when omitted), then named fields override it.
+- The arguments are named fields only; the base is always the current context.
 - A named field must be a context field visible to the module, at most once per rebind; its
   declaration types the value.
 - The construct is an expression; its value is the body's.
-- One token after `context` decides the form: `(` a rebind, `.` a field read, anything else a copy.
+- One token after `context` decides the form: `(` a rebind, `.` a field read; anything else is an
+  error.
 
 ### Semantics
 
 1. **Dynamic scope.** A callee runs under its caller's context at the time of the call.
 2. **Closures do not capture the context.** A closure runs under whoever calls it. To run under
-   the creator's context, capture a copy and rebind to it inside the body.
-3. **`defer` captures its own context**: the deferred body runs under the context current where
-   it was written.
-4. **`spawn` captures** (RFC-005): a structured child keeps the parent's context, which outlives
-   it; a detached task copies it.
+   the creator's values, capture the fields and rebind to them inside the body.
+3. **`defer` keeps its own context**: the deferred body runs under the context current where it
+   was written, whose link is still live where the scope ends.
+4. **`spawn`** (RFC-005): a structured child keeps the parent's link, which outlives it; a
+   detached task starts from the root context plus the fields its spawn names, since it may
+   outlive every link above it.
 5. **Generics are unaffected.** The context is not part of an instantiation key.
 
 ### ABI
@@ -112,9 +114,10 @@ const mesh = context(allocator = &frame) {
   pointer is `R code(args..., ctx, env)`.
 - **Entry.** C `main` initializes the runtime and passes the address of the static root context
   to the constant initializers, to FLang `main`, and to each test function.
-- **Rebinding** builds a new `Context` in the current frame (copy of the base with the named
-  fields replaced) and passes its address within the body. Exit needs no code: the outer
-  pointer is still live in the frame, so `return`, `?` and panics are correct.
+- **Rebinding** builds the new link in the current frame, laid out flat (the current context's
+  fields copied, the named ones replaced, so a read stays one load), and passes its address within
+  the body. Exit needs no code: the outer pointer is still live in the frame, so `return`, `?` and
+  panics are correct.
 - **Register.** On the C backend the context arrives in the argument register after the user's
   arguments, or on the stack once they fill the registers; the C compiler places it from there.
   Pinning a register is a native-backend decision, deferred to RFC-041.
@@ -134,7 +137,7 @@ const mesh = context(allocator = &frame) {
    relocation path.
 
 Cost: one symbol per field and one struct per program. Runtime cost: one argument per FLang call,
-and a struct copy of the context size per rebind.
+and a struct copy of the context size per rebind (the new link).
 
 ## Implementation plan
 
@@ -208,6 +211,21 @@ Step 6's promote is `seed/20261017`. Step 7 landed revised, 2026-10-18:
 - Until the next promote, `std.string_builder` keeps a `(usize, &Allocator?)` overload: the
   seed's `$"..."` desugar passes `null` for an omitted allocator.
 
+### Revision 2026-10-25: the context is not a value
+
+As first landed, `context` alone was a copyable `Context` and a rebind took an optional positional
+base. A copy carries every reference field at once, so one kept past its rebind (returned, stored,
+captured by the closure idiom of semantics 2) read the frame that owned what its fields point at:
+`fn leak() Context { let s = Svc { n = 42i32 }; return context(svc = &s) { context } }` built.
+
+- Bare `context`, `&context`, and a method taking the context are E2149; a positional rebind
+  argument is E2153. `context.f` and calls of function-typed fields stay.
+- A rebind is a link to the current context. Links nest with the frames that build them, so no
+  reference in a field outlives its frame through the context.
+- The layout stays flat: a link is the full struct, copied from its parent with the named fields
+  replaced, so a read is one load. A layout for separately compiled libraries is RFC-098.
+- Fields stay copyable (E2147): a link releases nothing when its body ends.
+
 ### Follow-ups, separate RFCs
 
 - **Collections over the context allocator.** Constructors capture `context.allocator`; the
@@ -224,5 +242,6 @@ Step 6's promote is `seed/20261017`. Step 7 landed revised, 2026-10-18:
 - Bare `logger` resolving to a context field when ordinary lookup fails. Revisit if `context.`
   proves too heavy in server code.
 - Dropping fields nothing reads; pruning the parameter from functions that never need it.
+- A layout for separately compiled libraries (RFC-098).
 - Parallel children sharing a non-thread-safe allocator (RFC-005).
 - `with`: reserved for a different feature (Visual Basic style member blocks), not for context.

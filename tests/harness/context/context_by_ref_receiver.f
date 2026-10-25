@@ -22,9 +22,5 @@ pub fn main() i32 {
     if context.counter.n != 0 {
         return 2
     }
-    let mine: Context = context
-    if mine.counter.bump() != 1 {
-        return 3
-    }
     return 0
 }

@@ -2611,6 +2611,19 @@ A `fn` value borrows the closure it came from (RFC-037), and the closure holds r
 
 ---
 
+### A Copied `Context` Outlives the Rebind That Owns Its References - RESOLVED
+
+**Status:** Resolved 2026-10-25 (found 2026-10-22)
+**Affected:** `let c = context` copies kept past their rebind: returned, stored, captured by a closure (spec 4.4 semantics 2), detached `spawn` (RFC-038 semantics 4)
+
+A context field is copyable (E2147), so owned state enters by reference, owned by the scope that rebinds, and `Context` is a copyable value. Nothing checks that a copy dies with that scope: `fn leak() Context { let s = Svc { n = 42i32 }; return context(svc = &s) { context } }` builds, and `context(leak()) { context.svc.n }` reads the dead frame. Unlike a single `&T` (spec 3.6), one copy carries every reference field at once, and the recommended closure idiom produces it. An owning field cannot fix it today: non-copyable types are refused in context.
+
+**Solution:** `Context` is no longer a value (RFC-038, revised 2026-10-25): bare `context` and a method taking it are E2149, a positional rebind base E2153. A rebind is a link to the current context, so no reference in a field outlives its frame through the context. A closure that wants its creator's values captures the fields, each an ordinary value (spec 3.6).
+
+**Related tests:** `context/context_no_value.f`, `context/context_leak_refused.f`, `context/context_method_receiver.f`, `context/context_no_base.f`.
+
+---
+
 ### An Unconsumed `move` Parameter Is Never Released
 
 **Status:** Open (found 2026-10-18)

@@ -2427,7 +2427,7 @@ fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand
         // headers still handle their own range directly (see `lower_for_range`).
         Range(rg) => lower_range_value(ctx, bb, env, &rg)
         Lambda(lam) => lower_lambda(ctx, bb, env, &lam)
-        // A `Context` value is its address, like any aggregate: the binding or callee copies.
+        // The base of `context.f`: the current context's address.
         Context(_) => ctx.cur_ctx
         ContextBind(cb) => lower_context_bind_value(ctx, bb, env, &cb)
         // A parse or projection failure. Already diagnosed upstream; refusing the function keeps a
@@ -2440,10 +2440,11 @@ fn lower_expr(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, expr: &Expr) Operand
     }
 }
 
-// `context(base?, f = v, ...) { body }` (RFC-038): a copy of the base with the named fields
-// replaced, in a slot of this frame whose address is the current context for the body. The
-// arguments evaluate under the outer context. Leaving the body needs no code - the outer context's
-// pointer is still live - so `return`, `?` and `break` out of it are correct as they are.
+// `context(f = v, ...) { body }` (RFC-038): a link to the current context, laid out flat - the
+// parent's fields with the named ones replaced, in a slot of this frame whose address is the
+// current context for the body. The arguments evaluate under the outer context. Leaving the body
+// needs no code - the outer context's pointer is still live - so `return`, `?` and `break` out of
+// it are correct as they are.
 fn lower_context_bind(
     ctx: &LowerCtx,
     bb: &BlockBuilder,
@@ -2456,15 +2457,8 @@ fn lower_context_bind(
         return BlockResult { terminated = false, value = null }
     }
     const st = target.unwrap()
-    let base = ctx.cur_ctx
-    for &a in cb.args {
-        a.* match {
-            Positional(e) => base = lower_expr(ctx, bb, env, e)
-            Named(_) => {}
-        }
-    }
     const slot = bb.stack_slot(st.layout.size as u64, st.layout.align as u64)
-    bb.memcpy(slot, base, Operand.IntConst(st.layout.size as i64))
+    bb.memcpy(slot, ctx.cur_ctx, Operand.IntConst(st.layout.size as i64))
     for &a in cb.args {
         a.* match {
             Positional(_) => {}

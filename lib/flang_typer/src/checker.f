@@ -6186,9 +6186,24 @@ fn is_context_ty(self: &Checker, t: Ty) bool {
     }
 }
 
-// Bare `context`: a copy of the current context.
+// Bare `context`: the current context is not a value, only the base of its fields.
 fn check_context_expr(self: &Checker, c: &ContextExpr) Ty {
-    return context_ty(self) match {
+    const t = context_root(self, c)
+    if t == TY_ERROR {
+        return t
+    }
+    push_diag_e(
+        self,
+        c.span,
+        E_CONTEXT_PLACE,
+        from_view("the current context is not a value - read a field: `context.f`"),
+    )
+    return TY_ERROR
+}
+
+// `context` as the base of `context.f`: typed `Context`, recorded on its node.
+fn context_root(self: &Checker, c: &ContextExpr) Ty {
+    const t = context_ty(self) match {
         Some(t) => t
         None => {
             push_diag_e(
@@ -6199,6 +6214,17 @@ fn check_context_expr(self: &Checker, c: &ContextExpr) Ty {
             )
             TY_ERROR
         }
+    }
+    self.results.record_type(self.node_of(c.span), t)
+    return t
+}
+
+// A member's receiver, or the target of `&` or an assignment: `context` there is the current
+// context's base, and any misuse is reported where the use is.
+fn check_receiver(self: &Checker, e: &Expr) Ty {
+    return e.* match {
+        Context(c) => context_root(self, &c)
+        _ => check_expr(self, e)
     }
 }
 
@@ -6254,26 +6280,21 @@ fn context_member(self: &Checker, ma: &MemberAccessExpr) Ty {
     }
 }
 
-// `context(base?, f = v, ...) { body }`: the base is a `Context`, each named field a visible one
-// typed by its declaration, and the construct's value is the body's.
+// `context(f = v, ...) { body }`: each named field a visible one typed by its declaration, and the
+// construct's value is the body's. The new context links to the current one.
 fn check_context_bind(self: &Checker, cb: &ContextBindExpr) Ty {
-    const cty = context_ty(self)
     let named: List(String) = list(cb.args.len)
     defer named.deinit()
-    for i in 0..cb.args.len {
-        cb.args[i] match {
+    for &a in cb.args {
+        a.* match {
             Positional(e) => {
-                const bt = check_expr(self, e)
-                if i > 0 {
-                    push_diag_e(
-                        self,
-                        expr_span(e),
-                        E_CONTEXT_BASE,
-                        from_view("a rebind's base context comes first, and only once"),
-                    )
-                } else if cty.is_some() {
-                    unify_expected(self, bt, cty.unwrap(), E_TYPE_MISMATCH, expr_span(e))
-                }
+                const _t = check_expr(self, e)
+                push_diag_e(
+                    self,
+                    expr_span(e),
+                    E_CONTEXT_BASE,
+                    from_view("a rebind names fields (`f = v`); it has no base context"),
+                )
             }
             Named(n) => check_context_override(self, &n, &named)
         }
@@ -7180,7 +7201,7 @@ fn check_assignment(self: &Checker, a: &AssignmentExpr) Ty {
         _ => {}
     }
 
-    let lhs = check_expr(self, a.lhs)
+    let lhs = check_receiver(self, a.lhs)
     let rhs = check_expr(self, a.rhs, Some(lhs))
     unify_expected(self, rhs, lhs, E_TYPE_MISMATCH, a.span)
     if in_current_context(self, a.lhs) {
@@ -7423,13 +7444,15 @@ fn is_move_operand(e: &Expr) bool {
 }
 
 fn check_address_of(self: &Checker, a: &AddressOfExpr) Ty {
-    let inner = check_expr(self, a.operand)
+    let inner = check_receiver(self, a.operand)
     if in_current_context(self, a.operand) {
         push_diag_e(
             self,
             a.span,
             E_CONTEXT_PLACE,
-            from_view("the current context has no address - copy it first (`let c = context`)"),
+            from_view(
+                "the current context has no address - read the field into a binding: `const a = context.f`",
+            ),
         )
         return self.engine.mk_ref(inner)
     }
@@ -9953,7 +9976,7 @@ fn resolve_method_call(
     pos_exprs: &List(&Expr),
     named: &NamedArgs? = null,
 ) Ty? {
-    let recv_ty = check_expr(self, ma.receiver)
+    let recv_ty = check_receiver(self, ma.receiver)
 
     // A field holding a function value has no parameter names, so a named-argument call never
     // dispatches through it (reference parity: "named arguments are not supported for
@@ -9963,6 +9986,19 @@ fn resolve_method_call(
         if fc.is_some() {
             return fc
         }
+    }
+    const on_context = ma.receiver.* match {
+        Context(_) => true
+        _ => false
+    }
+    if on_context {
+        push_diag_e(
+            self,
+            call.span,
+            E_CONTEXT_PLACE,
+            $"the current context is not a value - `context.{ma.member}(...)` calls only a field of function type",
+        )
+        return Some(TY_ERROR)
     }
 
     let vis = fn_visibility(self)
@@ -12208,7 +12244,7 @@ fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
         return ev.unwrap()
     }
 
-    let recv = check_expr(self, ma.receiver)
+    let recv = check_receiver(self, ma.receiver)
     if is_context_ty(self, recv) {
         return context_member(self, ma)
     }
@@ -13854,12 +13890,7 @@ fn own_give_up(self: &Checker, p: &OwnPass, src: &Expr) bool {
             src,
             "the value behind a reference stays with its owner",
         )
-        Context(_) => own_no_place(
-            self,
-            p,
-            expr_span(src),
-            "the current context is copied, never moved",
-        )
+        Context(_) => own_no_place(self, p, expr_span(src), "the current context is not a value")
         _ => true
     }
 }

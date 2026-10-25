@@ -95,12 +95,11 @@ pub context allocator: &Allocator = &global_allocator   // file scope; type and 
 context depth: u32 = 0                                  // module-private
 
 context.depth                                // read a field
-let saved = context                          // copy, type `Context`
 context(depth = context.depth + 1) { run() } // rebind for the body; an expression
-context(saved, depth = 0) { run() }          // positional base first, then named fields
+// the rebind links to the current context; it names fields only, and `context` is not a value
 ```
 
-`context` is a keyword. After it, `(` opens a rebind, `.` reads a field, anything else is a copy. The rebind body is a block: `return`, `?`, `break` and `defer` act as in any block. See spec §4.4.
+`context` is a keyword. After it, `(` opens a rebind and `.` reads a field; it is not a value (E2149). The rebind body is a block: `return`, `?`, `break` and `defer` act as in any block. See spec §4.4.
 
 ## Functions
 

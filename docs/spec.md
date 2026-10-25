@@ -538,7 +538,7 @@ Zero initialization covers the whole allocation, not just the named fields: aggr
 
 ### 4.4 Runtime Context
 
-Every FLang function runs under one current **context** (RFC-038): a value of the compiler-provided type `Context` (declared in `core.runtime`, so the prelude makes it visible everywhere), whose fields are the program's `context` declarations. Code reads it, copies it and rebinds it for a scope; it never mutates it.
+Every FLang function runs under one current **context** (RFC-038): an instance of the compiler-provided type `Context` (declared in `core.runtime`), whose fields are the program's `context` declarations. Code reads its fields and rebinds them for a scope; it never mutates the context, and the context is never a value it holds.
 
 ```
 pub context logger: &Logger = &stderr_logger
@@ -546,38 +546,38 @@ context span_depth: u32 = 0             // module-private
 
 fn handle(req: &Request) {
     context.logger.info("start")
-    let saved = context                 // a copy, type `Context`
+    const log = context.logger          // a field, read as any value
     context(logger = &req.log) { run(req) }
 }
 ```
 
 **Declaration.** `[pub] context <name>: <Type> = <default>`, top level only. The type and the default are both required; there is no zero-init.
 
-- The type is copyable (E2147): a context is copied by `let c = context`, by a rebind, and by `defer`. Shared or owned state goes in by reference (`&T`), owned by the scope that rebinds.
+- The type is copyable (E2147): a rebind copies its parent's fields into the new link, and nothing releases them. Shared or owned state goes in by reference (`&T`), owned by a binding of the scope that rebinds.
 - The default is a constant initializer (E2148): a literal, a negated number literal, a function name, a payload-less variant, the address of a module constant, a pointer cast of such an address, or a struct literal of those. The root context is a static, so it exists before any constant initializer runs.
 - Visibility is `pub` or module-private and covers both reading and rebinding. Two declarations of one name in one module are E2005.
 
 **Use.**
 
 - `context.<name>` reads a field. The name resolves among the fields visible from the module: its own, private or not, and the `pub` fields of the modules it sees (§6). None is E2150; two visible fields of one name are ambiguous (E2152).
-- `context` alone is a copy of the current context, of type `Context`. `ctx.<name>` reads a saved copy the same way, through a reference too (`c: &Context`).
-- The current context has no address (`&context`, `&context.f`: E2149) and is never assigned into (`context.f = v`: E2149). A by-value field passed to a `&T` receiver (`context.deadline.check()`) lends a copy. A `Context` is made only by `context`; a struct literal of it is E2153.
+- `context` is not a value (E2149): only `context.<name>` reads it, and only a field of function type is called on it (`context.f(...)`; a method taking the context is E2149). Nothing holds a context past the scope that bound it, so no reference in a field outlives its frame through the context.
+- The current context has no address (`&context`, `&context.f`: E2149) and is never assigned into (`context.f = v`: E2149). A by-value field passed to a `&T` receiver (`context.deadline.check()`) lends a copy. A struct literal of `Context` is E2153.
 
-**Rebinding.** `context(args) { body }` runs `body` under a new context. It is a block construct like `for` and `match`, not a call: `return`, `?`, `break`, `continue` and `defer` in the body act as in any block, and the construct is an expression whose value is the body's.
+**Rebinding.** `context(args) { body }` runs `body` under a new context: a link to the current one with the named fields replaced. It is a block construct like `for` and `match`, not a call: `return`, `?`, `break`, `continue` and `defer` in the body act as in any block, and the construct is an expression whose value is the body's.
 
-- The arguments follow the call rule: an optional positional `Context` is the base (the current context when omitted), then named fields override it. The base comes first and only once (E2153); a field is named at most once (E2151); a named field is a visible one (E2150), typed by its declaration.
+- The arguments are named fields only: a positional argument is E2153, since the base is always the current context. A field is named at most once (E2151); a named field is a visible one (E2150), typed by its declaration.
 - The arguments evaluate under the outer context, left to right. The change lasts exactly as long as the body; there is no form without one.
-- One token after `context` decides the form: `(` a rebind, `.` a field read, anything else a copy.
+- One token after `context` decides the form: `(` a rebind, `.` a field read; anything else is E2149.
 
 **Semantics.**
 
 1. **Dynamic scope.** A callee runs under its caller's context at the time of the call.
-2. **Closures do not capture the context.** A closure runs under whoever calls it. To run under the creator's context, capture a copy and rebind to it inside the body: `const saved = context; fn() { context(saved) { work() } }`.
+2. **Closures do not capture the context.** A closure runs under whoever calls it. To run under the creator's values, capture the fields and rebind to them inside the body: `const log = context.logger; { => context(logger = log) { work() } }`. A captured field is an ordinary value, a `&T` one included (§3.6).
 3. **`defer` keeps its own context**: the deferred expression runs under the context current where it was written, wherever the scope is left from.
 4. **Generics are unaffected.** The context is not part of an instantiation.
 5. **Entry.** `main`, the constant initializers and every `test {}` block run under the root context: every field at its default.
 
-**ABI.** Every FLang function, closure body and test block takes two hidden parameters after its own, and after the result buffer of an aggregate return: the address of the current context (`const Context *`), then `env`, the state of the function being called (RFC-037). Every call passes both; a direct call passes a null `env`, which only a closure body reads. `#foreign` functions take neither, a body declared `#foreign` included: it runs under the root context. A `fn` value calls through the same convention; a `#foreign fn` value is one C code pointer called with the arguments alone (§7.6). A rebind builds the new context in the caller's frame and passes its address within the body; leaving the body needs no code. The layout of `Context` holds every field of the program, ordered by module FQN then declaration order.
+**ABI.** Every FLang function, closure body and test block takes two hidden parameters after its own, and after the result buffer of an aggregate return: the address of the current context (`const Context *`), then `env`, the state of the function being called (RFC-037). Every call passes both; a direct call passes a null `env`, which only a closure body reads. `#foreign` functions take neither, a body declared `#foreign` included: it runs under the root context. A `fn` value calls through the same convention; a `#foreign fn` value is one C code pointer called with the arguments alone (§7.6). A rebind builds the new link in the caller's frame, laid out flat: the parent's fields copied, the named ones replaced, so a read is one load at a fixed offset. It passes the link's address within the body; leaving the body needs no code. The layout of `Context` holds every field of the program, ordered by module FQN then declaration order; separately compiled libraries are RFC-098.
 
 ---
 

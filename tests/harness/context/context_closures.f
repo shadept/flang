@@ -3,8 +3,8 @@
 //! STDOUT: creator
 //! EXIT: 0
 
-// A closure does not capture the context: it runs under whoever calls it. Capturing a copy and
-// rebinding to it inside the body runs it under its creator's.
+// A closure does not capture the context: it runs under whoever calls it. Capturing a field and
+// rebinding to it inside the body runs it under the creator's value.
 
 import std.io.print
 
@@ -18,10 +18,10 @@ fn run(f: $F) where F: fn() {
 
 pub fn main() i32 {
     context(who = "creator") {
-        const saved: Context = context
-        run { => println(context.who) }
-        run { =>
-            context(saved) {
+        const who = context.who
+        run { println(context.who) }
+        run {
+            context(who = who) {
                 println(context.who)
             }
         }

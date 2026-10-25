@@ -71,7 +71,7 @@ _Avoid_: integer enum, C enum
 ### Runtime context
 
 **Runtime context**:
-The `Context` value every FLang function runs under (RFC-038), assembled by the compiler from the program's `context` field declarations and passed to every FLang function as a hidden first parameter. Read with `context.f`, copied with `context`, never mutated.
+The `Context` every FLang function runs under (RFC-038), assembled by the compiler from the program's `context` field declarations and passed to every FLang function as a hidden parameter. Read with `context.f`; never a value, never mutated.
 _Avoid_: environment, ambient state, thread-local, context (alone, where **Compilation** could be meant)
 
 **Context field**:
@@ -79,7 +79,7 @@ One `[pub] context name: T = default` declaration: a field of the runtime contex
 _Avoid_: context variable, context key
 
 **Rebind**:
-`context(base?, f = v) { body }`: the body runs under a copy of the base with the named fields replaced. Dynamic scope: callees see it, the change ends with the body.
+`context(f = v) { body }`: the body runs under a new link to the current context with the named fields replaced. Dynamic scope: callees see it, the change ends with the body.
 _Avoid_: with-block, override, set (nothing is set)
 
 **Root context**:

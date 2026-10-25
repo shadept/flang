@@ -3013,11 +3013,11 @@ Report the issue with sample code that reproduces the error.
 | **E2146** | Type Checking     | A call through an unbounded type parameter   |
 | **E2147** | Type Checking     | A context field of a non-copyable type       |
 | **E2148** | Type Checking     | A context default that is not constant       |
-| **E2149** | Type Checking     | The current context used as a place          |
+| **E2149** | Type Checking     | The current context used other than through a field |
 | **E2150** | Name Resolution   | No visible context field of that name        |
 | **E2151** | Type Checking     | A rebind naming one field twice              |
 | **E2152** | Name Resolution   | An ambiguous context field                   |
-| **E2153** | Type Checking     | A misplaced rebind base, or a `Context` literal |
+| **E2153** | Type Checking     | A positional rebind argument, or a `Context` literal |
 | **E2154** | Type Checking     | A lambda without `=>` where the expected callable takes more than one parameter, or none is known |
 | **E2155** | Semantic Analysis | A type named lowercase, or a function named uppercase |
 | **E2156** | Type Checking     | A trailing lambda on a call with no parameter it can fill |
@@ -3784,9 +3784,9 @@ Bound the parameter by its shape: `fn apply(x: i32, f: $F) i32 where F: fn(i32) 
 
 #### Description
 
-A `context` field's type must be copyable (RFC-038). The language copies a context on
-`let c = context`, on every rebind and for every `defer`, and a field that owned a resource would
-gain a second owner each time.
+A `context` field's type must be copyable (RFC-038). A rebind copies its parent's fields into the
+new link, and nothing releases a link's fields when its body ends, so a field that owned a
+resource would gain a second owner on every rebind and never be released.
 
 #### Example
 
@@ -3826,26 +3826,31 @@ Default to a constant and rebind to the computed value where it is known:
 
 ---
 
-### E2149: The Current Context Used as a Place
+### E2149: The Current Context Used Other Than Through a Field
 
 **Category**: Type Checking
 **Severity**: Error
 
 #### Description
 
-The current context is never mutated in place and has no address. Taking `&context` or the
-address of one of its fields, or assigning into one, is refused.
+The current context is read only through its fields. It is not a value: a copy would carry every
+reference field past the rebind that owns what they point at. It is never mutated in place and
+has no address. So `let c = context`, `&context`, the address of a field, an assignment into one,
+and a method call that takes the context (`context.m()` where `m` is not a field of function
+type) are refused.
 
 #### Example
 
 ```flang
-const p = &context                      // error[E2149]
+const c = context                       // error[E2149]
+const p = &context.level                // error[E2149]
 context.level = 3                       // error[E2149]
 ```
 
 #### Solution
 
-Copy it (`let c = context`) to hold it, or rebind it for a scope: `context(level = 3) { ... }`.
+Read the field you need (`const level = context.level`), or rebind it for a scope:
+`context(level = 3) { ... }`.
 
 ---
 
@@ -3917,26 +3922,27 @@ Rename one of the declarations, or stop importing one module where both are visi
 
 ---
 
-### E2153: A Misplaced Rebind Base, or a `Context` Literal
+### E2153: A Positional Rebind Argument, or a `Context` Literal
 
 **Category**: Type Checking
 **Severity**: Error
 
 #### Description
 
-A rebind's positional argument is its base context: it comes first, and at most one is given. A
-`Context` value is made by `context`, never by a struct literal.
+A rebind links to the current context and names the fields it replaces; it has no base, so a
+positional argument is refused. No `Context` is built by a struct literal either.
 
 #### Example
 
 ```flang
-context(level = 1, saved) { run() }     // error[E2153]: the base comes first
+context(saved, level = 1) { run() }     // error[E2153]
 const c = Context {}                    // error[E2153]
 ```
 
 #### Solution
 
-Write `context(saved, level = 1) { run() }`; copy the current context with `let c = context`.
+Name each field: `context(level = 1) { run() }`. To restore values captured earlier, rebind to
+them field by field.
 
 ---
 
