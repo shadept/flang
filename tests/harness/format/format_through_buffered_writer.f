@@ -20,6 +20,8 @@ pub fn main() i32 {
     42i32.format(bw.writer(), "05")
     bw.flush()
 
-    println($"buffered=[{b.as_view()}]".view)
+    const s = $"buffered=[{b.as_view()}]"
+    defer s.deinit()
+    println(s.view)
     return 0
 }

@@ -265,10 +265,19 @@ ownership pass's diagnostics, so a copy of `T` is reported at the declaration.
 
 Each expression is walked with the slot it flows into (`OwnSlot`, RFC-033):
 a read, a by-value destination, a `move` parameter, the function's result,
-or a `match` scrutinee. Sugar is walked as its desugar: a `for` iterable and
-a `?` operand flow into the recorded `iter` / `op_try` pick's first
-parameter (`own_protocol`), and `a ?? b` is a match on `a` whose fallback
-takes the expression's own slot. A lambda literal reads its captures and
+a `match` scrutinee, or a slot only a copy fills (`[v; n]` elements, the
+`?.` payload). `own_expr` walks the operands (`own_operands`), then makes
+the one copy-or-move decision for the expression itself (`own_transfer`):
+`own_form` classifies it as a place, a value built where it stands, or a
+form that forwards its slot inward (blocks, `if`, `match`, `??`), and the
+slot, the form, copyability and a written `move` decide between read, fresh,
+copy, move and refusal. Giving a place up is `own_give_up`, one dispatch on
+the place form for `move` and owning slots alike. Sugar is classified and
+walked as its desugar: a recorded desugar block (interpolation) replaces
+the node, a resolved `op_*` operator, `op_index` or `op_set_index` is the
+call (`own_op_call`), a `for` iterable and a `?` operand flow into the
+recorded `iter` / `op_try` pick's first parameter (`own_protocol`), and
+`a ?? b` is a match on `a` whose fallback takes the expression's own slot. A lambda literal reads its captures and
 runs a pass of its own over its body (`own_lambda`): a capture of a name
 the enclosing body only reads stays lent, any other is `captured` and may
 not be moved out (E2131). A call

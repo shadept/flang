@@ -458,7 +458,7 @@ pub fn lookup_variant(
         }
         let d = found.unwrap()
         let ed = d.* match {
-            NomEnum(e) => Some(move e)
+            NomEnum(e) => Some(&e)
             _ => null
         }
         if ed.is_none() {
@@ -608,7 +608,8 @@ test "a carried copy keeps ids, holes and bodies" {
         decl_span = none_span(),
         owned = false,
     })
-    let bd = reg.get(b).* match { NomStruct(s) => move s, _ => probe_struct() }
+    let bd = probe_struct()
+    bd.fqn = nominal_fqn(reg.get(b))
     install(&bd.fields, fields)
     reg.replace_body(b, NominalDef.NomStruct(move bd))
 

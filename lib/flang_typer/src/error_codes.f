@@ -113,6 +113,9 @@ pub const E_USE_AFTER_MOVE: String = "E2123"
 // A site that would copy a non-copyable value: a rebinding, a by-value argument, a struct-literal
 // field, an element store, or a by-value return of a local.
 pub const E_COPY_NEEDS_MOVE: String = "E2124"
+// A non-copyable value where only a copy can go: each element of `[v; n]`, the payload `r?.f` reads
+// through a reference. `move` does not help, the value is duplicated either way.
+pub const E_COPY_ONLY: String = "E2158"
 // `move` over something with no storage to take. An rvalue leaves nothing behind, so there is
 // nothing to mark moved.
 pub const E_MOVE_NOT_LVALUE: String = "E2125"

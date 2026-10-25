@@ -3022,6 +3022,7 @@ Report the issue with sample code that reproduces the error.
 | **E2155** | Semantic Analysis | A type named lowercase, or a function named uppercase |
 | **E2156** | Type Checking     | A trailing lambda on a call with no parameter it can fill |
 | **E2157** | Type Checking     | A `#foreign struct` field of a FLang function type |
+| **E2158** | Semantic Analysis | A non-copyable value where only a copy can go |
 
 ### E2115: Unsupported Pattern Form
 
@@ -4040,6 +4041,32 @@ type Callbacks = #foreign struct {
 
 ---
 
+### E2158: A Non-Copyable Value Where Only a Copy Can Go
+
+**Category**: Semantic Analysis
+**Severity**: Error
+
+#### Description
+
+Two sites are filled with a copy whatever the source: each element of `[v; n]`, which stores `v`
+into every slot, and the payload of `r?.f`, which is `Some(v.f)` read through a reference. A
+non-copyable value there would gain several owners. `move` does not help, unlike E2124: the value
+is duplicated either way.
+
+#### Example
+
+```flang
+let a = [open("f"); 2]              // error[E2158]
+let x = r?.handle                   // error[E2158]
+```
+
+#### Solution
+
+Build each element on its own (`[open("a"), open("b")]`), or read through a reference
+(`r?.handle.fd`).
+
+---
+
 ### E2136: A `&move` Parameter Outside `core`
 
 **Category**: Semantic Analysis
@@ -4407,8 +4434,9 @@ place and reads it is E2133.
 
 A copy is reading an lvalue into a second location: the original keeps its storage and the result
 gets its own, so for a non-copyable type both are responsible for one resource. The lvalue sites are
-a rebinding, a struct-literal field, a variant payload, an element store, and a return of a field,
-element or dereference. Writing `move` says the use is a transfer.
+a rebinding, a struct-literal field (`S { f }` is `S { f = f }`), a variant payload, an element
+store, and a return of a field, element or dereference. Writing `move` says the use is a transfer.
+Where `move` cannot avoid the copy, the error is E2158.
 
 Arguments are not among them: a parameter declares whether it takes ownership (RFC-033), and a
 returned binding can only move. An rvalue is never a copy - it has no storage of its own, so nothing
@@ -4691,8 +4719,10 @@ of a value you only hold by reference, put another in its place with `replace`.
 A temporary that lands where nothing takes ownership is never released (RFC-033 rule 8): a `T`
 parameter, a read-only receiver, an operator operand, a field read, a discarded result. A `move`
 parameter, a binding, a `return`, a struct literal field and a `match` scrutinee each take it.
-Sugar is checked as what it desugars to: `for x in e` is `e.iter()`, `e?` is `op_try(e)`, and
-`a ?? b` is `a match { Some(v) => v, None => b }`, so `b` goes where the result goes.
+Sugar is checked as what it desugars to: `for x in e` is `e.iter()`, `e?` is `op_try(e)`,
+`a ?? b` is `a match { Some(v) => v, None => b }`, so `b` goes where the result goes, an operator
+resolved to `op_*` is that call, so `get(a + b)` is a temporary, and `$"..."` ends in
+`to_string()`, so `println($"{x}".view)` is too.
 
 Leaking is not wrong in itself, and the intended default is a warning a build can promote. The
 diagnostic system has no per-diagnostic severity control yet, so it is an error until it does.

@@ -1051,7 +1051,7 @@ fn root_default(
         return
     }
     const i = idx.unwrap()
-    const fty = field_ty(tyit(ctx), &st.def, i, &st.args, &ctx.result.nominals)
+    const fty = field_ty(tyit(ctx), st.def, i, &st.args, &ctx.result.nominals)
     if !const_bytes(ctx, &fty, cd.value, blob, rel, st.layout.offsets[i]) {
         m.skip_notes.push($"{fqn.view}: context default not encodable")
     }
@@ -1273,11 +1273,11 @@ fn const_variant(ctx: &LowerCtx, ty: &Ty, vnum: u32, buf: &List(u8), at: usize) 
         return false
     }
     let et = t.unwrap()
-    let el = en_layout(ctx, &et.def, &et.args)
+    let el = en_layout(ctx, et.def, &et.args)
     if el.is_niche {
         return true
     }
-    write_le(buf, at, variant_tag(&et.def, vnum as usize), el.tag_size)
+    write_le(buf, at, variant_tag(et.def, vnum as usize), el.tag_size)
     return true
 }
 
@@ -1362,8 +1362,8 @@ fn blob_string(
         return false
     }
     let st = st_opt.unwrap()
-    let pi = field_index(&st.def, "ptr")
-    let li = field_index(&st.def, "len")
+    let pi = field_index(st.def, "ptr")
+    let li = field_index(st.def, "len")
     if pi < 0 or li < 0 {
         return false
     }
@@ -1395,7 +1395,7 @@ fn const_struct(
     }
     let st = st_opt.unwrap()
     for &fi in lit.fields {
-        let di = field_index(&st.def, fi.name)
+        let di = field_index(st.def, fi.name)
         if di < 0 {
             continue
         }
@@ -1403,7 +1403,7 @@ fn const_struct(
             return false
         }
         let didx = di as usize
-        let fty = field_ty(tyit(ctx), &st.def, didx, &st.args, &ctx.result.nominals)
+        let fty = field_ty(tyit(ctx), st.def, didx, &st.args, &ctx.result.nominals)
         if !const_bytes(ctx, &fty, fi.value.unwrap(), buf, rel, at + st.layout.offsets[didx]) {
             return false
         }
@@ -2513,7 +2513,7 @@ fn store_context_field(
         return
     }
     const i = idx.unwrap()
-    const fty = field_ty(tyit(ctx), &st.def, i, &st.args, &ctx.result.nominals)
+    const fty = field_ty(tyit(ctx), st.def, i, &st.args, &ctx.result.nominals)
     const v = lower_adapted(ctx, bb, env, n.value, &fty)
     const at = bb.gep(slot, Operand.IntConst(st.layout.offsets[i] as i64))
     if is_by_ref(ctx, &fty) {
@@ -2766,7 +2766,7 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
         return
     }
     let ety = et.args[0]
-    let ol = en_layout(ctx, &et.def, &et.args)
+    let ol = en_layout(ctx, et.def, &et.args)
 
     // `iter(&xs)`: an aggregate iterable's value IS its address; a reference value is already the
     // pointer the parameter wants. A fixed array decays into the `{ptr, len}` view `iter(&T[])`
@@ -3257,8 +3257,8 @@ fn build_slice_view(
         return unlowerable(ctx)
     }
     let st = st_opt.unwrap()
-    let pi = field_index(&st.def, "ptr")
-    let li = field_index(&st.def, "len")
+    let pi = field_index(st.def, "ptr")
+    let li = field_index(st.def, "len")
     if pi < 0 or li < 0 {
         return unlowerable(ctx)
     }
@@ -3457,8 +3457,8 @@ fn build_range_slot(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty, sv: Operand, ev:
         return unlowerable(ctx)
     }
     let st = st_opt.unwrap()
-    let si = field_index(&st.def, "start")
-    let ei = field_index(&st.def, "end")
+    let si = field_index(st.def, "start")
+    let ei = field_index(st.def, "end")
     if si < 0 or ei < 0 {
         return unlowerable(ctx)
     }
@@ -3734,7 +3734,7 @@ fn push_blob_global(
 // Member `name` of `st` in a record written at `at`: its byte offset and its type. Null when the
 // record does not declare it, which leaves the blob's zeros in place.
 fn field_at(ctx: &LowerCtx, st: &StructTarget, name: String, at: usize) (usize, Ty)? {
-    let fi = field_index(&st.def, name)
+    let fi = field_index(st.def, name)
     if fi < 0 {
         return null
     }
@@ -3742,7 +3742,7 @@ fn field_at(ctx: &LowerCtx, st: &StructTarget, name: String, at: usize) (usize, 
     return Some(
         (at + st.layout.offsets[idx], field_ty(
             tyit(ctx),
-            &st.def,
+            st.def,
             idx,
             &st.args,
             &ctx.result.nominals,
@@ -3813,8 +3813,8 @@ fn blob_slice(
         Some(s) => move s
         None => return
     }
-    let pi = field_index(&ss.def, "ptr")
-    let li = field_index(&ss.def, "len")
+    let pi = field_index(ss.def, "ptr")
+    let li = field_index(ss.def, "len")
     if pi < 0 or li < 0 {
         return
     }
@@ -3924,7 +3924,7 @@ fn static_ti_fields(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel: &Li
         let at = fs.layout.size * i
         blob_string_field(ctx, &fs, &ablob, &arel, "name", ts.def.fields[i].name, at)
         blob_int_field(ctx, &fs, &ablob, "offset", ts.layout.offsets[i] as i64, at)
-        let fty = field_ty(tyit(ctx), &ts.def, i, &ts.args, &ctx.result.nominals)
+        let fty = field_ty(tyit(ctx), ts.def, i, &ts.args, &ctx.result.nominals)
         static_typeinfo(ctx, fty) match {
             Some(s) => blob_ptr_field(ctx, &fs, &arel, "type_info", s, at)
             None => {}
@@ -4306,7 +4306,7 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
 // (per-field offsets, total size, alignment) and the instantiation's type arguments (for
 // substituting generic field types - the raw definition stores them against the type parameters).
 type StructTarget = struct {
-    def: StructDef
+    def: &StructDef
     layout: StructLayout
     args: List(Ty)
 }
@@ -4329,7 +4329,7 @@ fn lower_struct_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lit: &StructLi
     // the stores below overwrite whatever they cover.
     bb.memset(slot, Operand.IntConst(0), Operand.IntConst(st.layout.size as i64))
     for &fi in lit.fields {
-        let di = field_index(&st.def, fi.name)
+        let di = field_index(st.def, fi.name)
         if di < 0 {
             continue
         }
@@ -4338,7 +4338,7 @@ fn lower_struct_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lit: &StructLi
         // Substituted through the instantiation's arguments - the raw definition stores a generic
         // field against the type parameter, and storing by the parameter's placeholder width
         // corrupts the neighbouring fields.
-        let fty = field_ty(tyit(ctx), &st.def, didx, &st.args, &ctx.result.nominals)
+        let fty = field_ty(tyit(ctx), st.def, didx, &st.args, &ctx.result.nominals)
         let v = lower_field_init(ctx, bb, env, fi, &fty)
         let fp = bb.gep(slot, Operand.IntConst(off as i64))
         if is_by_ref(ctx, &fty) {
@@ -4663,12 +4663,12 @@ fn struct_pattern_member(
         return null
     }
     let t = st.unwrap()
-    let di = field_index(&t.def, name)
+    let di = field_index(t.def, name)
     if di < 0 {
         return null
     }
     let idx = di as usize
-    let fty = field_ty(tyit(ctx), &t.def, idx, &t.args, &ctx.result.nominals)
+    let fty = field_ty(tyit(ctx), t.def, idx, &t.args, &ctx.result.nominals)
     let addr = bb.gep(scrut, Operand.IntConst(t.layout.offsets[idx] as i64))
     if is_by_ref(ctx, &fty) {
         return Some((addr, fty))
@@ -4915,7 +4915,7 @@ fn variant_test(
         return unlowerable(ctx)
     }
     let et = t.unwrap()
-    let offs = vp_offsets(ctx, &et.def, vnum.unwrap() as usize, &et.args)
+    let offs = vp_offsets(ctx, et.def, vnum.unwrap() as usize, &et.args)
     if offs.len != ev.payloads.len {
         offs.deinit()
         return unlowerable(ctx)
@@ -4933,7 +4933,7 @@ fn variant_test(
         }
         let dty = variant_payload_ty(
             tyit(ctx),
-            &et.def,
+            et.def,
             vnum.unwrap() as usize,
             j,
             &et.args,
@@ -4972,7 +4972,7 @@ fn discriminant_test(
     let tag = bb.load(IrType.I32, scrut)
     let t = resolve_enum(ctx, scrut_ty, &ctx.result.nominals)
     const want = if t.is_some() { variant_tag(
-        &t.unwrap_ref().def,
+        t.unwrap_ref().def,
         idx as usize,
     ) } else { idx as i64 }
     return bb.icmp_eq(IrType.I32, tag, Operand.IntConst(want))
@@ -5085,7 +5085,7 @@ fn bind_variant_payload(
         return
     }
     let et = t.unwrap()
-    let offs = vp_offsets(ctx, &et.def, vnum.unwrap() as usize, &et.args)
+    let offs = vp_offsets(ctx, et.def, vnum.unwrap() as usize, &et.args)
     if offs.len != ev.payloads.len {
         offs.deinit()
         let _u = unlowerable(ctx)
@@ -5096,7 +5096,7 @@ fn bind_variant_payload(
         // A unit payload (`Ok(())`) has no bytes to read or bind.
         let dty = variant_payload_ty(
             tyit(ctx),
-            &et.def,
+            et.def,
             vnum.unwrap() as usize,
             j,
             &et.args,
@@ -5135,13 +5135,13 @@ fn resolve_enum(ctx: &LowerCtx, ty: &Ty, reg: &NominalRegistry) EnumTarget? {
     let args: List(Ty) = list(nr.args.len)
     for i in 0..nr.args.len { args.push(tyit(ctx).child_at(nr.args, i)) }
     return reg.get(nr.id).* match {
-        NomEnum(e) => Some(EnumTarget { def = move e, args = move args })
+        NomEnum(e) => Some(EnumTarget { def = &e, args = move args })
         _ => null
     }
 }
 
 type EnumTarget = struct {
-    def: EnumDef
+    def: &EnumDef
     args: List(Ty)
 }
 
@@ -5151,7 +5151,7 @@ fn niche_optional(ctx: &LowerCtx, ty: &Ty) bool {
         return false
     }
     let et = t.unwrap()
-    return en_layout(ctx, &et.def, &et.args).is_niche
+    return en_layout(ctx, et.def, &et.args).is_niche
 }
 
 // Enum variant construction (M7)
@@ -5181,7 +5181,7 @@ fn lower_variant_call(
         return unlowerable(ctx)
     }
     let et = t.unwrap()
-    let el = en_layout(ctx, &et.def, &et.args)
+    let el = en_layout(ctx, et.def, &et.args)
 
     // Niche `Some(p)`: the payload pointer is the whole value.
     if el.is_niche {
@@ -5197,14 +5197,14 @@ fn lower_variant_call(
     // value - byte-wise consumers (the generic hash) read the whole slot. Each slot stores by the
     // variant's DECLARED payload type (substituted through the instantiation) - the memory's truth;
     // a coercion that rewrote an argument node's representation refuses - see `repr_compatible`.
-    let offs = vp_offsets(ctx, &et.def, vnum as usize, &et.args)
+    let offs = vp_offsets(ctx, et.def, vnum as usize, &et.args)
     if offs.len != call.args.len {
         offs.deinit()
         return unlowerable(ctx)
     }
     let slot = bb.stack_slot(el.size as u64, el.align as u64)
     bb.memset(slot, Operand.IntConst(0), Operand.IntConst(el.size as i64))
-    bb.store(IrType.I32, Operand.IntConst(variant_tag(&et.def, vnum as usize)), slot)
+    bb.store(IrType.I32, Operand.IntConst(variant_tag(et.def, vnum as usize)), slot)
     for j in 0..call.args.len {
         // Named arguments never resolve to a variant - the checker leaves those calls unresolved.
         // (The refusal path leaks `offs` - allocator-lifetime scratch, like the rest of lowering.)
@@ -5214,7 +5214,7 @@ fn lower_variant_call(
         }
         let pty = variant_payload_ty(
             tyit(ctx),
-            &et.def,
+            et.def,
             vnum as usize,
             j,
             &et.args,
@@ -5253,7 +5253,7 @@ fn lower_variant_nullary(ctx: &LowerCtx, bb: &BlockBuilder, span: SourceSpan, vn
     }
 
     let et = t.unwrap()
-    let el = en_layout(ctx, &et.def, &et.args)
+    let el = en_layout(ctx, et.def, &et.args)
 
     // The only nullary variant of the niche form is `None` - the null pointer by definition.
     if el.is_niche {
@@ -5262,7 +5262,7 @@ fn lower_variant_nullary(ctx: &LowerCtx, bb: &BlockBuilder, span: SourceSpan, vn
 
     let slot = bb.stack_slot(el.size as u64, el.align as u64)
     bb.memset(slot, Operand.IntConst(0), Operand.IntConst(el.size as i64))
-    const tag = variant_tag(&et.def, vnum as usize)
+    const tag = variant_tag(et.def, vnum as usize)
     if tag != 0i64 {
         bb.store(IrType.I32, Operand.IntConst(tag), slot)
     }
@@ -5351,7 +5351,7 @@ fn lower_cast_impl(
             return unlowerable(ctx)
         }
         let et = t.unwrap()
-        let el = en_layout(ctx, &et.def, &et.args)
+        let el = en_layout(ctx, et.def, &et.args)
         if el.is_niche {
             return unlowerable(ctx)
         }
@@ -5469,7 +5469,7 @@ fn lower_coalesce(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CoalesceExpr
         return unlowerable(ctx)
     }
     let et = t.unwrap()
-    let el = en_layout(ctx, &et.def, &et.args)
+    let el = en_layout(ctx, et.def, &et.args)
 
     let result_ty = node_ty(ctx, c.span)
     let ir = ir_of(ctx, result_ty)
@@ -5597,7 +5597,7 @@ fn lower_null_propagation(
     if et.args.len != 1 {
         return unlowerable_why(ctx, "`?.` receiver shape")
     }
-    let el = en_layout(ctx, &et.def, &et.args)
+    let el = en_layout(ctx, et.def, &et.args)
     if el.is_niche {
         return unlowerable_why(ctx, "`?.` niche receiver")
     }
@@ -5609,12 +5609,12 @@ fn lower_null_propagation(
         return unlowerable_why(ctx, "`?.` payload shape")
     }
     let st = target.unwrap()
-    let di = field_index(&st.def, np.member)
+    let di = field_index(st.def, np.member)
     if di < 0 {
         return unlowerable_why(ctx, "`?.` member unresolved")
     }
     let off = st.layout.offsets[di as usize]
-    let fty = field_ty(tyit(ctx), &st.def, di as usize, &st.args, &ctx.result.nominals)
+    let fty = field_ty(tyit(ctx), st.def, di as usize, &st.args, &ctx.result.nominals)
 
     let res_ty = node_ty(ctx, np.span)
     let rt = resolve_enum(ctx, &res_ty, reg)
@@ -5622,7 +5622,7 @@ fn lower_null_propagation(
         return unlowerable_why(ctx, "`?.` result shape")
     }
     let ret2 = rt.unwrap()
-    let rel = en_layout(ctx, &ret2.def, &ret2.args)
+    let rel = en_layout(ctx, ret2.def, &ret2.args)
     let flattens = fty == res_ty
 
     let recv = lower_expr(ctx, bb, env, np.receiver)
@@ -5747,7 +5747,7 @@ fn try_shape(ctx: &LowerCtx, o: &ResolvedOperator, want: &Ty) TryShape? {
     return Some(.{
         sym = sym,
         sig = sig,
-        el = en_layout(ctx, &et.def, &et.args),
+        el = en_layout(ctx, et.def, &et.args),
         cont_ty = et.args[0],
         res_ty = et.args[1],
     })
@@ -6035,13 +6035,13 @@ fn member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
             Some(i) => i as i64
             None => -1
         }
-        None => field_index(&st.def, ma.member)
+        None => field_index(st.def, ma.member)
     }
     if di < 0 {
         return null
     }
     let off = st.layout.offsets[di as usize]
-    let fty = field_ty(tyit(ctx), &st.def, di as usize, &st.args, &ctx.result.nominals)
+    let fty = field_ty(tyit(ctx), st.def, di as usize, &st.args, &ctx.result.nominals)
 
     let base = lower_base_address(ctx, bb, env, ma.receiver)
     for _k in 1..depth {
@@ -6136,14 +6136,14 @@ fn deref_member_field(
         Some(s) => move s
         None => return null
     }
-    let di = field_index(&st.def, ma.member)
+    let di = field_index(st.def, ma.member)
     if di < 0 {
         return null
     }
     let off = st.layout.offsets[di as usize]
     return Some(MemberField {
         addr = bb.gep(cur, Operand.IntConst(off as i64)),
-        fty = field_ty(tyit(ctx), &st.def, di as usize, &st.args, &ctx.result.nominals),
+        fty = field_ty(tyit(ctx), st.def, di as usize, &st.args, &ctx.result.nominals),
     })
 }
 
@@ -6457,7 +6457,7 @@ fn receiver_len(ctx: &LowerCtx, bb: &BlockBuilder, base_ty: &Ty, recv: Operand) 
         return null
     }
     let st = st_opt.unwrap()
-    let li = field_index(&st.def, "len")
+    let li = field_index(st.def, "len")
     if li < 0 {
         return null
     }
@@ -6512,7 +6512,7 @@ fn builtin_base_pointer(
         return null
     }
     let s = st.unwrap()
-    let fi = field_index(&s.def, "ptr")
+    let fi = field_index(s.def, "ptr")
     if fi < 0 {
         return null
     }
@@ -6592,7 +6592,7 @@ fn resolve_struct(ctx: &LowerCtx, ty: &Ty, reg: &NominalRegistry) StructTarget? 
                             args.clear()
                             const ti_layout = st_layout(ctx, &ts, &args)
                             return Some(StructTarget {
-                                def = move ts,
+                                def = &ts,
                                 layout = move ti_layout,
                                 args = move args,
                             })
@@ -6602,7 +6602,7 @@ fn resolve_struct(ctx: &LowerCtx, ty: &Ty, reg: &NominalRegistry) StructTarget? 
                 }
             }
             const layout = st_layout(ctx, &s, &args)
-            Some(StructTarget { def = move s, layout = move layout, args = move args })
+            Some(StructTarget { def = &s, layout = move layout, args = move args })
         }
         _ => null
     }
@@ -6695,7 +6695,7 @@ fn register_agg(m: &IrModule, ctx: &LowerCtx, ty: &Ty) AggType? {
     }
     let sd = tn(ctx, ty.*) match {
         NNominal(n) => ctx.result.nominals.get(n.id).* match {
-            NomStruct(d) => move d
+            NomStruct(d) => &d
             _ => return null
         }
         _ => return null
@@ -7100,15 +7100,15 @@ fn lower_operator_binary(
             return unlowerable(ctx)
         }
         let et = t.unwrap()
-        let less = variant_index_of(&et.def, "Less")
-        let equal = variant_index_of(&et.def, "Equal")
-        let greater = variant_index_of(&et.def, "Greater")
+        let less = variant_index_of(et.def, "Less")
+        let equal = variant_index_of(et.def, "Equal")
+        let greater = variant_index_of(et.def, "Greater")
         if less.is_none() or equal.is_none() or greater.is_none() {
             return unlowerable(ctx)
         }
-        let lo = Operand.IntConst(variant_tag(&et.def, less.unwrap()))
-        let eq = Operand.IntConst(variant_tag(&et.def, equal.unwrap()))
-        let hi = Operand.IntConst(variant_tag(&et.def, greater.unwrap()))
+        let lo = Operand.IntConst(variant_tag(et.def, less.unwrap()))
+        let eq = Operand.IntConst(variant_tag(et.def, equal.unwrap()))
+        let hi = Operand.IntConst(variant_tag(et.def, greater.unwrap()))
         let tag = bb.load(IrType.I32, res)
         return op.cmp_derived_op.unwrap() match {
             BodEq => bb.icmp_eq(IrType.I32, tag, eq)

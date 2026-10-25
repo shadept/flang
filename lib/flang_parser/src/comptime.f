@@ -446,8 +446,8 @@ fn ct_index(env: &CtEnv, ix: &IndexExpr) Result(CtValue, CtError) {
 }
 
 fn ct_slice(env: &CtEnv, recv: &CtValue, rg: &RangeExpr, span: SourceSpan) Result(CtValue, CtError) {
-    const items: List(CtValue) = recv.* match {
-        List(l) => move l
+    const items: &List(CtValue) = recv.* match {
+        List(l) => &l
         _ => return ct_err("E2118", $"cannot slice {describe(recv)}", span)
     }
     let start: i64 = 0

@@ -293,7 +293,7 @@ fn ty_lowerable(it: &TypeInterner, ty: Ty, is_foreign: bool, reg: &NominalRegist
 pub fn agg_abi_safe(it: &TypeInterner, ty: Ty, reg: &NominalRegistry) bool {
     let sd = it.node(ty) match {
         NNominal(nn) => reg.get(nn.id).* match {
-            NomStruct(d) => move d
+            NomStruct(d) => &d
             _ => return false
         }
         _ => return false
@@ -301,7 +301,7 @@ pub fn agg_abi_safe(it: &TypeInterner, ty: Ty, reg: &NominalRegistry) bool {
     if !fields_abi_safe(it, &sd.fields, reg) {
         return false
     }
-    return c_layout_agrees(it, ty, &sd, reg)
+    return c_layout_agrees(it, ty, sd, reg)
 }
 
 // Whether laying the members out the way C will - declaration order, each at its own alignment, the

@@ -59,7 +59,7 @@ pub fn report(outcome: &UnifyOutcome, ctx: &ReportCtx, it: &TypeInterner, out: &
 
 fn report_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic)) {
     let message = ctx.message_override match {
-        Some(msg) => move msg
+        Some(msg) => msg.clone()
         None => format_mismatch(m, ctx, it)
     }
     let empty_hint: OwnedString
