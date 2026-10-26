@@ -292,6 +292,25 @@ checker: `move` in argument position (E2129, `report_argument_moves`) and
 a `move self` receiver matched through a reference or `op_deref` hop
 (E2128, `check_consuming_receiver`).
 
+Each moved record says whether the move holds on every path that reaches
+it (`MovedRec.all`): `own_join` keeps a move as soon as either path has
+it, for E2123, and keeps `all` only where both do. Every scope records the
+non-copyable values it owns (`OwnPass.owned`: `let`s, `move` parameters,
+`for` variables), and each exit - the end of a block, `return`, `break`,
+`continue`, and `?` through `own_early_exit` - runs its defers and then
+`own_check_exit`, which reports W2006 for a value not moved on every path.
+A warning from an instantiation is reported at the line in the generic
+body, once. An `#intrinsic` body owns nothing it must release, which is
+what lets `leak` end a value (RFC-043). A record with `MovedRec.empty`
+says the place holds nothing on that path: it counts as released for
+W2006 and is skipped by every use-after-move query. `own_match` records
+the bindings of an owned scrutinee as parts of it (`OwnedRec.of`): moving
+one spends the scrutinee (`own_spend_owner`) and makes the others owed;
+an arm whose variant carries nothing owning, `null` and payload-less
+inits record an empty place. A field of type `core.memory.Memory`
+grants its type's module the element moves an `owned` field does
+(`own_memory_field`).
+
 A function type's parameter modes are part of its identity: `NFuncNode.moves`
 is a bitmask keyed into the interner, so `fn(T)` and `fn(move T)` never
 unify.

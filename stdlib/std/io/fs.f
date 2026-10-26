@@ -83,7 +83,7 @@ pub fn rename(from: String, to: String) Result((), FsError) {
 pub fn cwd(allocator: &Allocator = context.allocator) Result(Path, FsError) {
     const s = raw_getcwd(allocator)?
     defer s.deinit()
-    return Ok(path(s.view, allocator))
+    return Ok(path(s.view(), allocator))
 }
 
 // The directory for temporary files: $TMPDIR (falling back to /tmp) on POSIX, GetTempPath on
@@ -91,7 +91,7 @@ pub fn cwd(allocator: &Allocator = context.allocator) Result(Path, FsError) {
 pub fn temp_dir(allocator: &Allocator = context.allocator) Result(Path, FsError) {
     const s = raw_temp_dir(allocator)?
     defer s.deinit()
-    return Ok(path(s.view, allocator))
+    return Ok(path(s.view(), allocator))
 }
 
 // An absolute, lexically-normalized form of `p`, joined against cwd() when relative. Does NOT
@@ -114,7 +114,7 @@ pub fn to_absolute(p: &Path, allocator: &Allocator = context.allocator) Result(P
 pub fn canonicalize(p: &Path, allocator: &Allocator = context.allocator) Result(Path, FsError) {
     const s = raw_realpath(p.as_view(), allocator)?
     defer s.deinit()
-    return Ok(path(s.view, allocator))
+    return Ok(path(s.view(), allocator))
 }
 
 // =============================================================================
@@ -164,7 +164,7 @@ pub fn walk_dir(root: String, allocator: &Allocator = context.allocator) Result(
     sb.append(root)
     // Strip a trailing separator so we always append "/" before segment names.
     if sb.len > 0 {
-        const last: &u8 = sb.ptr + (sb.len - 1)
+        const last: &u8 = sb.as_view().ptr + (sb.len - 1)
         if last.* == '/' or last.* == '\\' {
             sb.truncate(sb.len - 1)
         }
@@ -222,14 +222,14 @@ pub fn next(self: &WalkIter) WalkEntry? {
 
         // Descend into directories (not symlinks - avoid cycles).
         if is_kind_dir(entry.kind) {
-            const child_r = raw_dir_open(path_view)
-            if child_r.is_ok() {
-                self.stack.push(WalkFrame {
-                    dir = child_r.unwrap(),
+            raw_dir_open(path_view) match {
+                Ok(child) => self.stack.push(WalkFrame {
+                    dir = move child,
                     path_len_before = self.path_buf.len,
                 })
-            } else if self.last_error.is_none() {
-                self.last_error = Some(child_r.unwrap_err())
+                Err(e) => if self.last_error.is_none() {
+                    self.last_error = Some(e)
+                }
             }
         }
 
@@ -492,6 +492,7 @@ test "canonicalize requires the target to exist" {
     let missing = path("definitely_not_here.toml")
     defer missing.deinit()
     const failed = canonicalize(&missing)
+    defer failed.deinit()
     assert_true(failed.is_err(), "missing path fails")
 
     let real = path("flang.toml")

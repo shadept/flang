@@ -317,7 +317,7 @@ fn header(self: &Parser, root: &Value) &Value? {
     self.path.clear()
     let node = root
     for i in 0..keys.len {
-        const key = keys[i].view
+        const key = keys[i].view()
         const last = i + 1 == keys.len
         const step = if !last {
             self.enter_parent(node, key)
@@ -427,13 +427,13 @@ fn key_value(self: &Parser, table: &Value) {
     self.pos = key_start
     let node = table
     for i in 0..keys.len - 1 {
-        const step = self.enter_dotted(node, keys[i].view)
+        const step = self.enter_dotted(node, keys[i].view())
         if step.is_none() {
             return
         }
         node = step.unwrap()
     }
-    const key = keys[keys.len - 1].view
+    const key = keys[keys.len - 1].view()
     const map = node.as_map().unwrap()
     if map.contains(key) {
         self.fail(TomlErrorKind.DuplicateKey)
@@ -441,11 +441,7 @@ fn key_value(self: &Parser, table: &Value) {
     }
     self.pos = value_start
     self.push_key(key)
-    let parsed = self.parse_value()
-    if parsed.is_none() {
-        return
-    }
-    let v = parsed.unwrap()
+    let v = self.parse_value() ?? return
     if v.is_map() {
         self.set_origin(INLINE)
     }
@@ -485,11 +481,13 @@ fn parse_key(self: &Parser) List(OwnedString) {
             '\'' => self.literal_string(false)
             else => self.bare_key()
         }
-        if part.is_none() {
-            keys.clear()
-            return keys
+        part match {
+            Some(k) => keys.push(k)
+            None => {
+                keys.clear()
+                return keys
+            }
         }
-        keys.push(part.unwrap())
         self.skip_blanks()
         if !self.eat('.') {
             return keys
@@ -538,15 +536,16 @@ fn parse_value(self: &Parser) Value? {
 }
 
 fn string_value(self: &Parser, s: move OwnedString?) Value? {
-    if s.is_none() {
-        return null
+    return s match {
+        Some(text) => Some(Value.Str(move text))
+        None => null
     }
-    return Some(Value.Str(s.unwrap()))
 }
 
 fn word(self: &Parser, w: String, v: move Value) Value? {
     if !self.starts(w) {
         self.fail(TomlErrorKind.UnexpectedChar)
+        v.deinit()
         return null
     }
     self.bump(w.len)
@@ -563,14 +562,15 @@ fn array(self: &Parser) Value? {
             return Some(move items)
         }
         self.push_index(items.len())
-        const v = self.parse_value()
+        const parsed = self.parse_value()
         self.path.truncate(base)
-        if v.is_none() {
-            items.deinit()
-            return null
+        parsed match {
+            Some(item) => items.push(item)
+            None => {
+                items.deinit()
+                return null
+            }
         }
-        let item = v.unwrap()
-        items.push(item)
         self.skip_space()
         if self.eat(']') {
             return Some(move items)
@@ -1098,7 +1098,7 @@ fn is_section(v: &Value) bool {
 fn write_table(self: &TomlWriter, table: &OrderedDict(OwnedString, Value), path: &List(String)) {
     for e in table {
         if !is_section(&e.value) {
-            self.write_key(e.key.view)
+            self.write_key(e.key.view())
             self.w.write_str(" = ")
             self.write_inline(&e.value)
             self.w.write_byte('\n')
@@ -1107,7 +1107,7 @@ fn write_table(self: &TomlWriter, table: &OrderedDict(OwnedString, Value), path:
     }
     for e in table {
         if e.value.is_map() {
-            path.push(e.key.view)
+            path.push(e.key.view())
             const sub = e.value.as_map().unwrap()
             if self.needs_header(sub) {
                 self.write_header(path, false)
@@ -1118,7 +1118,7 @@ fn write_table(self: &TomlWriter, table: &OrderedDict(OwnedString, Value), path:
     }
     for e in table {
         if is_table_array(&e.value) {
-            path.push(e.key.view)
+            path.push(e.key.view())
             const items = e.value.as_array().unwrap()
             for i in 0..items.len {
                 self.write_header(path, true)
@@ -1220,7 +1220,7 @@ fn write_inline(self: &TomlWriter, v: &Value) {
         Bool(b) => self.w.write_str(if b { "true" } else { "false" })
         Int(n) => self.w.write_int(n)
         Float(f) => self.write_float(f)
-        Str(s) => self.write_string(s.view)
+        Str(s) => self.write_string(s.view())
         Date(d) => d.format(self.w, "")
         Time(t) => t.format(self.w, "")
         DateTime(dt) => dt.format(self.w, "")
@@ -1241,7 +1241,7 @@ fn write_inline(self: &TomlWriter, v: &Value) {
             for e in d {
                 self.w.write_str(if first { " " } else { ", " })
                 first = false
-                self.write_key(e.key.view)
+                self.write_key(e.key.view())
                 self.w.write_str(" = ")
                 self.write_inline(&e.value)
             }
@@ -1340,8 +1340,8 @@ test "tables, dotted keys, inline tables and arrays of tables" {
         "mixed array, trailing comma",
     )
     const keys = doc.as_map().unwrap()
-    assert_true(keys.entry_at(0).unwrap().key.view == "title", "document order")
-    assert_true(keys.entry_at(1).unwrap().key.view == "owner", "document order")
+    assert_true(keys.entry_at(0).unwrap().key.view() == "title", "document order")
+    assert_true(keys.entry_at(1).unwrap().key.view() == "owner", "document order")
 }
 
 test "invalid documents report their error" {
@@ -1418,12 +1418,12 @@ test "to_toml writes plain keys before tables and reads back the same tree" {
     let text = to_toml(&doc).unwrap()
     defer text.deinit()
     assert_eq(
-        text.view,
+        text.view(),
         "name = \"x\\\"y\"\nratio = 2.0\ntags = [\"t\", 2026-10-14]\n\n[server]\nhost = \"a b\"\nport = 8080\n\n[[items]]\nid = 1\n\n[[items]]\nid = 2\n",
         "document",
     )
 
-    let back = parse_toml(text.view).unwrap()
+    let back = parse_toml(text.view()).unwrap()
     defer back.deinit()
     assert_eq(
         back.get("server").unwrap().get("port").unwrap().as_i64().unwrap(),
@@ -1441,6 +1441,7 @@ test "to_toml refuses a null and a non-map document" {
     const r = to_toml(&doc)
     assert_true(r.unwrap_err().kind == TomlErrorKind.NullValue, "null")
     const scalar = Value.Int(1)
+    defer scalar.deinit()
     const s = to_toml(&scalar)
     assert_true(s.unwrap_err().kind == TomlErrorKind.RootNotTable, "not a map")
 }
@@ -1475,17 +1476,17 @@ test "TOML and JSON convert through one tree" {
     let json = to_json(&doc).unwrap()
     defer json.deinit()
     assert_eq(
-        json.view,
+        json.view(),
         "{\"name\":\"fq\",\"deps\":{\"std\":{\"path\":\"../std\"}},\"bin\":[{\"at\":\"2026-10-14\"}]}",
         "TOML to JSON",
     )
 
-    let back = parse_json(json.view, json_options(DateParsing.All)).unwrap()
+    let back = parse_json(json.view(), json_options(DateParsing.All)).unwrap()
     defer back.deinit()
     let toml = to_toml(&back).unwrap()
     defer toml.deinit()
     assert_eq(
-        toml.view,
+        toml.view(),
         "name = \"fq\"\n\n[deps.std]\npath = \"../std\"\n\n[[bin]]\nat = 2026-10-14\n",
         "JSON to TOML, dates parsed back",
     )

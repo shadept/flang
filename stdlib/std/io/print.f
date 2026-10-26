@@ -27,7 +27,7 @@ pub fn print(value: &$T) {
 // Writes the string and frees it, so `print($"...")` needs no temporary.
 pub fn print(value: move OwnedString) {
     defer value.deinit()
-    print(value.view)
+    print(value.view())
 }
 
 // Writes the payload's text, or `null`.
@@ -52,7 +52,7 @@ pub fn println(value: &$T) {
 // Writes the string and a newline, then frees it.
 pub fn println(value: move OwnedString) {
     defer value.deinit()
-    println(value.view)
+    println(value.view())
 }
 
 // Writes the payload's text, or `null`, and a newline.

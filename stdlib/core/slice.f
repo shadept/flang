@@ -377,30 +377,6 @@ pub fn fold_right(s: $T[], init: move $A, f: fn(T, move A) A) A {
 // In-place mutation
 // =============================================================================
 
-// Exchanges the values in two slots. `&move` says the values leave their storage, so an owning `T`
-// swaps with no copy and no second owner; the caller keeps both slots, each holding the other's
-// value.
-pub fn swap(a: &move $T, b: &move T) {
-    let tmp = move a.*
-    a.* = move b.*
-    b.* = move tmp
-}
-
-// Puts `value` into the slot and hands back what was there. The caller names what goes in, so an
-// owning type is never left holding a zeroed stand-in.
-pub fn replace(slot: &move $T, value: move T) T {
-    let old = move slot.*
-    slot.* = move value
-    return old
-}
-
-// Puts `value` into the slot and releases what was there: the assign-over-a-live-value the language
-// refuses on its own (E2126), with the release the refusal is about.
-pub fn install(slot: &move $T, value: move T) {
-    let old = replace(slot, value)
-    release(old)
-}
-
 // Fills every element of the slice with `value`.
 pub fn fill(s: $T[], value: T) where T: copyable {
     for i in 0..s.len {

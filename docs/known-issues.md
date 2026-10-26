@@ -802,7 +802,7 @@ Name collisions with an existing declaration are not checked before answering.
 
 A generic body is type-checked per instantiation, and the only node types kept are each
 instantiation's overlay. Inlay hints, and hover on any node the rigid check did not type, read the
-first overlay that covers the cursor: in `core.slice.swap`, `let tmp = move a.*` shows
+first overlay that covers the cursor: in `core.memory.swap`, `let tmp = move a.*` shows
 `tmp: UnmanagedDict(OwnedString, JsonValue)`, whichever instantiation came first, instead of `T`.
 
 Hover already prefers what the rigid check typed (`checker.template_type_at`: `cmp: F where F:
@@ -2624,12 +2624,38 @@ A context field is copyable (E2147), so owned state enters by reference, owned b
 
 ---
 
-### An Unconsumed `move` Parameter Is Never Released
+### W2006 Fires Inside a Leaf Type's Own Release - RESOLVED
 
-**Status:** Open (found 2026-10-18)
+**Status:** Resolved 2026-10-25 (found 2026-10-25)
+**Affected:** the consuming functions of types non-copyable through an `owned` field of a copyable type
+
+A leaf type released its resource through something the ownership pass does not see as a move: a raw free, an OS call, a count. Memory owners now hold a `Memory` and move it into `dealloc`; every other leaf (`File`, `Child`, `Rc`, `NoCopy`, the allocators' own bottoms) ends with `leak` after its resource left (RFC-043).
+
+**Related tests:** `memory/memory_double_dealloc.f`, `memory/memory_never_released.f`, `memory/memory_leak_ends_value.f`, `memory/memory_field_moves_elements.f`.
+
+---
+
+### W2006: A Value Taken Apart by `match` Stays Live - RESOLVED
+
+**Status:** Resolved 2026-10-25 (found 2026-10-25)
+**Affected:** a function that owns a non-copyable value and moves a payload out of it through `match` (`Option.unwrap`, `Result.unwrap`, `expect`)
+
+`self match { Some(v) => v, None => panic(...) }` on `self: move Option(T)` moves `v` out, but the pass does not mark the scrutinee it came from, so `self` is reported never released. Pattern bindings of a scrutinee the function owns are not tracked as owned values either.
+
+**Solution:** an arm that moves a binding out of an owned scrutinee spends the scrutinee and owes the release of its other bindings; an arm whose variant carries only copyable payloads (or a catch-all left only such variants) leaves it holding nothing. A `match` over a temporary owns its bindings outright. A wildcard over an owning payload still drops it unreported.
+
+**Related tests:** `ownership/released_match_spends_owner.f`, `ownership/released_match_read_keeps_owner.f`, `ownership/released_match_temporary_part.f`, `ownership/released_holds_nothing.f`.
+
+---
+
+### An Unconsumed `move` Parameter Is Never Released - REPORTED
+
+**Status:** Reported as W2006 since 2026-10-25 (found 2026-10-18)
 **Affected:** functions and lambdas whose body leaves a non-copyable `move` parameter unconsumed
 
 `fn len_of(s: move OwnedString) usize { return s.len }` leaks `s`: the caller gave ownership away, and nothing releases a `move` parameter the body neither moves nor releases, nor reports it. The same holds for a lambda parameter that inherits `move` from its slot (`opt.map { it.len }`). Release it in the body (`defer s.deinit()`) or take it without `move`.
+
+**Solution:** W2006 reports it, with every other owned value still live at an exit. Related tests: `ownership/released_move_param.f`.
 
 ---
 

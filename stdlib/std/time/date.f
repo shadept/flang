@@ -193,15 +193,15 @@ test "date text" {
     const d = date(2026, Month.October, 4).unwrap()
     const iso = $"{d}"
     defer iso.deinit()
-    assert_true(iso.view == "2026-10-04", "iso")
+    assert_true(iso.view() == "2026-10-04", "iso")
     const custom = $"{d:%a %d %B %Y, day %j}"
     defer custom.deinit()
-    assert_true(custom.view == "Sun 04 October 2026, day 277", custom.view)
+    assert_true(custom.view() == "Sun 04 October 2026, day 277", custom.view())
     assert_true(parse_date("2026-10-04").unwrap() == d, "parse")
     assert_true(parse_date("-000044-03-15").unwrap().year() == -44i32, "extended year")
     const old = $"{parse_date("-000044-03-15").unwrap()}"
     defer old.deinit()
-    assert_true(old.view == "-000044-03-15", "extended year format")
+    assert_true(old.view() == "-000044-03-15", "extended year format")
     assert_true(parse_date("2026-02-30").unwrap_err() == TimeError.InvalidDate, "invalid")
     assert_true(parse_date("2026-1-01").unwrap_err() == TimeError.BadFormat, "short month")
     assert_true(parse_date("2026-10-04x").is_err(), "trailing")
@@ -225,5 +225,5 @@ test "date patterns" {
     assert_true(parse_date("2026-07-04", "%G-%m-%d").unwrap_err() == TimeError.BadFormat, "%G")
     const text = $"{d:%e %b %y}"
     defer text.deinit()
-    assert_true(parse_date(text.view, "%e %b %y").unwrap() == d, text.view)
+    assert_true(parse_date(text.view(), "%e %b %y").unwrap() == d, text.view())
 }

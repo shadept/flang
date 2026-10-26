@@ -37,7 +37,7 @@ pub fn main() i32 {
     let out_path = pick_output_path()
     defer out_path.deinit()
 
-    let opts = build_options(out_path.view)
+    let opts = build_options(out_path.view())
     defer opts.deinit()
     opts.set_keep_temps(true) // leave the .c next to the .exe for inspection
 
@@ -51,14 +51,14 @@ pub fn main() i32 {
     let result = r.unwrap()
     defer result.deinit()
 
-    const banner = $"codegen_demo: built {result.executable_path.view}"
+    const banner = $"codegen_demo: built {result.executable_path.view()}"
     defer banner.deinit()
-    println(banner.view)
+    println(banner.view())
     result.c_source_path match {
         Some(p) => {
-            const c_banner = $"codegen_demo: kept C source at {p.view}"
+            const c_banner = $"codegen_demo: kept C source at {p.view()}"
             defer c_banner.deinit()
-            println(c_banner.view)
+            println(c_banner.view())
         }
         None => {}
     }
@@ -67,14 +67,14 @@ pub fn main() i32 {
     println("----- program output -----")
     // Windows won't search cwd for executables - prefix with ".\\" so the OS treats it as a
     // relative path and looks where we wrote it.
-    let exe_sb = string_builder(result.executable_path.len + 4)
+    let exe_sb = string_builder(result.executable_path.view().len + 4)
     defer exe_sb.deinit()
     #if (platform.os == "windows") {
         exe_sb.append(".\\")
     } else {
         exe_sb.append("./")
     }
-    exe_sb.append(result.executable_path.view)
+    exe_sb.append(result.executable_path.view())
     let cmd = command(exe_sb.as_view())
     defer cmd.deinit()
     cmd.inherit_env()
@@ -93,7 +93,7 @@ pub fn main() i32 {
     const code = w.unwrap()
     const final = $"codegen_demo: program exited with code {code}"
     defer final.deinit()
-    println(final.view)
+    println(final.view())
     return 0
 }
 
@@ -360,7 +360,7 @@ fn report_error(e: BuildError) {
         CompilerFailed(code) => {
             const msg = $"codegen_demo: C compiler exited with code {code}"
             defer msg.deinit()
-            println(msg.view)
+            println(msg.view())
         }
         SpawnFailed => println("codegen_demo: failed to spawn the C compiler.")
         IOError => println("codegen_demo: I/O error writing the generated .c file.")

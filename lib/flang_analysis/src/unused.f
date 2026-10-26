@@ -99,7 +99,7 @@ pub fn unused_functions(
     defer directive.deinit()
     for i in 0..sources.len {
         if is_project(project_origin, i) {
-            directive_names(sources[i].view, &directive)
+            directive_names(sources[i].view(), &directive)
         }
     }
     for i in 0..modules.len {
@@ -262,7 +262,7 @@ fn root_intrinsics(
         for &d in modules[i].decls {
             d.* match {
                 Function(fd) => {
-                    if is_intrinsic(fd.directives) {
+                    if is_intrinsic_directive(fd.directives) {
                         root_at(&per_file[i], fd.span.start, reached, work)
                     }
                 }
@@ -270,19 +270,6 @@ fn root_intrinsics(
             }
         }
     }
-}
-
-fn is_intrinsic(directives: DeclAttribute[]) bool {
-    for &a in directives {
-        const hit = a.* match {
-            Intrinsic => true
-            _ => false
-        }
-        if hit {
-            return true
-        }
-    }
-    return false
 }
 
 fn root_at(fns: &List(FnNode), start: usize, reached: &Dict(u32, bool), work: &List(u32)) {
@@ -570,7 +557,7 @@ pub fn unused_imports(
         }
         let names: Set(String) = set()
         defer names.deinit()
-        directive_names(sources[i].view, &names)
+        directive_names(sources[i].view(), &names)
         let u = &used[i]
         for name in names {
             const overloads = result.functions.by_name.get_ref(name)
@@ -728,7 +715,7 @@ pub fn unused_imports(
                 Import(id) => {
                     if id.is_pub {
                         let dotted = dotted_name(id.path)
-                        const to = index_of.get(dotted.view)
+                        const to = index_of.get(dotted.view())
                         dotted.deinit()
                         if to.is_some() {
                             row.push(to.unwrap())
@@ -773,7 +760,7 @@ pub fn unused_imports(
         out.push(Diagnostic {
             severity = Severity.Warning,
             code = W_UNUSED_IMPORT,
-            message = $"unused import `{m.name.view}`",
+            message = $"unused import `{m.name.view()}`",
             hint = from_view("nothing from it is used - remove the import"),
             span = m.span,
         })
@@ -833,11 +820,11 @@ fn check_import(
         return
     }
     let dotted = dotted_name(id.path)
-    if dotted.view == "core.prelude" or index_of.get(dotted.view).is_none() {
+    if dotted.view() == "core.prelude" or index_of.get(dotted.view()).is_none() {
         dotted.deinit()
         return
     }
-    const target = index_of.get(dotted.view).unwrap()
+    const target = index_of.get(dotted.view()).unwrap()
     if target == from {
         dotted.deinit()
         return
@@ -1059,7 +1046,7 @@ fn analyzed_fixture(source: String) AnalyzedProject {
     const root = if exists("fixtures/leaf.f") { "fixtures" } else { "lib/flang_analysis/fixtures" }
     const manifest = $"[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"{root}/**/*.f\"\n"
     defer manifest.deinit()
-    let proj = parse_project(manifest.view).unwrap()
+    let proj = parse_project(manifest.view()).unwrap()
     defer proj.deinit()
     let ctx = resolve_ctx(&proj, "")
     defer ctx.deinit()
@@ -1077,7 +1064,7 @@ fn diag_messages(unit: &AnalyzedProject, code: String) List(String) {
     let out: List(String) = list(0)
     for i in 0..unit.diagnostics.len {
         if unit.diagnostics[i].code == code {
-            out.push(unit.diagnostics[i].message.view)
+            out.push(unit.diagnostics[i].message.view())
         }
     }
     return out

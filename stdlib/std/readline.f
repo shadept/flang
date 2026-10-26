@@ -139,10 +139,7 @@ fn history_add(h: &History, line: String) {
         // Shift everything down by removing the oldest entry
         const first_len = h.entries[0] as usize
         const remove = 1 + first_len
-        copy_to(
-            slice_from_raw_parts(&h.entries[remove], h.buf_used - remove),
-            slice_from_raw_parts(&h.entries[0], h.buf_used - remove),
-        )
+        copy_to(h.entries[remove..h.buf_used], h.entries[0..h.buf_used - remove])
         h.buf_used = h.buf_used - remove
         // Shift offsets
         for i in 0..(h.count - 1) {
@@ -167,7 +164,7 @@ fn history_get(h: &History, index: usize) String {
     }
     const off = h.offsets[index]
     const len = h.entries[off] as usize
-    return slice_from_raw_parts(&h.entries[off + 1], len) as String
+    return h.entries[off + 1..off + 1 + len] as String
 }
 
 // =============================================================================
@@ -237,10 +234,7 @@ fn enable_raw(rl: &Readline) {
 
         // Copy and modify
         let raw = [0u8; 72]
-        copy_to(
-            slice_from_raw_parts(&rl.raw_buf[0], TERMIOS_SIZE),
-            slice_from_raw_parts(&raw[0], TERMIOS_SIZE),
-        )
+        copy_to(rl.raw_buf[0..TERMIOS_SIZE], raw[0..TERMIOS_SIZE])
 
         // Clear ECHO, ICANON, ISIG from c_lflag
         let lflag = read_u64(&raw[LFLAG_OFFSET])
@@ -410,11 +404,8 @@ pub fn read_line(rl: &Readline) String? {
                 write_str("\r\n")
                 disable_raw(rl)
                 // Copy into persistent buffer so the returned String outlives this call
-                copy_to(
-                    slice_from_raw_parts(&buf[0], len),
-                    slice_from_raw_parts(&rl.line_buf[0], len),
-                )
-                const line = slice_from_raw_parts(&rl.line_buf[0], len) as String
+                copy_to(buf[0..len], rl.line_buf[0..len])
+                const line = rl.line_buf[0..len] as String
                 if len > 0 {
                     history_add(&rl.hist, line)
                 }
@@ -497,10 +488,7 @@ pub fn read_line(rl: &Readline) String? {
                 if rl.hist.count > 0 {
                     if hist_index == -1 {
                         // Save current input
-                        copy_to(
-                            slice_from_raw_parts(&buf[0], len),
-                            slice_from_raw_parts(&saved_buf[0], len),
-                        )
+                        copy_to(buf[0..len], saved_buf[0..len])
                         saved_len = len
                         hist_index = rl.hist.count as isize - 1
                     } else if hist_index > 0 {
@@ -509,10 +497,7 @@ pub fn read_line(rl: &Readline) String? {
                         continue
                     }
                     const entry = history_get(&rl.hist, hist_index as usize)
-                    copy_to(
-                        slice_from_raw_parts(entry.ptr, entry.len),
-                        slice_from_raw_parts(&buf[0], entry.len),
-                    )
+                    copy_to(entry.as_raw_bytes(), buf[0..entry.len])
                     len = entry.len
                     cursor = len
                     refresh_line(rl, buf, len, cursor)
@@ -525,18 +510,12 @@ pub fn read_line(rl: &Readline) String? {
                     if hist_index as usize >= rl.hist.count {
                         // Restore saved input
                         hist_index = -1
-                        copy_to(
-                            slice_from_raw_parts(&saved_buf[0], saved_len),
-                            slice_from_raw_parts(&buf[0], saved_len),
-                        )
+                        copy_to(saved_buf[0..saved_len], buf[0..saved_len])
                         len = saved_len
                         cursor = len
                     } else {
                         const entry = history_get(&rl.hist, hist_index as usize)
-                        copy_to(
-                            slice_from_raw_parts(entry.ptr, entry.len),
-                            slice_from_raw_parts(&buf[0], entry.len),
-                        )
+                        copy_to(entry.as_raw_bytes(), buf[0..entry.len])
                         len = entry.len
                         cursor = len
                     }
@@ -648,5 +627,5 @@ fn read_line_simple(rl: &Readline) String? {
         }
     }
 
-    return Some(slice_from_raw_parts(&rl.line_buf[0], len) as String)
+    return Some(rl.line_buf[0..len] as String)
 }

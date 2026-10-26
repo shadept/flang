@@ -75,6 +75,8 @@ pub const FQN_TYPE: String = "core.rtti.Type"
 pub const FQN_TYPE_INFO: String = "core.rtti.TypeInfo"
 // The runtime context (RFC-038). Its declaration names the type; the checker fills its fields.
 pub const FQN_CONTEXT: String = "core.runtime.Context"
+// Heap memory as an owned resource (RFC-043): a field of this type owns a container's storage.
+pub const FQN_MEMORY: String = "core.memory.Memory"
 // The rest of the RTTI record shapes `TypeInfo` points at.
 pub const FQN_FIELD_INFO: String = "core.rtti.FieldInfo"
 pub const FQN_VARIANT_INFO: String = "core.rtti.VariantInfo"

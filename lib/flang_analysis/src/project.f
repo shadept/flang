@@ -257,7 +257,7 @@ fn read_deps(self: &ManifestReader, proj: &Project, t: &Value) {
             return
         }
         proj.deps.push(DependencySpec {
-            name = from_view(e.key.view),
+            name = from_view(e.key.view()),
             path = from_view(text.unwrap()),
         })
     }
@@ -270,7 +270,7 @@ fn read_fmt(self: &ManifestReader, proj: &Project, t: &Value) {
             self.mismatch("fmt")
             return
         }
-        proj.fmt.push(FmtEntry { key = from_view(e.key.view), value = text.unwrap() })
+        proj.fmt.push(FmtEntry { key = from_view(e.key.view()), value = text.unwrap() })
     }
 }
 
@@ -342,7 +342,7 @@ fn scalar_text(v: &Value) OwnedString? {
     let sb = string_builder(16)
     defer sb.deinit()
     v.* match {
-        Str(s) => sb.append(s.view)
+        Str(s) => sb.append(s.view())
         Int(n) => sb.append(n)
         Float(f) => sb.append(f)
         Bool(b) => sb.append(if b { "true" } else { "false" })
@@ -360,23 +360,23 @@ test "parses project metadata, deps, build config and imports" {
     let p = parse_project(src).unwrap()
     defer p.deinit()
 
-    assert_true(p.name.view == "demo", "name parsed")
-    assert_true(p.version.view == "0.2.0", "version parsed")
+    assert_true(p.name.view() == "demo", "name parsed")
+    assert_true(p.version.view() == "0.2.0", "version parsed")
     let is_lib = p.kind match { Lib => true, _ => false }
     assert_true(is_lib, "kind = lib")
 
     assert_eq(p.deps.len, 2 as usize, "two dependencies")
-    assert_true(p.deps[0].name.view == "flang_core", "dep 0 name")
-    assert_true(p.deps[0].path.view == "../flang_core", "dep 0 path")
-    assert_true(p.deps[1].path.view == "../lib/flang_parser", "dep 1 path")
+    assert_true(p.deps[0].name.view() == "flang_core", "dep 0 name")
+    assert_true(p.deps[0].path.view() == "../flang_core", "dep 0 path")
+    assert_true(p.deps[1].path.view() == "../lib/flang_parser", "dep 1 path")
 
     assert_eq(p.windows.libs.len, 2 as usize, "two windows libs")
-    assert_true(p.windows.libs[0].view == "raylib.lib", "lib 0")
-    assert_true(p.windows.libs[1].view == "user32.lib", "lib 1")
+    assert_true(p.windows.libs[0].view() == "raylib.lib", "lib 0")
+    assert_true(p.windows.libs[1].view() == "user32.lib", "lib 1")
     assert_eq(p.windows.headers.len, 1 as usize, "one windows header")
 
     assert_eq(p.global_imports.len, 1 as usize, "one global import")
-    assert_true(p.global_imports[0].view == "std.prelude", "global import value")
+    assert_true(p.global_imports[0].view() == "std.prelude", "global import value")
 }
 
 test "collects [fmt] entries with values as text" {
@@ -385,11 +385,11 @@ test "collects [fmt] entries with values as text" {
     ).unwrap()
     defer p.deinit()
     assert_eq(p.fmt.len, 3 as usize, "three fmt entries")
-    assert_true(p.fmt[0].key.view == "indent", "key 0")
-    assert_true(p.fmt[0].value.view == "2", "integer as text")
-    assert_true(p.fmt[1].key.view == "trailing-comma", "key 1")
-    assert_true(p.fmt[1].value.view == "always", "string unquoted")
-    assert_true(p.fmt[2].value.view == "true", "bool as text")
+    assert_true(p.fmt[0].key.view() == "indent", "key 0")
+    assert_true(p.fmt[0].value.view() == "2", "integer as text")
+    assert_true(p.fmt[1].key.view() == "trailing-comma", "key 1")
+    assert_true(p.fmt[1].value.view() == "always", "string unquoted")
+    assert_true(p.fmt[2].value.view() == "true", "bool as text")
 }
 
 test "applies defaults for kind, source and output" {
@@ -397,8 +397,8 @@ test "applies defaults for kind, source and output" {
     defer p.deinit()
     let is_exe = p.kind match { Exe => true, _ => false }
     assert_true(is_exe, "kind defaults to exe")
-    assert_true(p.source.view == "src/**/*.f", "source default")
-    assert_true(p.output.view == "build", "output default")
+    assert_true(p.source.view() == "src/**/*.f", "source default")
+    assert_true(p.output.view() == "build", "output default")
     assert_eq(p.deps.len, 0 as usize, "no deps")
 }
 
@@ -407,8 +407,8 @@ test "ignores comments and blank lines" {
         "\n  # a comment\n[project]\nname = \"c\"  # trailing\nversion = \"2\"\n\n",
     ).unwrap()
     defer p.deinit()
-    assert_true(p.name.view == "c", "name ignores trailing comment")
-    assert_true(p.version.view == "2", "version after blank lines")
+    assert_true(p.name.view() == "c", "name ignores trailing comment")
+    assert_true(p.version.view() == "2", "version after blank lines")
 }
 
 test "invalid TOML and wrongly typed keys are errors" {

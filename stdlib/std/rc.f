@@ -52,6 +52,8 @@ pub fn deinit(self: move Rc($T)) {
         release(val)
         self.__allocator.free(self.__inner)
     }
+    // The count went back above; the handle that held it is spent.
+    leak(self)
 }
 
 // Transparent access to the inner value via field syntax (e.g., rc.field).
@@ -202,6 +204,8 @@ pub fn deinit(self: move Arc($T)) {
         release(val)
         self.__allocator.free(self.__inner)
     }
+    // The count went back above; the handle that held it is spent.
+    leak(self)
 }
 
 // Transparent access to the inner value via field syntax.

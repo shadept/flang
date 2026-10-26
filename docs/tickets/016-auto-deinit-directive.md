@@ -6,6 +6,11 @@ created: 2026-05-11
 
 # RFC-016: `#auto_deinit` directive and the managed-lifecycle contract
 
+> **Under review (2026-10-25).** Written before non-copyable types, `move` and parameter modes
+> (RFC-028, RFC-033). Its contract - idempotent `deinit(&self)`, alias panics, zero as released -
+> guards against structural copies those RFCs now refuse. A replacement would insert a release only
+> where the ownership pass finds a value still live at an exit (W2006), for types that opt in.
+
 ## Summary
 
 Introduce `#auto_deinit`, a type-level directive that marks a struct as a candidate for compiler-inserted scope-end cleanup. This RFC defines **only** the directive, its contract, and the initial set of stdlib types that adopt it.

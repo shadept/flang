@@ -192,10 +192,10 @@ test "datetime text" {
     const dt = datetime(2026, Month.October, 14, 9, 30, 0, 250000000).unwrap()
     const iso = $"{dt}"
     defer iso.deinit()
-    assert_true(iso.view == "2026-10-14T09:30:00.25", iso.view)
+    assert_true(iso.view() == "2026-10-14T09:30:00.25", iso.view())
     const custom = $"{dt:%F %T}"
     defer custom.deinit()
-    assert_true(custom.view == "2026-10-14 09:30:00", custom.view)
+    assert_true(custom.view() == "2026-10-14 09:30:00", custom.view())
     assert_true(parse_datetime("2026-10-14T09:30:00.25").unwrap() == dt, "parse")
     assert_true(parse_datetime("2026-10-14 09:30:00.25").unwrap() == dt, "space")
     assert_true(parse_datetime("2026-10-14").unwrap().hour() == 0i32, "date only")

@@ -18,7 +18,7 @@ pub fn main() i32 {
     sb.append("abc")
     let d = Doc { body = move sb }
     let s = d.body.to_string()
-    const n = s.len as i32
+    const n = s.view().len as i32
     s.deinit()
     d.deinit()
     return n

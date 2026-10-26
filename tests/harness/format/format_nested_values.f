@@ -37,12 +37,9 @@ pub fn format(self: &Pair, w: Writer, spec: String) {
 }
 
 pub fn main() i32 {
-    let p = Pair {
-        a = Point { x = 1i32, y = 2i32 },
-        b = Point { x = 3i32, y = 4i32 },
-    }
+    let p = Pair { a = Point { x = 1i32, y = 2i32 }, b = Point { x = 3i32, y = 4i32 } }
     const s = $"{p}"
     defer s.deinit()
-    println(s.view)
+    println(s.view())
     return 0
 }

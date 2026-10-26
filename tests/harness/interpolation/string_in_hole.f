@@ -10,6 +10,6 @@ pub fn main() i32 {
     let word = "WORLD"
     let msg = $"hello, {word}!"
     defer msg.deinit()
-    print(msg.view)
+    print(msg.view())
     return 0
 }

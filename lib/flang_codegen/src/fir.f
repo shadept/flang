@@ -566,7 +566,7 @@ pub fn add_test(self: &IrModule, label: move OwnedString, symbol: move OwnedStri
 pub fn retain_defined_tests(self: &IrModule, dropped: &Set(String)) {
     let kept: List(TestCase) = list(self.tests.len, self.tests.allocator)
     for t in self.tests.drain() {
-        if dropped.contains(t.symbol.view) {
+        if dropped.contains(t.symbol.view()) {
             t.label.deinit()
             t.symbol.deinit()
             continue
@@ -630,7 +630,7 @@ pub fn deinit(self: move ForeignDecl) {
 // Take ownership of a minted label buffer; returns the stable view the caller stores in blocks and
 // branch targets.
 pub fn add_label(self: &Function, owned: move OwnedString) String {
-    let view = owned.view
+    let view = owned.view()
     self.label_storage.push(owned)
     return view
 }

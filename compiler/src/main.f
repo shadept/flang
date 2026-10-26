@@ -191,7 +191,7 @@ fn parse_cli(argv: String[]) Cli {
         if !(head == "-h" or head == "--help") {
             const msg = $"flang: `{head}` must follow a command"
             defer msg.deinit()
-            println(msg.view)
+            println(msg.view())
         }
         cli.show_help = true
         return cli
@@ -200,7 +200,7 @@ fn parse_cli(argv: String[]) Cli {
     cli.subcommand = head
     const spec = $"{SHARED_OPTS}{command_opts(head)}"
     defer spec.deinit()
-    apply_opts(&cli, spec.view, argv)
+    apply_opts(&cli, spec.view(), argv)
     return cli
 }
 
@@ -294,7 +294,7 @@ fn apply_opts(cli: &Cli, spec: String, argv: String[]) {
                     if choice.is_none() {
                         const msg = $"flang: --color takes `auto`, `always` or `never` (got `{val}`)"
                         defer msg.deinit()
-                        println(msg.view)
+                        println(msg.view())
                         cli.show_help = true
                         return
                     }
@@ -305,14 +305,14 @@ fn apply_opts(cli: &Cli, spec: String, argv: String[]) {
             Error(c) => {
                 const msg = $"flang: `{cli.subcommand}` does not accept option `-{c as char}`"
                 defer msg.deinit()
-                println(msg.view)
+                println(msg.view())
                 cli.show_help = true
                 return
             }
             MissingArg(c) => {
                 const msg = $"flang: option `-{c as char}` requires an argument"
                 defer msg.deinit()
-                println(msg.view)
+                println(msg.view())
                 cli.show_help = true
                 return
             }
@@ -325,7 +325,7 @@ fn print_help() {
     const me = project_info()
     const banner = $"{me.name} {me.version} - the SELF-HOSTED compiler (written in FLang)"
     defer banner.deinit()
-    println(banner.view)
+    println(banner.view())
     println("A reimplementation of the reference CLI, not a port: no `-o` or bare-file form, and")
     println("options are parsed against the command they follow.")
     println("")
@@ -378,13 +378,13 @@ fn print_version() {
     const me = project_info()
     const banner = $"{me.name} {me.version} (self-hosted compiler, FLang; flang_parser {parser_version()})"
     defer banner.deinit()
-    println(banner.view)
+    println(banner.view())
 }
 
 fn unknown_subcommand(name: String) i32 {
     const msg = $"flang: unknown command `{name}`"
     defer msg.deinit()
-    println(msg.view)
+    println(msg.view())
     print_help()
     return 1
 }
@@ -409,7 +409,7 @@ fn run_build(argv: String[], cli: &Cli) i32 {
         }
         const msg = $"flang: `build` takes a `.f` file or no argument (got `{path}`)"
         defer msg.deinit()
-        println(msg.view)
+        println(msg.view())
         return 1
     }
     return build_project(&opts)
@@ -431,7 +431,7 @@ fn run_check(argv: String[], cli: &Cli) i32 {
         }
         const msg = $"flang: `check` takes a `.f` file or no argument (got `{path}`)"
         defer msg.deinit()
-        println(msg.view)
+        println(msg.view())
         return 1
     }
     return build_project(&opts)
@@ -442,7 +442,7 @@ fn run_test(argv: String[], cli: &Cli) i32 {
     if cli.args.len > 1 {
         const msg = $"flang: `test` takes at most one path filter (got {cli.args.len})"
         defer msg.deinit()
-        println(msg.view)
+        println(msg.view())
         return 1
     }
     let opts_opt = build_opts(argv, cli, false, true)
@@ -500,7 +500,7 @@ fn resolve_target(target_os: String, target_arch: String, testing: bool = false)
         if target_os != "windows" and target_os != "linux" and target_os != "macos" {
             const m = $"flang: unknown --target-os `{target_os}` (expected windows, linux, or macos)"
             defer m.deinit()
-            println(m.view)
+            println(m.view())
             return null
         }
     }
@@ -508,7 +508,7 @@ fn resolve_target(target_os: String, target_arch: String, testing: bool = false)
         if target_arch != "x86_64" and target_arch != "arm64" {
             const m = $"flang: unknown --target-arch `{target_arch}` (expected x86_64 or arm64)"
             defer m.deinit()
-            println(m.view)
+            println(m.view())
             return null
         }
     }
@@ -572,7 +572,7 @@ fn build_project(opts: &BuildOpts) i32 {
     let toml = toml_res.unwrap()
     defer toml.deinit()
 
-    const parsed = parse_project(toml.view)
+    const parsed = parse_project(toml.view())
     if parsed.is_err() {
         report_manifest_error(parsed.unwrap_err())
         return 1
@@ -580,17 +580,17 @@ fn build_project(opts: &BuildOpts) i32 {
     let proj = parsed.unwrap()
     defer proj.deinit()
 
-    let sources = glob_sources(proj.source.view)
+    let sources = glob_sources(proj.source.view())
     defer sources.deinit()
 
     if sources.len == 0 {
-        const m = $"flang: no sources match `{proj.source.view}`"
+        const m = $"flang: no sources match `{proj.source.view()}`"
         defer m.deinit()
-        println(m.view)
+        println(m.view())
         return 1
     }
 
-    let ctx = resolve_ctx(&proj, opts.stdlib_path.view)
+    let ctx = resolve_ctx(&proj, opts.stdlib_path.view())
     defer ctx.deinit()
     ctx.set_comptime(opts.target)
     // Lazy body demand is the default (RFC-022 §6): only the project's import closure is
@@ -620,27 +620,27 @@ fn build_project(opts: &BuildOpts) i32 {
                 names.append(", ")
             }
             names.append("$")
-            names.append(missing[i].view)
+            names.append(missing[i].view())
         }
         const m = $"flang: undefined environment variable(s): {names.as_view()}"
         defer m.deinit()
-        println(m.view)
+        println(m.view())
         return 1
     }
 
     // The runner gets its own artifact name so a `flang test` never overwrites the program, and so
     // the two keep separate build caches.
     const suffix = if opts.testing { "-test" } else { "" }
-    const out = $"{proj.output.view}/{proj.name.view}{suffix}"
+    const out = $"{proj.output.view()}/{proj.name.view()}{suffix}"
     defer out.deinit()
     const lib_root = proj.kind match { Lib => true, _ => false }
-    return finish_build(&unit, proj.name.view, out.view, opts, &libs, &ldflags, lib_root)
+    return finish_build(&unit, proj.name.view(), out.view(), opts, &libs, &ldflags, lib_root)
 }
 
 // Single-file mode: the file is the sole entry of a project-less build, so its imports resolve
 // against the stdlib and the working directory.
 fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
-    let ctx = single_file_ctx(opts.stdlib_path.view)
+    let ctx = single_file_ctx(opts.stdlib_path.view())
     defer ctx.deinit()
     ctx.set_comptime(opts.target)
     ctx.set_lazy(!opts.eager)
@@ -659,7 +659,7 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
         if opts.stats {
             const gm = $"  wrote {n} generated file(s)"
             defer gm.deinit()
-            println(gm.view)
+            println(gm.view())
         }
     }
     // No manifest, so no `[build.<os>]` inputs. One list per parameter: the call may not reach the
@@ -677,7 +677,7 @@ fn build_single_file(path: String, out: String, opts: &BuildOpts) i32 {
 fn expand_all(items: &List(OwnedString), missing: &List(OwnedString)) List(OwnedString) {
     let out: List(OwnedString) = list(items.len)
     for &item in items {
-        const s = item.view
+        const s = item.view()
         let sb = string_builder(s.len)
         let ok = true
         let i: usize = 0
@@ -732,7 +732,7 @@ fn finish_build(
     if opts.stats {
         const v = $"  ({unit.modules.len} modules, {unit.result.node_types.len()} nodes typed)"
         defer v.deinit()
-        println(v.view)
+        println(v.view())
     }
     if errs > 0 {
         return build_failed(label, errs)
@@ -741,7 +741,7 @@ fn finish_build(
     if opts.check_only {
         const m = $"checked {label} ({unit.modules.len} modules) in {elapsed_ns(opts.start_ns) / 1000000}ms"
         defer m.deinit()
-        println(m.view)
+        println(m.view())
         if opts.stats {
             print_memory(unit)
             print_timings(unit, 0, 0, 0, elapsed_ns(opts.start_ns))
@@ -753,13 +753,13 @@ fn finish_build(
     if unit.demanded.len > 0 {
         dm = Some(&unit.demanded)
     }
-    const prof_c = if opts.profile { $"{opts.stdlib_path.view}/std/profile.c" } else { from_view(
+    const prof_c = if opts.profile { $"{opts.stdlib_path.view()}/std/profile.c" } else { from_view(
         "",
     ) }
     defer prof_c.deinit()
     let prof_rt: String? = null
     if opts.profile {
-        prof_rt = Some(prof_c.view)
+        prof_rt = Some(prof_c.view())
     }
     // Which modules contribute `test {}` blocks: the project's own, narrowed by the path filter. A
     // null list is an ordinary build. Non-project modules are excluded whatever the filter says - a
@@ -771,7 +771,7 @@ fn finish_build(
         for i in 0..unit.modules.len {
             const own = i < unit.project_origin.len and unit.project_origin[i]
             const hit = opts.test_path.len == 0 or (i < unit.file_paths.len
-                and contains(unit.file_paths[i].view, opts.test_path))
+                and contains(unit.file_paths[i].view(), opts.test_path))
             tm.push(own and hit)
         }
         tests = Some(&tm)
@@ -813,9 +813,9 @@ fn finish_build(
     let artifact = result.unwrap()
     defer artifact.deinit()
     const built = if opts.emit_c_only {
-        (artifact.c_source_path ?? artifact.executable_path).view
+        (artifact.c_source_path ?? artifact.executable_path).view()
     } else {
-        artifact.executable_path.view
+        artifact.executable_path.view()
     }
     if opts.testing and !opts.emit_c_only {
         if opts.stats {
@@ -833,7 +833,7 @@ fn finish_build(
     const verb = if opts.emit_c_only { "emitted" } else { "built" }
     const msg = $"{verb} {built} in {elapsed_ns(opts.start_ns) / 1000000}ms"
     defer msg.deinit()
-    println(msg.view)
+    println(msg.view())
     if opts.stats {
         print_memory(unit)
         print_timings(
@@ -859,7 +859,7 @@ fn run_test_binary(built: String) i32 {
     if abs_r.is_err() {
         const msg = $"flang: cannot resolve the test runner's path `{built}`"
         defer msg.deinit()
-        println(msg.view)
+        println(msg.view())
         return 1
     }
     let abs = abs_r.unwrap()
@@ -873,7 +873,7 @@ fn run_test_binary(built: String) i32 {
     if child.is_err() {
         const msg = $"flang: could not run the test runner `{path}`"
         defer msg.deinit()
-        println(msg.view)
+        println(msg.view())
         return 1
     }
     let proc = child.unwrap()
@@ -928,7 +928,7 @@ fn print_timings(
 fn print_memory(unit: &AnalyzedProject) {
     const st = unit.result.interner.stats_report()
     defer st.deinit()
-    println(st.view)
+    println(st.view())
 
     let arenas: usize = 0
     let arenas_used: usize = 0
@@ -940,12 +940,12 @@ fn print_memory(unit: &AnalyzedProject) {
     }
     let src: usize = 0
     for &sc in unit.sources {
-        src = src + sc.len
+        src = src + sc.view().len
     }
     const r = &unit.result
     const mm = $"memory: arenas={arenas} arenas_used={arenas_used} pages={pages} sources={src} interner={r.interner.capacity_bytes()} node_types={r.node_types.capacity_bytes()} resolved_ops={r.resolved_ops.capacity_bytes()} resolved_targets={r.resolved_targets.capacity_bytes()} instantiated={r.instantiated_types.capacity_bytes()} desugars={r.desugars.capacity_bytes()} default_args={r.default_args.capacity_bytes()} arg_lists={r.arg_lists.capacity_bytes()} receiver_derefs={r.receiver_derefs.capacity_bytes()}"
     defer mm.deinit()
-    println(mm.view)
+    println(mm.view())
 
     // What passed through the global allocator. `live` is what is still out at this point, which
     // includes everything the readout itself is holding, so it is a floor on the leak rather than
@@ -953,7 +953,7 @@ fn print_memory(unit: &AnalyzedProject) {
     const c = &alloc_counter
     const ac = $"allocator: allocs={c.allocs} reallocs={c.reallocs} frees={c.deallocs} live={c.live_bytes} peak={c.peak_bytes} total={c.total_bytes}"
     defer ac.deinit()
-    println(ac.view)
+    println(ac.view())
 }
 
 // A count argument for the profiler knobs. Anything that is not a whole number reads as zero, which
@@ -979,7 +979,7 @@ fn print_phase(label: String, ns: u64, total_ns: u64, nested: bool) {
     while pad.len < 20 { pad.append(" ") }
     const line = $"{pad.as_view()} {ns / 1000000} ms ({pct}%)"
     defer line.deinit()
-    println(line.view)
+    println(line.view())
 }
 
 // Derive the output artifact path from the input: strip a trailing `.f` so `hello.f` builds to
@@ -1005,13 +1005,13 @@ fn report_read_error(path: String, e: FileError) {
     }
     const m = $"flang: cannot read `{path}`: {label}"
     defer m.deinit()
-    println(m.view)
+    println(m.view())
 }
 
 fn report_manifest_error(e: ManifestError) {
     const m = $"flang: invalid flang.toml: {e}"
     defer m.deinit()
-    println(m.view)
+    println(m.view())
 }
 
 fn report_build_error(e: &BuildError, path: String) {
@@ -1024,13 +1024,13 @@ fn report_build_error(e: &BuildError, path: String) {
     }
     const m = $"build failed: {label} ({path})"
     defer m.deinit()
-    println(m.view)
+    println(m.view())
 }
 
 fn build_failed(path: String, errs: usize) i32 {
     const m = $"build failed: {errs} error(s) in {path}"
     defer m.deinit()
-    println(m.view)
+    println(m.view())
     return 1
 }
 
@@ -1048,7 +1048,7 @@ fn run_lsp(argv: String[], cli: &Cli) i32 {
     const _ob = set_binary_mode(&stdout)
 
     const me = project_info()
-    let srv = lsp_server(stdin.reader(), stdout.writer(), stdlib.view, me.version, true)
+    let srv = lsp_server(stdin.reader(), stdout.writer(), stdlib.view(), me.version, true)
     defer srv.deinit()
     return srv.run()
 }
@@ -1090,24 +1090,24 @@ fn run_fmt(cli: &Cli) i32 {
         }
         let toml = toml_res.unwrap()
         defer toml.deinit()
-        const parsed = parse_project(toml.view)
+        const parsed = parse_project(toml.view())
         if parsed.is_err() {
             report_manifest_error(parsed.unwrap_err())
             return 1
         }
         let proj = parsed.unwrap()
         defer proj.deinit()
-        install(&project_name, from_view(proj.name.view))
-        set_project(&cfg, project_name.view)
+        install(&project_name, from_view(proj.name.view()))
+        set_project(&cfg, project_name.view())
         for &e in proj.fmt {
-            if !set_option(&cfg, e.key.view, e.value.view) {
-                const w = $"flang: ignoring unknown [fmt] entry `{e.key.view} = {e.value.view}`"
+            if !set_option(&cfg, e.key.view(), e.value.view()) {
+                const w = $"flang: ignoring unknown [fmt] entry `{e.key.view()} = {e.value.view()}`"
                 defer w.deinit()
-                println(w.view)
+                println(w.view())
             }
         }
         if files.len == 0 {
-            install(&sources, glob_sources(proj.source.view))
+            install(&sources, glob_sources(proj.source.view()))
         }
     }
     for f in files {
@@ -1122,7 +1122,7 @@ fn run_fmt(cli: &Cli) i32 {
     let changed: usize = 0
     let failed: usize = 0
     for &s in sources {
-        fmt_file(s.view, &cfg, check) match {
+        fmt_file(s.view(), &cfg, check) match {
             Unchanged => {}
             Changed => { changed = changed + 1 }
             Failed => { failed = failed + 1 }
@@ -1132,12 +1132,12 @@ fn run_fmt(cli: &Cli) i32 {
     if check and changed > 0 {
         const m = $"flang: {changed} file(s) would be reformatted"
         defer m.deinit()
-        println(m.view)
+        println(m.view())
     }
     if !check and changed > 0 {
         const m = $"formatted {changed} of {sources.len} file(s)"
         defer m.deinit()
-        println(m.view)
+        println(m.view())
     }
     if failed > 0 {
         return 1
@@ -1159,7 +1159,7 @@ fn fmt_file(path: String, cfg: &FmtConfig, check: bool) FmtStatus {
     let source = read_res.unwrap()
     defer source.deinit()
 
-    const fmt_res = format_source(source.view, cfg)
+    const fmt_res = format_source(source.view(), cfg)
     if fmt_res.is_err() {
         report_fmt_error(path, fmt_res.unwrap_err())
         return FmtStatus.Failed
@@ -1167,19 +1167,19 @@ fn fmt_file(path: String, cfg: &FmtConfig, check: bool) FmtStatus {
     let formatted = fmt_res.unwrap()
     defer formatted.deinit()
 
-    if formatted.view == source.view {
+    if formatted.view() == source.view() {
         return FmtStatus.Unchanged
     }
     if check {
         const m = $"would reformat {path}"
         defer m.deinit()
-        println(m.view)
+        println(m.view())
         return FmtStatus.Changed
     }
     let wrote = false
     open_file(path, FileMode.Write) match {
         Ok(handle) => {
-            wrote = !write(&handle, formatted.view).is_err()
+            wrote = !write(&handle, formatted.view()).is_err()
             const _closed = close_file(handle)
         }
         Err(_) => {}
@@ -1187,7 +1187,7 @@ fn fmt_file(path: String, cfg: &FmtConfig, check: bool) FmtStatus {
     if !wrote {
         const m = $"flang: cannot write `{path}`"
         defer m.deinit()
-        println(m.view)
+        println(m.view())
         return FmtStatus.Failed
     }
     return FmtStatus.Changed
@@ -1199,7 +1199,7 @@ fn report_fmt_error(path: String, e: FmtError) {
         VerifyFailed => $"flang: formatter verification failed on `{path}` (formatter bug) - file left untouched"
     }
     defer msg.deinit()
-    println(msg.view)
+    println(msg.view())
 }
 
 // Spawn the sibling tool with our trailing argv. Tool binaries are expected on PATH (or addressable
@@ -1216,7 +1216,7 @@ fn spawn_tool(tool: String, cli: &Cli) i32 {
     if spawn_result.is_err() {
         const msg = $"flang: failed to spawn `{tool}` - is it on PATH?"
         defer msg.deinit()
-        println(msg.view)
+        println(msg.view())
         return 1
     }
     let child = spawn_result.unwrap()
@@ -1226,7 +1226,7 @@ fn spawn_tool(tool: String, cli: &Cli) i32 {
     if wait_result.is_err() {
         const msg = $"flang: `{tool}` wait failed"
         defer msg.deinit()
-        println(msg.view)
+        println(msg.view())
         return 1
     }
     return wait_result.unwrap()

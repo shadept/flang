@@ -35,8 +35,16 @@ fn count(r: Reader, lines: &usize, words: &usize, bytes_count: &usize) {
     }
 }
 
-fn print_counts(sb: &StringBuilder, lines: usize, words: usize, bytes_count: usize,
-    show_lines: bool, show_words: bool, show_bytes: bool, name: String) {
+fn print_counts(
+    sb: &StringBuilder,
+    lines: usize,
+    words: usize,
+    bytes_count: usize,
+    show_lines: bool,
+    show_words: bool,
+    show_bytes: bool,
+    name: String,
+) {
     sb.clear()
     if show_lines {
         sb.append(lines, "8")
@@ -71,8 +79,8 @@ pub fn main() i32 {
             Opt('w') => { show_words = true }
             Opt('c') => { show_bytes = true }
             NonOpt(s) => { if s.len > 0 {
-                    files.push(s)
-                } }
+                files.push(s)
+            } }
             _ => {}
         }
     }
@@ -120,8 +128,16 @@ pub fn main() i32 {
             total_bytes = total_bytes + bytes_count
         }
         if files.len > 1 {
-            print_counts(&sb, total_lines, total_words, total_bytes, show_lines, show_words,
-                show_bytes, "total")
+            print_counts(
+                &sb,
+                total_lines,
+                total_words,
+                total_bytes,
+                show_lines,
+                show_words,
+                show_bytes,
+                "total",
+            )
         }
     }
 

@@ -378,7 +378,7 @@ pub type Lines = struct {
 }
 
 pub fn lines(s: String) Lines {
-    return .{ buf = slice_from_raw_parts(s.ptr, s.len), pos = 0, done = false }
+    return .{ buf = s.as_raw_bytes(), pos = 0, done = false }
 }
 
 pub fn iter(self: &Lines) &Lines {
@@ -429,16 +429,34 @@ pub fn next(self: &Lines) String? {
 // Owns its buffer and frees it on `deinit`. Null-terminated for C FFI; `len` excludes the
 // terminator. Fixed size, with no spare capacity: build strings with `StringBuilder`.
 //
-// The owning counterpart to [core.string.String]: `view` is the text, and every `String` read
-// reaches it through `op_deref`.
+// The owning counterpart to [core.string.String]: `view()` is the text.
 pub type OwnedString = struct {
-    owned view: String
+    // The text and its terminator, exactly; the zero block for the empty zero value.
+    mem: Memory
     allocator: &Allocator
 }
 
-// Every read of an `OwnedString` is a read of the `String` it holds.
-pub fn op_deref(self: &OwnedString) &String {
-    return &self.view
+// The text, without its terminator. Valid while the string is and is not given away.
+pub fn view(self: OwnedString) String {
+    if self.mem.len == 0 {
+        return ""
+    }
+    return .{ ptr = self.mem.ptr, len = self.mem.len - 1 }
+}
+
+// The string held in `mem`: `len` bytes of text followed by a terminator, allocated from
+// `allocator`, which `deinit` gives the block back to. A larger block is shrunk to fit, or copied
+// into one that does when the allocator cannot shrink it.
+pub fn from_memory(mem: move Memory, len: usize, allocator: &Allocator) OwnedString {
+    const fits = mem.len == len + 1 or allocator.realloc(&mem, len + 1)
+    if !fits {
+        const exact = allocator.alloc(len + 1, align_of(u8))
+            .expect("OwnedString.from_memory: allocation failed")
+        const from: u8[] = mem.as_slice()
+        copy_to(from[0..len + 1], exact.as_slice())
+        allocator.dealloc(replace(&mem, exact))
+    }
+    return .{ mem = move mem, allocator = allocator }
 }
 
 // An owned copy of a string view, one allocation of `s.len + 1` for the terminator.
@@ -452,20 +470,17 @@ pub fn from_view(s: String, allocator: &Allocator = context.allocator) OwnedStri
     const buf = allocator.alloc(s.len + 1, align_of(u8))
         .expect("OwnedString.from_view: allocation failed")
     if s.len > 0 {
-        copy_to(slice_from_raw_parts(s.ptr, s.len), slice_from_raw_parts(buf.ptr, s.len))
+        copy_to(s.as_raw_bytes(), buf.as_slice())
     }
-    const term = buf.ptr + s.len
-    term.* = 0
-    return .{ view = .{ ptr = buf.ptr, len = s.len }, allocator = allocator }
+    const out: u8[] = buf.as_slice()
+    out[s.len] = 0
+    return from_memory(buf, s.len, allocator)
 }
 
 // Frees the buffer. The binding is dead afterwards (RFC-033), so a second release is E2123 rather
 // than a run-time no-op.
 pub fn deinit(self: move OwnedString) {
-    if self.view.ptr == (0usize as &u8) {
-        return
-    }
-    self.allocator.free(slice_from_raw_parts(self.view.ptr, self.view.len))
+    self.allocator.dealloc(self.mem)
 }
 
 // The element form: containers release their elements with an allocator in hand. The string frees
@@ -476,13 +491,26 @@ pub fn deinit(self: move OwnedString, allocator: &Allocator) {
 
 // An independent copy on `allocator`, or on the global allocator when null.
 pub fn clone(self: &OwnedString, allocator: &Allocator = context.allocator) OwnedString {
-    return from_view(self.view, allocator)
+    return from_view(self.view(), allocator)
 }
 
 // Declared rather than peeled: the catch-all `hash(val: $T)` takes an `OwnedString` as written and
 // would hash the struct's bytes, not the text.
 pub fn hash(s: OwnedString) usize {
-    return hash(s.view)
+    return hash(s.view())
+}
+
+pub fn op_eq(a: OwnedString, b: OwnedString) bool {
+    return a.view() == b.view()
+}
+
+// A `String` probe finds an `OwnedString` key.
+pub fn op_eq(a: OwnedString, b: String) bool {
+    return a.view() == b
+}
+
+pub fn op_cmp(a: OwnedString, b: OwnedString) Ord {
+    return a.view().op_cmp(b.view())
 }
 
 // =============================================================================
@@ -496,7 +524,7 @@ type Bytes = struct {
 
 pub fn bytes(s: String) Bytes {
     // TODO fix String to Slice(u8) coersion
-    const slice = slice_from_raw_parts(s.ptr, s.len)
+    const slice = s.as_raw_bytes()
     return .{ buf = slice, idx = 0 }
 }
 
@@ -526,7 +554,7 @@ type Chars = struct {
 
 pub fn chars(s: String) Chars {
     // TODO fix String to Slice(u8) coersion
-    const slice = slice_from_raw_parts(s.ptr, s.len)
+    const slice = s.as_raw_bytes()
     return .{ buf = slice, idx = 0 }
 }
 
@@ -566,6 +594,7 @@ pub fn partition(s: String, delimiter: u8) (String, String) {
 // - `allocator`: where the result is allocated. Null is the global allocator.
 pub fn join(parts: String[], sep: String, allocator: &Allocator = context.allocator) OwnedString {
     let sb = string_builder(0, allocator)
+    defer sb.deinit()
     for i in 0..parts.len {
         if i > 0 {
             sb.append(sep)

@@ -217,7 +217,7 @@ pub fn remove_dir_all(path: String, allocator: &Allocator = context.allocator) R
     while i > 0 {
         i = i - 1
         const item: &Doomed = doomed.op_index_ref(i)
-        const view = item.path.view
+        const view = item.path.view()
         // A file that will not unlink is a failure of the directory removal, so it is reported as
         // one.
         const r = if item.is_dir { remove_dir(

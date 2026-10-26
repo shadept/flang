@@ -22,6 +22,6 @@ pub fn main() i32 {
 
     const s = $"buffered=[{b.as_view()}]"
     defer s.deinit()
-    println(s.view)
+    println(s.view())
     return 0
 }

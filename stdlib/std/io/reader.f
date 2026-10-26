@@ -60,8 +60,8 @@ pub fn read_byte(r: &BufferedReader) u8? {
             return null
         }
     }
-    const src = r.buf.ptr + r.pos
-    let b: u8 = src.*
+
+    let b: u8 = r.buf[r.pos]
     r.pos = r.pos + 1
     return Some(b)
 }
@@ -82,7 +82,7 @@ pub fn read(r: &BufferedReader, dst: u8[]) usize {
     if r.pos < r.end {
         let avail = r.end - r.pos
         let n = if dst.len < avail { dst.len } else { avail }
-        copy_to(slice_from_raw_parts(r.buf.ptr + r.pos, n), slice_from_raw_parts(dst.ptr, n))
+        copy_to(r.buf[r.pos..r.pos + n], dst[0..n])
         r.pos = r.pos + n
         return n
     }
@@ -101,7 +101,7 @@ pub fn read(r: &BufferedReader, dst: u8[]) usize {
 
     let avail = r.end - r.pos
     let n = if dst.len < avail { dst.len } else { avail }
-    copy_to(slice_from_raw_parts(r.buf.ptr + r.pos, n), slice_from_raw_parts(dst.ptr, n))
+    copy_to(r.buf[r.pos..r.pos + n], dst[0..n])
     r.pos = r.pos + n
     return n
 }
@@ -109,6 +109,7 @@ pub fn read(r: &BufferedReader, dst: u8[]) usize {
 // Read `r` to EOF into a fresh OwnedString. Bytes are taken as-is - no encoding checks.
 pub fn read_all(r: Reader, allocator: &Allocator = context.allocator) OwnedString {
     let sb = string_builder(4096, allocator)
+    defer sb.deinit()
     let buf = [0u8; 4096]
     loop {
         const n = r.read(buf as u8[])
@@ -127,10 +128,7 @@ fn fill(r: &BufferedReader) {
     if r.pos > 0 {
         if r.end > r.pos {
             let leftover = r.end - r.pos
-            copy_to(
-                slice_from_raw_parts(r.buf.ptr + r.pos, leftover),
-                slice_from_raw_parts(r.buf.ptr, leftover),
-            )
+            copy_to(r.buf[r.pos..r.pos + leftover], r.buf[0..leftover])
             r.pos = 0
             r.end = leftover
         } else {
@@ -155,17 +153,18 @@ test "read_all drains a reader to EOF" {
     let r = mem_reader("hello, reader")
     let out = read_all(r.reader())
     defer out.deinit()
-    assert_true(out.view == "hello, reader", "everything arrives, nothing extra")
+    assert_true(out.view() == "hello, reader", "everything arrives, nothing extra")
 }
 
 test "read_all crosses the internal chunk size" {
     let sb = string_builder(9600)
+    defer sb.deinit()
     sb.append_repeated("abcdefgh", 1200)
     let src = sb.to_string()
     defer src.deinit()
-    let r = mem_reader(src.view)
+    let r = mem_reader(src.view())
     let out = read_all(r.reader())
     defer out.deinit()
-    assert_eq(out.len, src.len, "a payload larger than one chunk arrives whole")
-    assert_true(out.view == src.view, "byte for byte")
+    assert_eq(out.view().len, src.view().len, "a payload larger than one chunk arrives whole")
+    assert_true(out.view() == src.view(), "byte for byte")
 }

@@ -175,7 +175,7 @@ pub fn serialize(self: &usize, enc: &Encoder) { encode_usize(enc, self.*) }
 pub fn serialize(self: &f32, enc: &Encoder) { encode_f32(enc, self.*) }
 pub fn serialize(self: &f64, enc: &Encoder) { encode_f64(enc, self.*) }
 pub fn serialize(self: &String, enc: &Encoder) { enc.encode_str(self.*) }
-pub fn serialize(self: &OwnedString, enc: &Encoder) { enc.encode_str(self.view) }
+pub fn serialize(self: &OwnedString, enc: &Encoder) { enc.encode_str(self.view()) }
 
 // `None` is an absent value (`encode_none`), `Some` its payload.
 pub fn serialize(self: &Option($T), enc: &Encoder) where T: Serialize {

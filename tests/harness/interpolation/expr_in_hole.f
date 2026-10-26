@@ -10,6 +10,6 @@ pub fn main() i32 {
     let c = true
     let msg = $"result={ if c { 1i32 } else { 2i32 } }"
     defer msg.deinit()
-    print(msg.view)
+    print(msg.view())
     return 0
 }

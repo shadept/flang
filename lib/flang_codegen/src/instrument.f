@@ -42,7 +42,7 @@ pub fn instrument_profile(m: &IrModule, all: bool = false) OwnedString {
         }
         // Lent, not taken: the display name stays the module's.
         m.displays.get_ref(f.name) match {
-            Some(d) => names.append(d.view)
+            Some(d) => names.append(d.view())
             None => names.append(f.name)
         }
         names.append('\n')
@@ -56,15 +56,15 @@ pub fn instrument_profile(m: &IrModule, all: bool = false) OwnedString {
         let f = &m.functions[i]
         if f.name == "main" {
             let entry = &f.blocks[0]
-            entry.instrs.insert(0, register_call(count, blob.view.len))
+            entry.instrs.insert(0, register_call(count, blob.view().len))
         }
     }
 
     m.add_global(Global {
         name = PROF_NAMES,
-        size = blob.view.len as u64,
+        size = blob.view().len as u64,
         align = 1,
-        init_bytes = Some(as_raw_bytes(blob.view)),
+        init_bytes = Some(as_raw_bytes(blob.view())),
         relocs = null,
     })
     add_runtime_foreigns(m)

@@ -319,7 +319,7 @@ test "duration iso round trip" {
         const d = parse_duration(c).unwrap()
         const text = $"{d}"
         defer text.deinit()
-        assert_true(text.view == c, c)
+        assert_true(text.view() == c, c)
     }
     assert_true(parse_duration("P1DT2H").unwrap() == hours(26), "days are 24 h")
     assert_true(parse_duration("PT1.5H").is_err(), "fraction only on seconds")
@@ -336,7 +336,7 @@ test "period format and parse" {
     const p = period(years = 1, months = 2, days = 3)
     const text = $"{p}"
     defer text.deinit()
-    assert_true(text.view == "P1Y2M3D", "format")
+    assert_true(text.view() == "P1Y2M3D", "format")
     assert_true(parse_period("P1Y2M3D").unwrap() == p, "parse")
     assert_true(parse_period("P2W").unwrap() == period(days = 14), "weeks")
     assert_true(parse_period("-P1M").unwrap() == period(months = -1), "negated")

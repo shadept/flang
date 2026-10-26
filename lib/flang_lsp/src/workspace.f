@@ -82,7 +82,7 @@ fn canonical_root(p: String) OwnedString {
     let base = wd.unwrap()
     const joined = $"{base.as_view()}/{rel}"
     base.deinit()
-    const norm = normalize_fs_path(joined.view)
+    const norm = normalize_fs_path(joined.view())
     joined.deinit()
     return norm
 }
@@ -113,7 +113,7 @@ pub fn project_dir_for(path: String) OwnedString? {
     let dir = parent_dir(path)
     while dir.len > 0 {
         const manifest = $"{dir}/flang.toml"
-        const hit = exists(manifest.view)
+        const hit = exists(manifest.view())
         manifest.deinit()
         if hit {
             return Some(from_view(dir))
@@ -126,7 +126,7 @@ pub fn project_dir_for(path: String) OwnedString? {
 // Index of the open project rooted exactly at `dir`.
 pub fn find_project(self: &Workspace, dir: String) ProjectId? {
     for i in 0..self.projects.len {
-        if self.projects[i].dir.view == dir {
+        if self.projects[i].dir.view() == dir {
             return Some(i)
         }
     }
@@ -139,7 +139,7 @@ pub fn project_of_path(self: &Workspace, path: String) ProjectId? {
     let best: ProjectId? = null
     let best_len: usize = 0
     for i in 0..self.projects.len {
-        const dir = self.projects[i].dir.view
+        const dir = self.projects[i].dir.view()
         if dir.len >= best_len and path_under(path, dir) {
             best = Some(i)
             best_len = dir.len
@@ -160,9 +160,9 @@ fn path_under(path: String, dir: String) bool {
 fn overrides_from(docs: &DocumentStore) Dict(String, String) {
     let ov: Dict(String, String) = dict()
     for e in docs.docs.iter() {
-        const p = e.value.path.view
+        const p = e.value.path.view()
         if p.len > 0 {
-            ov.set(p, e.value.text.view)
+            ov.set(p, e.value.text.view())
         }
     }
     return ov
@@ -197,8 +197,8 @@ pub fn reanalyze_project(
 // Rebuild an open project from scratch: fresh manifest, fresh module set. Keeps the old analysis
 // when the rebuild fails (manifest gone mid-edit).
 pub fn reopen_project(self: &Workspace, idx: ProjectId, docs: &DocumentStore) bool {
-    let dir = from_view(self.projects[idx].dir.view)
-    const fresh = self.load_project(dir.view, docs)
+    let dir = from_view(self.projects[idx].dir.view())
+    const fresh = self.load_project(dir.view(), docs)
     dir.deinit()
     if fresh.is_none() {
         return false
@@ -209,33 +209,33 @@ pub fn reopen_project(self: &Workspace, idx: ProjectId, docs: &DocumentStore) bo
 
 fn load_project(self: &Workspace, dir: String, docs: &DocumentStore) OpenProject? {
     const manifest = $"{dir}/flang.toml"
-    const text = read_text(manifest.view)
+    const text = read_text(manifest.view())
     manifest.deinit()
     if text.is_none() {
         return null
     }
     let toml = text.unwrap()
     defer toml.deinit()
-    const parsed = parse_project(toml.view)
+    const parsed = parse_project(toml.view())
     if parsed.is_err() {
         return null
     }
     let proj = parsed.unwrap()
     defer proj.deinit()
 
-    let ctx = resolve_ctx_at(&proj, dir, self.stdlib_path.view)
+    let ctx = resolve_ctx_at(&proj, dir, self.stdlib_path.view())
     // The LSP checks every body (no lazy demand) and reports unused functions. Test bodies are in
     // that set: an editor has to diagnose a `test {}` block like any other code, and their calls
     // are what lets W1003 see a function that exists only for its tests.
     ctx.set_warn_unused(true)
     ctx.set_check_tests(true)
 
-    const pattern = $"{dir}/{proj.source.view}"
-    let raw = glob_sources(pattern.view)
+    const pattern = $"{dir}/{proj.source.view()}"
+    let raw = glob_sources(pattern.view())
     pattern.deinit()
     let entries: List(OwnedString) = list(raw.len)
     for &r in raw {
-        entries.push(normalize_sep(r.view))
+        entries.push(normalize_sep(r.view()))
     }
     raw.deinit()
     if entries.len == 0 {
@@ -252,7 +252,7 @@ fn load_project(self: &Workspace, dir: String, docs: &DocumentStore) OpenProject
 
     return Some(OpenProject {
         dir = from_view(dir),
-        name = from_view(proj.name.view),
+        name = from_view(proj.name.view()),
         ctx = move ctx,
         unit = move unit,
         index = move index,

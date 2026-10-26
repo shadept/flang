@@ -37,7 +37,7 @@ pub fn deinit(self: move Entry) {
 }
 
 fn entry_cmp(a: Entry, b: Entry) Ord {
-    return op_cmp(a.name.view, b.name.view)
+    return op_cmp(a.name.view(), b.name.view())
 }
 
 type State = struct {
@@ -167,7 +167,7 @@ fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state
         }
     }
 
-    sb.append(entry.name.view)
+    sb.append(entry.name.view())
 
     if state.classify and entry.kind == FileKind.Dir {
         sb.append("/")
@@ -176,7 +176,7 @@ fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state
     if state.show_size and entry.kind != FileKind.Dir {
         let stat_sb = string_builder(path.len + entry.name.len + 2)
         defer stat_sb.deinit()
-        append_join(&stat_sb, path, entry.name.view)
+        append_join(&stat_sb, path, entry.name.view())
 
         const info_r = stat(stat_sb.as_view())
         let size = 0
@@ -227,7 +227,7 @@ fn walk(path: String, prefix: String, depth: usize, state: &State) {
             if can_descend {
                 let child_path = string_builder(path.len + entry_ref.name.len + 2)
                 defer child_path.deinit()
-                append_join(&child_path, path, entry_ref.name.view)
+                append_join(&child_path, path, entry_ref.name.view())
 
                 let child_prefix = string_builder(prefix.len + 8)
                 defer child_prefix.deinit()

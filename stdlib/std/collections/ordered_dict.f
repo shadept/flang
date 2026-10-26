@@ -32,8 +32,7 @@ pub fn deinit(self: move OrderedEntry($K, $V)) {
 // zero-initialised value is a valid empty dict. Keys and values are owned: `deinit` deinits each.
 pub type UnmanagedOrderedDict = struct(K: Hash + Eq, V) {
     entries: UnmanagedList(OrderedEntry(K, V))
-    owned index: &usize
-    cap: usize
+    index: Memory
 }
 
 // A map from `K` to `V` that iterates in insertion order and remembers the allocator it grows and
@@ -64,29 +63,31 @@ pub fn ordered_dict(allocator: &Allocator = context.allocator) OrderedDict($K, $
 // =============================================================================
 
 fn index_slot(self: &UnmanagedOrderedDict($K, $V), i: usize) &usize {
-    return self.index + i
+    return (self.index.ptr as &usize) + i
+}
+
+// The number of slots in the index.
+fn index_cap(self: &UnmanagedOrderedDict($K, $V)) usize {
+    return self.index.len / size_of(usize)
 }
 
 // Grows the index so one more entry keeps it under a 75% load. Capacity is a power of two.
 fn reserve_index(self: &UnmanagedOrderedDict($K, $V), allocator: &Allocator) {
     const needed = self.entries.len + 1
-    if self.cap > 0 and needed * 4 <= self.cap * 3 {
+    const cap = self.index_cap()
+    if cap > 0 and needed * 4 <= cap * 3 {
         return
     }
-    let new_cap: usize = if self.cap == 0 { 8 } else { self.cap * 2 }
-    if self.cap > 0 {
-        allocator.free(slice_from_raw_parts(self.index, self.cap))
-    }
-    const raw: u8[] = allocator.alloc(new_cap * size_of(usize), align_of(usize))
+    const new_cap: usize = if cap == 0 { 8 } else { cap * 2 }
+    const fresh = allocator.alloc(new_cap * size_of(usize), align_of(usize))
         .expect("ordered_dict: allocation failed")
-    self.index = raw.ptr as &usize
-    self.cap = new_cap
+    allocator.dealloc(replace(&self.index, fresh))
     self.reindex()
 }
 
 // Rebuilds the index from the entries.
 fn reindex(self: &UnmanagedOrderedDict($K, $V)) {
-    for i in 0..self.cap {
+    for i in 0..self.index_cap() {
         self.index_slot(i).* = 0
     }
     for i in 0..self.entries.len {
@@ -95,8 +96,8 @@ fn reindex(self: &UnmanagedOrderedDict($K, $V)) {
 }
 
 fn place(self: &UnmanagedOrderedDict($K, $V), h: usize, pos: usize) {
-    const mask = self.cap - 1
-    for i in 0..self.cap {
+    const mask = self.index_cap() - 1
+    for i in 0..self.index_cap() {
         const slot = self.index_slot((h + i) & mask)
         if slot.* == 0 {
             slot.* = pos + 1
@@ -109,12 +110,12 @@ fn place(self: &UnmanagedOrderedDict($K, $V), h: usize, pos: usize) {
 // The position of the entry whose key equals `key`, or null. `key` is a `K` or a probe whose `hash`
 // and `==` agree with `K`'s.
 fn find(self: &UnmanagedOrderedDict($K, $V), key: $Q) usize? where Q: Hash {
-    if self.cap == 0 {
+    if self.index_cap() == 0 {
         return null
     }
     const h = key.hash()
-    const mask = self.cap - 1
-    for i in 0..self.cap {
+    const mask = self.index_cap() - 1
+    for i in 0..self.index_cap() {
         const slot = self.index_slot((h + i) & mask).*
         if slot == 0 {
             return null
@@ -208,14 +209,10 @@ pub fn add(
     return true
 }
 
-// Deinits every key and value, frees the storage and resets to empty, so a second call is a no-op.
+// Deinits every key and value and frees the storage.
 pub fn deinit(self: move UnmanagedOrderedDict($K, $V), allocator: &Allocator) {
     self.entries.deinit(allocator)
-    if self.cap > 0 {
-        allocator.free(slice_from_raw_parts(self.index, self.cap))
-    }
-    self.index = 0usize as &usize
-    self.cap = 0
+    allocator.dealloc(self.index)
 }
 
 // =============================================================================
@@ -382,7 +379,7 @@ test "string keys are copied on insert, looked up by view and freed" {
     d.set("b", 3i32)
     assert_true(!d.add("a", 9i32), "add leaves a present key alone")
     assert_eq(d.get("b").unwrap(), 3i32, "lookup by view")
-    assert_true(d.entry_at(0).unwrap().key.view == "b", "first key")
+    assert_true(d.entry_at(0).unwrap().key.view() == "b", "first key")
     assert_eq(d.remove("b").unwrap(), 3i32, "remove by view")
     d.deinit()
     assert_eq(counting.deallocs, counting.allocs, "keys, entries and index freed")

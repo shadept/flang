@@ -17,7 +17,7 @@ fn wrap(s: move OwnedString, f: fn(move OwnedString) Holder) Holder {
 pub fn main() i32 {
     const s: OwnedString = from_view("owned")
     const h: Holder = wrap(s) { Holder { s = move it } }
-    const n: usize = h.s.len
+    const n: usize = h.s.view().len
     h.s.deinit()
     return n as i32 - 5
 }

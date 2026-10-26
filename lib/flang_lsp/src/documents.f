@@ -86,11 +86,11 @@ test "open, change, close lifecycle" {
 
     store.open("file:///a.f", 1, "let x = 1\n")
     assert_eq(store.len(), 1, "one open document")
-    assert_eq(store.get("file:///a.f").unwrap().text.view, "let x = 1\n", "text stored")
+    assert_eq(store.get("file:///a.f").unwrap().text.view(), "let x = 1\n", "text stored")
 
     store.change("file:///a.f", 2, "let x = 2\n")
     const doc = store.get("file:///a.f").unwrap()
-    assert_eq(doc.text.view, "let x = 2\n", "full sync replaces the buffer")
+    assert_eq(doc.text.view(), "let x = 2\n", "full sync replaces the buffer")
     assert_eq(doc.version, 2, "version follows")
 
     store.close("file:///a.f")
@@ -112,6 +112,6 @@ test "reopening replaces the previous buffer" {
     store.open("file:///a.f", 5, "new")
     assert_eq(store.len(), 1, "still one entry")
     const doc = store.get("file:///a.f").unwrap()
-    assert_eq(doc.text.view, "new", "latest open wins")
+    assert_eq(doc.text.view(), "new", "latest open wins")
     assert_eq(doc.version, 5, "with its version")
 }

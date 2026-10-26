@@ -156,6 +156,7 @@ pub fn cwd(self: &Command, dir: String) &Command {
 // Add a single KEY=VALUE pair to the child environment.
 pub fn env(self: &Command, key: String, val: String) &Command {
     let sb = string_builder(key.len + val.len + 2, self.__allocator)
+    defer sb.deinit()
     sb.append(key)
     sb.append_byte('=')
     sb.append(val)
@@ -208,23 +209,23 @@ pub fn spawn(self: &Command) Result(Child, ProcessError) {
     let argv_ptrs: List(usize) = list(self.__args.len, self.__allocator)
     defer argv_ptrs.deinit()
     for &a in self.__args {
-        argv_ptrs.push(a.view.ptr as usize)
+        argv_ptrs.push(a.view().ptr as usize)
     }
 
     let envp_ptrs: List(usize) = list(self.__env_pairs.len, self.__allocator)
     defer envp_ptrs.deinit()
     for &e in self.__env_pairs {
-        envp_ptrs.push(e.view.ptr as usize)
+        envp_ptrs.push(e.view().ptr as usize)
     }
 
-    const prog: &u8 = self.__args[0].ptr
+    const prog: &u8 = self.__args[0].view().ptr
 
     let cwd_ptr: &u8? = null
     let has_cwd: i32 = 0
     if self.__has_cwd {
         self.__cwd match {
             Some(c) => {
-                cwd_ptr = Some(c.ptr)
+                cwd_ptr = Some(c.view().ptr)
                 has_cwd = 1
             }
             None => {}
@@ -239,9 +240,9 @@ pub fn spawn(self: &Command) Result(Child, ProcessError) {
 
     const status = __flang_proc_spawn(
         prog,
-        argv_ptrs.ptr,
+        argv_ptrs.as_slice().ptr,
         argv_ptrs.len,
-        envp_ptrs.ptr,
+        envp_ptrs.as_slice().ptr,
         envp_ptrs.len,
         cwd_ptr,
         has_cwd,
@@ -321,6 +322,8 @@ pub fn deinit(self: move Child) {
         const _s = __flang_proc_wait(self.__handle, &exit, &err)
     }
     __flang_proc_release(self.__handle)
+    // The pipes and the handle left through the calls above.
+    leak(self)
 }
 
 // Returns the child's stdout stream if it was configured with Stdio.Pipe, otherwise null. Reading
@@ -397,16 +400,19 @@ pub fn close(self: move ChildStdout) {
     if self.__fd >= 0 {
         __flang_proc_close_fd(self.__fd)
     }
+    leak(self)
 }
 
 pub fn close(self: move ChildStderr) {
     if self.__fd >= 0 {
         __flang_proc_close_fd(self.__fd)
     }
+    leak(self)
 }
 
 pub fn close(self: move ChildStdin) {
     if self.__fd >= 0 {
         __flang_proc_close_fd(self.__fd)
     }
+    leak(self)
 }

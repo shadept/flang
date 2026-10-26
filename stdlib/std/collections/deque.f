@@ -15,8 +15,7 @@ import std.test
 // and `deinit` take one as their last argument, and the same allocator must be passed every time. A
 // zero-initialised value is a valid empty deque. Elements are owned: `deinit` deinits each.
 pub type UnmanagedDeque = struct(T) {
-    owned ptr: &T
-    cap: usize // backing buffer capacity (in elements)
+    owned mem: Memory
     head: usize // index of the front element when len > 0
     len: usize
 }
@@ -66,40 +65,46 @@ pub fn deque(capacity: usize, allocator: &Allocator = context.allocator) Deque($
 // Grow the backing buffer to at least `required` slots. When the live window wraps around the
 // buffer end, growth flattens it back to head=0 so subsequent indexing stays simple.
 fn reserve(self: &UnmanagedDeque($T), required: usize, allocator: &Allocator) {
-    if self.cap >= required {
+    const cap = self.capacity()
+    if cap >= required {
         return
     }
 
-    let new_cap = if self.cap == 0 { DEQUE_DEFAULT_CAPACITY } else { self.cap * 2 }
+    let new_cap = if cap == 0 { DEQUE_DEFAULT_CAPACITY } else { cap * 2 }
     if new_cap < required {
         new_cap = required
     }
 
-    const buf = allocator.alloc(
+    const fresh = allocator.alloc(
         new_cap * size_of(T),
         align_of(T),
     ).expect("deque: allocation failed")
-    const new_ptr: &T = buf.ptr as &T
+    const slots: T[] = fresh.as_slice()
 
     // The live window moves in logical order, flattened to start at index 0.
-    const first = if self.head + self.len <= self.cap { self.len } else { self.cap - self.head }
-    move_to(slice_from_raw_parts(self.ptr + self.head, first), slice_from_raw_parts(new_ptr, first))
+    const first = if self.head + self.len <= cap { self.len } else { cap - self.head }
+    move_to(slice_from_raw_parts((self.mem.ptr as &T) + self.head, first), slots[0..first])
     const second = self.len - first
-    move_to(slice_from_raw_parts(self.ptr, second), slice_from_raw_parts(new_ptr + first, second))
-    if self.cap > 0 {
-        allocator.free(slice_from_raw_parts(self.ptr, self.cap))
-    }
-    self.ptr = new_ptr
-    self.cap = new_cap
+    move_to(slice_from_raw_parts(self.mem.ptr as &T, second), slots[first..first + second])
+    allocator.dealloc(replace(&self.mem, fresh))
     self.head = 0
+}
+
+// The number of elements the buffer holds room for. A zero-size element needs no storage, so there
+// is always room for one more.
+pub fn capacity(self: &UnmanagedDeque($T)) usize {
+    if size_of(T) == 0 {
+        return self.len + 1
+    }
+    return self.mem.len / size_of(T)
 }
 
 // Appends `value` at the back, growing when full. The deque owns it from here. Panics when the
 // allocation fails.
 pub fn push_back(self: &UnmanagedDeque($T), value: move T, allocator: &Allocator) {
     self.reserve(self.len + 1, allocator)
-    const tail = (self.head + self.len) % self.cap
-    const slot: &T = self.ptr + tail
+    const tail = (self.head + self.len) % self.capacity()
+    const slot: &T = (self.mem.ptr as &T) + tail
     slot.* = move value
     self.len = self.len + 1
 }
@@ -109,25 +114,20 @@ pub fn push_back(self: &UnmanagedDeque($T), value: move T, allocator: &Allocator
 pub fn push_front(self: &UnmanagedDeque($T), value: move T, allocator: &Allocator) {
     self.reserve(self.len + 1, allocator)
     // Wrap backwards. Adding cap-1 then mod cap avoids underflow on usize.
-    self.head = (self.head + self.cap - 1) % self.cap
-    const slot: &T = self.ptr + self.head
+    self.head = (self.head + self.capacity() - 1) % self.capacity()
+    const slot: &T = (self.mem.ptr as &T) + self.head
     slot.* = move value
     self.len = self.len + 1
 }
 
-// Deinits every element, front to back, and frees the buffer. Idempotent: a second call is a no-op.
+// Deinits every element, front to back, and frees the buffer.
 pub fn deinit(self: move UnmanagedDeque($T), allocator: &Allocator) {
-    if self.cap > 0 {
-        for i in 0..self.len {
-            let v = move (self.ptr + ((self.head + i) % self.cap)).*
-            release(v)
-        }
-        allocator.free(slice_from_raw_parts(self.ptr, self.cap))
+    const cap = self.capacity()
+    for i in 0..self.len {
+        let v = move ((self.mem.ptr as &T) + ((self.head + i) % cap)).*
+        release(v)
     }
-    self.ptr = 0usize as &T
-    self.cap = 0
-    self.head = 0
-    self.len = 0
+    allocator.dealloc(self.mem)
 }
 
 // =============================================================================
@@ -144,8 +144,8 @@ pub fn pop_front(self: &UnmanagedDeque($T)) T? {
     if self.len == 0 {
         return null
     }
-    const v = move (self.ptr + self.head).*
-    self.head = (self.head + 1) % self.cap
+    const v = move ((self.mem.ptr as &T) + self.head).*
+    self.head = (self.head + 1) % self.capacity()
     self.len = self.len - 1
     return Some(move v)
 }
@@ -156,8 +156,8 @@ pub fn pop_back(self: &UnmanagedDeque($T)) T? where T: copyable {
         return null
     }
     self.len = self.len - 1
-    const tail = (self.head + self.len) % self.cap
-    const slot: &T = self.ptr + tail
+    const tail = (self.head + self.len) % self.capacity()
+    const slot: &T = (self.mem.ptr as &T) + tail
     return Some(slot.*)
 }
 
@@ -166,7 +166,7 @@ pub fn peek_front(self: &UnmanagedDeque($T)) T? where T: copyable {
     if self.len == 0 {
         return null
     }
-    const slot: &T = self.ptr + self.head
+    const slot: &T = (self.mem.ptr as &T) + self.head
     return Some(slot.*)
 }
 
@@ -175,8 +175,8 @@ pub fn peek_back(self: &UnmanagedDeque($T)) T? where T: copyable {
     if self.len == 0 {
         return null
     }
-    const tail = (self.head + self.len - 1) % self.cap
-    const slot: &T = self.ptr + tail
+    const tail = (self.head + self.len - 1) % self.capacity()
+    const slot: &T = (self.mem.ptr as &T) + tail
     return Some(slot.*)
 }
 
@@ -214,8 +214,8 @@ pub fn next(it: &DequeIterator($T)) T? where T: copyable {
     if it.current >= it.deque.len {
         return null
     }
-    const idx = (it.deque.head + it.current) % it.deque.cap
-    const slot: &T = it.deque.ptr + idx
+    const idx = (it.deque.head + it.current) % it.deque.capacity()
+    const slot: &T = (it.deque.mem.ptr as &T) + idx
     it.current = it.current + 1
     return Some(slot.*)
 }

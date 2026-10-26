@@ -1392,7 +1392,7 @@ test "format_i64 i64 min" {
 
 test "parse_u64 basic" {
     const input = "12345"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_u64(s).unwrap()
     assert_eq(p.0, 12345u64, "value should be 12345")
     assert_eq(p.1, 5usize, "should consume 5 bytes")
@@ -1400,7 +1400,7 @@ test "parse_u64 basic" {
 
 test "parse_u64 hex" {
     const input = "ff"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_u64(s, 16).unwrap()
     assert_eq(p.0, 255u64, "0xff = 255")
     assert_eq(p.1, 2usize, "consumed 2 bytes")
@@ -1408,14 +1408,14 @@ test "parse_u64 hex" {
 
 test "parse_u64 uppercase hex" {
     const input = "FF"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_u64(s, 16).unwrap()
     assert_eq(p.0, 255u64, "0xFF = 255")
 }
 
 test "parse_u64 partial" {
     const input = "123abc"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_u64(s).unwrap()
     assert_eq(p.0, 123u64, "parsed value")
     assert_eq(p.1, 3usize, "consumed 3 decimal digits")
@@ -1423,21 +1423,21 @@ test "parse_u64 partial" {
 
 test "parse_u64 empty returns error" {
     const input = ""
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const result = parse_u64(s)
     assert_true(result.is_err(), "empty should return error")
 }
 
 test "parse_u64 no digits returns error" {
     const input = "abc"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const result = parse_u64(s)
     assert_true(result.is_err(), "non-digit should return error")
 }
 
 test "parse_u64 zero" {
     const input = "0"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_u64(s).unwrap()
     assert_eq(p.0, 0u64, "value is 0")
     assert_eq(p.1, 1usize, "consumed 1 byte")
@@ -1445,7 +1445,7 @@ test "parse_u64 zero" {
 
 test "parse_i64 positive" {
     const input = "42"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_i64(s).unwrap()
     const val: i64 = p.0 as i64
     assert_eq(val, 42i64, "value is 42")
@@ -1454,7 +1454,7 @@ test "parse_i64 positive" {
 
 test "parse_i64 negative" {
     const input = "-123"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_i64(s).unwrap()
     const val: i64 = p.0 as i64
     assert_eq(val, -123i64, "value is -123")
@@ -1463,14 +1463,14 @@ test "parse_i64 negative" {
 
 test "parse_i64 just minus returns error" {
     const input = "-"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const result = parse_i64(s)
     assert_true(result.is_err(), "bare minus should return error")
 }
 
 test "parse_i64 zero" {
     const input = "0"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_i64(s).unwrap()
     const val: i64 = p.0 as i64
     assert_eq(val, 0i64, "value is 0")
@@ -1499,7 +1499,7 @@ test "format_bool false" {
 
 test "parse_bool true" {
     const input = "true"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_bool(s).unwrap()
     assert_eq(p.0, true, "value is true")
     assert_eq(p.1, 4usize, "consumed 4 bytes")
@@ -1507,7 +1507,7 @@ test "parse_bool true" {
 
 test "parse_bool false" {
     const input = "false"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_bool(s).unwrap()
     assert_eq(p.0, false, "value is false")
     assert_eq(p.1, 5usize, "consumed 5 bytes")
@@ -1515,7 +1515,7 @@ test "parse_bool false" {
 
 test "parse_bool invalid returns error" {
     const input = "yes"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const result = parse_bool(s)
     assert_true(result.is_err(), "invalid should return error")
 }
@@ -1537,21 +1537,21 @@ test "format_i64 roundtrip negative" {
 
 test "parse_u8 valid" {
     const input = "200"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_u8(s).unwrap()
     assert_eq(p.0, 200u64, "value is 200")
 }
 
 test "parse_u8 overflow" {
     const input = "256"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const result = parse_u8(s)
     assert_true(result.is_err(), "256 overflows u8")
 }
 
 test "parse_i8 valid" {
     const input = "-128"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_i8(s).unwrap()
     const val: i64 = p.0 as i64
     assert_eq(val, -128i64, "value is -128")
@@ -1559,14 +1559,14 @@ test "parse_i8 valid" {
 
 test "parse_i8 overflow" {
     const input = "128"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const result = parse_i8(s)
     assert_true(result.is_err(), "128 overflows i8")
 }
 
 test "parse_f64 integer" {
     const input = "42"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_f64(s).unwrap()
     assert_eq(p.0, 42.0, "value should be 42.0")
     assert_eq(p.1, 2usize, "consumed 2 bytes")
@@ -1574,7 +1574,7 @@ test "parse_f64 integer" {
 
 test "parse_f64 decimal" {
     const input = "3.14"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_f64(s).unwrap()
     assert_true(p.0 > 3.13 and p.0 < 3.15, "value should be ~3.14")
     assert_eq(p.1, 4usize, "consumed 4 bytes")
@@ -1582,7 +1582,7 @@ test "parse_f64 decimal" {
 
 test "parse_f64 negative" {
     const input = "-1.5"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_f64(s).unwrap()
     assert_eq(p.0, -1.5, "value should be -1.5")
     assert_eq(p.1, 4usize, "consumed 4 bytes")
@@ -1590,7 +1590,7 @@ test "parse_f64 negative" {
 
 test "parse_f64 exponent" {
     const input = "1e3"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_f64(s).unwrap()
     assert_eq(p.0, 1000.0, "1e3 should be 1000")
     assert_eq(p.1, 3usize, "consumed 3 bytes")
@@ -1598,7 +1598,7 @@ test "parse_f64 exponent" {
 
 test "parse_f64 negative exponent" {
     const input = "5e-2"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_f64(s).unwrap()
     assert_true(p.0 > 0.049 and p.0 < 0.051, "5e-2 should be ~0.05")
     assert_eq(p.1, 4usize, "consumed 4 bytes")
@@ -1606,7 +1606,7 @@ test "parse_f64 negative exponent" {
 
 test "parse_f64 zero" {
     const input = "0"
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const p = parse_f64(s).unwrap()
     assert_eq(p.0, 0.0, "value should be 0.0")
     assert_eq(p.1, 1usize, "consumed 1 byte")
@@ -1614,7 +1614,7 @@ test "parse_f64 zero" {
 
 test "parse_f64 empty returns error" {
     const input = ""
-    const s = slice_from_raw_parts(input.ptr, input.len)
+    const s = input.as_raw_bytes()
     const result = parse_f64(s)
     assert_true(result.is_err(), "empty should return error")
 }

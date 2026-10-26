@@ -128,10 +128,10 @@ test "time text" {
     const t = time(9, 5, 7, 500000000).unwrap()
     const iso = $"{t}"
     defer iso.deinit()
-    assert_true(iso.view == "09:05:07.5", iso.view)
+    assert_true(iso.view() == "09:05:07.5", iso.view())
     const custom = $"{t:%H.%M.%S.%f}"
     defer custom.deinit()
-    assert_true(custom.view == "09.05.07.500000", custom.view)
+    assert_true(custom.view() == "09.05.07.500000", custom.view())
     assert_true(parse_time("09:05:07.5").unwrap() == t, "parse")
     assert_true(parse_time("09:05").unwrap() == time(9, 5).unwrap(), "no seconds")
     assert_true(parse_time("23:59:60").unwrap() == time(23, 59, 59).unwrap(), "leap second")
@@ -152,5 +152,5 @@ test "time patterns" {
     const t = time(21, 5).unwrap()
     const text = $"{t:%I:%M %p}"
     defer text.deinit()
-    assert_true(text.view == "09:05 PM", text.view)
+    assert_true(text.view() == "09:05 PM", text.view())
 }

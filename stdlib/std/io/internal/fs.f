@@ -282,6 +282,7 @@ pub fn deinit(self: move RawDir) {
     if self.handle != 0 {
         const _closed = raw_closedir(self.handle)
     }
+    leak(self)
 }
 
 // =============================================================================

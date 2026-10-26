@@ -37,7 +37,7 @@ pub fn deinit(self: move ExtraHover) {
 }
 
 pub fn markdown(self: &ExtraHover) OwnedString {
-    return hover_markdown(self.label.view, &self.doc, &self.prose)
+    return hover_markdown(self.label.view(), &self.doc, &self.prose)
 }
 
 // A hover's markdown: `label` as a flang code block, the docstring `doc` rendered below it, then
@@ -52,14 +52,14 @@ pub fn hover_markdown(
     md.append(label)
     md.append("\n```")
     if doc.is_some() {
-        const rendered = doc_markdown(doc.unwrap_ref().view)
+        const rendered = doc_markdown(doc.unwrap_ref().view())
         md.append("\n\n")
-        md.append(rendered.view)
+        md.append(rendered.view())
         rendered.deinit()
     }
-    if prose.is_some() and prose.unwrap_ref().view.len > 0 {
+    if prose.is_some() and prose.unwrap_ref().view().len > 0 {
         md.append("\n\n")
-        md.append(prose.unwrap_ref().view)
+        md.append(prose.unwrap_ref().view())
     }
     const out = md.to_string()
     md.deinit()
@@ -144,7 +144,7 @@ fn member_base(text: String, wstart: usize) String? {
 // The generator invocation whose `#name` holds `offset` in file `fid`: its `#define` header and
 // docstring, and the declarations its expansion added.
 pub fn generator_hover(unit: &AnalyzedProject, fid: i32, offset: usize) ExtraHover? {
-    const text = unit.sources[fid as usize].view
+    const text = unit.sources[fid as usize].view()
     let doc = parse_raw(text)
     defer doc.deinit()
     const inv = invocation_at(doc.module.decls.as_slice(), offset)
@@ -165,7 +165,7 @@ pub fn generator_hover(unit: &AnalyzedProject, fid: i32, offset: usize) ExtraHov
         return Some(.{ label = $"#{call.name}", doc = null, prose = Some(move p), span = word })
     }
     const g = def.unwrap()
-    const src = unit.sources[g.file as usize].view
+    const src = unit.sources[g.file as usize].view()
     return Some(.{
         label = from_view(define_header(src, g.span)),
         doc = doc_above(src, g.span.start),
@@ -268,11 +268,11 @@ fn expansion_names(
 ) {
     const header = invocation_header(text, call)
     defer header.deinit()
-    const gen_path = generated_path(unit.file_paths[fid as usize].view)
+    const gen_path = generated_path(unit.file_paths[fid as usize].view())
     defer gen_path.deinit()
     for c in unit.modules.len..unit.sources.len {
-        if unit.file_paths[c].view != gen_path.view
-            or trim(unit.sources[c].view).starts_with(header.view) == false {
+        if unit.file_paths[c].view() != gen_path.view()
+            or trim(unit.sources[c].view()).starts_with(header.view()) == false {
             continue
         }
         for &d in unit.modules[fid as usize].decls {

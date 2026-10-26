@@ -323,7 +323,7 @@ test "fixed zones and offset date-times" {
     const odt = i.to_offset_datetime(tz)
     const text = $"{odt}"
     defer text.deinit()
-    assert_true(text.view == "2026-10-14T05:30:00+05:30", text.view)
+    assert_true(text.view() == "2026-10-14T05:30:00+05:30", text.view())
     const parsed = parse_offset_datetime("2026-10-14T05:30:00+05:30").unwrap()
     assert_true(parsed == odt, "parse")
     assert_eq(parsed.offset, 19800i32, "keeps offset")
@@ -337,7 +337,7 @@ test "fixed zones and offset date-times" {
     )
     const name = $"{tz} {TimeZone.Utc}"
     defer name.deinit()
-    assert_true(name.view == "+05:30 UTC", name.view)
+    assert_true(name.view() == "+05:30 UTC", name.view())
 }
 
 test "database zones follow DST" {
@@ -361,7 +361,7 @@ test "database zones follow DST" {
     assert_true(summer.to_datetime(ny) == datetime(2026, Month.July, 1, 8).unwrap(), "to_datetime")
     const name = $"{ny}"
     defer name.deinit()
-    assert_true(name.view == "America/New_York", name.view)
+    assert_true(name.view() == "America/New_York", name.view())
     assert_true(zone("America/New_York").unwrap() == ny, "same handle")
     assert_true(zone("Not/AZone").unwrap_err() == TimeError.UnknownZone, "unknown")
     assert_true(
@@ -449,5 +449,5 @@ test "rfc 5322 dates" {
     assert_true(parse_rfc5322("14 Oct 2026 09:30").is_err(), "no zone")
     const text = $"{full:%a, %d %b %Y %H:%M:%S %z}"
     defer text.deinit()
-    assert_true(parse_rfc5322(text.view).unwrap() == full, text.view)
+    assert_true(parse_rfc5322(text.view()).unwrap() == full, text.view())
 }

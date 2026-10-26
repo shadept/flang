@@ -107,8 +107,13 @@ fn split_columns(s: String, cols: &List(String)) {
     }
 }
 
-fn print_record(sb: &StringBuilder, record: &CsvRecord, indices: &List(usize), has_columns: bool,
-    delimiter: u8) {
+fn print_record(
+    sb: &StringBuilder,
+    record: &CsvRecord,
+    indices: &List(usize),
+    has_columns: bool,
+    delimiter: u8,
+) {
     sb.clear()
     if has_columns {
         for i in 0..indices.len {
@@ -134,8 +139,15 @@ fn print_record(sb: &StringBuilder, record: &CsvRecord, indices: &List(usize), h
     println(sb.as_view())
 }
 
-fn run(reader: &CsvReader, columns_arg: String, range_start: usize, range_end: usize,
-    has_range: bool, tail_count: usize, has_tail: bool) i32 {
+fn run(
+    reader: &CsvReader,
+    columns_arg: String,
+    range_start: usize,
+    range_end: usize,
+    has_range: bool,
+    tail_count: usize,
+    has_tail: bool,
+) i32 {
     const hdrs = reader.get_headers()
     const rows = reader.get_rows()
     if rows.len == 0 {
@@ -315,16 +327,30 @@ pub fn main() i32 {
         let file = result.unwrap()
         let reader: CsvReader
         csv_reader_init(&reader, file.reader())
-        const code = run(&reader, columns_arg, range_start, range_end, has_range, tail_count,
-            has_tail)
+        const code = run(
+            &reader,
+            columns_arg,
+            range_start,
+            range_end,
+            has_range,
+            tail_count,
+            has_tail,
+        )
         reader.deinit()
         close_file(file)
         return code
     } else {
         let reader: CsvReader
         csv_reader_init(&reader, stdin.reader())
-        const code = run(&reader, columns_arg, range_start, range_end, has_range, tail_count,
-            has_tail)
+        const code = run(
+            &reader,
+            columns_arg,
+            range_start,
+            range_end,
+            has_range,
+            tail_count,
+            has_tail,
+        )
         reader.deinit()
         return code
     }

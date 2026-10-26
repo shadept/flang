@@ -957,7 +957,7 @@ fn register_alias(self: &Checker, fqn_owned: move OwnedString, body: &TypeExpr) 
 }
 
 fn register_collected(self: &Checker, def: move NominalDef, fqn_owned: move OwnedString) NominalId {
-    const previous = self.recycled.remove(fqn_owned.view)
+    const previous = self.recycled.remove(fqn_owned.view())
     if previous.is_none() {
         self.saw_new_name = true
         return self.nominals.register(def, fqn_owned)
@@ -1106,7 +1106,7 @@ fn contract_param(self: &Checker, te: &TypeExpr, label: String, span: SourceSpan
         return TY_ERROR
     }
     const at = $"@{span.start}"
-    const name = intern_path(self, label, at.view)
+    const name = intern_path(self, label, at.view())
     at.deinit()
     const b = self.env.lookup(name)
     if b.is_some() and b.unwrap().is_type_param {
@@ -1555,7 +1555,7 @@ pub fn set_check_tests(self: &Checker, on: bool) {
 // both, so the caller's lists need not outlive the call.
 pub fn set_project_globals(self: &Checker, names: &List(OwnedString), origin: &List(bool)) {
     for &n in names {
-        self.project_globals.push(from_view(n.view))
+        self.project_globals.push(from_view(n.view()))
     }
     for i in 0..origin.len {
         self.project_origin.push(origin[i])
@@ -1693,7 +1693,7 @@ fn build_visibility(self: &Checker, modules: &List(Module), paths: &List(String)
         // (Compiler.cs).
         if i < self.project_origin.len and self.project_origin[i] {
             for &g in self.project_globals {
-                let gv = find_fqn(paths, g.view)
+                let gv = find_fqn(paths, g.view())
                 if gv.is_some() {
                     let v = gv.unwrap()
                     if !contains_view(&imps, v) {
@@ -1723,7 +1723,7 @@ fn collect_edges(m: &Module, paths: &List(String), imps: &List(String), reexps: 
         d.* match {
             Import(id) => {
                 let dotted = dot_join(id.path)
-                let fv = find_fqn(paths, dotted.view)
+                let fv = find_fqn(paths, dotted.view())
                 dotted.deinit()
                 if fv.is_some() {
                     let v = fv.unwrap()
@@ -1848,7 +1848,7 @@ fn collect_one_name(self: &Checker, decl: &Decl, module_path: String) {
         Type(td) => {
             check_type_name(self, td.name, td.span)
             let fqn_owned = $"{module_path}.{td.name}"
-            if self.nominals.contains(fqn_owned.view) or self.aliases.contains(fqn_owned.view) {
+            if self.nominals.contains(fqn_owned.view()) or self.aliases.contains(fqn_owned.view()) {
                 push_diag_e(
                     self,
                     td.span,
@@ -1938,7 +1938,7 @@ fn note_bound_text(self: &Checker, id: NominalId, body: &TypeExpr) {
     }
     const old = self.bound_texts.remove(id)
     const same = spelled and old match {
-        Some(t) => t.view == sb.as_view()
+        Some(t) => t.view() == sb.as_view()
         None => sb.len == 0
     }
     if !same {
@@ -1998,7 +1998,7 @@ fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedStrin
 
 fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let fqn_owned = $"{module_path}.{td.name}"
-    let id_opt = self.nominals.lookup_fqn(fqn_owned.view)
+    let id_opt = self.nominals.lookup_fqn(fqn_owned.view())
     fqn_owned.deinit()
     if id_opt.is_none() {
         return
@@ -2327,7 +2327,7 @@ fn parse_i64_text(text: String) i64 {
 
 fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let fqn_owned = $"{module_path}.{td.name}"
-    let id_opt = self.nominals.lookup_fqn(fqn_owned.view)
+    let id_opt = self.nominals.lookup_fqn(fqn_owned.view())
     fqn_owned.deinit()
     if id_opt.is_none() {
         return
@@ -2529,7 +2529,7 @@ fn register_constant(self: &Checker, cd: &ConstDecl) {
     let fqn = $"{self.current_module.unwrap()}.{cd.name}"
     // A second module-level constant under the same name would silently overwrite the first (E2005;
     // the local same-scope case is only a warning - see `check_let`).
-    if self.constants.contains(fqn.view) {
+    if self.constants.contains(fqn.view()) {
         push_diag_e(self, cd.span, E_DUP_TYPE_DECL, $"global `{cd.name}` is already declared")
         fqn.deinit()
         return
@@ -2552,7 +2552,7 @@ fn register_context_fields(self: &Checker, module: &Module, module_path: String)
 fn register_context_field(self: &Checker, cd: &ContextDecl) {
     const ty = resolve_type_expr(self, cd.type_annotation)
     let fqn = $"{self.current_module.unwrap()}.{cd.name}"
-    if self.ctx_fields.contains(fqn.view) {
+    if self.ctx_fields.contains(fqn.view()) {
         push_diag_e(
             self,
             cd.name_span,
@@ -2920,7 +2920,7 @@ fn check_context_default(self: &Checker, cd: &ContextDecl) {
     let fqn = $"{self.current_module.unwrap()}.{cd.name}"
     defer fqn.deinit()
     const v = check_expr(self, cd.value)
-    const field = self.ctx_fields.get_fqn(fqn.view)
+    const field = self.ctx_fields.get_fqn(fqn.view())
     if field.is_none() {
         return
     }
@@ -3040,7 +3040,7 @@ fn check_test_body(self: &Checker, td: &TestDecl) {
     self.fn_stack.push(frame)
 
     const _body_ty = check_block(self, td.body)
-    own_check_body(self, td.body, null, false)
+    own_check_body(self, td.body, null, false, false)
 
     let _r = self.fn_stack.pop()
     self.engine.exit_level()
@@ -3049,7 +3049,7 @@ fn check_test_body(self: &Checker, td: &TestDecl) {
 
 fn check_constant_init(self: &Checker, cd: &ConstDecl) {
     let fqn = $"{self.current_module.unwrap()}.{cd.name}"
-    let reg = self.constants.get_fqn(fqn.view)
+    let reg = self.constants.get_fqn(fqn.view())
     // The decl node carries its own FQN as an RtConst target - lowering's const pre-pass reads it
     // to name the global (M11), so no module-path plumbing is needed lowering-side. Interned;
     // outlives the checker.
@@ -3114,7 +3114,8 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
     }
 
     if !self.skip_ownership {
-        own_check_body(self, body, Some(fd.params), !ret_is_void and !ret_is_never)
+        own_check_body(self, body, Some(fd.params), !ret_is_void
+            and !ret_is_never, is_intrinsic_directive(fd.directives))
     }
 
     let _r = self.fn_stack.pop()
@@ -3470,12 +3471,12 @@ fn bound_path(self: &Checker, param: String, path: String[]) String {
 // outlive the strings they were built from.
 fn intern_path(self: &Checker, base: String, name: String) String {
     let joined = $"{base}.{name}"
-    const known = self.paths.get(joined.view)
+    const known = self.paths.get(joined.view())
     if known.is_some() {
         joined.deinit()
         return known.unwrap()
     }
-    const view = joined.view
+    const view = joined.view()
     self.path_bufs.push(joined)
     self.paths.set(view, view)
     return view
@@ -5164,7 +5165,7 @@ fn process_pending(self: &Checker, p: &PendingSpec) {
     const l0 = self.next_lambda
 
     let key = key_for(&self.engine.interner, p.function_id, &params, ret)
-    let existing = self.specs.lookup(key.view)
+    let existing = self.specs.lookup(key.view())
     if existing.is_none() {
         // A provisional key that misses can still name a carried entry - one whose stored key was
         // re-keyed to its settled signature, or renders variables. The call site is the stable
@@ -5728,7 +5729,7 @@ fn reset_template_types(self: &Checker, path: String) {
     const idx = self.template_type_keys.len
     self.template_type_keys.push(from_view(path))
     self.template_types.set(
-        self.template_type_keys[idx].view,
+        self.template_type_keys[idx].view(),
         TemplateTypes { facts = list(0), names = dict(), bounds = dict() },
     )
 }
@@ -5773,7 +5774,7 @@ fn keep_template_types(self: &Checker, fd: &FunctionDecl, fid: u32) {
         const prior = tt.bounds.remove(v.unwrap())
         prior match {
             Some(text) => {
-                let joined = $"{text.view} + {sb.as_view()}"
+                let joined = $"{text.view()} + {sb.as_view()}"
                 text.deinit()
                 sb.deinit()
                 tt.bounds.set(v.unwrap(), joined)
@@ -6718,7 +6719,7 @@ fn segment_literal_text(self: &Checker, raw: String) String {
         return raw
     }
     let decoded = decoded_opt.unwrap()
-    const out = self.results.add_synth_string(escape_backslashes(self, decoded.view))
+    const out = self.results.add_synth_string(escape_backslashes(self, decoded.view()))
     decoded.deinit()
     return out
 }
@@ -8711,7 +8712,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
             params = move sig_params,
             moves = moves,
             ret = ret,
-            symbol = from_view(sym.view),
+            symbol = from_view(sym.view()),
             lambda_node = node,
         },
     )
@@ -12705,7 +12706,7 @@ fn zonk_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
         ret = ret,
         captures = move caps,
         closure_id = info.closure_id,
-        symbol = from_view(info.symbol.view),
+        symbol = from_view(info.symbol.view()),
         conv = info.conv,
     }
 }
@@ -12747,7 +12748,7 @@ fn zonk_closures(self: &Checker) {
                 params = move ps,
                 moves = cs.moves,
                 ret = self.engine.zonk(cs.ret),
-                symbol = from_view(cs.symbol.view),
+                symbol = from_view(cs.symbol.view()),
                 lambda_node = cs.lambda_node,
             },
         )
@@ -13039,6 +13040,12 @@ type MovedRec = struct {
     // "" for the whole binding, else the moved field's path below it (`log`, `a.log`). A view into
     // `OwnPass.paths`.
     path: String
+    // Moved on every path that reaches here, not only on some.
+    all: bool
+    // Not moved: on the paths that recorded it the place holds nothing to release (a payload-less
+    // variant, a `match` arm whose variant carries nothing owning), so it counts as released and
+    // stays usable.
+    empty: bool
 }
 
 // One registered `defer`, with the scope depth its body runs at the end of.
@@ -13099,6 +13106,10 @@ type OwnPass = struct {
     // break feeds the loop's exit; a continue feeds the next iteration's entry.
     escaped: List(MovedRec)
     continued: List(MovedRec)
+    // Whether a `break`, a `continue` of the innermost loop was reached, so `escaped`, `continued`
+    // hold a path.
+    broke: bool
+    went_on: bool
     scope: usize
     loop_scope: usize
     in_loop: bool
@@ -13133,6 +13144,28 @@ type OwnPass = struct {
     borrowed: List(BorrowedRec)
     // The function value a `move` argument is being handed to, "" for a declared function.
     taker: String
+    // What the open scopes own, innermost last.
+    owned: List(OwnedRec)
+}
+
+// A non-copyable value a scope owns and has to see leave: a `let`, a `move` parameter, a `for`
+// variable.
+type OwnedRec = struct {
+    decl: NodeId
+    name: String
+    span: SourceSpan
+    ty: Ty
+    scope: usize
+    // A `match` binding naming part of this owned place: it is the scope's to release only once the
+    // place is spent, by this binding or a sibling moving out of it.
+    of: OwnPlace?
+}
+
+// An owned place: a binding, or a field path below one.
+type OwnPlace = struct {
+    decl: NodeId
+    // "" for the binding itself, else a view into `OwnPass.paths`.
+    path: String
 }
 
 type BorrowedRec = struct {
@@ -13150,18 +13183,29 @@ type BorrowedRec = struct {
 // than two or three deep do not occur; if one does, cache the first pass's effect per body node.
 //
 // `params` are the body's parameters, null for a `test {}` block; `returns` says whether the body's
-// trailing expression is the function's value.
-fn own_check_body(self: &Checker, body: &BlockExpr, params: FunctionParam[]?, returns: bool) {
+// trailing expression is the function's value; an `intrinsic` body owns nothing it must release,
+// since the compiler defines what it does.
+fn own_check_body(
+    self: &Checker,
+    body: &BlockExpr,
+    params: FunctionParam[]?,
+    returns: bool,
+    intrinsic: bool,
+) {
     let lent: List(NodeId) = list(0)
     let slots: List(NodeId) = list(0)
+    let owned: List(OwnedRec) = list(0)
     params match {
         Some(ps) => {
             own_collect_lent(self, &lent, ps, 0usize)
             own_collect_slots(self, &slots, ps)
+            if !intrinsic {
+                own_collect_owned(self, &owned, ps, 0usize)
+            }
         }
         None => {}
     }
-    own_run(self, body, lent, list(0), returns, slots)
+    own_run(self, body, lent, list(0), returns, slots, owned)
 }
 
 fn own_collect_slots(self: &Checker, slots: &List(NodeId), params: FunctionParam[]) {
@@ -13201,7 +13245,8 @@ fn own_run(
     lent: move List(NodeId),
     captured: move List(NodeId),
     returns: bool,
-    slots: move List(NodeId) = list(0),
+    slots: move List(NodeId),
+    owned: move List(OwnedRec),
 ) {
     // `slots` is moved into the pass below; its span is the body's, for the exit check.
     let p = OwnPass {
@@ -13210,6 +13255,8 @@ fn own_run(
         defers = list(0),
         escaped = list(0),
         continued = list(0),
+        broke = false,
+        went_on = false,
         scope = 0usize,
         loop_scope = 0usize,
         in_loop = false,
@@ -13223,6 +13270,7 @@ fn own_run(
         borrowed = list(0),
         uncertain = list(0),
         taker = "",
+        owned = move owned,
     }
     own_block(self, &p, body, if returns { OwnSlot.Returns } else { OwnSlot.Read })
     if !p.diverged {
@@ -13235,11 +13283,44 @@ fn own_run(
 fn own_collect_lent(self: &Checker, lent: &List(NodeId), params: FunctionParam[], moves: usize) {
     for i in 0..params.len {
         const prm = &params[i]
-        const owns = prm.is_move or (i < MAX_MOVE_PARAMS and (moves & move_bit(i)) != 0usize)
-        if !owns and !prm.is_variadic {
+        if !own_param_owns(prm, i, moves) and !prm.is_variadic {
             lent.push(self.node_of(prm.span))
         }
     }
+}
+
+// The non-copyable `move` parameters, which the body owns.
+fn own_collect_owned(self: &Checker, owned: &List(OwnedRec), params: FunctionParam[], moves: usize) {
+    for i in 0..params.len {
+        const prm = &params[i]
+        if !own_param_owns(prm, i, moves) or prm.is_variadic {
+            continue
+        }
+        own_owns(self, own_type(self, prm.span)) match {
+            Some(t) => owned.push(OwnedRec {
+                decl = self.node_of(prm.span),
+                name = prm.name,
+                span = prm.span,
+                ty = t,
+                scope = 1usize,
+                of = null,
+            })
+            None => {}
+        }
+    }
+}
+
+fn own_param_owns(prm: &FunctionParam, i: usize, moves: usize) bool {
+    return prm.is_move or (i < MAX_MOVE_PARAMS and (moves & move_bit(i)) != 0usize)
+}
+
+// `ty` when it is a non-copyable type a scope must see leave.
+fn own_owns(self: &Checker, ty: Ty?) Ty? {
+    if ty.is_none() {
+        return null
+    }
+    const t = self.engine.resolve(ty.unwrap())
+    return if t.is_error() or ty_copyable(self, t) { null } else { Some(t) }
 }
 
 // A lambda literal reads every name it captures where it is built. Its body is a body of its own:
@@ -13266,7 +13347,10 @@ fn own_lambda(self: &Checker, p: &OwnPass, lam: &LambdaExpr) {
     }
     let lent: List(NodeId) = list(captures.len)
     let captured: List(NodeId) = list(captures.len)
-    own_collect_lent(self, &lent, lam.params_at(info.unwrap().params.len), info.unwrap().moves)
+    let owned: List(OwnedRec) = list(0)
+    const params = lam.params_at(info.unwrap().params.len)
+    own_collect_lent(self, &lent, params, info.unwrap().moves)
+    own_collect_owned(self, &owned, params, info.unwrap().moves)
     for &cap in captures {
         if own_is_lent(p, cap.decl) {
             lent.push(cap.decl)
@@ -13275,7 +13359,7 @@ fn own_lambda(self: &Checker, p: &OwnPass, lam: &LambdaExpr) {
         }
     }
     const ret = self.engine.resolve(info.unwrap().ret)
-    own_run(self, lam.body, lent, captured, ret != TY_VOID and ret != TY_NEVER, list(0))
+    own_run(self, lam.body, lent, captured, ret != TY_VOID and ret != TY_NEVER, list(0), owned)
 }
 
 fn own_deinit(p: move OwnPass) {
@@ -13290,6 +13374,7 @@ fn own_deinit(p: move OwnPass) {
     p.slots.deinit()
     p.borrowed.deinit()
     p.uncertain.deinit()
+    p.owned.deinit()
 }
 
 fn own_is_lent(p: &OwnPass, decl: NodeId) bool {
@@ -13327,7 +13412,7 @@ fn own_list_has(xs: &List(NodeId), decl: NodeId) bool {
 // Whether any part of the binding is moved, whole or a field.
 fn own_has_moves(p: &OwnPass, decl: NodeId) bool {
     for &m in p.moved {
-        if m.decl == decl {
+        if m.decl == decl and !m.empty {
             return true
         }
     }
@@ -13336,7 +13421,7 @@ fn own_has_moves(p: &OwnPass, decl: NodeId) bool {
 
 fn own_mark(p: &OwnPass, decl: NodeId) {
     own_unmark(p, decl)
-    p.moved.push(MovedRec { decl = decl, path = "" })
+    p.moved.push(MovedRec { decl = decl, path = "", all = true, empty = false })
 }
 
 // Records a field moved out of `decl`. A move above it already covers it; moves below it are
@@ -13347,7 +13432,7 @@ fn own_mark_field(self: &Checker, p: &OwnPass, decl: NodeId, path: String) {
     }
     own_unmark_field(p, decl, path)
     let stored = from_view(path)
-    p.moved.push(MovedRec { decl = decl, path = stored.view })
+    p.moved.push(MovedRec { decl = decl, path = stored.view(), all = true, empty = false })
     p.paths.push(stored)
 }
 
@@ -13404,17 +13489,38 @@ fn own_unmark_field(p: &OwnPass, decl: NodeId, path: String) {
 // The recorded move at or above `path` - the whole binding, the field itself or an enclosing one.
 fn own_moved_above(p: &OwnPass, decl: NodeId, path: String) String? {
     for &m in p.moved {
-        if m.decl == decl and path_within(path, m.path) {
+        if m.decl == decl and !m.empty and path_within(path, m.path) {
             return Some(m.path)
         }
     }
     return null
 }
 
-// The recorded move strictly below `path`, which leaves the place at `path` incomplete.
-fn own_moved_below(p: &OwnPass, decl: NodeId, path: String) String? {
+// The recorded move strictly below `path`, which leaves the place at `path` incomplete. Whether the
+// place or an enclosing one was moved: on every path that reaches here, or on any.
+fn own_moved_on(p: &OwnPass, decl: NodeId, path: String, every: bool) bool {
+    for &m in p.moved {
+        if m.decl == decl and path_within(path, m.path) and (m.all or !every) {
+            return true
+        }
+    }
+    return false
+}
+
+// Whether something strictly below `path` was moved or holds nothing, so the place at `path` may be
+// released field by field.
+fn own_touched_below(p: &OwnPass, decl: NodeId, path: String) bool {
     for &m in p.moved {
         if m.decl == decl and m.path.len > path.len and path_within(m.path, path) {
+            return true
+        }
+    }
+    return false
+}
+
+fn own_moved_below(p: &OwnPass, decl: NodeId, path: String) String? {
+    for &m in p.moved {
+        if m.decl == decl and !m.empty and m.path.len > path.len and path_within(m.path, path) {
             return Some(m.path)
         }
     }
@@ -13573,19 +13679,38 @@ fn own_restore(dst: &List(MovedRec), src: &List(MovedRec)) {
     dst.push_all(src.as_slice())
 }
 
-// A value moved on any path into a merge is moved at the merge - no drop flags.
-fn own_merge(dst: &List(MovedRec), src: &List(MovedRec)) {
-    for i in 0..src.len {
-        let found = false
-        for j in 0..dst.len {
-            if dst[j].decl == src[i].decl and dst[j].path == src[i].path {
-                found = true
-            }
-        }
-        if !found {
-            dst.push(src[i])
+// A value moved on any path into a merge is moved at the merge - no drop flags. Two paths meet. A
+// move on either one makes later use a use after move; it holds on every path only when it holds on
+// both.
+fn own_join(dst: &List(MovedRec), src: &List(MovedRec)) {
+    for i in 0..dst.len {
+        const other = own_rec_at(src, dst[i].decl, dst[i].path)
+        dst[i].all = dst[i].all and other.is_some() and src[other.unwrap()].all
+        dst[i].empty = dst[i].empty and (other.is_none() or src[other.unwrap()].empty)
+    }
+    for &m in src {
+        if own_rec_at(dst, m.decl, m.path).is_none() {
+            dst.push(MovedRec { decl = m.decl, path = m.path, all = false, empty = m.empty })
         }
     }
+}
+
+// Adds one path to the paths a point is reached by: the first one is taken as it is.
+fn own_gather(dst: &List(MovedRec), reached: bool, src: &List(MovedRec)) {
+    if reached {
+        own_join(dst, src)
+    } else {
+        own_restore(dst, src)
+    }
+}
+
+fn own_rec_at(state: &List(MovedRec), decl: NodeId, path: String) usize? {
+    for i in 0..state.len {
+        if state[i].decl == decl and state[i].path == path {
+            return Some(i)
+        }
+    }
+    return null
 }
 
 // ── reporting ────────────────────────────────────────────────────────
@@ -13902,6 +14027,7 @@ fn own_give_up_binding(self: &Checker, p: &OwnPass, id: &IdentifierExpr) bool {
         return own_no_place(self, p, id.span, "a global keeps its value")
     }
     own_mark(p, d.unwrap())
+    own_spend_owner(self, p, d.unwrap())
     return true
 }
 
@@ -13942,7 +14068,13 @@ fn own_operands(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) bool {
             own_expr(self, p, np.receiver, OwnSlot.Read)
             const _t = own_transfer(self, p, e, ValueForm.Place, OwnSlot.Copies)
         }
-        Call(c) => own_call(self, p, &c)
+        // A call that returns `never` ends the path: nothing after it runs, and no scope is left.
+        Call(c) => {
+            own_call(self, p, &c)
+            if own_type(self, c.span).map({ self.engine.resolve(it) }) == Some(TY_NEVER) {
+                p.diverged = true
+            }
+        }
         StructLit(sl) => own_struct_lit(self, p, &sl)
         ArrayLit(al) => own_array_lit(self, p, &al)
         TupleLit(tl) => {
@@ -13965,7 +14097,10 @@ fn own_operands(self: &Checker, p: &OwnPass, e: &Expr, slot: OwnSlot) bool {
             }
             own_expr(self, p, c.rhs, slot)
         }
-        Try(t) => own_protocol(self, p, t.span, t.operand)
+        Try(t) => {
+            own_protocol(self, p, t.span, t.operand)
+            own_early_exit(self, p, t.span)
+        }
         Range(r) => {
             r.start match { Some(s) => own_expr(self, p, s, OwnSlot.Read), None => {} }
             r.end match { Some(x) => own_expr(self, p, x, OwnSlot.Read), None => {} }
@@ -14062,7 +14197,12 @@ fn own_moved_use(
         if own_claim(p, node) {
             const shown = place_text(name, path)
             defer shown.deinit()
-            own_report(self, span, E_USE_AFTER_MOVE, $"`{shown.view}` was moved and cannot be used")
+            own_report(
+                self,
+                span,
+                E_USE_AFTER_MOVE,
+                $"`{shown.view()}` was moved and cannot be used",
+            )
         }
         return
     }
@@ -14077,7 +14217,7 @@ fn own_moved_use(
         self,
         span,
         E_USE_AFTER_MOVE,
-        $"`{shown.view}` is incomplete: field `{field}` was moved out - assign it before using `{shown.view}`",
+        $"`{shown.view()}` is incomplete: field `{field}` was moved out - assign it before using `{shown.view()}`",
     )
 }
 
@@ -14103,7 +14243,7 @@ fn own_member_use(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr) {
     }
     const path = member_path(ma)
     defer path.deinit()
-    own_moved_use(self, p, d.unwrap(), id.name, path.view, ma.span)
+    own_moved_use(self, p, d.unwrap(), id.name, path.view(), ma.span)
 }
 
 // The identifier a chain of field accesses starts from, when no step goes through a reference.
@@ -14124,7 +14264,7 @@ fn member_path(ma: &MemberAccessExpr) OwnedString {
         MemberAccess(inner) => {
             const head = member_path(&inner)
             defer head.deinit()
-            $"{head.view}.{ma.member}"
+            $"{head.view()}.{ma.member}"
         }
         _ => from_view(ma.member)
     }
@@ -14208,7 +14348,7 @@ fn own_mark_member(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr) {
     }
     const path = member_path(ma)
     defer path.deinit()
-    own_mark_field(self, p, d.unwrap(), path.view)
+    own_mark_field(self, p, d.unwrap(), path.view())
 }
 
 // Whether `e` names storage the function owns: a local, or a `move` parameter, and the fields of
@@ -14257,11 +14397,31 @@ fn own_lent_ident(self: &Checker, p: &OwnPass, id: &IdentifierExpr) IdentifierEx
     return Some(id.*)
 }
 
-// `&place`, or a receiver adapted to `&T`: the callee may write through it.
+// `&place`, or a receiver adapted to `&T`: the callee may write through it, so a place that held
+// nothing may hold something afterwards.
 fn own_share(self: &Checker, p: &OwnPass, e: &Expr) {
     own_lent_root(self, p, e) match {
         Some(id) => own_lent_error(self, p, &id, "sharing it needs ownership")
         None => {}
+    }
+    own_chain_root(self, e) match {
+        Some(id) => own_local_decl(self, self.node_of(id.span)) match {
+            Some(d) => own_forget_empty(p, d)
+            None => {}
+        }
+        None => {}
+    }
+}
+
+fn own_forget_empty(p: &OwnPass, decl: NodeId) {
+    let i = 0
+    while i < p.moved.len {
+        if p.moved[i].decl == decl and p.moved[i].empty {
+            p.moved[i] = p.moved[p.moved.len - 1]
+            let _r = p.moved.pop()
+            continue
+        }
+        i = i + 1
     }
 }
 
@@ -14285,8 +14445,10 @@ fn own_move_storage(self: &Checker, p: &OwnPass, e: &Expr, why: String) bool {
     return own_no_place(self, p, expr_span(e), why)
 }
 
-// Whether the place `e` names is reached through an `owned` field of a type this module declares.
-// Follows the base chain a container writes: `(self.entries + i).key`, `self.ptr[i]`, `(p + n).*`.
+// Whether the place `e` names is reached through an `owned` or `Memory` field of a type this module
+// declares.
+// Follows the base chain a container writes: `(self.entries + i).key`, `self.ptr[i]`, `(p + n).*`,
+// `self.mem.view()[a..b]`.
 fn own_through_owned_field(self: &Checker, e: &Expr) bool {
     return e.* match {
         MemberAccess(ma) => own_owned_field_here(self, &ma)
@@ -14295,7 +14457,8 @@ fn own_through_owned_field(self: &Checker, e: &Expr) bool {
         Dereference(d) => own_through_owned_field(self, d.operand)
         Binary(b) => own_through_owned_field(self, b.lhs) or own_through_owned_field(self, b.rhs)
         Cast(c) => own_through_owned_field(self, c.operand)
-        Call(c) => own_raw_parts_of(&c) match {
+        AddressOf(a) => own_through_owned_field(self, a.operand)
+        Call(c) => own_storage_of(&c) match {
             Some(ptr) => own_through_owned_field(self, ptr)
             None => false
         }
@@ -14303,8 +14466,28 @@ fn own_through_owned_field(self: &Checker, e: &Expr) bool {
     }
 }
 
-// The pointer of a `slice_from_raw_parts(ptr, len)` call: the slice spans the storage `ptr`
-// reaches.
+// The storage a slice-building call spans: the pointer of `slice_from_raw_parts(ptr, len)`, or the
+// block of `m.as_slice()` / `as_slice(&m)`.
+fn own_storage_of(c: &CallExpr) &Expr? {
+    const raw = own_raw_parts_of(c)
+    if raw.is_some() {
+        return raw
+    }
+    return c.callee.* match {
+        MemberAccess(ma) => if ma.member == "as_slice"
+            and c.args.len == 0 { Some(ma.receiver) } else { null }
+        Identifier(id) => if id.name == "as_slice" and c.args.len == 1 {
+            c.args[0] match {
+                Positional(e) => Some(e)
+                Named(_) => null
+            }
+        } else {
+            null
+        }
+        _ => null
+    }
+}
+
 fn own_raw_parts_of(c: &CallExpr) &Expr? {
     const named = c.callee.* match {
         Identifier(id) => id.name == "slice_from_raw_parts"
@@ -14319,10 +14502,27 @@ fn own_raw_parts_of(c: &CallExpr) &Expr? {
     }
 }
 
-// An `owned` field of a type declared in the module being checked: storage the type releases, which
-// is what grants taking out of it through a reference. A plain field follows rule 3 instead.
+// An `owned` field, or a `Memory` one, of a type declared in the module being checked: storage the
+// type releases, which is what grants taking out of it through a reference. A plain field follows
+// rule 3 instead.
 fn own_owned_field_here(self: &Checker, ma: &MemberAccessExpr) bool {
-    return field_owner_elsewhere(self, ma).is_none() and own_field_of_nominal(self, ma)
+    if field_owner_elsewhere(self, ma).is_some() {
+        return false
+    }
+    return own_field_of_nominal(self, ma) or own_memory_field(self, ma)
+}
+
+// Whether `ma` reads a field holding a `Memory` (RFC-043), the storage owner of a container.
+fn own_memory_field(self: &Checker, ma: &MemberAccessExpr) bool {
+    const t = own_type(self, ma.span)
+    if t.is_none() {
+        return false
+    }
+    const id = self.nominals.by_fqn.get(FQN_MEMORY)
+    return id.is_some() and ty_node(self, self.engine.resolve(t.unwrap())) match {
+        NNominal(nn) => nn.id == id.unwrap()
+        _ => false
+    }
 }
 
 // Whether `ma` reads a declared `owned` field rather than a plain one, a method or an `op_deref`
@@ -14591,7 +14791,7 @@ fn own_relocate(self: &Checker, p: &OwnPass, src: &Expr) {
         self,
         p,
         expr_span(src),
-        "`move_to` takes non-copyable elements only out of an `owned` field this module declares",
+        "`move_to` takes non-copyable elements only out of an `owned` or `Memory` field this module declares",
     )
 }
 
@@ -14983,26 +15183,27 @@ fn own_assign_field(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr, span: So
     }
     const path = member_path(ma)
     defer path.deinit()
-    const released = own_released(self, p, d.unwrap(), path.view, own_type(self, ma.span))
-    own_unmark_field(p, d.unwrap(), path.view)
+    const released = own_released(self, p, d.unwrap(), path.view(), own_type(self, ma.span), false)
+    own_unmark_field(p, d.unwrap(), path.view())
     if released or own_is_copyable(self, ma.span) or !own_claim(p, self.node_of(ma.span)) {
         return
     }
-    const shown = place_text(root.unwrap().name, path.view)
+    const shown = place_text(root.unwrap().name, path.view())
     defer shown.deinit()
     let sb = string_builder(160)
-    sb.append($"`{shown.view}` is live - assigning over it leaks the value it holds")
+    sb.append($"`{shown.view()}` is live - assigning over it leaks the value it holds")
     own_blame(self, ma.span, &sb)
     own_report(self, span, E_ASSIGN_OVER_LIVE, sb.to_string())
 }
 
 // Whether nothing the place `path` holds is still owned there: the place was moved, or every
-// non-copyable field below it was. A binding of uncertain liveness counts as released.
-fn own_released(self: &Checker, p: &OwnPass, decl: NodeId, path: String, ty: Ty?) bool {
+// non-copyable field below it was. `every` asks for a move on every path that reaches here rather
+// than on any. A binding of uncertain liveness counts as released.
+fn own_released(self: &Checker, p: &OwnPass, decl: NodeId, path: String, ty: Ty?, every: bool) bool {
     if own_list_has(&p.uncertain, decl) {
         return true
     }
-    if own_moved_above(p, decl, path).is_some() {
+    if own_moved_on(p, decl, path, every) {
         return true
     }
     if ty.is_none() {
@@ -15012,28 +15213,56 @@ fn own_released(self: &Checker, p: &OwnPass, decl: NodeId, path: String, ty: Ty?
     if ty_copyable(self, t) {
         return true
     }
-    if own_moved_below(p, decl, path).is_none() {
+    if !own_touched_below(p, decl, path) {
         return false
     }
-    const nid = ty_node(self, t) match {
-        NNominal(nn) => Some(nn.id)
-        _ => null
+    return ty_node(self, t) match {
+        NTuple(span) => own_elements_released(self, p, decl, path, span, every)
+        NNominal(nn) => own_fields_released(self, p, decl, path, t, nn.id, every)
+        _ => false
     }
-    if nid.is_none() {
-        return false
+}
+
+// Whether every element of a tuple at `path` was released, element `i` at the path `i` below it.
+fn own_elements_released(
+    self: &Checker,
+    p: &OwnPass,
+    decl: NodeId,
+    path: String,
+    elems: ChildSpan,
+    every: bool,
+) bool {
+    for i in 0..elems.len {
+        const sub = if path.len == 0 { $"{i}" } else { $"{path}.{i}" }
+        defer sub.deinit()
+        const et = self.engine.interner.child_at(elems, i)
+        if !own_released(self, p, decl, sub.view(), Some(et), every) {
+            return false
+        }
     }
-    const sd = self.nominals.get(nid.unwrap()).* match {
+    return true
+}
+
+fn own_fields_released(
+    self: &Checker,
+    p: &OwnPass,
+    decl: NodeId,
+    path: String,
+    t: Ty,
+    nid: NominalId,
+    every: bool,
+) bool {
+    const sd = self.nominals.get(nid).* match {
         NomStruct(s) => Some(&s)
         _ => null
     }
     if sd.is_none() {
         return false
     }
-    const __sd_v = sd.unwrap()
-    for &f in __sd_v.fields {
+    for &f in sd.unwrap().fields {
         const sub = if path.len == 0 { from_view(f.name) } else { $"{path}.{f.name}" }
         defer sub.deinit()
-        if !own_released(self, p, decl, sub.view, struct_field_lookup(self, t, f.name)) {
+        if !own_released(self, p, decl, sub.view(), struct_field_lookup(self, t, f.name), every) {
             return false
         }
     }
@@ -15049,7 +15278,7 @@ fn own_assign_binding(self: &Checker, p: &OwnPass, id: &IdentifierExpr, span: So
         return
     }
     const dd = d.unwrap()
-    if own_released(self, p, dd, "", own_type(self, id.span)) {
+    if own_released(self, p, dd, "", own_type(self, id.span), false) {
         own_unmark(p, dd)
         return
     }
@@ -15086,9 +15315,107 @@ fn own_block(self: &Checker, p: &OwnPass, blk: &BlockExpr, slot: OwnSlot) {
     }
     if !p.diverged {
         own_fire_defers(self, p, here)
+        own_check_exit(self, p, here, null)
     }
     own_drop_defers(p, here)
+    own_drop_owned(p, here)
     p.scope = p.scope - 1
+}
+
+// Every non-copyable value the scopes being left own has to have left them: moved, returned or
+// handed on. `exit` is the statement that leaves, null for falling off the end of a block, where
+// the report points at the value's declaration.
+fn own_check_exit(self: &Checker, p: &OwnPass, from_scope: usize, exit: OwnExit?) {
+    for &o in p.owned {
+        const held = o.of match {
+            Some(place) => !own_moved_on(p, place.decl, place.path, false)
+            None => false
+        }
+        if o.scope < from_scope or held or own_released(self, p, o.decl, "", Some(o.ty), true) {
+            continue
+        }
+        own_unreleased(self, p, o, exit)
+    }
+}
+
+// A statement that leaves the scopes it is written in.
+type OwnExit = struct {
+    span: SourceSpan
+    what: String
+}
+
+fn own_unreleased(self: &Checker, p: &OwnPass, o: &OwnedRec, exit: OwnExit?) {
+    if !own_claim(p, o.decl) {
+        return
+    }
+    let sb = string_builder(200)
+    if own_moved_on(p, o.decl, "", false) {
+        sb.append(
+            $"`{o.name}` is not released on every path: some paths move it, and on the others it ",
+        )
+    } else if own_moved_below(p, o.decl, "").is_some() {
+        sb.append($"`{o.name}` is never released: part of it was moved out and the rest ")
+    } else {
+        sb.append($"`{o.name}` is never released: it ")
+    }
+    exit match {
+        Some(x) => sb.append($"is still live at this `{x.what}`")
+        None => sb.append("is still live at the end of its scope")
+    }
+    sb.append(" - move it on every path")
+    if own_has_deinit(self, o.ty, o.span) {
+        sb.append($", or add `defer {o.name}.deinit()` after it is declared")
+    }
+    const at = exit match {
+        Some(x) => x.span
+        None => o.span
+    }
+    own_warn(self, at, W_NEVER_RELEASED, sb.to_string())
+}
+
+// Whether a `deinit` taking `ty` resolves, for the hint. The probe leaves no trace.
+fn own_has_deinit(self: &Checker, ty: Ty, span: SourceSpan) bool {
+    const before = self.diagnostics.len
+    let no_args: List(Ty) = list(0)
+    defer no_args.deinit()
+    self.engine.push_checkpoint()
+    const pick = satisfy_pick(self, "deinit", ty, &no_args, span)
+    const found = pick.is_some()
+    pick.deinit()
+    self.engine.rollback()
+    drop_diags_from(self, before)
+    return found
+}
+
+// A leak sits in the body it is written in, so it is reported there, once however many
+// instantiations reach it.
+fn own_warn(self: &Checker, span: SourceSpan, code: String, msg: move OwnedString) {
+    for &d in self.diagnostics {
+        if d.code == code and d.span.file_id == span.file_id and d.span.start == span.start {
+            msg.deinit()
+            return
+        }
+    }
+    push_diag_w(self, span, code, msg)
+}
+
+fn own_drop_owned(p: &OwnPass, scope: usize) {
+    while p.owned.len > 0 and p.owned[p.owned.len - 1].scope >= scope {
+        let _o = p.owned.pop()
+    }
+}
+
+// `e?` may leave the function: the defers fire and every owned value has to have left, while the
+// path that continues keeps the state it had.
+fn own_early_exit(self: &Checker, p: &OwnPass, span: SourceSpan) {
+    if p.firing {
+        return
+    }
+    let kept = own_snapshot(self, &p.moved)
+    defer kept.deinit()
+    own_fire_defers(self, p, 1usize)
+    own_check_exit(self, p, 1usize, Some(OwnExit { span = span, what = "?" }))
+    own_restore(&p.moved, &kept)
 }
 
 // Defers fire LIFO, so the last registered runs first and the earlier ones see its effects. The
@@ -15121,8 +15448,8 @@ fn own_stmt(self: &Checker, p: &OwnPass, st: &Stmt) {
         Expression(es) => own_expr(self, p, es.expr, OwnSlot.Read)
         Return(rs) => own_return(self, p, &rs)
         Defer(ds) => p.defers.push(DeferRec { expr = ds.expr, scope = p.scope })
-        Break(_) => own_escape(self, p, true)
-        Continue(_) => own_escape(self, p, false)
+        Break(bs) => own_escape(self, p, true, bs.span)
+        Continue(cs) => own_escape(self, p, false, cs.span)
         For(fs) => {
             // A temporary iterable is the loop's own once `record_iter_release` gave it a release.
             const loop_owned = self.results.resolved_ops.get(self.node_of(fs.var_span)).is_some()
@@ -15132,13 +15459,13 @@ fn own_stmt(self: &Checker, p: &OwnPass, st: &Stmt) {
             } else {
                 own_protocol(self, p, fs.body.span, fs.iterable)
             }
-            own_loop(self, p, fs.body, Some(self.node_of(fs.var_span)))
+            own_loop(self, p, fs.body, Some(&fs), true)
         }
         While(ws) => {
             own_expr(self, p, ws.condition, OwnSlot.Read)
-            own_loop(self, p, ws.body)
+            own_loop(self, p, ws.body, null, true)
         }
-        Loop(ls) => own_loop(self, p, ls.body)
+        Loop(ls) => own_loop(self, p, ls.body, null, false)
         IfDirective(ifd) => own_if_directive(self, p, &ifd)
     }
 }
@@ -15150,7 +15477,26 @@ fn own_let(self: &Checker, p: &OwnPass, ls: &LetStmt) {
     }
     // The declaration makes the binding live again, which is what lets a `let` inside a loop body
     // survive the state the back edge carries in.
-    own_unmark(p, self.node_of(ls.name_span))
+    const decl = self.node_of(ls.name_span)
+    own_unmark(p, decl)
+    own_owns(self, own_type(self, ls.span)) match {
+        Some(t) => p.owned.push(OwnedRec {
+            decl = decl,
+            name = ls.name,
+            span = ls.name_span,
+            ty = t,
+            scope = p.scope,
+            of = null,
+        })
+        None => {}
+    }
+    const empty = ls.init match {
+        Some(e) => own_built_empty(self, e)
+        None => false
+    }
+    if empty {
+        own_hold_nothing(p, OwnPlace { decl = decl, path = "" })
+    }
 }
 
 // The value is evaluated first, then the active defers fire, then control transfers (spec 4.1).
@@ -15182,18 +15528,23 @@ fn own_return(self: &Checker, p: &OwnPass, rs: &ReturnStmt) {
     }
     own_fire_defers(self, p, 1usize)
     own_check_slots_filled(self, p, rs.span)
+    own_check_exit(self, p, 1usize, Some(OwnExit { span = rs.span, what = "return" }))
     p.diverged = true
 }
 
 // `break` and `continue` unwind the block's defers on their way out, and carry the state they leave
 // with - to the loop's exit and to its next iteration respectively.
-fn own_escape(self: &Checker, p: &OwnPass, is_break: bool) {
+fn own_escape(self: &Checker, p: &OwnPass, is_break: bool, span: SourceSpan) {
     if p.in_loop {
         own_fire_defers(self, p, p.loop_scope)
+        const what = if is_break { "break" } else { "continue" }
+        own_check_exit(self, p, p.loop_scope, Some(OwnExit { span = span, what = what }))
         if is_break {
-            own_merge(&p.escaped, &p.moved)
+            own_gather(&p.escaped, p.broke, &p.moved)
+            p.broke = true
         } else {
-            own_merge(&p.continued, &p.moved)
+            own_gather(&p.continued, p.went_on, &p.moved)
+            p.went_on = true
         }
     }
     p.diverged = true
@@ -15202,13 +15553,20 @@ fn own_escape(self: &Checker, p: &OwnPass, is_break: bool) {
 // The body runs an unknown number of times, so whatever it moves is moved on entry to the next
 // iteration. The first pass is silent and only settles what the back edge carries; the second
 // reports from that, which is a superset of the entry state, so a first-iteration error is reported
-// too. Paths that left through `break` do not feed the back edge - they feed the exit. `var_decl`
-// is a `for` variable: it is bound anew on every iteration, so a body that moves it leaves nothing
-// moved for the next one, nor on the way out.
-fn own_loop(self: &Checker, p: &OwnPass, body: &BlockExpr, var_decl: NodeId? = null) {
+// too. Paths that left through `break` do not feed the back edge - they feed the exit. A `for`
+// variable is bound anew on every iteration, so a body that moves it leaves nothing moved for the
+// next one, nor on the way out. A `for` and a `while` also leave at their head, before any
+// iteration or after one; a `loop` leaves only through `break`.
+fn own_loop(self: &Checker, p: &OwnPass, body: &BlockExpr, fs: &ForStmt?, exits_at_head: bool) {
+    const var_decl: NodeId? = fs match {
+        Some(f) => Some(self.node_of(f.var_span))
+        None => null
+    }
     const was_in = p.in_loop
     const was_scope = p.loop_scope
     const was_div = p.diverged
+    const was_broke = p.broke
+    const was_went_on = p.went_on
     let outer_escaped = own_snapshot(self, &p.escaped)
     defer outer_escaped.deinit()
     let outer_continued = own_snapshot(self, &p.continued)
@@ -15218,44 +15576,84 @@ fn own_loop(self: &Checker, p: &OwnPass, body: &BlockExpr, var_decl: NodeId? = n
 
     p.in_loop = true
     p.loop_scope = p.scope + 1
-    p.escaped.clear()
-    p.continued.clear()
+    own_loop_reset(p)
 
     const was_report = p.report
     p.report = false
     p.diverged = false
-    own_fresh_var(p, var_decl)
+    own_bind_var(self, p, fs, var_decl)
     own_block(self, p, body, OwnSlot.Read)
     let back = own_snapshot(self, &entry)
     defer back.deinit()
-    if !p.diverged {
-        own_merge(&back, &p.moved)
-    }
-    own_merge(&back, &p.continued)
+    own_join_tail(p, &back)
     own_drop_decl(&back, var_decl)
 
     p.report = was_report
-    p.escaped.clear()
-    p.continued.clear()
+    own_loop_reset(p)
     own_restore(&p.moved, &back)
     p.diverged = false
-    own_fresh_var(p, var_decl)
+    own_bind_var(self, p, fs, var_decl)
     own_block(self, p, body, OwnSlot.Read)
 
     let exit = own_snapshot(self, &entry)
     defer exit.deinit()
-    own_merge(&exit, &p.escaped)
-    if !p.diverged {
-        own_merge(&exit, &p.moved)
+    if exits_at_head {
+        own_join_tail(p, &exit)
+        if p.broke {
+            own_join(&exit, &p.escaped)
+        }
+    } else if p.broke {
+        own_restore(&exit, &p.escaped)
     }
     own_drop_decl(&exit, var_decl)
     own_restore(&p.moved, &exit)
+    const leaves = exits_at_head or p.broke
 
     own_restore(&p.escaped, &outer_escaped)
     own_restore(&p.continued, &outer_continued)
+    p.broke = was_broke
+    p.went_on = was_went_on
     p.in_loop = was_in
     p.loop_scope = was_scope
-    p.diverged = was_div
+    p.diverged = was_div or !leaves
+}
+
+fn own_loop_reset(p: &OwnPass) {
+    p.escaped.clear()
+    p.continued.clear()
+    p.broke = false
+    p.went_on = false
+}
+
+// Joins into `head` the paths that come back to the loop's head after an iteration: falling off the
+// body, and every `continue`.
+fn own_join_tail(p: &OwnPass, head: &List(MovedRec)) {
+    if !p.diverged {
+        own_join(head, &p.moved)
+    }
+    if p.went_on {
+        own_join(head, &p.continued)
+    }
+}
+
+// A `for` variable is live again for the iteration, and owned by the body it is bound in.
+fn own_bind_var(self: &Checker, p: &OwnPass, fs: &ForStmt?, var_decl: NodeId?) {
+    own_fresh_var(p, var_decl)
+    if fs.is_none() {
+        return
+    }
+    const f = fs.unwrap()
+    own_owns(self, own_type(self, f.var_span)) match {
+        Some(t) => p.owned.push(OwnedRec {
+            decl = var_decl.unwrap(),
+            name = f.var_name,
+            span = f.var_span,
+            ty = t,
+            scope = p.scope + 1,
+            of = null,
+        })
+        None => {}
+    }
 }
 
 fn own_if(self: &Checker, p: &OwnPass, ife: &IfExpr, slot: OwnSlot) {
@@ -15282,15 +15680,22 @@ fn own_if(self: &Checker, p: &OwnPass, ife: &IfExpr, slot: OwnSlot) {
         if else_div {
             own_restore(&p.moved, &taken)
         } else {
-            own_merge(&p.moved, &taken)
+            own_join(&p.moved, &taken)
         }
     }
     p.diverged = then_div and else_div
 }
 
+// A `match` over a place the function owns takes it apart: an arm that moves a binding out spends
+// the place, and then owes the release of every other binding it took. An arm whose variant carries
+// nothing owning leaves the place holding nothing. Over a temporary the arms own their bindings
+// outright.
 fn own_match(self: &Checker, p: &OwnPass, m: &MatchExpr, slot: OwnSlot) {
     own_expr(self, p, m.scrutinee, OwnSlot.Owner)
     const from = own_unowned_scrutinee(self, p, m.scrutinee)
+    const owner = own_owned_scrutinee(self, p, m.scrutinee)
+    const temporary = own_form(self, m.scrutinee) == ValueForm.Built
+        and !own_is_copyable(self, expr_span(m.scrutinee))
     let entry = own_snapshot(self, &p.moved)
     defer entry.deinit()
     // Seeded empty, not from `entry`: an arm that reinitializes a moved binding leaves it live, and
@@ -15299,11 +15704,19 @@ fn own_match(self: &Checker, p: &OwnPass, m: &MatchExpr, slot: OwnSlot) {
     defer merged.deinit()
 
     let reached = false
-    for &arm in m.arms {
+    for k in 0..m.arms.len {
+        const arm = &m.arms[k]
         own_restore(&p.moved, &entry)
         own_unmark_pattern(self, p, arm.pattern)
         if from.is_some() {
             own_borrow_pattern(self, p, arm.pattern, from.unwrap())
+        }
+        const parts_scope = p.scope + 1
+        if owner.is_some() or temporary {
+            own_take_parts(self, p, arm.pattern, owner, parts_scope)
+        }
+        if owner.is_some() and own_arm_holds_nothing(self, m, k) {
+            own_hold_nothing(p, owner.unwrap())
         }
         p.diverged = false
         arm.guard match {
@@ -15311,11 +15724,15 @@ fn own_match(self: &Checker, p: &OwnPass, m: &MatchExpr, slot: OwnSlot) {
             None => {}
         }
         own_expr(self, p, arm.body, slot)
+        if !p.diverged {
+            own_check_exit(self, p, parts_scope, null)
+        }
+        own_drop_owned(p, parts_scope)
         if p.diverged {
             continue
         }
+        own_gather(&merged, reached, &p.moved)
         reached = true
-        own_merge(&merged, &p.moved)
     }
     if reached {
         own_restore(&p.moved, &merged)
@@ -15323,6 +15740,238 @@ fn own_match(self: &Checker, p: &OwnPass, m: &MatchExpr, slot: OwnSlot) {
         own_restore(&p.moved, &entry)
     }
     p.diverged = m.arms.len > 0 and !reached
+}
+
+// The non-copyable place a `match` scrutinee names when the function owns it: a binding, or a field
+// path below one reached without a reference.
+fn own_owned_scrutinee(self: &Checker, p: &OwnPass, e: &Expr) OwnPlace? {
+    if own_is_copyable(self, expr_span(e)) or !own_owned_base(self, p, e) {
+        return null
+    }
+    const root = own_chain_root(self, e)
+    if root.is_none() {
+        return null
+    }
+    const d = own_local_decl(self, self.node_of(root.unwrap().span))
+    if d.is_none() {
+        return null
+    }
+    return e.* match {
+        Identifier(_) => Some(OwnPlace { decl = d.unwrap(), path = "" })
+        MemberAccess(ma) => {
+            let stored = member_path(&ma)
+            const view = stored.view()
+            p.paths.push(stored)
+            Some(OwnPlace { decl = d.unwrap(), path = view })
+        }
+        _ => null
+    }
+}
+
+// Records the non-copyable bindings `pat` takes, as parts of `owner` or, with none, outright.
+fn own_take_parts(self: &Checker, p: &OwnPass, pat: &Pattern, owner: OwnPlace?, scope: usize) {
+    pat.* match {
+        Variable(v) => if !own_names_variant(self, self.node_of(v.span)) {
+            own_take_part(self, p, v.name, v.span, owner, scope)
+        }
+        EnumVariant(ev) => {
+            for &sub in ev.payloads {
+                own_take_parts(self, p, sub, owner, scope)
+            }
+        }
+        Or(o) => {
+            for &sub in o.alternatives {
+                own_take_parts(self, p, sub, owner, scope)
+            }
+        }
+        Struct(st) => {
+            for &f in st.fields {
+                f.binding match {
+                    Some(sub) => own_take_parts(self, p, sub, owner, scope)
+                    None => own_take_part(self, p, f.name, f.span, owner, scope)
+                }
+            }
+        }
+        Tuple(t) => {
+            for &sub in t.elements {
+                own_take_parts(self, p, sub, owner, scope)
+            }
+        }
+        _ => {}
+    }
+}
+
+fn own_take_part(
+    self: &Checker,
+    p: &OwnPass,
+    name: String,
+    span: SourceSpan,
+    owner: OwnPlace?,
+    scope: usize,
+) {
+    own_owns(self, own_type(self, span)) match {
+        Some(t) => p.owned.push(OwnedRec {
+            decl = self.node_of(span),
+            name = name,
+            span = span,
+            ty = t,
+            scope = scope,
+            of = owner,
+        })
+        None => {}
+    }
+}
+
+// Whether the value arm `k` matched holds nothing to release: its variant carries only copyable
+// payloads, or, for a catch-all, every variant the earlier unguarded arms leave to it does.
+fn own_arm_holds_nothing(self: &Checker, m: &MatchExpr, k: usize) bool {
+    const pat = m.arms[k].pattern
+    const catch_all = pat.* match {
+        Wildcard(_) => true
+        _ => false
+    }
+    if !catch_all {
+        return own_carries_nothing(self, pat)
+    }
+    const scrut = own_type(self, expr_span(m.scrutinee))
+    return scrut.is_some() and own_rest_carries_nothing(self, scrut.unwrap(), m, k)
+}
+
+fn own_rest_carries_nothing(self: &Checker, scrut: Ty, m: &MatchExpr, upto: usize) bool {
+    const peeled = peel_refs(self, self.engine.resolve(scrut))
+    const nn = ty_node(self, peeled) match {
+        NNominal(n) => n
+        _ => return false
+    }
+    const ed = self.nominals.get(nn.id).* match {
+        NomEnum(e) => &e
+        _ => return false
+    }
+    let seen: List(String) = list(upto)
+    defer seen.deinit()
+    for i in 0..upto {
+        if m.arms[i].guard.is_none() {
+            own_variant_names(self, m.arms[i].pattern, &seen)
+        }
+    }
+    let sub = member_subst(
+        self,
+        self.engine.zonk(peeled),
+        &ed.type_params,
+        &ed.assoc_params,
+        nn.args,
+    )
+    defer sub.deinit()
+    for &v in ed.variants {
+        if contains_view(&seen, v.name) {
+            continue
+        }
+        for &pt in v.payloads {
+            if !ty_copyable(self, self.engine.substitute_shared(pt.*, &sub)) {
+                return false
+            }
+        }
+    }
+    return true
+}
+
+// The variants `pat` names at its top level.
+fn own_variant_names(self: &Checker, pat: &Pattern, out: &List(String)) {
+    pat.* match {
+        EnumVariant(ev) => out.push(ev.name)
+        Variable(v) => if own_names_variant(self, self.node_of(v.span)) {
+            out.push(v.name)
+        }
+        Or(o) => {
+            for &sub in o.alternatives {
+                own_variant_names(self, sub, out)
+            }
+        }
+        _ => {}
+    }
+}
+
+// Whether `pat` matches a variant whose payloads are all copyable: the value it matched holds
+// nothing to release.
+fn own_carries_nothing(self: &Checker, pat: &Pattern) bool {
+    const ev = pat.* match {
+        EnumVariant(v) => v
+        Variable(v) => return own_names_variant(self, self.node_of(v.span))
+        _ => return false
+    }
+    for &sub in ev.payloads {
+        if !own_is_copyable(self, pattern_span(sub)) {
+            return false
+        }
+    }
+    return true
+}
+
+// On this path `place` holds nothing to release, whatever was recorded for it before.
+fn own_hold_nothing(p: &OwnPass, place: OwnPlace) {
+    if place.path.len == 0 {
+        own_unmark(p, place.decl)
+    } else {
+        own_unmark_field(p, place.decl, place.path)
+    }
+    p.moved.push(MovedRec { decl = place.decl, path = place.path, all = true, empty = true })
+}
+
+// A part moving out of the place it names spends the place.
+fn own_spend_owner(self: &Checker, p: &OwnPass, part: NodeId) {
+    let owner: OwnPlace? = null
+    for &o in p.owned {
+        if o.decl == part and o.of.is_some() {
+            owner = o.of
+        }
+    }
+    owner match {
+        Some(place) => if place.path.len == 0 {
+            own_mark(p, place.decl)
+        } else {
+            own_mark_field(self, p, place.decl, place.path)
+        }
+        None => {}
+    }
+}
+
+// Whether a value built by `e` holds nothing to release: `null`, a payload-less variant, or a
+// variant whose payloads are all copyable.
+fn own_built_empty(self: &Checker, e: &Expr) bool {
+    const node = self.node_of(expr_span(e))
+    return e.* match {
+        Lit(l) => l.value match {
+            Null => true
+            _ => false
+        }
+        Identifier(_) => own_names_variant(self, node)
+        MemberAccess(_) => own_names_variant(self, node)
+        Call(c) => own_names_variant(self, node) and own_args_copyable(self, &c)
+        _ => false
+    }
+}
+
+fn own_names_variant(self: &Checker, node: NodeId) bool {
+    return self.results.resolved_targets.get(node) match {
+        Some(t) => t match {
+            RtEnumVariant(_, _) => true
+            _ => false
+        }
+        None => false
+    }
+}
+
+fn own_args_copyable(self: &Checker, c: &CallExpr) bool {
+    for &a in c.args {
+        const e = a.* match {
+            Positional(x) => x
+            Named(n) => n.value
+        }
+        if !own_is_copyable(self, expr_span(e)) {
+            return false
+        }
+    }
+    return true
 }
 
 // Only the active branch is checked, so only the active branch has types to check against.
@@ -15646,7 +16295,7 @@ pub fn check_all(
     // list. An empty `file_paths` leaves `path_of` reporting every file as unknown.
     let out_paths: List(OwnedString) = list(file_paths.len)
     for &fp in file_paths {
-        out_paths.push(from_view(fp.view))
+        out_paths.push(from_view(fp.view()))
     }
 
     self.results.reset_side_tables()
@@ -15806,7 +16455,7 @@ fn module_diags_entry(
         const idx = self.nominal_diag_keys.len
         self.nominal_diag_keys.push(from_view(path))
         self.nominal_diags.set(
-            self.nominal_diag_keys[idx].view,
+            self.nominal_diag_keys[idx].view(),
             ModuleNomDiags {
                 collect = list(0),
                 resolve = list(0),
@@ -15984,7 +16633,7 @@ fn finish_sig_capture(
     if found.is_none() {
         const idx = self.sig_cache_keys.len
         self.sig_cache_keys.push(from_view(path))
-        self.sig_caches.set(self.sig_cache_keys[idx].view, cache)
+        self.sig_caches.set(self.sig_cache_keys[idx].view(), cache)
         return
     }
     let slot = found.unwrap()
@@ -16036,7 +16685,7 @@ fn replay_signature_cache(self: &Checker, path: String) {
 // still unresolved would owe an E2001 per demand, so its module stays uncached and re-runs.
 fn harvest_sig_caches(self: &Checker, zonked: &Dict(NodeId, Ty)) {
     for k in 0..self.sig_cache_keys.len {
-        const path = self.sig_cache_keys[k].view
+        const path = self.sig_cache_keys[k].view()
         let entry = self.sig_caches.get_ref(path).unwrap()
         if !entry.fresh {
             continue
@@ -16427,7 +17076,7 @@ fn replay_closure(self: &Checker, f: &ClosureFact) {
         is_simd = false,
         is_foreign = false,
     }
-    const nid = register_collected(self, NominalDef.NomStruct(move sd), from_view(f.fqn.view))
+    const nid = register_collected(self, NominalDef.NomStruct(move sd), from_view(f.fqn.view()))
     self.closures.set(nid, copy_sig(&f.sig))
 }
 
@@ -16436,7 +17085,7 @@ fn store_body_cache(self: &Checker, path: String, cache: move ModuleBodyCache) {
     if found.is_none() {
         const idx = self.body_cache_keys.len
         self.body_cache_keys.push(from_view(path))
-        self.body_caches.set(self.body_cache_keys[idx].view, cache)
+        self.body_caches.set(self.body_cache_keys[idx].view(), cache)
         return
     }
     let slot = found.unwrap()
@@ -16446,7 +17095,7 @@ fn store_body_cache(self: &Checker, path: String, cache: move ModuleBodyCache) {
 // Fill this demand's fresh body caches from the finished tables, once the final zonk has run.
 fn harvest_body_caches(self: &Checker, zonked: &Dict(NodeId, Ty)) {
     for k in 0..self.body_cache_keys.len {
-        const path = self.body_cache_keys[k].view
+        const path = self.body_cache_keys[k].view()
         let entry = self.body_caches.get_ref(path).unwrap()
         if !entry.fresh {
             continue
@@ -16830,7 +17479,7 @@ fn nominal_defs_differ(self: &Checker, old: &Dict(String, OwnedString)) bool {
         }
         sb.clear()
         render_def_fingerprint(self.nominals.find(id.unwrap()).unwrap(), &sb)
-        if sb.as_view() != entry.value.view {
+        if sb.as_view() != entry.value.view() {
             return true
         }
     }
@@ -16925,7 +17574,7 @@ fn default_text_of(sources: &List(OwnedString), sp: SourceSpan) String {
     if f >= sources.len {
         return ""
     }
-    const src = sources[f].view
+    const src = sources[f].view()
     if sp.start + sp.length > src.len {
         return ""
     }
@@ -16937,7 +17586,7 @@ fn default_texts_differ(old: &List(OwnedString), new: &List(OwnedString)) bool {
         return true
     }
     for i in 0..old.len {
-        if old[i].view != new[i].view {
+        if old[i].view() != new[i].view() {
             return true
         }
     }
@@ -16994,7 +17643,7 @@ fn aliases_differ(self: &Checker, old: &Dict(StrId, OwnedString), retiring: &Set
         if !render_alias_body(body, &sb) {
             return true
         }
-        if sb.as_view() != prev.unwrap().view {
+        if sb.as_view() != prev.unwrap().view() {
             return true
         }
     }
@@ -18188,9 +18837,12 @@ test "ranking: a concrete parameter beats a catch-all on a direct call" {
         "pub fn f(x: Inner) i64 { return 1 }\npub fn f(x: $T) i64 { return 2 }\nfn main() i64 { let i: Inner return f(i) }\n",
     )
     defer src.deinit()
-    let r = resolved_call(src.view, "f")
+    let r = resolved_call(src.view(), "f")
     defer r.signature.deinit()
-    assert_true(r.signature.view == "fn(Inner) i64", "the nominal parameter is the stricter match")
+    assert_true(
+        r.signature.view() == "fn(Inner) i64",
+        "the nominal parameter is the stricter match",
+    )
 }
 
 test "ranking: a value receiver as written beats adapting it to a reference parameter" {
@@ -18198,9 +18850,9 @@ test "ranking: a value receiver as written beats adapting it to a reference para
         "pub fn f(x: &Inner) i64 { return 1 }\npub fn f(x: $T) i64 { return 2 }\nfn main(i: Inner) i64 { return i.f() }\n",
     )
     defer src.deinit()
-    let r = resolved_call(src.view, "f")
+    let r = resolved_call(src.view(), "f")
     defer r.signature.deinit()
-    assert_true(r.signature.view.starts_with("fn(?"), "the receiver as written takes the call")
+    assert_true(r.signature.view().starts_with("fn(?"), "the receiver as written takes the call")
     assert_eq(r.hops, 0 as usize, "no op_deref hop")
 }
 
@@ -18209,9 +18861,9 @@ test "ranking: a value receiver adapts to a reference parameter when nothing tak
         "pub fn f(x: &Inner) i64 { return 1 }\nfn main(i: Inner) i64 { return i.f() }\n",
     )
     defer src.deinit()
-    let r = resolved_call(src.view, "f")
+    let r = resolved_call(src.view(), "f")
     defer r.signature.deinit()
-    assert_true(r.signature.view == "fn(&Inner) i64", "the adapted receiver takes the call")
+    assert_true(r.signature.view() == "fn(&Inner) i64", "the adapted receiver takes the call")
     assert_eq(r.hops, 0 as usize, "no op_deref hop")
 }
 
@@ -18220,9 +18872,9 @@ test "ranking: a direct hit beats an equally specific overload through op_deref"
         "pub fn f(x: &Wrap) i64 { return 1 }\npub fn f(x: &Inner) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n",
     )
     defer src.deinit()
-    let r = resolved_call(src.view, "f")
+    let r = resolved_call(src.view(), "f")
     defer r.signature.deinit()
-    assert_true(r.signature.view == "fn(&Wrap) i64", "the wrapper's own overload wins")
+    assert_true(r.signature.view() == "fn(&Wrap) i64", "the wrapper's own overload wins")
     assert_eq(r.hops, 0 as usize, "no op_deref hop")
 }
 
@@ -18231,9 +18883,9 @@ test "ranking: a catch-all matched as written beats a concrete overload through 
         "pub fn f(x: &Inner) i64 { return 1 }\npub fn f(x: $I) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n",
     )
     defer src.deinit()
-    let r = resolved_call(src.view, "f")
+    let r = resolved_call(src.view(), "f")
     defer r.signature.deinit()
-    assert_true(r.signature.view.starts_with("fn(?"), "the receiver as written takes the call")
+    assert_true(r.signature.view().starts_with("fn(?"), "the receiver as written takes the call")
     assert_eq(r.hops, 0 as usize, "no op_deref hop")
 }
 
@@ -18242,9 +18894,9 @@ test "ranking: the peel also runs through a generic wrapper" {
         "pub type Box = struct(T) { pad: i64 inner: T }\npub fn op_deref(b: &Box($T)) &T { return &b.inner }\npub fn f(x: &Inner) i64 { return 1 }\nfn main(b: &Box(Inner)) i64 { return b.f() }\n",
     )
     defer src.deinit()
-    let r = resolved_call(src.view, "f")
+    let r = resolved_call(src.view(), "f")
     defer r.signature.deinit()
-    assert_true(r.signature.view == "fn(&Inner) i64", "the peeled receiver's overload wins")
+    assert_true(r.signature.view() == "fn(&Inner) i64", "the peeled receiver's overload wins")
     assert_eq(r.hops, 1 as usize, "one op_deref hop recorded for lowering")
 }
 
@@ -18253,9 +18905,9 @@ test "ranking: the peel chains through two wrappers" {
         "pub type Outer = struct { tag: i64 w: Wrap }\npub fn op_deref(o: &Outer) &Wrap { return &o.w }\npub fn f(x: &Inner) i64 { return 1 }\nfn main(o: &Outer) i64 { return o.f() }\n",
     )
     defer src.deinit()
-    let r = resolved_call(src.view, "f")
+    let r = resolved_call(src.view(), "f")
     defer r.signature.deinit()
-    assert_true(r.signature.view == "fn(&Inner) i64", "the innermost receiver's overload wins")
+    assert_true(r.signature.view() == "fn(&Inner) i64", "the innermost receiver's overload wins")
     assert_eq(r.hops, 2 as usize, "both hops recorded for lowering")
 }
 
@@ -18266,9 +18918,9 @@ test "ranking: a wrapper declares the member a catch-all would otherwise take" {
         "pub fn any(x: &Inner, pred: $F) bool { return pred(x.value, x.value) }\npub fn any(w: &Wrap, pred: $F) bool { return w.inner.any(pred) }\npub fn any(it: $I, pred: $F) bool { return pred(0i64) }\nfn main(w: &Wrap) bool { return w.any({ a, b => a == b }) }\n",
     )
     defer src.deinit()
-    let r = resolved_call(src.view, "any")
+    let r = resolved_call(src.view(), "any")
     defer r.signature.deinit()
-    assert_true(r.signature.view.starts_with("fn(&Wrap, "), "the wrapper's own overload wins")
+    assert_true(r.signature.view().starts_with("fn(&Wrap, "), "the wrapper's own overload wins")
     assert_eq(r.hops, 0 as usize, "no op_deref hop")
 }
 
@@ -18277,9 +18929,9 @@ test "ranking: indexing resolves op_index_ref through op_deref, like the call it
         "pub fn op_index_ref(x: &Inner, i: usize) &i64 { return &x.value }\nfn main(w: &Wrap) i64 { return w[0usize] }\n",
     )
     defer src.deinit()
-    let r = resolved_call(src.view, "op_index_ref")
+    let r = resolved_call(src.view(), "op_index_ref")
     defer r.signature.deinit()
-    assert_true(r.signature.view == "fn(&Inner, usize) &i64", "the inner type's operator")
+    assert_true(r.signature.view() == "fn(&Inner, usize) &i64", "the inner type's operator")
     assert_eq(r.hops, 1 as usize, "one op_deref hop recorded on the index node")
 }
 
@@ -18288,9 +18940,9 @@ test "ranking: for resolves iter through op_deref, like the call it desugars to"
         "pub type It = struct { n: i64 }\npub fn iter(x: &Inner) It { return It { n = x.value } }\npub fn next(it: &It) i64? { if it.n == 0 { return null } it.n = it.n - 1 return Some(it.n) }\nfn main(w: &Wrap) i64 { let t = 0i64 for x in w { t = t + x } return t }\n",
     )
     defer src.deinit()
-    let r = resolved_call(src.view, "iter")
+    let r = resolved_call(src.view(), "iter")
     defer r.signature.deinit()
-    assert_true(r.signature.view == "fn(&Inner) It", "the inner type's iter")
+    assert_true(r.signature.view() == "fn(&Inner) It", "the inner type's iter")
     assert_eq(r.hops, 1 as usize, "one op_deref hop recorded beside the iter pick")
 }
 
@@ -18299,9 +18951,9 @@ test "ranking: the catch-all still wins when nothing through the peel matches" {
         "pub type Other = struct { n: i64 }\npub fn f(x: &Other) i64 { return 1 }\npub fn f(x: $I) i64 { return 2 }\nfn main(w: &Wrap) i64 { return w.f() }\n",
     )
     defer src.deinit()
-    let r = resolved_call(src.view, "f")
+    let r = resolved_call(src.view(), "f")
     defer r.signature.deinit()
-    assert_true(r.signature.view.starts_with("fn(?"), "only the catch-all matches")
+    assert_true(r.signature.view().starts_with("fn(?"), "only the catch-all matches")
     assert_eq(r.hops, 0 as usize, "no op_deref hop")
 }
 

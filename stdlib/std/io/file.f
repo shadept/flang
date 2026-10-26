@@ -99,7 +99,10 @@ pub fn open_file(path: String, mode: FileMode, encoding: FileEncoding) Result(Fi
 }
 
 pub fn close_file(file: move File) Result((), FileError) {
-    return raw_close(file.handle.fd).map_err(to_file_error)
+    const fd = file.handle.fd
+    // The descriptor leaves the language through the syscall below.
+    leak(file)
+    return raw_close(fd).map_err(to_file_error)
 }
 
 // Deletes a file, or a symlink itself - never the symlink's target. A directory is rejected by the
@@ -129,7 +132,7 @@ pub fn read_all(
         // Grow capacity by one page. StringBuilder doubles capacity on each growth, so subsequent
         // calls over-allocate. This amortizes allocation cost and aligns with typical file size
         // distributions (many small, few large).
-        sb.ensure_capacity(sb.cap + PAGE_SIZE)
+        sb.ensure_capacity(sb.capacity() + PAGE_SIZE)
     }
     return Ok(sb.to_string())
 }
@@ -251,7 +254,7 @@ test "write, read back, and remove a file" {
     const text = read_all(&r)
     assert_true(text.is_ok(), "read_all")
     let owned_text = text.unwrap()
-    assert_eq(owned_text.view, "hello flang", "round-trip")
+    assert_eq(owned_text.view(), "hello flang", "round-trip")
     owned_text.deinit()
     assert_true(close_file(r).is_ok(), "close after read")
 
@@ -272,7 +275,7 @@ test "write truncates an existing file" {
 
     let c = open_file(p, FileMode.Read).unwrap()
     const text = read_all(&c).unwrap()
-    assert_eq(text.view, "short", "old tail is gone")
+    assert_eq(text.view(), "short", "old tail is gone")
     text.deinit()
     assert_true(close_file(c).is_ok(), "close")
     assert_true(remove_file(p).is_ok(), "cleanup")
@@ -291,7 +294,7 @@ test "append adds to the end instead of truncating" {
 
     let c = open_file(p, FileMode.Read).unwrap()
     const text = read_all(&c).unwrap()
-    assert_eq(text.view, "one-two", "appended")
+    assert_eq(text.view(), "one-two", "appended")
     text.deinit()
     assert_true(close_file(c).is_ok(), "close")
     assert_true(remove_file(p).is_ok(), "cleanup")

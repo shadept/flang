@@ -7,7 +7,7 @@
 import std.string
 
 fn consume(s: move OwnedString) usize {
-    const n: usize = s.len
+    const n: usize = s.view().len
     s.deinit()
     return n
 }

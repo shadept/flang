@@ -118,20 +118,14 @@ pub fn write(w: &BufferedWriter, data: u8[]) usize {
 
         if remaining <= space {
             // Fits in buffer without flushing
-            copy_to(
-                slice_from_raw_parts(data.ptr + written, remaining),
-                slice_from_raw_parts(w.buf.ptr + w.pos, remaining),
-            )
+            copy_to(data[written..written + remaining], w.buf[w.pos..w.pos + remaining])
             w.pos = w.pos + remaining
             written = written + remaining
             break
         }
 
         // Fill the rest of the buffer and flush
-        copy_to(
-            slice_from_raw_parts(data.ptr + written, space),
-            slice_from_raw_parts(w.buf.ptr + w.pos, space),
-        )
+        copy_to(data[written..written + space], w.buf[w.pos..w.pos + space])
         w.pos = w.buf.len
         w.flush_all()
         written = written + space
@@ -153,7 +147,7 @@ pub fn flush(w: &BufferedWriter) {
 fn flush_all(w: &BufferedWriter) {
     let flushed: usize = 0
     while flushed < w.pos {
-        const chunk = slice_from_raw_parts(w.buf.ptr + flushed, w.pos - flushed)
+        const chunk = w.buf[flushed..w.pos]
         const n = w.inner.write(chunk)
         if n == 0 {
             panic("writer: write returned 0")

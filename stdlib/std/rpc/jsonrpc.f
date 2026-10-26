@@ -117,6 +117,7 @@ pub fn read_frame(
 
     const want = content_len.unwrap()
     let sb = string_builder(want, allocator)
+    defer sb.deinit()
     let buf = [0u8; 4096]
     let got: usize = 0
     while got < want {
@@ -126,7 +127,6 @@ pub fn read_frame(
         }
         const n = r.read(buf[0..chunk])
         if n == 0 {
-            sb.deinit()
             return Err(RpcError.BodyTruncated)
         }
         sb.append_bytes(buf[0..n])
@@ -210,11 +210,10 @@ pub fn parse_message(
     payload: String,
     allocator: &Allocator = context.allocator,
 ) Result(RpcMessage, RpcError) {
-    const parsed = parse_json(payload, json_options(), allocator)
-    if parsed.is_err() {
-        return Err(RpcError.BadJson)
+    let doc = parse_json(payload, json_options(), allocator) match {
+        Ok(v) => move v
+        Err(_) => return Err(RpcError.BadJson)
     }
-    let doc = parsed.unwrap()
 
     const versioned = doc.get("jsonrpc") match {
         Some(v) => v.as_string() match {
@@ -242,7 +241,7 @@ pub fn read_message(
     }
     let payload = framed.unwrap()
     defer payload.deinit()
-    return parse_message(payload.view, allocator)
+    return parse_message(payload.view(), allocator)
 }
 
 // =============================================================================
@@ -344,7 +343,7 @@ test "frame round-trip" {
     assert_true(got.is_ok(), "frame reads back")
     let payload = got.unwrap()
     defer payload.deinit()
-    assert_eq(payload.view, "{\"x\":1}", "payload survives the round trip")
+    assert_eq(payload.view(), "{\"x\":1}", "payload survives the round trip")
 }
 
 test "read_frame skips unknown headers" {
@@ -355,7 +354,7 @@ test "read_frame skips unknown headers" {
     assert_true(got.is_ok(), "extra headers are skipped")
     let payload = got.unwrap()
     defer payload.deinit()
-    assert_eq(payload.view, "{}", "body follows the blank line")
+    assert_eq(payload.view(), "{}", "body follows the blank line")
 }
 
 test "read_frame reads consecutive frames" {
@@ -363,11 +362,11 @@ test "read_frame reads consecutive frames" {
     const first = read_frame(mr.reader())
     let a = first.unwrap()
     defer a.deinit()
-    assert_eq(a.view, "{}", "first frame")
+    assert_eq(a.view(), "{}", "first frame")
     const second = read_frame(mr.reader())
     let b = second.unwrap()
     defer b.deinit()
-    assert_eq(b.view, "null", "second frame starts at the next byte")
+    assert_eq(b.view(), "null", "second frame starts at the next byte")
 }
 
 test "clean end of stream is Eof" {
@@ -454,6 +453,7 @@ test "respond echoes an integer id as an integer" {
     let sb = string_builder(64)
     defer sb.deinit()
     const nul = Value.Null
+    defer nul.deinit()
     rpc_writer(sb.writer()).respond(msg.id().unwrap(), &nul)
     assert_true(contains(sb.as_view(), "\"id\":7,"), "id 7 comes back as 7")
     assert_true(contains(sb.as_view(), "\"result\":null"), "null result is explicit")
@@ -467,6 +467,7 @@ test "respond echoes a string id verbatim" {
     let sb = string_builder(64)
     defer sb.deinit()
     const nul = Value.Null
+    defer nul.deinit()
     rpc_writer(sb.writer()).respond(msg.id().unwrap(), &nul)
     assert_true(contains(sb.as_view(), "\"id\":\"a-1\""), "string id round-trips")
 }
@@ -496,6 +497,7 @@ test "respond_error shape" {
     let sb = string_builder(64)
     defer sb.deinit()
     const nul = Value.Null
+    defer nul.deinit()
     rpc_writer(sb.writer()).respond_error(&nul, METHOD_NOT_FOUND, "no such method")
     assert_true(
         contains(sb.as_view(), "\"error\":{\"code\":-32601,\"message\":\"no such method\"}"),

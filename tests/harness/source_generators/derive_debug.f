@@ -2,8 +2,8 @@
 //! EXIT: 0
 
 import std.derive
-import std.string_builder
 import std.string
+import std.string_builder
 
 type Pair = struct {
     a: i32
@@ -19,10 +19,14 @@ pub fn main() i32 {
     let s = sb.to_string()
 
     // Expected: "Pair { a = 10, b = 20, }"
-    if s.len == 0 { return 1 }
+    if s.view().len == 0 {
+        return 1
+    }
 
     // Check the output matches
-    if s.view != "Pair { a = 10, b = 20, }" { return 2 }
+    if s.view() != "Pair { a = 10, b = 20, }" {
+        return 2
+    }
 
     sb.deinit()
     s.deinit()

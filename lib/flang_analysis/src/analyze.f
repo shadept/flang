@@ -57,7 +57,7 @@ pub type AnalyzedUnit = struct {
 // need not name a real file.
 pub fn analyze(source: move OwnedString, path: String) AnalyzedUnit {
     let diagnostics: List(Diagnostic) = list(0)
-    const src = source.view
+    const src = source.view()
 
     let lx = lexer(src)
     let tokens = lx.tokenize()
@@ -328,7 +328,7 @@ pub fn analyze_project(
     let queue: List(OwnedString) = list(0)
     let seen: Set(OwnedString) = set()
     for i in 0..entries.len {
-        enqueue_copy(&queue, &seen, entries[i].view)
+        enqueue_copy(&queue, &seen, entries[i].view())
     }
     // Everything enqueued from here on is stdlib, a dependency or a transitive import - never a
     // project file. `[imports].global` applies to project files only, so the boundary has to be
@@ -348,7 +348,7 @@ pub fn analyze_project(
 
     let qi: usize = 0
     while qi < queue.len {
-        let path = queue[qi].view
+        let path = queue[qi].view()
         let is_project = qi < project_count
         qi = qi + 1
         let src_opt = read_source(path, overrides)
@@ -359,7 +359,7 @@ pub fn analyze_project(
         }
         let src = src_opt.unwrap()
         let fid = modules.len as i32
-        let module = parse_to_module(src.view, fid, &ctx.comptime, &parse_diags)
+        let module = parse_to_module(src.view(), fid, &ctx.comptime, &parse_diags)
         let fqn = module_fqn(ctx, path)
         enqueue_imports(
             ctx,
@@ -445,7 +445,7 @@ fn check_project(
         return
     }
 
-    let path_views = self.fqns.map { it.view }
+    let path_views = self.fqns.map { it.view() }
     defer path_views.deinit()
     let edges = index_edges(&self.file_paths, edge_from, edge_to)
     defer edges.deinit()
@@ -593,7 +593,7 @@ fn demand_root(fqn: String, i: usize, project_origin: &List(bool), globals: &Lis
         return true
     }
     for &g in globals {
-        if fqn == g.view {
+        if fqn == g.view() {
             return true
         }
     }
@@ -645,7 +645,7 @@ pub fn reanalyze(
     let srcs = &self.sources
     let mods = &self.modules
     for i in 0..self.modules.len {
-        const path = self.file_paths[i].view
+        const path = self.file_paths[i].view()
         if !reparse_all and !dirty.contains(path) and !stale.contains(path) {
             continue
         }
@@ -662,7 +662,7 @@ pub fn reanalyze(
         self.retired_sources.push(incoming)
         // The module is exchanged the same way: the retired one leaves as a value this owns.
         let incoming_module = parse_to_module(
-            srcs[i].view,
+            srcs[i].view(),
             i as i32,
             &ctx.comptime,
             &self.parse_diags,
@@ -724,7 +724,7 @@ pub fn analyze_source_set(srcs: move List(OwnedString), fqns: &List(String)) Ana
     let modules: List(Module) = list(srcs.len)
     const host = host_ctx()
     for i in 0..srcs.len {
-        modules.push(parse_to_module(srcs[i].view, i as i32, &host, &parse_diags))
+        modules.push(parse_to_module(srcs[i].view(), i as i32, &host, &parse_diags))
         owned_fqns.push(from_view(fqns[i]))
         file_paths.push(from_view(fqns[i]))
     }
@@ -794,7 +794,7 @@ pub fn write_generated(self: &AnalyzedProject) usize {
     for &e in self.generated.emitted {
         const path = generated_path(e.origin_path)
         defer path.deinit()
-        let f = open_file(path.view, FileMode.Write) match {
+        let f = open_file(path.view(), FileMode.Write) match {
             Ok(v) => move v
             Err(_) => continue
         }
@@ -844,7 +844,7 @@ fn enqueue_imports(
                 r match {
                     Some(p) => {
                         edge_from.push(from)
-                        edge_to.push(from_view(p.view))
+                        edge_to.push(from_view(p.view()))
                         enqueue_owned(queue, seen, p)
                     }
                     None => push_unresolved(diags, &id)
@@ -865,13 +865,13 @@ fn seed_globals(
     diags: &List(Diagnostic),
 ) {
     for &g in ctx.global_imports {
-        let segs = split(g.view, '.')
+        let segs = split(g.view(), '.')
         let r = resolve_import(ctx, segs.as_slice())
         segs.deinit()
         r match {
             Some(p) => enqueue_owned(queue, seen, p)
             None => {
-                const msg = $"unresolved global import `{g.view}` from flang.toml [imports].global"
+                const msg = $"unresolved global import `{g.view()}` from flang.toml [imports].global"
                 diags.push(error("E0001", msg, none_span()))
             }
         }
@@ -901,15 +901,15 @@ fn seed_prelude(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(OwnedStr
 // typechecks all of std on every build; prune to the import closure once stdlib type visibility
 // turns strict.
 fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(OwnedString)) {
-    if ctx.stdlib_root.view.len == 0 {
+    if ctx.stdlib_root.view().len == 0 {
         return
     }
-    let pattern = $"{ctx.stdlib_root.view}/**/*.f"
-    let found = glob_sources(pattern.view)
+    let pattern = $"{ctx.stdlib_root.view()}/**/*.f"
+    let found = glob_sources(pattern.view())
     pattern.deinit()
     for i in 0..found.len {
-        let norm = normalize_sep(found[i].view)
-        if shadowed_by_project(ctx, norm.view) {
+        let norm = normalize_sep(found[i].view())
+        if shadowed_by_project(ctx, norm.view()) {
             norm.deinit()
             continue
         }
@@ -921,7 +921,7 @@ fn seed_stdlib(ctx: &ResolveCtx, queue: &List(OwnedString), seen: &Set(OwnedStri
 // Whether the project or a dependency provides its own module for this stdlib file's dotted name -
 // resolution would never pick the stdlib copy, so the loader must not either.
 fn shadowed_by_project(ctx: &ResolveCtx, stdlib_file: String) bool {
-    const rel = module_rel(stdlib_file, ctx.stdlib_root.view)
+    const rel = module_rel(stdlib_file, ctx.stdlib_root.view())
     if rel.is_none() {
         return false
     }
@@ -932,7 +932,7 @@ fn shadowed_by_project(ctx: &ResolveCtx, stdlib_file: String) bool {
         return false
     }
     const p = r.unwrap()
-    const shadowed = p.view != stdlib_file
+    const shadowed = p.view() != stdlib_file
     p.deinit()
     return shadowed
 }
@@ -980,14 +980,14 @@ fn index_edges(
     let index_of: Dict(OwnedString, usize) = dict()
     defer index_of.deinit()
     for i in 0..file_paths.len {
-        const key = canon_path(file_paths[i].view)
-        index_of.set(key.view, i)
+        const key = canon_path(file_paths[i].view())
+        index_of.set(key.view(), i)
         key.deinit()
     }
     let edges = list(edge_from.len)
     for i in 0..edge_from.len {
-        const key = canon_path(edge_to[i].view)
-        const to = index_of.get(key.view)
+        const key = canon_path(edge_to[i].view())
+        const to = index_of.get(key.view())
         key.deinit()
         if to.is_none() {
             continue
@@ -1005,7 +1005,7 @@ fn enqueue_copy(queue: &List(OwnedString), seen: &Set(OwnedString), path: String
 }
 
 fn enqueue_owned(queue: &List(OwnedString), seen: &Set(OwnedString), owned: move OwnedString) {
-    if !mark_seen(seen, owned.view) {
+    if !mark_seen(seen, owned.view()) {
         owned.deinit()
         return
     }
@@ -1016,16 +1016,16 @@ fn enqueue_owned(queue: &List(OwnedString), seen: &Set(OwnedString), owned: move
 fn mark_seen(seen: &Set(OwnedString), path: String) bool {
     const key = canon_path(path)
     defer key.deinit()
-    if seen.contains(key.view) {
+    if seen.contains(key.view()) {
         return false
     }
-    seen.add(key.view)
+    seen.add(key.view())
     return true
 }
 
 fn push_unresolved(diags: &List(Diagnostic), id: &ImportDecl) {
     let dotted = dot_join(id.path)
-    const msg = $"unresolved import `{dotted.view}`"
+    const msg = $"unresolved import `{dotted.view()}`"
     dotted.deinit()
     diags.push(error("E0001", msg, id.span))
 }
@@ -1040,7 +1040,7 @@ test "an override stands in for a file that is not on disk" {
     assert_true(got.is_some(), "the override supplied the text")
     let text = got.unwrap()
     defer text.deinit()
-    assert_true(text.view == "fn main() i32 { return 0 }\n", "and it is the buffer verbatim")
+    assert_true(text.view() == "fn main() i32 { return 0 }\n", "and it is the buffer verbatim")
 }
 
 // A one-module project built from `source`, with `test {}` body checking as `tests` asks. An empty

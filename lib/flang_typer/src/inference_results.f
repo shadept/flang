@@ -413,7 +413,7 @@ pub fn record_instantiated(self: &InferenceResults, ty: Ty) {
 // Take ownership of a synthesized string's buffer; returns the stable view the synthesized AST
 // stores (an OwnedString's heap bytes do not move when the list grows).
 pub fn add_synth_string(self: &InferenceResults, owned: move OwnedString) String {
-    let view = owned.view
+    let view = owned.view()
     self.synth_strings.push(owned)
     return view
 }
@@ -545,7 +545,7 @@ pub fn copy_lambda(info: &LambdaInfo) LambdaInfo {
         ret = info.ret,
         captures = move caps,
         closure_id = info.closure_id,
-        symbol = from_view(info.symbol.view),
+        symbol = from_view(info.symbol.view()),
         conv = info.conv,
     }
 }
@@ -559,7 +559,7 @@ pub fn copy_sig(sig: &ClosureSig) ClosureSig {
         params = move ps,
         moves = sig.moves,
         ret = sig.ret,
-        symbol = from_view(sig.symbol.view),
+        symbol = from_view(sig.symbol.view()),
         lambda_node = sig.lambda_node,
     }
 }

@@ -360,7 +360,7 @@ pub fn encode_int(self: &JsonEncoder, v: i64, width: u8) usize {
     self.write_separator()
     let buf = [0u8; 21]
     const len = format_i64(v, buf).unwrap()
-    self.w.write(slice_from_raw_parts(&buf[0], len))
+    self.w.write(buf[0..len])
     return len
 }
 
@@ -368,7 +368,7 @@ pub fn encode_uint(self: &JsonEncoder, v: u64, width: u8) usize {
     self.write_separator()
     let buf = [0u8; 20]
     const len = format_u64(v, buf).unwrap()
-    self.w.write(slice_from_raw_parts(&buf[0], len))
+    self.w.write(buf[0..len])
     return len
 }
 
@@ -409,7 +409,7 @@ pub fn encode_bytes(self: &JsonEncoder, v: u8[]) usize {
         }
         let buf = [0u8; 3]
         const len = format_u64(v[i] as u64, buf).unwrap()
-        self.w.write(slice_from_raw_parts(&buf[0], len))
+        self.w.write(buf[0..len])
     }
     write_byte(self.w, ']')
     return 0
@@ -551,7 +551,7 @@ fn set_error(self: &JsonDecoder, err: JsonError) {
 // ---- Low-level scanning ----
 
 fn fill_buf(self: &JsonDecoder) {
-    let dst = slice_from_raw_parts(&self.buf[0], 256)
+    let dst = self.buf[0..256]
     let n = self.reader.read(dst)
     self.buf_pos = 0
     self.buf_end = n
@@ -879,7 +879,7 @@ fn tracks_keys(self: &JsonDecoder) bool {
 // The innermost object key above the next value, when tracked.
 fn current_key(self: &JsonDecoder) String? {
     const top = self.keys.last_ref()?
-    return Some(top.view)
+    return Some(top.view())
 }
 
 // ---- Decoder interface ----
@@ -1159,10 +1159,7 @@ pub fn begin_map(self: &JsonDecoder) usize {
 
 pub fn end_map(self: &JsonDecoder) bool {
     if self.tracks_keys() {
-        const k = self.keys.pop()
-        if k.is_some() {
-            k.unwrap().deinit()
-        }
+        self.keys.pop().deinit()
     }
     return self.close('}')
 }
@@ -1402,8 +1399,8 @@ test "arrays and objects nest, and object keys keep their order" {
     defer v.deinit()
     assert_eq(v.len(), 3 as usize, "three keys")
     const m = v.as_map().unwrap()
-    assert_true(m.entry_at(0).unwrap().key.view == "z", "first key")
-    assert_true(m.entry_at(1).unwrap().key.view == "a", "second key")
+    assert_true(m.entry_at(0).unwrap().key.view() == "z", "first key")
+    assert_true(m.entry_at(1).unwrap().key.view() == "a", "second key")
     const z = v.get("z").unwrap()
     assert_eq(z.len(), 5 as usize, "five elements")
     assert_eq(z.at(0).unwrap().as_i64().unwrap(), 1i64, "int element")
@@ -1433,7 +1430,7 @@ test "to_json writes compact text that parses back" {
     defer v.deinit()
     let text = to_json(&v).unwrap()
     defer text.deinit()
-    assert_eq(text.view, "{\"b\":[1,2.0,\"s\\\"q\"],\"a\":{\"x\":null,\"y\":false}}", "compact")
+    assert_eq(text.view(), "{\"b\":[1,2.0,\"s\\\"q\"],\"a\":{\"x\":null,\"y\":false}}", "compact")
 
     let sb = string_builder(64)
     defer sb.deinit()
@@ -1447,6 +1444,7 @@ test "a non-finite float is an encoder error" {
     let zero = 0.0
     const nan = zero / zero
     const v = Value.Float(nan)
+    defer v.deinit()
     assert_true(to_json(&v, sb.writer()).unwrap_err() == JsonError.NonFiniteNumber, "nan")
 }
 
@@ -1459,23 +1457,23 @@ test "dates are written as ISO 8601 strings and read back where options say" {
     let text = to_json(&v).unwrap()
     defer text.deinit()
     assert_eq(
-        text.view,
+        text.view(),
         "{\"day\":\"2026-10-14\",\"at\":\"2026-10-14T09:30:00+01:00\",\"note\":\"2026-01-01\"}",
         "ISO text",
     )
 
-    let off = parse_json(text.view).unwrap()
+    let off = parse_json(text.view()).unwrap()
     defer off.deinit()
     assert_true(off.get("day").unwrap().is_string(), "Off keeps strings")
 
-    let all = parse_json(text.view, json_options(DateParsing.All)).unwrap()
+    let all = parse_json(text.view(), json_options(DateParsing.All)).unwrap()
     defer all.deinit()
     assert_true(all.get("day").unwrap().as_date().is_some(), "All reads the date")
     assert_true(all.get("at").unwrap().as_offset_datetime().is_some(), "and the timestamp")
     assert_true(all.get("note").unwrap().as_date().is_some(), "and every other date string")
 
     const keys = ["day", "at"]
-    let some = parse_json(text.view, json_options(DateParsing.Keys(keys[..]))).unwrap()
+    let some = parse_json(text.view(), json_options(DateParsing.Keys(keys[..]))).unwrap()
     defer some.deinit()
     assert_true(some.get("day").unwrap().as_date().is_some(), "listed key read")
     assert_true(some.get("note").unwrap().is_string(), "unlisted key kept")
@@ -1542,8 +1540,8 @@ test "floats round-trip through JSON text exactly" {
     v.push(Value.Float(-0.0))
     let text = to_json(&v).unwrap()
     defer text.deinit()
-    assert_eq(text.view, "[0.30000000000000004,0.3333333333333333,1e+300,-0.0]", "shortest text")
-    let back = parse_json(text.view).unwrap()
+    assert_eq(text.view(), "[0.30000000000000004,0.3333333333333333,1e+300,-0.0]", "shortest text")
+    let back = parse_json(text.view()).unwrap()
     defer back.deinit()
     assert_eq(back.at(0).unwrap().as_f64().unwrap(), 0.1 + 0.2, "0.1 + 0.2 exactly")
     assert_eq(back.at(1).unwrap().as_f64().unwrap(), 1.0 / 3.0, "a third exactly")

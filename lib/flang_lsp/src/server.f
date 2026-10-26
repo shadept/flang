@@ -287,10 +287,10 @@ fn lsp_diagnostic(
     d: &Diagnostic,
     enc: PositionEncoding,
 ) LspDiagnostic {
-    const message = if d.hint.view.len > 0 {
-        $"{d.message.view}\n{d.hint.view}"
+    const message = if d.hint.view().len > 0 {
+        $"{d.message.view()}\n{d.hint.view()}"
     } else {
-        from_view(d.message.view)
+        from_view(d.message.view())
     }
     return .{
         range = lsp_range(idx, text, d.span, enc),
@@ -337,13 +337,13 @@ fn publish_open_file(self: &LspServer, uri: String) {
         return
     }
     const d = doc.unwrap()
-    let parsed = parse_doc(d.text.view)
+    let parsed = parse_doc(d.text.view())
     defer parsed.deinit()
     let diagnostics: List(LspDiagnostic) = list(parsed.diagnostics.len)
     for &x in parsed.diagnostics {
-        diagnostics.push(lsp_diagnostic(&d.index, d.text.view, x, self.encoding))
+        diagnostics.push(lsp_diagnostic(&d.index, d.text.view(), x, self.encoding))
     }
-    self.analyzed_diags(d.path.view, &parsed.diagnostics, &diagnostics)
+    self.analyzed_diags(d.path.view(), &parsed.diagnostics, &diagnostics)
     let params = PublishDiagnosticsParams { uri = uri, diagnostics = move diagnostics }
     defer params.deinit()
     self.out.notify("textDocument/publishDiagnostics", &params)
@@ -366,7 +366,7 @@ fn analyzed_diags(
     if fid.is_none() {
         return
     }
-    const text = unit.sources[fid.unwrap() as usize].view
+    const text = unit.sources[fid.unwrap() as usize].view()
     let idx = line_index(text)
     defer idx.deinit()
     for &x in unit.diagnostics {
@@ -381,7 +381,7 @@ fn analyzed_diags(
 fn reported(live: &List(Diagnostic), d: &Diagnostic) bool {
     for &l in live {
         const same_span = l.span.start == d.span.start and l.span.length == d.span.length
-        if same_span and l.code == d.code and l.message.view == d.message.view {
+        if same_span and l.code == d.code and l.message.view() == d.message.view() {
             return true
         }
     }
@@ -392,8 +392,8 @@ fn reported(live: &List(Diagnostic), d: &Diagnostic) bool {
 // publish lands on the exact buffer), a freshly encoded one otherwise.
 fn uri_for_path(self: &LspServer, path: String) OwnedString {
     for entry in self.docs.docs.iter() {
-        if entry.value.path.view == path {
-            return from_view(entry.key.view)
+        if entry.value.path.view() == path {
+            return from_view(entry.key.view())
         }
     }
     return path_to_uri(path)
@@ -414,8 +414,8 @@ fn publish_project(self: &LspServer, pi: ProjectId) {
                 file_diags.push(d)
             }
         }
-        const u = self.uri_for_path(unit.file_paths[fid].view)
-        self.publish_file_diags(u.view, unit.sources[fid].view, &file_diags)
+        const u = self.uri_for_path(unit.file_paths[fid].view())
+        self.publish_file_diags(u.view(), unit.sources[fid].view(), &file_diags)
         u.deinit()
         file_diags.deinit()
     }
@@ -428,10 +428,10 @@ fn publish_project(self: &LspServer, pi: ProjectId) {
 fn progress_begin(self: &LspServer, title: String) OwnedString {
     self.next_id = self.next_id + 1
     const token = $"flang-{self.next_id}"
-    const create = WorkDoneProgressCreateParams { token = token.view }
+    const create = WorkDoneProgressCreateParams { token = token.view() }
     self.out.request(self.next_id, "window/workDoneProgress/create", &create)
     const begin = ProgressParams {
-        token = token.view,
+        token = token.view(),
         value = WorkDoneProgress { kind = "begin", title = Some(title) },
     }
     self.out.notify("$/progress", &begin)
@@ -454,14 +454,14 @@ fn send_status(self: &LspServer) {
     let projects: List(ProjectStatus) = list(self.ws.projects.len)
     for &p in self.ws.projects {
         projects.push(ProjectStatus {
-            name = p.name.view,
-            dir = p.dir.view,
+            name = p.name.view(),
+            dir = p.dir.view(),
             errors = project_error_count(&p.unit),
         })
     }
     let status = ServerStatus {
-        version = self.version.view,
-        folders = self.folders.map { it.view },
+        version = self.version.view(),
+        folders = self.folders.map { it.view() },
         projects = move projects,
     }
     defer status.deinit()
@@ -569,10 +569,10 @@ fn collect_folders(self: &LspServer, params: &Value?) {
         return
     }
     const p = path.unwrap()
-    const cut = rfind(p.view, '/')
+    const cut = rfind(p.view(), '/')
     const name = cut match {
-        Some(i) => p.view[(i + 1)..p.view.len]
-        None => p.view
+        Some(i) => p.view()[(i + 1)..p.view().len]
+        None => p.view()
     }
     if name.len > 0 {
         self.folders.push(from_view(name))
@@ -602,7 +602,7 @@ fn initialize_result(self: &LspServer, triggers: String[]) InitializeResult {
         code_lens_provider = lens,
         signature_help_provider = SignatureHelpOptions { trigger_characters = triggers },
         rename_provider = RenameOptions { prepare_provider = true },
-    }, server_info = ServerInfo { name = "flang-lsp", version = self.version.view } }
+    }, server_info = ServerInfo { name = "flang-lsp", version = self.version.view() } }
 }
 
 fn is_utf8_encoding(enc: PositionEncoding) bool {
@@ -661,8 +661,8 @@ fn on_did_open(self: &LspServer, msg: &RpcMessage) {
 
     self.publish_open_file(uri.unwrap())
     const doc = self.docs.get(uri.unwrap())
-    if doc.is_some() and doc.unwrap().path.view.len > 0 {
-        self.ensure_project(doc.unwrap().path.view)
+    if doc.is_some() and doc.unwrap().path.view().len > 0 {
+        self.ensure_project(doc.unwrap().path.view())
     }
 }
 
@@ -714,10 +714,10 @@ fn on_did_save(self: &LspServer, msg: &RpcMessage) {
         return
     }
     const doc = self.docs.get(uri.unwrap())
-    if doc.is_none() or doc.unwrap().path.view.len == 0 {
+    if doc.is_none() or doc.unwrap().path.view().len == 0 {
         return
     }
-    const path = doc.unwrap().path.view
+    const path = doc.unwrap().path.view()
 
     const pi = self.ws.project_of_path(path)
     if pi.is_none() {
@@ -742,7 +742,7 @@ fn on_did_close(self: &LspServer, msg: &RpcMessage) {
 // resolve and diagnostics would be pure noise, so the server stays tier-1-only. A configured root
 // that does not exist on disk gets the same treatment, plus a one-time editor warning.
 fn can_analyze(self: &LspServer) bool {
-    const root = self.ws.stdlib_path.view
+    const root = self.ws.stdlib_path.view()
     if root.len == 0 {
         return false
     }
@@ -758,10 +758,10 @@ fn warn_stdlib_missing(self: &LspServer) {
         return
     }
     self.stdlib_warned = true
-    const text = $"FLang: stdlib not found at `{self.ws.stdlib_path.view}`; type checking is disabled. Set flang.stdlibPath or pass -s."
+    const text = $"FLang: stdlib not found at `{self.ws.stdlib_path.view()}`; type checking is disabled. Set flang.stdlibPath or pass -s."
     defer text.deinit()
     // MessageType.Warning
-    const params = ShowMessageParams { type_ = 2, message = text.view }
+    const params = ShowMessageParams { type_ = 2, message = text.view() }
     self.out.notify("window/showMessage", &params)
 }
 
@@ -779,15 +779,15 @@ fn ensure_project(self: &LspServer, path: String) {
     }
     const d = dir.unwrap()
 
-    const base = rfind(d.view, '/') match {
-        Some(i) => d.view[(i + 1)..d.view.len]
-        None => d.view
+    const base = rfind(d.view(), '/') match {
+        Some(i) => d.view()[(i + 1)..d.view().len]
+        None => d.view()
     }
     const title = $"FLang: checking {base}"
-    const token = self.progress_begin(title.view)
+    const token = self.progress_begin(title.view())
     title.deinit()
-    const idx = open_project(&self.ws, d.view, &self.docs)
-    self.progress_end(token.view)
+    const idx = open_project(&self.ws, d.view(), &self.docs)
+    self.progress_end(token.view())
     token.deinit()
     d.deinit()
 
@@ -807,11 +807,11 @@ fn recheck_project(self: &LspServer, pi: ProjectId, dirty_path: String) {
 }
 
 fn recheck_with(self: &LspServer, pi: ProjectId, dirty: &Set(String)) {
-    const title = $"FLang: checking {self.ws.projects[pi].name.view}"
-    const token = self.progress_begin(title.view)
+    const title = $"FLang: checking {self.ws.projects[pi].name.view()}"
+    const token = self.progress_begin(title.view())
     title.deinit()
     reanalyze_project(&self.ws, pi, dirty, &self.docs)
-    self.progress_end(token.view)
+    self.progress_end(token.view())
     token.deinit()
     self.publish_project(pi)
     self.send_status()
@@ -868,8 +868,8 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
         }
         let path = got.unwrap()
 
-        if ends_with(path.view, "/flang.toml") {
-            const owner = self.ws.find_project(parent_dir(path.view))
+        if ends_with(path.view(), "/flang.toml") {
+            const owner = self.ws.find_project(parent_dir(path.view()))
             if owner.is_some() {
                 reopen[owner.unwrap()] = true
             }
@@ -877,7 +877,7 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
             continue
         }
 
-        const owner = self.ws.project_of_path(path.view)
+        const owner = self.ws.project_of_path(path.view())
         if owner.is_none() {
             path.deinit()
             continue
@@ -888,7 +888,7 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
             path.deinit()
             continue
         }
-        if self.is_open_path(path.view) {
+        if self.is_open_path(path.view()) {
             path.deinit()
             continue
         }
@@ -898,11 +898,11 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
 
     for pi in 0..self.ws.projects.len {
         if reopen[pi] {
-            const title = $"FLang: checking {self.ws.projects[pi].name.view}"
-            const token = self.progress_begin(title.view)
+            const title = $"FLang: checking {self.ws.projects[pi].name.view()}"
+            const token = self.progress_begin(title.view())
             title.deinit()
             const ok = reopen_project(&self.ws, pi, &self.docs)
-            self.progress_end(token.view)
+            self.progress_end(token.view())
             token.deinit()
             if ok {
                 self.publish_project(pi)
@@ -914,7 +914,7 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
         let dirty: Set(String) = set()
         for i in 0..touched.len {
             if touched_owner[i] == pi {
-                dirty.add(touched[i].view)
+                dirty.add(touched[i].view())
             }
         }
         if dirty.len() > 0 {
@@ -926,7 +926,7 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
 
 fn is_open_path(self: &LspServer, path: String) bool {
     for entry in self.docs.docs.iter() {
-        if entry.value.path.view == path {
+        if entry.value.path.view() == path {
             return true
         }
     }
@@ -946,11 +946,11 @@ fn on_document_symbol(self: &LspServer, msg: &RpcMessage) {
         return
     }
     const d = doc.unwrap()
-    let parsed = parse_doc(d.text.view)
+    let parsed = parse_doc(d.text.view())
     defer parsed.deinit()
     let syms = document_symbols(&parsed.module)
     defer syms.deinit()
-    let out = lsp_symbols(&syms, &d.index, d.text.view, self.encoding)
+    let out = lsp_symbols(&syms, &d.index, d.text.view(), self.encoding)
     defer out.deinit()
     self.out.respond(msg.id().unwrap(), &out)
 }
@@ -965,7 +965,7 @@ fn lsp_symbols(
     for &s in syms {
         const range = lsp_range(idx, text, s.span, enc)
         out.push(DocumentSymbol {
-            name = s.name.view,
+            name = s.name.view(),
             kind = s.kind as i32,
             range = range,
             selection_range = range,
@@ -997,7 +997,7 @@ fn on_folding_range(self: &LspServer, msg: &RpcMessage) {
         self.respond_null(msg)
         return
     }
-    let folds = folding_ranges(doc.unwrap().text.view)
+    let folds = folding_ranges(doc.unwrap().text.view())
     defer folds.deinit()
     let out = folds.map { f => FoldingRange { start_line = f.start_line, end_line = f.end_line } }
     defer out.deinit()
@@ -1016,7 +1016,7 @@ fn on_code_lens(self: &LspServer, msg: &RpcMessage) {
     }
     const uri = doc_uri(msg)
     const doc = if uri.is_some() { self.docs.get(uri.unwrap()) } else { null }
-    const dir = if doc.is_some() { self.test_dir(doc.unwrap().path.view) } else { null }
+    const dir = if doc.is_some() { self.test_dir(doc.unwrap().path.view()) } else { null }
     let lenses: List(CodeLens) = list(0)
     defer lenses.deinit()
     if dir.is_none() {
@@ -1027,16 +1027,16 @@ fn on_code_lens(self: &LspServer, msg: &RpcMessage) {
     let dv = dir.unwrap()
     defer dv.deinit()
     const d = doc.unwrap()
-    let parsed = parse_doc(d.text.view)
+    let parsed = parse_doc(d.text.view())
     defer parsed.deinit()
-    const file = d.path.view[(dv.view.len + 1)..d.path.view.len]
+    const file = d.path.view()[(dv.view().len + 1)..d.path.view().len]
     for &decl in parsed.module.decls {
         decl.* match {
             Test(t) => {
                 let arguments: List(TestTarget) = list(1)
-                arguments.push(TestTarget { dir = dv.view, file = file, name = t.label })
+                arguments.push(TestTarget { dir = dv.view(), file = file, name = t.label })
                 lenses.push(CodeLens {
-                    range = lsp_range(&d.index, d.text.view, t.span, self.encoding),
+                    range = lsp_range(&d.index, d.text.view(), t.span, self.encoding),
                     command = RunTestCommand {
                         title = "Run test",
                         command = "flang.runTest",
@@ -1057,7 +1057,7 @@ fn test_dir(self: &LspServer, path: String) OwnedString? {
         return null
     }
     return self.ws.project_of_path(path) match {
-        Some(pi) => Some(from_view(self.ws.projects[pi].dir.view))
+        Some(pi) => Some(from_view(self.ws.projects[pi].dir.view()))
         None => project_dir_for(path)
     }
 }
@@ -1090,7 +1090,7 @@ fn project_symbols(self: &LspServer, pi: ProjectId, query: String, out: &List(Sy
     for fid in 0..index.len {
         let any = false
         for &s in index[fid].symbols {
-            if symbol_matches(s.name.view, query) {
+            if symbol_matches(s.name.view(), query) {
                 any = true
             }
         }
@@ -1098,23 +1098,23 @@ fn project_symbols(self: &LspServer, pi: ProjectId, query: String, out: &List(Sy
             continue
         }
 
-        const text = unit.sources[fid].view
+        const text = unit.sources[fid].view()
         let lidx = line_index(text)
-        const u = self.uri_for_path(unit.file_paths[fid].view)
+        const u = self.uri_for_path(unit.file_paths[fid].view())
         for &s in index[fid].symbols {
-            if !symbol_matches(s.name.view, query) {
+            if !symbol_matches(s.name.view(), query) {
                 continue
             }
             let container: String? = null
-            if s.container.view.len > 0 {
-                container = Some(s.container.view)
+            if s.container.view().len > 0 {
+                container = Some(s.container.view())
             }
             out.push(SymbolInformation {
-                name = s.name.view,
+                name = s.name.view(),
                 kind = s.kind as i32,
                 container_name = container,
                 location = Location {
-                    uri = from_view(u.view),
+                    uri = from_view(u.view()),
                     range = lsp_range(&lidx, text, s.span, self.encoding),
                 },
             })
@@ -1140,14 +1140,14 @@ fn request_ctx(self: &LspServer, msg: &RpcMessage) ReqCtx? {
         return null
     }
     const doc = self.docs.get(uri.unwrap())
-    if doc.is_none() or doc.unwrap().path.view.len == 0 {
+    if doc.is_none() or doc.unwrap().path.view().len == 0 {
         return null
     }
-    const pi = self.ws.project_of_path(doc.unwrap().path.view)
+    const pi = self.ws.project_of_path(doc.unwrap().path.view())
     if pi.is_none() {
         return null
     }
-    const fid = file_id_of(&self.ws.projects[pi.unwrap()].unit, doc.unwrap().path.view)
+    const fid = file_id_of(&self.ws.projects[pi.unwrap()].unit, doc.unwrap().path.view())
     if fid.is_none() {
         return null
     }
@@ -1195,7 +1195,7 @@ fn cursor_at(self: &LspServer, msg: &RpcMessage) Cursor? {
     }
     const pi = ctx.unwrap().pi
     const fid = ctx.unwrap().fid
-    const text = self.ws.projects[pi].unit.sources[fid as usize].view
+    const text = self.ws.projects[pi].unit.sources[fid as usize].view()
     let idx = line_index(text)
     const off = idx.to_offset(text, pos.unwrap(), self.encoding)
     idx.deinit()
@@ -1211,16 +1211,16 @@ fn respond_null(self: &LspServer, msg: &RpcMessage) {
 // project `pi`. The target's range doubles as its selection range.
 fn span_link(self: &LspServer, pi: ProjectId, origin: SourceSpan, target: SourceSpan) LocationLink {
     const unit = &self.ws.projects[pi].unit
-    const origin_text = unit.sources[origin.file_id as usize].view
+    const origin_text = unit.sources[origin.file_id as usize].view()
     let origin_idx = line_index(origin_text)
     defer origin_idx.deinit()
-    const target_text = unit.sources[target.file_id as usize].view
+    const target_text = unit.sources[target.file_id as usize].view()
     let target_idx = line_index(target_text)
     defer target_idx.deinit()
     const range = lsp_range(&target_idx, target_text, target, self.encoding)
     return .{
         origin_selection_range = lsp_range(&origin_idx, origin_text, origin, self.encoding),
-        target_uri = self.uri_for_path(unit.file_paths[target.file_id as usize].view),
+        target_uri = self.uri_for_path(unit.file_paths[target.file_id as usize].view()),
         target_range = range,
         target_selection_range = range,
     }
@@ -1231,11 +1231,11 @@ fn span_link(self: &LspServer, pi: ProjectId, origin: SourceSpan, target: Source
 fn span_location(self: &LspServer, pi: ProjectId, span: SourceSpan) Location {
     const unit = &self.ws.projects[pi].unit
     const fid = span.file_id as usize
-    const text = unit.sources[fid].view
+    const text = unit.sources[fid].view()
     let idx = line_index(text)
     defer idx.deinit()
     return .{
-        uri = self.uri_for_path(unit.file_paths[fid].view),
+        uri = self.uri_for_path(unit.file_paths[fid].view()),
         range = lsp_range(&idx, text, span, self.encoding),
     }
 }
@@ -1253,7 +1253,7 @@ fn decl_label(self: &LspServer, pi: ProjectId, span: SourceSpan) String? {
     if !self.location_span_ok(pi, span) {
         return null
     }
-    const text = self.ws.projects[pi].unit.sources[span.file_id as usize].view
+    const text = self.ws.projects[pi].unit.sources[span.file_id as usize].view()
     let end = span.start + span.length
     if end > text.len {
         end = text.len
@@ -1287,7 +1287,7 @@ fn append_bound(result: &TypeCheckResult, ty: Ty, hit: &TemplateHit, rendered: &
     if bound.is_none() or name.is_none() {
         return
     }
-    const joined = $"{rendered.view} where {name.unwrap()}: {bound.unwrap().view}"
+    const joined = $"{rendered.view()} where {name.unwrap()}: {bound.unwrap().view()}"
     replace(rendered, joined).deinit()
 }
 
@@ -1327,7 +1327,7 @@ fn doc_for(self: &LspServer, pi: ProjectId, span: SourceSpan) OwnedString? {
     if !self.location_span_ok(pi, span) {
         return null
     }
-    return doc_above(self.ws.projects[pi].unit.sources[span.file_id as usize].view, span.start)
+    return doc_above(self.ws.projects[pi].unit.sources[span.file_id as usize].view(), span.start)
 }
 
 // What brings the binding declared at exactly `span` into scope - `let`, `const`, `param`, `for` -
@@ -1372,7 +1372,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     const offset = cur.unwrap().offset
     const unit = &self.ws.projects[pi].unit
     const result = &unit.result
-    const text = unit.sources[fid as usize].view
+    const text = unit.sources[fid as usize].view()
 
     // An import names one file: its path, with that module's docstring. Never falls through - a
     // path segment like `list` would otherwise hover as every declaration of that name.
@@ -1380,13 +1380,13 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     if imp.is_some() {
         let ref = imp.unwrap()
         defer ref.deinit()
-        const target = file_id_of_fqn(unit, ref.path.view)
+        const target = file_id_of_fqn(unit, ref.path.view())
         const doc: OwnedString? = if target.is_some() {
-            module_doc(unit.sources[target.unwrap() as usize].view)
+            module_doc(unit.sources[target.unwrap() as usize].view())
         } else {
             null
         }
-        self.respond_hover(msg, $"import {ref.path.view}", doc, text, ref.span)
+        self.respond_hover(msg, $"import {ref.path.view()}", doc, text, ref.span)
         return
     }
 
@@ -1520,10 +1520,10 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
                 }
             }
             if intro.is_some() {
-                set_hover_label(&label, $"{intro.unwrap()} {wname}: {rendered.view}")
+                set_hover_label(&label, $"{intro.unwrap()} {wname}: {rendered.view()}")
                 rendered.deinit()
             } else if th.unwrap().span.length == wname.len {
-                set_hover_label(&label, $"{wname}: {rendered.view}")
+                set_hover_label(&label, $"{wname}: {rendered.view()}")
                 rendered.deinit()
             } else {
                 set_hover_label(&label, rendered)
@@ -1542,7 +1542,7 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         if fh.is_some() {
             const vars = type_param_names(&unit.checker)
             const rendered = render_ty(result, fh.unwrap().ty, Some(vars))
-            set_hover_label(&label, $"field {wname}: {rendered.view}")
+            set_hover_label(&label, $"field {wname}: {rendered.view()}")
             rendered.deinit()
             doc_span = Some(fh.unwrap().decl_span)
         }
@@ -1628,10 +1628,10 @@ fn context_fields_into(sb: &StringBuilder, result: &TypeCheckResult, sd: &Struct
         sb.append("\n    ")
         sb.append(f.name)
         sb.append(": ")
-        sb.append(ty.view)
+        sb.append(ty.view())
         ty.deinit()
         if i < result.context_fields.len {
-            const fqn = result.context_fields[i].view
+            const fqn = result.context_fields[i].view()
             const dot = rfind(fqn, '.')
             if dot.is_some() {
                 sb.append(" // ")
@@ -1662,7 +1662,7 @@ fn respond_hover(
     span: SourceSpan,
 ) {
     const none: OwnedString? = null
-    const md = hover_markdown(label.view, &doc, &none)
+    const md = hover_markdown(label.view(), &doc, &none)
     label.deinit()
     if doc.is_some() {
         doc.unwrap().deinit()
@@ -1788,7 +1788,7 @@ fn on_definition(self: &LspServer, msg: &RpcMessage) {
     let locs: List(Location) = list(0)
     defer locs.deinit()
 
-    const text = unit.sources[fid as usize].view
+    const text = unit.sources[fid as usize].view()
 
     // An import names one file: answer with its start, and never fall through to the name tiers - a
     // path segment like `list` would otherwise match every declaration of that name. As a
@@ -1797,7 +1797,7 @@ fn on_definition(self: &LspServer, msg: &RpcMessage) {
     if imp.is_some() {
         let ref = imp.unwrap()
         defer ref.deinit()
-        const target = file_id_of_fqn(unit, ref.path.view)
+        const target = file_id_of_fqn(unit, ref.path.view())
         if target.is_some() {
             const start = SourceSpan { file_id = target.unwrap(), start = 0, length = 0 }
             if self.definition_links {
@@ -1879,7 +1879,7 @@ fn index_matches(self: &LspServer, name: String, out: &List(Location)) {
         const index = &self.ws.projects[pi].index
         for fid in 0..index.len {
             for &s in index[fid].symbols {
-                if s.name.view != name {
+                if s.name.view() != name {
                     continue
                 }
                 if self.location_span_ok(pi, s.span) {
@@ -1945,7 +1945,7 @@ fn on_references(self: &LspServer, msg: &RpcMessage) {
     if tg.is_some() {
         targets.push(tg.unwrap().target)
     } else {
-        const text = unit.sources[fid as usize].view
+        const text = unit.sources[fid as usize].view()
         const word = identifier_at(text, offset)
         if word.is_some() {
             const overloads = result.functions.by_name.get_ref(word.unwrap().name)
@@ -2030,11 +2030,11 @@ fn on_inlay_hint(self: &LspServer, msg: &RpcMessage) {
         self.respond_null(msg)
         return
     }
-    const atext = unit.sources[fid as usize].view
+    const atext = unit.sources[fid as usize].view()
     const uri = doc_uri(msg)
     const doc = if uri.is_some() { self.docs.get(uri.unwrap()) } else { null }
     // The text positions are computed against: the live buffer when open, else the analyzed text.
-    const text = if doc.is_some() { doc.unwrap().text.view } else { atext }
+    const text = if doc.is_some() { doc.unwrap().text.view() } else { atext }
     let lidx = line_index(text)
     defer lidx.deinit()
 
@@ -2074,7 +2074,7 @@ fn on_inlay_hint(self: &LspServer, msg: &RpcMessage) {
         const rendered = render_ty(result, ty.unwrap(), Some(vars))
         hints.push(InlayHint {
             position = lidx.to_position(text, site.offset, self.encoding),
-            label = $": {rendered.view}",
+            label = $": {rendered.view()}",
             // InlayHintKind.Type
             kind = 1,
         })
@@ -2108,7 +2108,7 @@ fn on_signature_help(self: &LspServer, msg: &RpcMessage) {
         return
     }
     const pi = ctx.unwrap().pi
-    const text = doc.unwrap().text.view
+    const text = doc.unwrap().text.view()
     const offset = doc.unwrap().index.to_offset(text, pos.unwrap(), self.encoding)
 
     const site = call_site_at(text, offset)
@@ -2118,7 +2118,7 @@ fn on_signature_help(self: &LspServer, msg: &RpcMessage) {
     }
     let cs = site.unwrap()
     const result = &self.ws.projects[pi].unit.result
-    const overloads = result.functions.by_name.get_ref(cs.name.view)
+    const overloads = result.functions.by_name.get_ref(cs.name.view())
     if overloads.is_none() or overloads.unwrap().len == 0 {
         cs.deinit()
         self.respond_null(msg)
@@ -2175,17 +2175,17 @@ fn on_formatting(self: &LspServer, msg: &RpcMessage) {
         self.respond_null(msg)
         return
     }
-    const text = doc.unwrap().text.view
+    const text = doc.unwrap().text.view()
 
     let cfg = default_config()
     // The project name is owned here so the config's view of it outlives the format.
-    let project = if doc.unwrap().path.view.len > 0 {
-        apply_project_fmt(doc.unwrap().path.view, &cfg)
+    let project = if doc.unwrap().path.view().len > 0 {
+        apply_project_fmt(doc.unwrap().path.view(), &cfg)
     } else {
         from_view("")
     }
     defer project.deinit()
-    set_project(&cfg, project.view)
+    set_project(&cfg, project.view())
 
     const res = format_source(text, &cfg)
     if res.is_err() {
@@ -2197,11 +2197,11 @@ fn on_formatting(self: &LspServer, msg: &RpcMessage) {
 
     let edits: List(TextEdit) = list(1)
     defer edits.deinit()
-    if formatted.view != text {
+    if formatted.view() != text {
         const whole = SourceSpan { file_id = 0, start = 0, length = text.len }
         edits.push(TextEdit {
             range = lsp_range(&doc.unwrap().index, text, whole, self.encoding),
-            new_text = formatted.view,
+            new_text = formatted.view(),
         })
     }
     self.out.respond(msg.id().unwrap(), &edits)
@@ -2216,25 +2216,25 @@ fn apply_project_fmt(path: String, cfg: &FmtConfig) OwnedString {
         return from_view("")
     }
     let d = dir.unwrap()
-    const manifest = $"{d.view}/flang.toml"
+    const manifest = $"{d.view()}/flang.toml"
     d.deinit()
-    const got = read_text(manifest.view)
+    const got = read_text(manifest.view())
     manifest.deinit()
     if got.is_none() {
         return from_view("")
     }
     let toml = got.unwrap()
     defer toml.deinit()
-    const parsed = parse_project(toml.view)
+    const parsed = parse_project(toml.view())
     if parsed.is_err() {
         return from_view("")
     }
     let proj = parsed.unwrap()
     defer proj.deinit()
     for &e in proj.fmt {
-        const _ok = set_option(cfg, e.key.view, e.value.view)
+        const _ok = set_option(cfg, e.key.view(), e.value.view())
     }
-    return from_view(proj.name.view)
+    return from_view(proj.name.view())
 }
 
 // ---- textDocument/prepareRename, textDocument/rename ----
@@ -2261,8 +2261,8 @@ fn rename_site(self: &LspServer, msg: &RpcMessage) Result(RenameSite, String) {
     const pi = cur.unwrap().pi
     const fid = cur.unwrap().fid
     const unit = &self.ws.projects[pi].unit
-    const text = unit.sources[fid as usize].view
-    if self.is_stale(unit.file_paths[fid as usize].view, text) {
+    const text = unit.sources[fid as usize].view()
+    if self.is_stale(unit.file_paths[fid as usize].view(), text) {
         return Err("save the file before renaming: the rename works on the last check")
     }
     const word = identifier_at(text, cur.unwrap().offset)
@@ -2278,7 +2278,7 @@ fn rename_site(self: &LspServer, msg: &RpcMessage) Result(RenameSite, String) {
     if sym.is_none() {
         return Err("no renameable symbol under the cursor")
     }
-    const decl_path = unit.file_paths[sym.unwrap().decl.file_id as usize].view
+    const decl_path = unit.file_paths[sym.unwrap().decl.file_id as usize].view()
     if !self.workspace_origin(decl_path) {
         return Err(
             "the symbol is declared outside the workspace's projects (stdlib or a dependency)",
@@ -2294,8 +2294,8 @@ fn rename_site(self: &LspServer, msg: &RpcMessage) Result(RenameSite, String) {
 // Whether an open buffer of `path` holds anything but `analyzed`.
 fn is_stale(self: &LspServer, path: String, analyzed: String) bool {
     for entry in self.docs.docs.iter() {
-        if entry.value.path.view == path {
-            return entry.value.text.view != analyzed
+        if entry.value.path.view() == path {
+            return entry.value.text.view() != analyzed
         }
     }
     return false
@@ -2326,7 +2326,7 @@ fn on_prepare_rename(self: &LspServer, msg: &RpcMessage) {
         return
     }
     const s = site.unwrap()
-    const text = self.ws.projects[s.pi].unit.sources[s.word.file_id as usize].view
+    const text = self.ws.projects[s.pi].unit.sources[s.word.file_id as usize].view()
     let lidx = line_index(text)
     defer lidx.deinit()
     const result = PrepareRenameResult {
@@ -2394,7 +2394,7 @@ pub fn deinit(self: move FileEdits) {
 
 fn collect_rename(self: &LspServer, s: &RenameSite, files: &List(FileEdits)) {
     const home = &self.ws.projects[s.pi].unit
-    const decl_path = home.file_paths[s.sym.decl.file_id as usize].view
+    const decl_path = home.file_paths[s.sym.decl.file_id as usize].view()
     for qi in 0..self.ws.projects.len {
         const unit = &self.ws.projects[qi].unit
         let sym: Symbol? = Some(s.sym)
@@ -2407,7 +2407,7 @@ fn collect_rename(self: &LspServer, s: &RenameSite, files: &List(FileEdits)) {
         let spans = symbol_edits(unit, &sym.unwrap(), s.name)
         for &span in spans {
             const fid = span.file_id as usize
-            add_file_edit(files, unit.file_paths[fid].view, unit.sources[fid].view, span.start)
+            add_file_edit(files, unit.file_paths[fid].view(), unit.sources[fid].view(), span.start)
         }
         spans.deinit()
     }
@@ -2586,9 +2586,9 @@ test "didOpen and didChange replace the buffer, didClose drops it" {
 
     const doc = srv.docs.get("file:///t.f")
     assert_true(doc.is_some(), "document open")
-    assert_eq(doc.unwrap().text.view, "const B: i32 = 2", "full sync replaced the text")
+    assert_eq(doc.unwrap().text.view(), "const B: i32 = 2", "full sync replaced the text")
     assert_eq(doc.unwrap().version, 2, "version tracked")
-    assert_eq(doc.unwrap().path.view, "/t.f", "file uri resolves to a path")
+    assert_eq(doc.unwrap().path.view(), "/t.f", "file uri resolves to a path")
 
     let input2 = string_builder(256)
     defer input2.deinit()
@@ -2831,9 +2831,9 @@ fn demo_src_json() OwnedString {
 fn demo_input(request: String) StringBuilder {
     let input = string_builder(4096)
     const src = demo_src_json()
-    const open = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\",\"version\":1,\"text\":\"{src.view}\"}}}}}}"
+    const open = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\",\"version\":1,\"text\":\"{src.view()}\"}}}}}}"
     src.deinit()
-    frame_into(&input, open.view)
+    frame_into(&input, open.view())
     open.deinit()
     frame_into(&input, request)
     return input
@@ -2852,9 +2852,9 @@ fn demo_run(request: String, out: &StringBuilder) {
 test "opening and editing a file keep the last analysis's warnings" {
     let change = demo_src_json()
     defer change.deinit()
-    const edit = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\",\"version\":2}},\"contentChanges\":[{{\"text\":\"// pad\\n{change.view}\"}}]}}}}"
+    const edit = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\",\"version\":2}},\"contentChanges\":[{{\"text\":\"// pad\\n{change.view()}\"}}]}}}}"
     defer edit.deinit()
-    let input = demo_input(edit.view)
+    let input = demo_input(edit.view())
     defer input.deinit()
     let out = string_builder(4096)
     defer out.deinit()
@@ -3206,7 +3206,7 @@ fn definition_lands(id: i32, line: i32, ch: i32, want: String) bool {
     let out = string_builder(4096)
     defer out.deinit()
     const req = $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/definition\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\"}},\"position\":{{\"line\":{line},\"character\":{ch}}}}}}}"
-    demo_run(req.view, &out)
+    demo_run(req.view(), &out)
     req.deinit()
     return contains(out.as_view(), want)
 }
@@ -3235,7 +3235,7 @@ fn hover_shows(id: i32, line: i32, ch: i32, want: String) bool {
     let out = string_builder(4096)
     defer out.deinit()
     const req = $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/hover\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\"}},\"position\":{{\"line\":{line},\"character\":{ch}}}}}}}"
-    demo_run(req.view, &out)
+    demo_run(req.view(), &out)
     req.deinit()
     return contains(out.as_view(), want)
 }
@@ -3387,9 +3387,9 @@ test "inlayHint follows unsaved edits to live positions" {
     defer out.deinit()
     // The same source shifted down one line: every binder pairs, every hint moves with it.
     const src = demo_src_json()
-    const change = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\",\"version\":2}},\"contentChanges\":[{{\"text\":\"// pad\\n{src.view}\"}}]}}}}"
+    const change = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\",\"version\":2}},\"contentChanges\":[{{\"text\":\"// pad\\n{src.view()}\"}}]}}}}"
     src.deinit()
-    let input = demo_input(change.view)
+    let input = demo_input(change.view())
     change.deinit()
     frame_into(
         &input,
@@ -3497,7 +3497,7 @@ fn lens_run(commands: String, out: &StringBuilder) {
     let input = string_builder(1024)
     defer input.deinit()
     const init = $"{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"capabilities\":{{\"experimental\":{{\"commands\":{{\"commands\":[{commands}]}}}}}}}}}}"
-    frame_into(&input, init.view)
+    frame_into(&input, init.view())
     init.deinit()
     frame_into(
         &input,
@@ -3607,7 +3607,7 @@ fn open_test_project(
     }
     let index = build_indexes(&unit)
     let manifest = $"[project]\nname = \"{name}\"\n"
-    let proj = parse_project(manifest.view).unwrap()
+    let proj = parse_project(manifest.view()).unwrap()
     manifest.deinit()
     let ctx = resolve_ctx(&proj, "")
     proj.deinit()
@@ -3635,7 +3635,7 @@ fn rename_run_with(requests: String[], out: &StringBuilder, second: bool) {
     }
     const open = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///r/m.f\",\"version\":1,\"text\":\"{body.as_view()}\"}}}}}}"
     body.deinit()
-    frame_into(&input, open.view)
+    frame_into(&input, open.view())
     open.deinit()
     for r in requests {
         frame_into(&input, r)
@@ -3672,11 +3672,11 @@ fn rename_count(id: i32, line: i32, ch: i32, fresh: String) usize {
     let out = string_builder(8192)
     defer out.deinit()
     const req = $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/rename\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///r/m.f\"}},\"position\":{{\"line\":{line},\"character\":{ch}}},\"newName\":\"{fresh}\"}}}}"
-    rename_run([req.view], &out)
+    rename_run([req.view()], &out)
     req.deinit()
     const want = $"\"newText\":\"{fresh}\""
     defer want.deinit()
-    return count(out.as_view(), want.view)
+    return count(out.as_view(), want.view())
 }
 
 test "rename rewrites a field at its declaration, initializer and read" {
@@ -3757,11 +3757,11 @@ fn rename_refused(id: i32, method: String, line: i32, ch: i32, fresh: String, co
     let out = string_builder(4096)
     defer out.deinit()
     const req = $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/{method}\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///r/m.f\"}},\"position\":{{\"line\":{line},\"character\":{ch}}},\"newName\":\"{fresh}\"}}}}"
-    rename_run([req.view], &out)
+    rename_run([req.view()], &out)
     req.deinit()
     const want = $"\"id\":{id},\"error\":{{\"code\":{code}"
     defer want.deinit()
-    return contains(out.as_view(), want.view)
+    return contains(out.as_view(), want.view())
 }
 
 test "rename refuses dependencies, keywords, bad names and empty space" {
@@ -3813,7 +3813,7 @@ fn hover_holds(id: i32, line: i32, ch: i32, want: String) bool {
     let out = string_builder(8192)
     defer out.deinit()
     const req = $"{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"textDocument/hover\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///r/m.f\"}},\"position\":{{\"line\":{line},\"character\":{ch}}}}}}}"
-    rename_run([req.view], &out)
+    rename_run([req.view()], &out)
     req.deinit()
     return contains(out.as_view(), want)
 }

@@ -93,12 +93,20 @@ A non-owning view `{ ptr: &u8, len: usize }`. No `deinit`. Same binary layout as
 _Avoid_: str, view, slice (when string-specific)
 
 **OwnedString**:
-An owning string that must be freed via `deinit()`. Produced by `StringBuilder.to_string()` or `from_view()`.
+An owning string that must be freed via `deinit()`: a `Memory` holding the text and its terminator. `view()` is the text as a **String**. Produced by `StringBuilder.to_string()` or `from_view()`.
 _Avoid_: heap string, allocated string
 
 **StringBuilder**:
 An owning, mutable, growable buffer. `to_string()` transfers the buffer into a fresh `OwnedString` (move semantics — the builder resets).
 _Avoid_: rope, buffer
+
+**Memory**:
+An owned block of heap bytes `{ ptr, len }` (RFC-043): what an allocator hands out and takes back. `unallocated()` is the block that owns nothing; `as_slice()` borrows a block as elements, and the slice owns nothing.
+_Avoid_: block, buffer, allocation (for the owner type)
+
+**Leak**:
+`leak(value)`: taking ownership and releasing nothing, where a resource leaves the language - C took the block back, a region reclaims it, a syscall closed the handle. The end of every ownership chain.
+_Avoid_: forget, drop, discard
 
 ### Stdlib conventions
 

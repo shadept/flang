@@ -3,6 +3,7 @@ pub import core.comptime
 pub import core.deinit
 pub import core.hash
 pub import core.math
+pub import core.memory
 pub import core.ops
 pub import core.option
 pub import core.panic

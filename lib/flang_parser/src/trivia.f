@@ -309,12 +309,12 @@ test "doc_markdown fences indented runs and keeps list continuations" {
         "Prose that\nwraps.\n\n  let x = 1\n  x + 1\n\n  - first item\n    continued\n2. second\nTail.",
     )
     assert_true(
-        md.view == "Prose that\nwraps.\n\n```flang\n  let x = 1\n  x + 1\n```\n\n  - first item\n  continued\n2. second\nTail.",
+        md.view() == "Prose that\nwraps.\n\n```flang\n  let x = 1\n  x + 1\n```\n\n  - first item\n  continued\n2. second\nTail.",
         "code fenced, list continuation indented, prose untouched",
     )
     md.deinit()
     const plain = doc_markdown("Just prose.")
-    assert_true(plain.view == "Just prose.", "prose passes through")
+    assert_true(plain.view() == "Just prose.", "prose passes through")
     plain.deinit()
 }
 
@@ -323,7 +323,7 @@ test "doc_above collects the comment run glued to a declaration" {
     const d = doc_above(src, 31)
     assert_true(d.is_some(), "a docstring")
     const text = d.unwrap()
-    assert_true(text.view == "Adds one.\n\n  Indented.", "prefix stripped, lines kept")
+    assert_true(text.view() == "Adds one.\n\n  Indented.", "prefix stripped, lines kept")
     text.deinit()
 }
 
@@ -342,7 +342,7 @@ test "doc_above honours indentation and CRLF" {
     const d = doc_above(src, 38)
     assert_true(d.is_some(), "an indented field docstring")
     const text = d.unwrap()
-    assert_true(text.view == "The x.", "CR trimmed")
+    assert_true(text.view() == "The x.", "CR trimmed")
     text.deinit()
 }
 
@@ -350,7 +350,7 @@ test "module_doc takes the opening run only when a blank line follows it" {
     const m = module_doc("// Trivia.\n// More.\n\nimport std.option\n")
     assert_true(m.is_some(), "module docstring")
     const text = m.unwrap()
-    assert_true(text.view == "Trivia.\nMore.", "and it is the opening run")
+    assert_true(text.view() == "Trivia.\nMore.", "and it is the opening run")
     text.deinit()
     const glued = module_doc("// see\nfn f() {}\n")
     assert_true(glued.is_none(), "glued to the first decl")
@@ -359,6 +359,6 @@ test "module_doc takes the opening run only when a blank line follows it" {
     const eof = module_doc("// only\n")
     assert_true(eof.is_some(), "end of file closes the run")
     const eof_text = eof.unwrap()
-    assert_true(eof_text.view == "only", "and keeps the text")
+    assert_true(eof_text.view() == "only", "and keeps the text")
     eof_text.deinit()
 }

@@ -4,6 +4,7 @@
 import std.allocator
 import std.collections.list
 import std.mem
+import std.option
 
 // =============================================================================
 // TestAllocator - tracking allocator for leak detection in tests
@@ -25,29 +26,37 @@ import std.mem
 
 // Built on malloc, so it carries the global allocator's ceiling: a request above `MAX_ALIGN` is
 // declined rather than under-served.
-fn test_alloc(impl: &u8, size: usize, alignment: usize) u8[]? {
+fn test_alloc(impl: &u8, size: usize, alignment: usize) Memory? {
     if alignment > MAX_ALIGN {
         return null
     }
     const ptr = malloc(size)?
     __flang_test_track_alloc(ptr, size)
     // Wrapped explicitly - see the note in core/range.f::next.
-    return Some(slice_from_raw_parts(ptr, size))
+    return Some(from_raw(ptr, size))
 }
 
-fn test_realloc(impl: &u8, memory: u8[], alignment: usize, new_size: usize) u8[]? {
-    if alignment > MAX_ALIGN {
-        return null
-    }
+fn test_realloc(impl: &u8, memory: &Memory, new_size: usize) bool {
     const old_ptr = memory.ptr
-    const ptr = realloc(Some(old_ptr), new_size)?
-    __flang_test_track_realloc(old_ptr, ptr, new_size)
-    return Some(slice_from_raw_parts(ptr, new_size))
+    const grown = realloc(Some(old_ptr), new_size)
+    if grown.is_none() {
+        return false
+    }
+    __flang_test_track_realloc(old_ptr, grown.unwrap(), new_size)
+    leak(replace(memory, from_raw(grown.unwrap(), new_size)))
+    return true
 }
 
-fn test_dealloc(impl: &u8, memory: u8[], alignment: usize) {
-    __flang_test_track_free(memory.ptr)
-    free(Some(memory.ptr))
+// The block leaves the language here: C owns it again.
+fn test_dealloc(impl: &u8, memory: move Memory) {
+    if !memory.is_allocated() {
+        leak(memory)
+        return
+    }
+    const ptr = memory.ptr
+    leak(memory)
+    __flang_test_track_free(ptr)
+    free(Some(ptr))
 }
 
 // The ledger is in C and needs no per-instance state; the impl pointer addresses this and is never
@@ -185,7 +194,11 @@ pub fn assert_set_eq(a: &List($T), b: &List(T), msg: String) {
 test "a test runs under the tracking allocator, with its own temp arena" {
     assert_true(context.allocator.impl == (&test_allocator).impl, "allocations are tracked")
     const served = context.temp_allocator.alloc(256, 8) match {
-        Some(block) => block.len
+        Some(block) => {
+            const n = block.len
+            context.temp_allocator.dealloc(block)
+            n
+        }
         None => 0usize
     }
     assert_true(served == 256usize, "the arena serves temp allocations, never freed")

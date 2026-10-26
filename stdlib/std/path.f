@@ -74,8 +74,8 @@ pub fn path(s: String, allocator: &Allocator = context.allocator) Path {
 // directly and skip the OwnedString entirely.
 pub fn path_from_owned(s: move OwnedString) Path {
     const alloc = s.allocator
-    let sb = string_builder(s.len + 1, alloc)
-    sb.append(s.view)
+    let sb = string_builder(s.view().len + 1, alloc)
+    sb.append(s.view())
     s.deinit()
     return .{ __sb = move sb }
 }
@@ -101,7 +101,7 @@ pub fn as_view(self: &Path) String {
 }
 
 pub fn as_raw_bytes(self: &Path) u8[] {
-    return slice_from_raw_parts(self.__sb.ptr, self.__sb.len)
+    return self.as_view().as_raw_bytes()
 }
 
 pub fn len(self: &Path) usize {
@@ -316,7 +316,7 @@ pub fn join(self: &Path, other: String) Path {
     sb.append(self.as_view())
 
     if sb.len > 0 {
-        const last_ptr: &u8 = sb.ptr + (sb.len - 1)
+        const last_ptr: &u8 = sb.as_view().ptr + (sb.len - 1)
         if !is_separator(last_ptr.*) {
             sb.append_byte(sep())
         }
@@ -731,7 +731,7 @@ pub fn push(self: &Path, other: String) {
         return
     }
     if self.__sb.len > 0 {
-        const last: &u8 = self.__sb.ptr + (self.__sb.len - 1)
+        const last: &u8 = self.__sb.as_view().ptr + (self.__sb.len - 1)
         if !is_separator(last.*) {
             self.__sb.append_byte(sep())
         }
@@ -763,7 +763,7 @@ pub fn with_file_name(self: &Path, name: String) Path {
     let sb = string_builder(dir.unwrap().len + name.len + 1, alloc)
     sb.append(dir.unwrap())
     if sb.len > 0 {
-        const last: &u8 = sb.ptr + (sb.len - 1)
+        const last: &u8 = sb.as_view().ptr + (sb.len - 1)
         if !is_separator(last.*) {
             sb.append_byte(sep())
         }
@@ -783,7 +783,7 @@ fn assert_slash_eq(actual: String, expected: String, msg: String) {
     defer p.deinit()
     const s = p.to_slash()
     defer s.deinit()
-    assert_eq(s.view, expected, msg)
+    assert_eq(s.view(), expected, msg)
 }
 
 test "path basics" {
@@ -1054,7 +1054,7 @@ test "to_slash and from_slash round-trip" {
     defer p.deinit()
     const s = p.to_slash()
     defer s.deinit()
-    assert_eq(s.view, "src/a/b.f", "forward slashes on every platform")
+    assert_eq(s.view(), "src/a/b.f", "forward slashes on every platform")
 
     let back = from_slash("src/a/b.f")
     defer back.deinit()

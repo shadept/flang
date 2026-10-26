@@ -215,7 +215,7 @@ fn _powersort_owning(s: $T[], cmp: fn(T, T) Ord) {
     const bytes = alloc.alloc(n * size_of(usize), align_of(usize))
         .expect("powersort: index allocation failed")
     const order: usize[] = .{ ptr = bytes.ptr as &usize, len = n }
-    defer alloc.dealloc(bytes, align_of(usize))
+    defer alloc.dealloc(bytes)
     for i in 0..n {
         order[i] = i
     }
@@ -258,7 +258,7 @@ fn _powersort_staged(s: $T[], cmp: fn(T, T) Ord) where T: copyable {
     const scratch_bytes = alloc.alloc(byte_len, align_of(T))
         .expect("powersort: scratch allocation failed")
     const scratch: T[] = .{ ptr = scratch_bytes.ptr as &T, len = n }
-    defer alloc.dealloc(scratch_bytes, align_of(T))
+    defer alloc.dealloc(scratch_bytes)
     _powersort_with(s, scratch, cmp)
 }
 

@@ -90,14 +90,14 @@ pub fn render_project_diagnostics(
         } else if sources.len == 0 {
             continue
         }
-        const source = sources[which].view
+        const source = sources[which].view()
         if !indexes.contains(which) {
             indexes.set(which, line_index(source))
         }
         const idx = indexes.get_ref(which).unwrap()
-        const text = render_diagnostic(paths[which].view, source, idx, d, style)
+        const text = render_diagnostic(paths[which].view(), source, idx, d, style)
         defer text.deinit()
-        write_err(text.view)
+        write_err(text.view())
     }
 }
 

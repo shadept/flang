@@ -285,5 +285,5 @@ pub fn path_of(self: &TypeCheckResult, file_id: i32) String? {
     if i >= self.file_paths.len {
         return null
     }
-    return Some(self.file_paths[i].view)
+    return Some(self.file_paths[i].view())
 }

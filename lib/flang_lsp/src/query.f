@@ -29,7 +29,7 @@ import flang_typer.well_known
 // convention).
 pub fn file_id_of(unit: &AnalyzedProject, path: String) i32? {
     for i in 0..unit.file_paths.len {
-        if unit.file_paths[i].view == path {
+        if unit.file_paths[i].view() == path {
             return Some(i as i32)
         }
     }
@@ -62,8 +62,8 @@ pub fn import_at(module: &Module, offset: usize) ImportRef? {
                     const end = id.span.start + id.span.length
                     const span = SourceSpan {
                         file_id = id.span.file_id,
-                        start = end - path.len,
-                        length = path.len,
+                        start = end - path.view().len,
+                        length = path.view().len,
                     }
                     return Some(ImportRef { path = move path, span = span })
                 }
@@ -79,7 +79,7 @@ pub fn import_at(module: &Module, offset: usize) ImportRef? {
 // (the import did not resolve).
 pub fn file_id_of_fqn(unit: &AnalyzedProject, fqn: String) i32? {
     for i in 0..unit.fqns.len {
-        if unit.fqns[i].view == fqn {
+        if unit.fqns[i].view() == fqn {
             return Some(i as i32)
         }
     }
@@ -348,7 +348,7 @@ fn context_field_span(result: &TypeCheckResult, fqn: String) SourceSpan? {
         return null
     }
     for i in 0..result.context_fields.len {
-        if result.context_fields[i].view == fqn {
+        if result.context_fields[i].view() == fqn {
             return field_span(result, id.unwrap(), i as u32)
         }
     }

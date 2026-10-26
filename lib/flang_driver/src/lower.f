@@ -481,7 +481,7 @@ pub fn lower_program(
     let m = module()
     let sb = symbol_builder(result)
     for i in 0..modules.len {
-        sb.add_module(&modules[i], fqns[i].view)
+        sb.add_module(&modules[i], fqns[i].view())
     }
     let syms = sb.finish()
     let loop_stack: List(LoopFrame) = list(0)
@@ -539,10 +539,10 @@ pub fn lower_program(
     for i in 0..modules.len {
         if module_demanded(demanded, i) {
             ctx.exporting = exports.is_some() and i < exports.unwrap().len and exports.unwrap()[i]
-            lower_into(&m, &ctx, &modules[i], fqns[i].view)
+            lower_into(&m, &ctx, &modules[i], fqns[i].view())
             ctx.exporting = false
         } else {
-            lower_foreign_decls(&m, &ctx, &modules[i], fqns[i].view)
+            lower_foreign_decls(&m, &ctx, &modules[i], fqns[i].view())
         }
     }
     // Test blocks after every ordinary declaration, so a block's calls resolve against symbols that
@@ -552,7 +552,7 @@ pub fn lower_program(
         const want = tests.unwrap()
         for i in 0..modules.len {
             if i < want.len and want[i] {
-                lower_tests(&m, &ctx, &modules[i], fqns[i].view, name_filter)
+                lower_tests(&m, &ctx, &modules[i], fqns[i].view(), name_filter)
             }
         }
     }
@@ -564,7 +564,7 @@ pub fn lower_program(
     if demanded.is_some() {
         for i in 0..modules.len {
             if !module_demanded(demanded, i) {
-                skip_specs.add(fqns[i].view)
+                skip_specs.add(fqns[i].view())
             }
         }
     }
@@ -1007,7 +1007,7 @@ fn lower_root_context(m: &IrModule, ctx: &LowerCtx, modules: Module[], fqns: Own
     let blob: List(u8) = filled_list(size, 0u8)
     let rel: List(Reloc) = list(0)
     for i in 0..modules.len {
-        const fqn = if i < fqns.len { fqns[i].view } else { "" }
+        const fqn = if i < fqns.len { fqns[i].view() } else { "" }
         for &d in modules[i].decls {
             d.* match {
                 Context(cd) => root_default(m, ctx, &st, &cd, fqn, &blob, &rel)
@@ -1046,14 +1046,14 @@ fn root_default(
         $"{module}.{cd.name}"
     }
     defer fqn.deinit()
-    const idx = context_index(ctx, fqn.view)
+    const idx = context_index(ctx, fqn.view())
     if idx.is_none() {
         return
     }
     const i = idx.unwrap()
     const fty = field_ty(tyit(ctx), st.def, i, &st.args, &ctx.result.nominals)
     if !const_bytes(ctx, &fty, cd.value, blob, rel, st.layout.offsets[i]) {
-        m.skip_notes.push($"{fqn.view}: context default not encodable")
+        m.skip_notes.push($"{fqn.view()}: context default not encodable")
     }
 }
 
@@ -1068,7 +1068,7 @@ fn context_target(ctx: &LowerCtx) StructTarget? {
 // The layout index of the context field `fqn`: its position in the assembled `Context`.
 fn context_index(ctx: &LowerCtx, fqn: String) usize? {
     for i in 0..ctx.result.context_fields.len {
-        if ctx.result.context_fields[i].view == fqn {
+        if ctx.result.context_fields[i].view() == fqn {
             return Some(i)
         }
     }
@@ -1496,7 +1496,7 @@ fn const_symbol(prefix: String, fqn: String) OwnedString {
 // Park an owned symbol string; the returned view stays valid because an OwnedString's heap bytes do
 // not move when the list grows.
 fn park_sym(ctx: &LowerCtx, s: move OwnedString) String {
-    let v = s.view
+    let v = s.view()
     ctx.owned_syms.push(s)
     return v
 }
@@ -1822,7 +1822,7 @@ fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
         span = pl.lam.span,
         is_pub = false,
         directives = empty_dirs,
-        name = pl.info.symbol.view,
+        name = pl.info.symbol.view(),
         params = pl.lam.params_at(pl.info.params.len),
         return_type = pl.lam.return_type,
         bounds = no_bounds,
@@ -1832,7 +1832,7 @@ fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
     sig_params.push_all(pl.info.params.as_slice())
     let sig = FnSig { params = move sig_params, ret = pl.info.ret }
     if pl.info.captures.len == 0 {
-        lower_function_body(m, ctx, &decl, pl.info.symbol.view, &sig, pl.info.conv)
+        lower_function_body(m, ctx, &decl, pl.info.symbol.view(), &sig, pl.info.conv)
         return
     }
     let cid = pl.info.closure_id.unwrap()
@@ -1843,7 +1843,7 @@ fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
         m,
         ctx,
         &decl,
-        pl.info.symbol.view,
+        pl.info.symbol.view(),
         &sig,
         FnConv.ConvFlang,
         Some(LoweredClosure { ty = cty, captures = &pl.info.captures }),
@@ -2982,10 +2982,10 @@ fn lower_lambda(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lam: &LambdaExpr) 
     let info = info_opt.unwrap()
     ctx.pending_lambdas.push(PendingLambda { lam = lam, info = info, overlay = ctx.overlay })
     if info.conv == FnConv.ConvC {
-        return Operand.FuncRef(info.symbol.view)
+        return Operand.FuncRef(info.symbol.view())
     }
     if info.captures.len == 0 {
-        return fn_value(bb, Operand.FuncRef(info.symbol.view), Operand.NullPtr)
+        return fn_value(bb, Operand.FuncRef(info.symbol.view()), Operand.NullPtr)
     }
     let cid = info.closure_id.unwrap()
     let no_args: List(Ty) = list(0)
@@ -4153,7 +4153,7 @@ fn closure_fn_value(
         return null
     }
     const closure = lower_expr(ctx, bb, env, e)
-    return Some(fn_value(bb, Operand.FuncRef(c.unwrap().symbol.view), closure))
+    return Some(fn_value(bb, Operand.FuncRef(c.unwrap().symbol.view()), closure))
 }
 
 // A function value (RFC-037): a fresh `{ code, env }` pair. Its operand is the pair's address, as
@@ -4202,7 +4202,7 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
         }
         let sig_params: List(Ty) = list(0)
         let sig = FnSig { params = move sig_params, ret = c.ret }
-        return emit_call(ctx, bb, c.symbol.view, &sig, args, false, closure_env)
+        return emit_call(ctx, bb, c.symbol.view(), &sig, args, false, closure_env)
     }
 
     let ft = tn(ctx, callee_ty) match {
@@ -6916,8 +6916,8 @@ fn intern_string(ctx: &LowerCtx, raw: String) StrData? {
 
     // Data-segment bytes: decoded content plus a null terminator, so the `ptr` field satisfies
     // String's C-FFI contract (core/string.f).
-    let buf = string_builder(d.len + 1)
-    buf.append(d.view)
+    let buf = string_builder(d.view().len + 1)
+    buf.append(d.view())
     buf.append_byte(0u8)
     let bytes = buf.to_string()
 
@@ -6928,13 +6928,13 @@ fn intern_string(ctx: &LowerCtx, raw: String) StrData? {
     nb.deinit()
 
     ctx.globals.push(Global {
-        name = name.view,
-        size = (d.len + 1) as u64,
+        name = name.view(),
+        size = (d.view().len + 1) as u64,
         align = 1u64,
-        init_bytes = Some(bytes.view.as_raw_bytes()),
+        init_bytes = Some(bytes.view().as_raw_bytes()),
         relocs = null,
     })
-    let entry = StrData { name = name.view, len = d.len }
+    let entry = StrData { name = name.view(), len = d.view().len }
     ctx.strings.set(raw, entry)
     d.deinit()
     return Some(entry)

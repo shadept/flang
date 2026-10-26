@@ -12,6 +12,6 @@ pub fn main() i32 {
         x
     } }"
     defer msg.deinit()
-    print(msg.view)
+    print(msg.view())
     return 0
 }

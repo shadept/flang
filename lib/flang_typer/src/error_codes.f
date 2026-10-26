@@ -232,5 +232,9 @@ pub const W_REF_TO_INT: String = "W2004"
 // becoming copyable does not break the build.
 pub const W_MOVE_NO_CONSUME: String = "W2005"
 
+// A non-copyable value a scope owns - a `let`, a `move` parameter, a `for` variable - still live at
+// an exit: nothing moved it, so nothing releases it.
+pub const W_NEVER_RELEASED: String = "W2006"
+
 // `return move x` of a binding. A returned binding can only move, so the marker says nothing.
 pub const I_REDUNDANT_MOVE: String = "I2001"

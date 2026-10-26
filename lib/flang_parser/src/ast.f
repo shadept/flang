@@ -120,6 +120,17 @@ pub fn is_simd_directive(ds: DeclAttribute[]) bool {
     return false
 }
 
+// Whether a declaration's directives mark it as a compiler intrinsic.
+pub fn is_intrinsic_directive(ds: DeclAttribute[]) bool {
+    for &d in ds {
+        let f = d.* match { Intrinsic => true, _ => false }
+        if f {
+            return true
+        }
+    }
+    return false
+}
+
 // Whether a declaration's directives mark it as a foreign import.
 pub fn is_foreign_directive(ds: DeclAttribute[]) bool {
     for &d in ds {

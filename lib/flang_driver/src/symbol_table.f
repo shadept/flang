@@ -81,7 +81,7 @@ pub fn deinit(self: move FnSig) {
 
 pub fn lookup_symbol(self: &SymbolTable, fn_id: u32) String? {
     return self.by_fn_id.get_ref(fn_id) match {
-        Some(s) => Some(s.view)
+        Some(s) => Some(s.view())
         None => null
     }
 }
@@ -106,7 +106,7 @@ pub fn sig_of(self: &SymbolTable, fn_id: u32) &FnSig? {
 
 pub fn spec_symbol(self: &SymbolTable, spec_id: u32) String? {
     return self.by_spec_id.get_ref(spec_id) match {
-        Some(s) => Some(s.view)
+        Some(s) => Some(s.view())
         None => null
     }
 }
@@ -200,7 +200,7 @@ pub fn symbol_builder(result: &TypeCheckResult) SymbolBuilder {
             continue
         }
         let sym = mangle_spec_symbol(&result.interner, sp.module, sp.name, &s, &result.nominals)
-        const sym_view = sym.view
+        const sym_view = sym.view()
         by_spec_id.set(sp.id, sym)
         displays.set(
             sym_view,
@@ -461,7 +461,7 @@ fn add_function_symbol(self: &SymbolBuilder, decl: &FunctionDecl, fqn: String) {
     let s = sig.unwrap()
     const foreign = is_foreign_directive(decl.directives)
     let sym = mangle_symbol(self.interner, fqn, decl.name, foreign, &s.params, s.ret, self.nominals)
-    const sym_view = sym.view
+    const sym_view = sym.view()
     self.by_fn_id.set(fid.unwrap(), sym)
     // `main` and foreigns keep their bare, already-readable symbol.
     if !foreign and decl.name != "main" {
@@ -801,12 +801,12 @@ test "mangles symbols by module fqn, keeping main and foreigns bare" {
     let d = mangle_symbol(&it, "", "add", false, &none, TY_VOID, &reg)
     defer d.deinit()
     assert_true(
-        a.view == "flang_0typer__checker__deinit",
+        a.view() == "flang_0typer__checker__deinit",
         "dotted fqn separates, underscores escape",
     )
-    assert_true(b.view == "printf", "foreign names pass through")
-    assert_true(c.view == "main", "main stays bare")
-    assert_true(d.view == "add", "no fqn, bare name")
+    assert_true(b.view() == "printf", "foreign names pass through")
+    assert_true(c.view() == "main", "main stays bare")
+    assert_true(d.view() == "add", "no fqn, bare name")
 }
 
 test "escaping keeps a dotted path distinct from an underscored name" {
@@ -824,9 +824,9 @@ test "escaping keeps a dotted path distinct from an underscored name" {
     defer dotted.deinit()
     let underscored = mangle_symbol(&it, "a", "b__c", false, &none, TY_VOID, &reg)
     defer underscored.deinit()
-    assert_true(dotted.view == "a__b__c", "dotted path uses the separator")
-    assert_true(underscored.view == "a__b_0_0c", "source underscores escape")
-    assert_true(!(dotted.view == underscored.view), "the two no longer collide")
+    assert_true(dotted.view() == "a__b__c", "dotted path uses the separator")
+    assert_true(underscored.view() == "a__b_0_0c", "source underscores escape")
+    assert_true(!(dotted.view() == underscored.view()), "the two no longer collide")
 }
 
 test "overloads separate by parameter type, with no counter" {
@@ -850,15 +850,15 @@ test "overloads separate by parameter type, with no counter" {
     defer a.deinit()
     let b = mangle_symbol(&it, "m", "f", false, &two, TY_VOID, &reg)
     defer b.deinit()
-    assert_true(a.view == "m__f__i32", "one i32 parameter")
-    assert_true(b.view == "m__f__i32__i32", "two i32 parameters")
-    assert_true(!(a.view == b.view), "arities separate")
+    assert_true(a.view() == "m__f__i32", "one i32 parameter")
+    assert_true(b.view() == "m__f__i32__i32", "two i32 parameters")
+    assert_true(!(a.view() == b.view()), "arities separate")
 
     // Re-mangling the same declaration yields the same symbol - the property the ordinal scheme
     // could not provide.
     let again = mangle_symbol(&it, "m", "f", false, &one, TY_VOID, &reg)
     defer again.deinit()
-    assert_true(again.view == a.view, "deterministic across calls")
+    assert_true(again.view() == a.view(), "deterministic across calls")
 }
 
 test "overloads that differ only in their return type get distinct symbols" {
@@ -876,7 +876,7 @@ test "overloads that differ only in their return type get distinct symbols" {
     defer i.deinit()
     let b = mangle_symbol(&it, "m", "f", false, &one, prim_of(PrimitiveKind.Bool), &reg)
     defer b.deinit()
-    assert_true(v.view == "m__f__i32", "a void return adds nothing")
-    assert_true(i.view == "m__f__i32__r_i32", "a value return is encoded")
-    assert_true(!(i.view == b.view), "two returns, two symbols")
+    assert_true(v.view() == "m__f__i32", "a void return adds nothing")
+    assert_true(i.view() == "m__f__i32__r_i32", "a value return is encoded")
+    assert_true(!(i.view() == b.view()), "two returns, two symbols")
 }

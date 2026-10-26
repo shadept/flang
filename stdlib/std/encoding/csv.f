@@ -186,10 +186,7 @@ fn process_chunk(
     let chunk_buf: [u8; 16] = [0; 16]
     let chunk_ptr = data.ptr
     if data_len < 16 {
-        copy_to(
-            slice_from_raw_parts(data.ptr, data_len),
-            slice_from_raw_parts(&chunk_buf[0], data_len),
-        )
+        copy_to(slice_from_raw_parts(data.ptr, data_len), chunk_buf[0..data_len])
         chunk_ptr = &chunk_buf[0]
     }
 
@@ -317,7 +314,7 @@ pub fn csv_decoder_init(
 }
 
 fn fill_decoder_chunk(self: &CsvDecoder) {
-    let dst = slice_from_raw_parts(&self.chunk[0], 16)
+    let dst = self.chunk[0..16]
     const n = self.reader.read(dst)
     self.chunk_len = n
     if n == 0 {
@@ -350,7 +347,7 @@ fn parse_decoder_row(self: &CsvDecoder) bool {
         // track relative to field_buf. But since process_chunk clears field_buf between fields, we
         // need a different approach. Instead: accumulate ALL field data into field_buf with a
         // separator, and track spans as absolute offsets into field_buf.
-        const chunk_slice = slice_from_raw_parts(&self.chunk[0], self.chunk_len)
+        const chunk_slice = self.chunk[0..self.chunk_len]
         const consumed = process_chunk(
             chunk_slice,
             self.chunk_len,
@@ -394,7 +391,7 @@ fn get_decoder_field(self: &CsvDecoder, index: usize) String {
         return ""
     }
     const len = span.end - span.start
-    const ptr = self.field_buf.ptr + span.start
+    const ptr = self.field_buf.as_view().ptr + span.start
     return .{ ptr = ptr, len = len } as String
 }
 
@@ -415,7 +412,7 @@ fn ensure_decoder_headers(self: &CsvDecoder) {
             // String views resolved after all headers are added
         }
         // Now create String views into header_buf
-        const buf_ptr = self.header_buf.ptr
+        const buf_ptr = self.header_buf.as_view().ptr
         let offset: usize = 0
         for span in self.spans {
             const len = span.end - span.start
@@ -775,14 +772,14 @@ pub fn end_map(self: &CsvEncoder) usize {
             if i > 0 {
                 self.w.write_byte(self.options.delimiter)
             }
-            self.w.write_str(self.current_keys[i].view)
+            self.w.write_str(self.current_keys[i].view())
         }
         self.w.write_byte(0x0A)
         for i in 0..self.first_row_values.len {
             if i > 0 {
                 self.w.write_byte(self.options.delimiter)
             }
-            const val = self.first_row_values[i].view
+            const val = self.first_row_values[i].view()
             self.field_index = i
             self.write_csv_field(val)
         }
@@ -872,12 +869,12 @@ pub fn csv_reader_init(
     // Read entire input into buffer
     let chunk: [u8; 4096] = [0; 4096]
     loop {
-        let dst = slice_from_raw_parts(&chunk[0], 4096)
+        let dst = chunk[0..4096]
         const n = r.read(dst)
         if n == 0 {
             break
         }
-        const data = slice_from_raw_parts(&chunk[0], n)
+        const data = chunk[0..n]
         self.buffer.append_bytes(data)
     }
 }
@@ -908,10 +905,7 @@ fn parse_all(self: &CsvReader) {
             // SIMD classify
             let chunk_buf: [u8; 16] = [0; 16]
             if chunk_size < 16 {
-                copy_to(
-                    slice_from_raw_parts(data_ptr + pos, chunk_size),
-                    slice_from_raw_parts(&chunk_buf[0], chunk_size),
-                )
+                copy_to(slice_from_raw_parts(data_ptr + pos, chunk_size), chunk_buf[0..chunk_size])
             }
             const cptr = if chunk_size < 16 { &chunk_buf[0] } else { data_ptr + pos }
             const masks = classify_chunk(cptr, self.options.delimiter, self.options.quote)
@@ -987,10 +981,7 @@ fn parse_all(self: &CsvReader) {
         const chunk_size = if is_partial { remaining } else { 16usize }
         let cptr = data_ptr + pos
         if is_partial {
-            copy_to(
-                slice_from_raw_parts(cptr, chunk_size),
-                slice_from_raw_parts(&pad_buf[0], chunk_size),
-            )
+            copy_to(slice_from_raw_parts(cptr, chunk_size), pad_buf[0..chunk_size])
             cptr = &pad_buf[0]
         }
 

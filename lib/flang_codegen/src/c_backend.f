@@ -121,7 +121,7 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = nul
     sb.append("static const char* const __flang_test_names[] = {\n")
     for &t in m.tests {
         sb.append("    \"")
-        emit_c_string_body(t.label.view, sb)
+        emit_c_string_body(t.label.view(), sb)
         sb.append("\",\n")
     }
     sb.append("    0\n")
@@ -130,7 +130,7 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = nul
     sb.append("static const __flang_test_fn __flang_test_fns[] = {\n")
     for &t in m.tests {
         sb.append("    ")
-        sb.append(t.symbol.view)
+        sb.append(t.symbol.view())
         sb.append(",\n")
     }
     sb.append("    0\n")
@@ -188,7 +188,7 @@ fn emit_test_runner(m: &IrModule, sb: &StringBuilder, opts: &BuildOptions? = nul
                 "void* __flang_test_body[2] = { (void*)__flang_test_fns[__flang_test_i], 0 };\n",
             )
             sb.append("            ")
-            sb.append(sym.view)
+            sb.append(sym.view())
             sb.append("((void*)__flang_test_body, ")
             emit_operand(Operand.GlobalRef(ROOT_CONTEXT_SYM), sb)
             sb.append(", 0);\n")
@@ -271,10 +271,10 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     //    does not exist on a fresh checkout - create it rather than failing
     //    the whole build with an opaque I/O error. Errors here are left to
     //    the write below, which reports against a concrete path.
-    ensure_parent_dir(c_path_owned.view)
+    ensure_parent_dir(c_path_owned.view())
     ensure_parent_dir(options.output_path)
 
-    const write_status = write_c_file(c_path_owned.view, sb.as_view())
+    const write_status = write_c_file(c_path_owned.view(), sb.as_view())
     if write_status.is_err() {
         c_path_owned.deinit()
         return Err(BuildError.IOError)
@@ -296,7 +296,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     let info_r = discover_or_override(options)
     if info_r.is_err() {
         if !keep_c {
-            remove_file_quiet(c_path_owned.view)
+            remove_file_quiet(c_path_owned.view())
         }
         c_path_owned.deinit()
         return Err(info_r.unwrap_err())
@@ -310,11 +310,11 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     let objs_dir = objs_dir_for(options.output_path)
     defer objs_dir.deinit()
     if info.is_msvc() {
-        let _c = create_dir_all(objs_dir.view)
+        let _c = create_dir_all(objs_dir.view())
     }
 
     // 5. Build the argv and spawn the compiler.
-    let argv = build_compiler_argv(&info, c_path_owned.view, options)
+    let argv = build_compiler_argv(&info, c_path_owned.view(), options)
     defer argv.deinit()
 
     const cc_start = monotonic_ns()
@@ -323,8 +323,8 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     let spawn_r = run_compiler(&info, &argv, &cc_out)
     if spawn_r.is_err() {
         if !keep_c {
-            remove_file_quiet(c_path_owned.view)
-            let _r = remove_dir_all(objs_dir.view)
+            remove_file_quiet(c_path_owned.view())
+            let _r = remove_dir_all(objs_dir.view())
         }
         c_path_owned.deinit()
         return Err(spawn_r.unwrap_err())
@@ -334,15 +334,15 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
         // The captured compiler output surfaces only on failure.
         println(cc_out.as_view())
         if !keep_c {
-            remove_file_quiet(c_path_owned.view)
-            let _r = remove_dir_all(objs_dir.view)
+            remove_file_quiet(c_path_owned.view())
+            let _r = remove_dir_all(objs_dir.view())
         }
         c_path_owned.deinit()
         return Err(BuildError.CompilerFailed(exit_code))
     }
     const cc_ns = elapsed_ns(cc_start)
     if !keep_c {
-        let _r = remove_dir_all(objs_dir.view)
+        let _r = remove_dir_all(objs_dir.view())
     }
 
     // 6. Build the result. Retain the c_source_path if requested.
@@ -351,7 +351,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     const c_kept: OwnedString? = if keep_c {
         Some(move c_path_owned)
     } else {
-        remove_file_quiet(c_path_owned.view)
+        remove_file_quiet(c_path_owned.view())
         c_path_owned.deinit()
         null
     }
@@ -1870,9 +1870,9 @@ fn discover_msvc() CompilerInfo? {
     let install = install_opt.unwrap()
     defer install.deinit()
 
-    let tools = string_builder(install.len + 32)
+    let tools = string_builder(install.view().len + 32)
     defer tools.deinit()
-    tools.append(install.view)
+    tools.append(install.view())
     tools.append("\\VC\\Tools\\MSVC")
     nul_term(&tools)
     if !dir_exists(tools.as_view()) {
@@ -1887,11 +1887,11 @@ fn discover_msvc() CompilerInfo? {
     let toolset = toolset_opt.unwrap()
     defer toolset.deinit()
 
-    let toolset_dir = string_builder(tools.len + toolset.len + 2)
+    let toolset_dir = string_builder(tools.len + toolset.view().len + 2)
     defer toolset_dir.deinit()
     toolset_dir.append(tools.as_view())
     toolset_dir.append("\\")
-    toolset_dir.append(toolset.view)
+    toolset_dir.append(toolset.view())
 
     let cl = string_builder(toolset_dir.len + 32)
     defer cl.deinit()
@@ -1935,15 +1935,15 @@ fn discover_msvc() CompilerInfo? {
             include_paths.append(";")
             include_paths.append(sdk_root)
             include_paths.append("\\Include\\")
-            include_paths.append(ver.view)
+            include_paths.append(ver.view())
             include_paths.append("\\ucrt;")
             include_paths.append(sdk_root)
             include_paths.append("\\Include\\")
-            include_paths.append(ver.view)
+            include_paths.append(ver.view())
             include_paths.append("\\um;")
             include_paths.append(sdk_root)
             include_paths.append("\\Include\\")
-            include_paths.append(ver.view)
+            include_paths.append(ver.view())
             include_paths.append("\\shared")
         }
         None => {}
@@ -1957,11 +1957,11 @@ fn discover_msvc() CompilerInfo? {
             lib_paths.append(";")
             lib_paths.append(sdk_root)
             lib_paths.append("\\Lib\\")
-            lib_paths.append(ver.view)
+            lib_paths.append(ver.view())
             lib_paths.append("\\ucrt\\x64;")
             lib_paths.append(sdk_root)
             lib_paths.append("\\Lib\\")
-            lib_paths.append(ver.view)
+            lib_paths.append(ver.view())
             lib_paths.append("\\um\\x64")
         }
         None => {}
@@ -2041,7 +2041,7 @@ fn run_vswhere(vswhere_path: String) OwnedString? {
         return null
     }
     // Trim trailing CR/LF + whitespace; "" means vswhere found nothing.
-    const trimmed = raw.view.trim()
+    const trimmed = raw.view().trim()
     if trimmed.len == 0 {
         raw.deinit()
         return null
@@ -2056,7 +2056,7 @@ fn run_vswhere(vswhere_path: String) OwnedString? {
 // auto-terminate).
 fn nul_term(sb: &StringBuilder) {
     sb.ensure_capacity(sb.len + 1)
-    const term: &u8 = sb.ptr + sb.len
+    const term: &u8 = sb.as_view().ptr + sb.len
     term.* = 0
 }
 
@@ -2098,7 +2098,7 @@ fn newest_subdir(parent: String) OwnedString? {
         // The binding is released and dead before it takes the new name: assigning over a live one
         // would leak what it holds (E2126).
         const keeps = best match {
-            Some(b) => e.name <= b.view
+            Some(b) => e.name <= b.view()
             None => false
         }
         if keeps {
@@ -2227,7 +2227,7 @@ fn build_compiler_argv(
         argv.push(fe.to_string())
         let objs = objs_dir_for(options.output_path)
         defer objs.deinit()
-        const od = objs.view
+        const od = objs.view()
         let fo = string_builder(4 + od.len)
         fo.append("/Fo")
         for i in 0..od.len {
@@ -2375,14 +2375,14 @@ fn run_compiler(
     argv: &List(OwnedString),
     out: &StringBuilder,
 ) Result(i32, BuildError) {
-    let cmd = command(info.path.view)
+    let cmd = command(info.path.view())
     defer cmd.deinit()
     for i in 0..argv.len {
-        cmd.arg(argv[i].view)
+        cmd.arg(argv[i].view())
     }
     cmd.inherit_env()
     for i in 0..info.extra_env_keys.len {
-        cmd.env(info.extra_env_keys[i].view, info.extra_env_vals[i].view)
+        cmd.env(info.extra_env_keys[i].view(), info.extra_env_vals[i].view())
     }
     cmd.stdin_mode(Stdio.Null)
     cmd.stdout_mode(Stdio.Pipe)

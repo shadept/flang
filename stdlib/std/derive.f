@@ -83,7 +83,7 @@ pub import std.io.writer
                     } #elif field.type_info.name == "String" {
                         enc.encode_str(self.#(field.name))
                     } #elif field.type_info.name == "OwnedString" {
-                        enc.encode_str(self.#(field.name).view)
+                        enc.encode_str(self.#(field.name).view())
                     } #elif field.type_info.name == "Date" {
                         enc.encode_date(self.#(field.name))
                     } #elif field.type_info.name == "Time" {

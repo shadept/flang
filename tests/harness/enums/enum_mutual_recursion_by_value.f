@@ -57,7 +57,7 @@ pub fn main() i32 {
             if n.generic_args.len != 0 {
                 return 4
             }
-            if n.generic_args.cap != 0 {
+            if n.generic_args.capacity() != 0 {
                 return 5
             }
             0

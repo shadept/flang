@@ -89,7 +89,11 @@ pub fn format(self: bool, w: Writer, spec: String) {
 }
 
 pub fn format(self: String, w: Writer, spec: String) {
-    write_text(w, slice_from_raw_parts(self.ptr, self.len), spec)
+    write_text(w, self.as_raw_bytes(), spec)
+}
+
+pub fn format(self: OwnedString, w: Writer, spec: String) {
+    self.view().format(w, spec)
 }
 
 // Width counts the encoded bytes of the character, so a multi-byte char pads narrower than it
@@ -430,6 +434,7 @@ test "append integers" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     0i32.format(w, "")
@@ -469,6 +474,7 @@ test "append bool and string" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     true.format(w, "")
@@ -494,6 +500,7 @@ test "append all int sizes" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     "u8: ".format(w, "")
@@ -555,6 +562,7 @@ test "append format hex" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     255u8.format(w, "x")
@@ -586,6 +594,7 @@ test "append format octal binary" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     255u8.format(w, "o")
@@ -617,6 +626,7 @@ test "append signed hex" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     format(-1i32, w, "x")
@@ -636,6 +646,7 @@ test "append signed hex all sizes" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     format(-1i8, w, "x")
@@ -675,6 +686,7 @@ test "append unsigned hex all sizes" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     255u8.format(w, "x")
@@ -710,6 +722,7 @@ test "append floats" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     3.14f64.format(w, "")
@@ -741,6 +754,7 @@ test "append floats with precision" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     3.14f64.format(w, ".2")
@@ -765,6 +779,7 @@ test "append floats scientific" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     1.5f64.format(w, "e")
@@ -793,6 +808,7 @@ test "append floats exact hex" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     1.5f64.format(w, "a")
@@ -825,6 +841,7 @@ test "append floats with width" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     3.14f64.format(w, "8.2")
@@ -845,6 +862,7 @@ test "append binary octal all sizes" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     255u8.format(w, "b")
@@ -884,6 +902,7 @@ test "int width right align" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     42usize.format(w, "8")
@@ -912,6 +931,7 @@ test "int width left align" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     42usize.format(w, "<8")
@@ -928,6 +948,7 @@ test "int width center align" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     42usize.format(w, "^8")
@@ -948,6 +969,7 @@ test "int zero pad" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     42usize.format(w, "08")
@@ -972,6 +994,7 @@ test "int custom fill" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     42usize.format(w, "-<8")
@@ -992,6 +1015,7 @@ test "int width with base" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     255u8.format(w, ">8x")
@@ -1012,6 +1036,7 @@ test "float alignment" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     3.14f64.format(w, "<10.2")
@@ -1036,6 +1061,7 @@ test "append text with a spec" {
     let fba = fixed_buffer_allocator(buf)
     let alloc = fba.allocator()
     let sb = string_builder(allocator = &alloc)
+    defer sb.deinit()
     const w = sb.writer()
 
     "hi".format(w, ">6")
@@ -1208,29 +1234,29 @@ fn rendered(template: String, a: $A, b: $B) OwnedString {
 test "bare holes take the arguments in order" {
     const s = rendered("{} and {}", "this", "that")
     defer s.deinit()
-    assert_eq(s.view, "this and that", "positional")
+    assert_eq(s.view(), "this and that", "positional")
 }
 
 test "an indexed hole picks its argument and leaves the counter alone" {
     const s = rendered("{1} {} {0}", "a", "b")
     defer s.deinit()
-    assert_eq(s.view, "b a a", "indexed")
+    assert_eq(s.view(), "b a a", "indexed")
 }
 
 test "a spec reaches the argument's format" {
     const s = rendered("{:x} {1:04}", 255i32, 7i32)
     defer s.deinit()
-    assert_eq(s.view, "ff 0007", "spec")
+    assert_eq(s.view(), "ff 0007", "spec")
 }
 
 test "doubled braces are literal" {
     const s = rendered("{{{}}} {{}}", 1i32, 2i32)
     defer s.deinit()
-    assert_eq(s.view, "{1} {}", "escapes")
+    assert_eq(s.view(), "{1} {}", "escapes")
 }
 
 test "text without holes is written whole" {
     const s = rendered("plain", 1i32, 2i32)
     defer s.deinit()
-    assert_eq(s.view, "plain", "no holes")
+    assert_eq(s.view(), "plain", "no holes")
 }

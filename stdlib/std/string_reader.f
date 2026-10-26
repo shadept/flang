@@ -18,7 +18,7 @@ pub type MemReader = struct {
 }
 
 pub fn mem_reader(s: String) MemReader {
-    return .{ data = slice_from_raw_parts(s.ptr, s.len), pos = 0 }
+    return .{ data = s.as_raw_bytes(), pos = 0 }
 }
 
 fn read(self: &MemReader, buf: u8[]) usize {
@@ -27,7 +27,7 @@ fn read(self: &MemReader, buf: u8[]) usize {
     }
     let avail = self.data.len - self.pos
     let n = if buf.len < avail { buf.len } else { avail }
-    copy_to(slice_from_raw_parts(self.data.ptr + self.pos, n), slice_from_raw_parts(buf.ptr, n))
+    copy_to(self.data[self.pos..self.pos + n], buf[0..n])
     self.pos = self.pos + n
     return n
 }

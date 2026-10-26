@@ -453,7 +453,7 @@ test "template: #for over a bound list with #(x) and \"#(x)\"" {
     )
     defer out.deinit()
     assert_true(
-        out.view == "type P = struct {\n\n  x: f32, \"x\"\n\n  y: f32, \"y\"\n\n  z: f32, \"z\"\n\n}",
+        out.view() == "type P = struct {\n\n  x: f32, \"x\"\n\n  y: f32, \"y\"\n\n  z: f32, \"z\"\n\n}",
         "expansion text",
     )
 }
@@ -469,7 +469,7 @@ test "template: #if / #elif / #else on the closed context and bindings" {
         &a,
     )
     defer out.deinit()
-    assert_true(out.view == "B", "expansion text")
+    assert_true(out.view() == "B", "expansion text")
 }
 
 test "template: string-literal hole escapes its value" {
@@ -479,5 +479,5 @@ test "template: string-literal hole escapes its value" {
     env.bindings["q"] = CtValue.S("say \"hi\"")
     const out = expand_for_test("let s = \"#(q)!\"", &env, &a)
     defer out.deinit()
-    assert_true(out.view == "let s = \"say \\\"hi\\\"!\"", "expansion text")
+    assert_true(out.view() == "let s = \"say \\\"hi\\\"!\"", "expansion text")
 }

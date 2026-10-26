@@ -16,7 +16,7 @@ pub fn main() i32 {
     xs.sort()
     let bad: i32 = 0
     for i in 1..xs.len {
-        if !(xs[i - 1].view < xs[i].view) {
+        if !(xs[i - 1].view() < xs[i].view()) {
             bad = bad + 1
         }
     }

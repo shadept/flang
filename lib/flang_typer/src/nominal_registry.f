@@ -177,7 +177,7 @@ pub fn register(self: &NominalRegistry, def: move NominalDef, fqn_owned: move Ow
     self.next_id = id + 1
     let idx = self.owned_fqns.len
     self.owned_fqns.push(fqn_owned)
-    let stable: String = self.owned_fqns[idx].view
+    let stable: String = self.owned_fqns[idx].view()
     let fixed = with_fqn(def, stable)
     self.defs.set(id, fixed)
     self.by_fqn.set(stable, id)
@@ -245,7 +245,7 @@ fn fill_carried(out: &NominalRegistry, src: &NominalRegistry) {
         const idx = out.owned_fqns.len
         out.owned_fqns.push(from_view(nominal_fqn(found.unwrap())))
         const __found_v = found.unwrap()
-        out.register_at(id, clone_def(__found_v), out.owned_fqns[idx].view)
+        out.register_at(id, clone_def(__found_v), out.owned_fqns[idx].view())
     }
     out.next_id = src.next_id
 }
@@ -405,7 +405,7 @@ pub fn lookup(self: &NominalRegistry, name: String, vis: &Visibility) NomLookup 
     if vis.current_module.is_some() {
         let cur = vis.current_module.unwrap()
         let qualified_owned = $"{cur}.{name}"
-        let q = self.by_fqn.get(qualified_owned.view)
+        let q = self.by_fqn.get(qualified_owned.view())
         qualified_owned.deinit()
         if q.is_some() {
             return NomLookup.NomLookFound(q.unwrap())

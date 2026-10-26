@@ -155,7 +155,7 @@ pub fn as_f64(self: &Value) f64? {
 
 // A view of the string held, valid while the value lives.
 pub fn as_string(self: &Value) String? {
-    return self.* match { Str(s) => Some(s.view), else => null }
+    return self.* match { Str(s) => Some(s.view()), else => null }
 }
 
 pub fn as_date(self: &Value) Date? {
@@ -230,7 +230,7 @@ pub fn serialize(self: &Value, enc: &Encoder) {
         Bool(b) => { enc.encode_bool(b) }
         Int(n) => { enc.encode_int(n, 8) }
         Float(n) => { enc.encode_float(n, 8) }
-        Str(s) => { enc.encode_str(s.view) }
+        Str(s) => { enc.encode_str(s.view()) }
         Date(v) => { enc.encode_date(v) }
         Time(v) => { enc.encode_time(v) }
         DateTime(v) => { enc.encode_datetime(v) }
@@ -245,7 +245,7 @@ pub fn serialize(self: &Value, enc: &Encoder) {
         Map(d) => {
             enc.begin_map(d.len())
             for e in d {
-                enc.key(e.key.view)
+                enc.key(e.key.view())
                 e.value.serialize(enc)
             }
             enc.end_map()
@@ -532,7 +532,7 @@ pub fn decode_str(self: &ValueDecoder, w: Writer) bool {
         return false
     }
     v.unwrap().* match {
-        Str(s) => { w.write_str(s.view) }
+        Str(s) => { w.write_str(s.view()) }
         Date(d) => { d.format(w, "") }
         Time(t) => { t.format(w, "") }
         DateTime(dt) => { dt.format(w, "") }
@@ -551,7 +551,7 @@ pub fn decode_bytes(self: &ValueDecoder, w: Writer) bool {
         return false
     }
     v.unwrap().* match {
-        Str(s) => { w.write_str(s.view) }
+        Str(s) => { w.write_str(s.view()) }
         Array(items) => {
             for i in 0..items.len {
                 const b = items[i].as_i64()
@@ -628,7 +628,7 @@ pub fn next_key(self: &ValueDecoder, sb: &StringBuilder) bool {
     if e.is_none() {
         return false
     }
-    sb.append(e.unwrap().key.view)
+    sb.append(e.unwrap().key.view())
     return true
 }
 
@@ -646,7 +646,7 @@ pub fn decode_date(self: &ValueDecoder) Date {
         v.unwrap().* match {
             Date(d) => { return d }
             Str(s) => {
-                const r = parse_date(s.view)
+                const r = parse_date(s.view())
                 if r.is_ok() {
                     return r.unwrap()
                 }
@@ -664,7 +664,7 @@ pub fn decode_time(self: &ValueDecoder) Time {
         v.unwrap().* match {
             Time(t) => { return t }
             Str(s) => {
-                const r = parse_time(s.view)
+                const r = parse_time(s.view())
                 if r.is_ok() {
                     return r.unwrap()
                 }
@@ -682,7 +682,7 @@ pub fn decode_datetime(self: &ValueDecoder) DateTime {
         v.unwrap().* match {
             DateTime(dt) => { return dt }
             Str(s) => {
-                const r = parse_datetime(s.view)
+                const r = parse_datetime(s.view())
                 if r.is_ok() {
                     return r.unwrap()
                 }
@@ -700,7 +700,7 @@ pub fn decode_offset_datetime(self: &ValueDecoder) OffsetDateTime {
         v.unwrap().* match {
             OffsetDateTime(odt) => { return odt }
             Str(s) => {
-                const r = parse_offset_datetime(s.view)
+                const r = parse_offset_datetime(s.view())
                 if r.is_ok() {
                     return r.unwrap()
                 }
@@ -800,7 +800,7 @@ fn emit(self: &ValueEncoder, v: move Value) usize {
         return 0
     }
     const k = self.keys.pop().unwrap()
-    parent.set(k.view, v)
+    parent.set(k.view(), v)
     k.deinit()
     return 0
 }
@@ -919,7 +919,7 @@ test "map entries keep insertion order and set replaces in place" {
     m.set("a", value_str("x"))
     m.set("z", Value.Int(2))
     assert_eq(m.len(), 2 as usize, "two keys")
-    assert_true(m.as_map().unwrap().entry_at(0).unwrap().key.view == "z", "first key stays first")
+    assert_true(m.as_map().unwrap().entry_at(0).unwrap().key.view() == "z", "first key stays first")
     assert_eq(m.get("z").unwrap().as_i64().unwrap(), 2i64, "value replaced")
     assert_eq(m.get("a").unwrap().as_string().unwrap(), "x", "string value")
     assert_true(m.get("missing").is_none(), "absent key")
@@ -953,11 +953,12 @@ test "an encoder builds a tree a decoder reads back" {
     defer copy.deinit()
     assert_true(!dec.has_error(), "no error")
     assert_eq(copy.get("s").unwrap().as_string().unwrap(), "hi", "string round-trips")
-    assert_true(copy.as_map().unwrap().entry_at(1).unwrap().key.view == "list", "order kept")
+    assert_true(copy.as_map().unwrap().entry_at(1).unwrap().key.view() == "list", "order kept")
 }
 
 test "a decoder reports a kind mismatch" {
     const v = Value.Bool(true)
+    defer v.deinit()
     let dec = value_decoder(&v)
     defer dec.deinit()
     const d = dec.decoder()
@@ -975,5 +976,6 @@ test "an encoder refuses a map value without a key" {
     e.end_map()
     assert_true(e.has_error(), "error channel set")
     const r = enc.finish()
+    defer r.deinit()
     assert_true(r.is_err(), "no tree")
 }

@@ -146,7 +146,7 @@ fn canonical(result: &TypeCheckResult, t: ResolvedTarget) ResolvedTarget {
 }
 
 fn source_of(unit: &AnalyzedProject, fid: i32) String {
-    return unit.sources[fid as usize].view
+    return unit.sources[fid as usize].view()
 }
 
 fn same_span(a: SourceSpan, b: SourceSpan) bool {
@@ -248,7 +248,7 @@ fn struct_member(
         }
         const ctx_fields = &unit.result.context_fields
         if sd.fqn == FQN_CONTEXT and i < ctx_fields.len {
-            return Some(ResolvedTarget.RtContextField(ctx_fields[i].view))
+            return Some(ResolvedTarget.RtContextField(ctx_fields[i].view()))
         }
         return Some(ResolvedTarget.RtStructField(id, i as u32))
     }

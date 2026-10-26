@@ -4083,7 +4083,7 @@ Build each element on its own (`[open("a"), open("b")]`), or read through a refe
 `&move T` is the only parameter mode that empties storage the caller keeps: the callee may take the
 value out, and must leave one behind (E2137). Because a caller cannot see at the call site that its
 value is about to be replaced, the mode is declared in the core library alone, and every other
-module reaches it through `core.slice`'s `swap` and `replace`. Calling such a function is
+module reaches it through `core.memory`'s `swap`, `replace` and `install`. Calling such a function is
 unrestricted.
 
 #### Example
@@ -4483,17 +4483,18 @@ be a second owner. Inside a generic body - a combinator calling back a function 
 ownership - the error is reported at the instantiation and names the callback parameter.
 
 `move_to(src, dst)` (RFC-034) holds `src` to the same rule when its elements are not copyable: the
-slice is formed in the call, through `slice_from_raw_parts` or a range, from an `owned` field of a
-type this module declares.
+slice is formed in the call, through `slice_from_raw_parts` or a range, from an `owned` or `Memory`
+field of a type this module declares.
 
 `move` itself takes a binding, a field of a binding the function owns, or a place reached through
-an `owned` field of a type the current module declares. That is the scoped-mutability right a
-container has over the storage it releases (spec 3.4.1): `std.collections.list` takes an element
-out of `owned ptr`, and nobody else can, or a lent reference would be a way to take ownership of
-what it points at. A pointer field without `owned` grants nothing. The chain has to be written out
-at the move: a local reference binding loses the provenance the rule reads. Handing the place to a
-`move` parameter follows the same rule as writing `move` in front of it, so `release((s.ptr + i).*)`
-inside `std.collections.list` is accepted and `close(h.*)` on a lent `h: &Handle` is not.
+an `owned` or `Memory` field of a type the current module declares (RFC-043). That is the
+scoped-mutability right a container has over the storage it releases (spec 3.4.1):
+`std.collections.list` takes an element out of its `Memory`, and nobody else can, or a lent
+reference would be a way to take ownership of what it points at. A plain pointer field grants
+nothing. The chain has to be written out at the move: a local reference binding loses the
+provenance the rule reads. Handing the place to a `move` parameter follows the same rule as writing
+`move` in front of it, so `release(((s.mem.ptr as &T) + i).*)` inside `std.collections.list` is
+accepted and `close(h.*)` on a lent `h: &Handle` is not.
 
 #### Example
 
@@ -5037,6 +5038,47 @@ let m = move n                  // warning[W2005]: `i32` is copyable
 #### Solution
 
 Drop the `move`.
+
+---
+
+### W2006: A Non-Copyable Value Never Released
+
+**Category**: Semantic Analysis
+**Severity**: Warning
+
+#### Description
+
+A non-copyable value a scope owns - a `let`, a `move` parameter, a `for` variable - has to leave it
+on every path: moved, returned, or handed to a `move` parameter. One still live at an exit is never
+released. The exits are the end of a block, `return`, `break`, `continue` and `?`; the defers run
+first, so `defer x.deinit()` counts. A value moved on some paths only is reported too. A generic
+body is checked at each instantiation and reported once, at the line in the body.
+
+A `match` over an owned place takes it apart: an arm that moves a binding out spends the place and
+owes the release of every other binding it took, and an arm whose variant carries only copyable
+payloads leaves it holding nothing, as `null` and `Value.Null` do. Over a temporary the arms own
+their bindings. A call returning `never`, and a `loop` with no `break`, end the path. A binding
+that holds nothing and is shared by reference counts as live again: the callee may fill it.
+
+`deinit` is not special: it releases because it takes its value by `move`. The hint names it when
+the type declares one. A chain ends where its resource leaves the language: `leak(value)` takes
+ownership and releases nothing, and its own body is the one the check trusts (RFC-043).
+
+#### Example
+
+```flang
+let h = open(3)
+return h.fd                     // warning[W2006]: `h` is still live at this `return`
+
+let b = string_builder(16)
+if ok {
+    return b.to_string()        // warning[W2006]: `b` is not released on every path
+}
+```
+
+#### Solution
+
+Move the value on every path, or release it with `defer x.deinit()` after its declaration.
 
 ---
 

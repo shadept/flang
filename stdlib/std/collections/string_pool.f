@@ -65,7 +65,7 @@ pub fn intern(self: &StringPool, s: String) StrId {
         return self.index[slot]
     }
     const id = self.ends.len as StrId
-    self.bytes.push_all(slice_from_raw_parts(s.ptr, s.len), self.allocator)
+    self.bytes.push_all(s.as_raw_bytes(), self.allocator)
     self.ends.push(self.bytes.len as u32, self.allocator)
     self.index[slot] = id
     return id
@@ -92,7 +92,7 @@ pub fn get(self: &StringPool, id: StrId) String {
     }
     const start = if i == 0 { 0usize } else { self.ends[i - 1] as usize }
     const end = self.ends[i] as usize
-    return .{ ptr = self.bytes.ptr + start, len = end - start }
+    return .{ ptr = self.bytes.as_slice().ptr + start, len = end - start }
 }
 
 // Returns the number of strings held.

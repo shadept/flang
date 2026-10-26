@@ -21,5 +21,7 @@ pub fn no_copy() NoCopy {
     return .{ __marker = () }
 }
 
-// Nothing to release: the holder's own `deinit` meets the obligation.
-pub fn deinit(self: move NoCopy) {}
+// Nothing to release: the holder's own `deinit` meets the obligation, and the marker ends here.
+pub fn deinit(self: move NoCopy) {
+    leak(self)
+}

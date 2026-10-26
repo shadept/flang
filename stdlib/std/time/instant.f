@@ -101,14 +101,14 @@ test "instant bounds" {
     assert_true(MAX_INSTANT == instant_from_ticks((MAX_EPOCH_DAY + 1) * TICKS_PER_DAY - 1), "max")
     const text = $"{MIN_INSTANT} {MAX_INSTANT}"
     defer text.deinit()
-    assert_true(text.view == "-009999-01-01T00:00:00Z 9999-12-31T23:59:59.9999999Z", text.view)
+    assert_true(text.view() == "-009999-01-01T00:00:00Z 9999-12-31T23:59:59.9999999Z", text.view())
 }
 
 test "instant text" {
     const i = from_unix_seconds(1760434200)
     const iso = $"{i}"
     defer iso.deinit()
-    assert_true(iso.view == "2025-10-14T09:30:00Z", iso.view)
+    assert_true(iso.view() == "2025-10-14T09:30:00Z", iso.view())
     assert_true(parse_instant("2025-10-14T09:30:00Z").unwrap() == i, "Z")
     assert_true(parse_instant("2025-10-14T10:30:00+01:00").unwrap() == i, "offset")
     assert_true(parse_instant("2025-10-14T04:30:00-0500").unwrap() == i, "basic offset")
@@ -127,5 +127,5 @@ test "instant text" {
     )
     const custom = $"{i:%Y%m%dT%H%M%S%z}"
     defer custom.deinit()
-    assert_true(custom.view == "20251014T093000+0000", custom.view)
+    assert_true(custom.view() == "20251014T093000+0000", custom.view())
 }

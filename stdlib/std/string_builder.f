@@ -15,9 +15,8 @@ import std.string
 import std.test
 
 pub type StringBuilder = struct {
-    owned ptr: &u8
+    mem: Memory
     len: usize
-    cap: usize
     allocator: &Allocator
 }
 
@@ -25,7 +24,7 @@ pub type StringBuilder = struct {
 // The returned String points into the builder's buffer and is only valid while the builder is alive
 // and not modified.
 pub fn as_view(sb: &StringBuilder) String {
-    return .{ ptr = sb.ptr, len = sb.len }
+    return .{ ptr = sb.mem.ptr, len = sb.len }
 }
 
 #string_reader(StringBuilder)
@@ -71,35 +70,43 @@ pub fn string_builder_with_capacity_and_allocator(
 
 // Frees the backing storage, consuming the builder.
 pub fn deinit(self: move StringBuilder) {
-    if self.cap > 0 {
-        self.allocator.free(slice_from_raw_parts(self.ptr, self.cap))
-    }
+    self.allocator.dealloc(self.mem)
 }
 
 // Ensure the builder has room for at least `additional` more bytes.
 fn reserve(sb: &StringBuilder, additional: usize) {
     const required = sb.len + additional
-    if (sb.cap >= required) {
+    if sb.mem.len >= required {
         return
     }
 
-    let new_cap = if (sb.cap == 0) { SB_DEFAULT_CAPACITY } else { sb.cap * 2 }
-    if (new_cap < required) {
+    let new_cap = if sb.mem.len == 0 { SB_DEFAULT_CAPACITY } else { sb.mem.len * 2 }
+    if new_cap < required {
         new_cap = required
     }
 
-    const resized = sb.allocator
-        .realloc(slice_from_raw_parts(sb.ptr, sb.cap), align_of(u8), new_cap)
-    if (resized.is_none()) {
-        panic("StringBuilder.reserve: realloc failed")
+    // retry reallocating first
+    if sb.allocator.realloc(&sb.mem, new_cap) {
+        return
     }
 
-    sb.ptr = resized.unwrap().ptr
-    sb.cap = new_cap
+    // if reallocation fails, request new memory, copy bytes, free old memory
+    const fresh = sb.allocator
+        .alloc(new_cap, align_of(u8))
+        .expect("StringBuilder.reserve: allocation failed")
+    if sb.len > 0 {
+        copy_to(sb.as_view().as_raw_bytes(), fresh.as_slice())
+    }
+    sb.allocator.dealloc(replace(&sb.mem, fresh))
+}
+
+// The bytes the buffer holds room for.
+pub fn capacity(sb: &StringBuilder) usize {
+    return sb.mem.len
 }
 
 pub fn ensure_capacity(sb: &StringBuilder, capacity: usize) {
-    if capacity <= sb.cap {
+    if capacity <= sb.mem.len {
         return
     }
     sb.reserve(capacity - sb.len)
@@ -113,59 +120,57 @@ pub fn truncate(sb: &StringBuilder, new_len: usize) {
     }
 }
 
-// Slice over the unused tail of the backing buffer - bytes from `sb.len` to `sb.cap`. Use with
+// Slice over the unused tail of the backing buffer - bytes from `sb.len` to the capacity. Use with
 // `commit(n)` to fill the buffer in place (e.g. from a syscall) without going through `append`.
 pub fn unwritten_buf(sb: &StringBuilder) u8[] {
-    return slice_from_raw_parts(sb.ptr + sb.len, sb.cap - sb.len)
+    const bytes: u8[] = sb.mem.as_slice()
+    return bytes[sb.len..sb.mem.len]
 }
 
 // Extend the logical length by `n` bytes, claiming bytes already written into the tail of the
 // buffer (typically via `unwritten_buf()`). Panics if `n` exceeds the unwritten capacity.
 pub fn commit(sb: &StringBuilder, n: usize) {
-    if sb.len + n > sb.cap {
+    if sb.len + n > sb.mem.len {
         panic("StringBuilder.commit: n exceeds unwritten capacity")
     }
     sb.len = sb.len + n
 }
 
-// Transfer ownership of the current buffer as a null-terminated OwnedString. No allocation, no
-// copy: the builder's buffer becomes the OwnedString's buffer and the builder is reset to empty
-// (cap=0) so a subsequent deinit() is a no-op. Enables the `let sb = string_builder(); defer
+// Transfer ownership of the current buffer as a null-terminated OwnedString, shrunk to fit: the
+// builder's buffer becomes the OwnedString's buffer and the builder is reset to empty, so a
+// subsequent deinit() gives back nothing. Enables the `let sb = string_builder(); defer
 // sb.deinit(); ... sb.to_string()` pattern - defer fires on panic before to_string, otherwise
 // transfers cleanly.
 pub fn to_string(sb: &StringBuilder) OwnedString {
-    // Ensure room for the null terminator. StringBuilder grows in powers of two, so cap > len is
-    // the common case and reserve is a no-op.
-    if (sb.cap == sb.len) {
+    // Ensure room for the null terminator. StringBuilder grows in powers of two, so capacity above
+    // len is the common case and reserve is a no-op.
+    if sb.mem.len == sb.len {
         sb.reserve(1)
     }
 
-    const term = sb.ptr + sb.len
-    term.* = 0
+    const bytes: u8[] = sb.mem.as_slice()
+    bytes[sb.len] = 0
 
-    const result = OwnedString { view = .{ ptr = sb.ptr, len = sb.len }, allocator = sb.allocator }
-
-    sb.ptr = 0usize as &u8
+    const len = sb.len
+    const mem = replace(&sb.mem, unallocated())
     sb.len = 0
-    sb.cap = 0
-    return result
+    return from_memory(mem, len, sb.allocator)
 }
 
 // Return a copy of the current contents as a null-terminated OwnedString. Allocates from the given
-// allocator.
+// allocator; the builder is reset to empty and keeps its buffer.
 pub fn to_string(sb: &StringBuilder, allocator: &Allocator) OwnedString {
     const buf = allocator.alloc(sb.len + 1, align_of(u8))
         .expect("StringBuilder.to_string: allocation failed")
     if (sb.len > 0) {
-        copy_to(slice_from_raw_parts(sb.ptr, sb.len), slice_from_raw_parts(buf.ptr, sb.len))
+        copy_to(sb.as_view().as_raw_bytes(), buf.as_slice())
     }
     // Null-terminate for C FFI compatibility
-    const term = buf.ptr + sb.len
-    term.* = 0
-    const result = OwnedString { view = .{ ptr = buf.ptr, len = sb.len }, allocator = allocator }
-    sb.ptr = 0usize as &u8
+    const out: u8[] = buf.as_slice()
+    out[sb.len] = 0
+    const len = sb.len
     sb.len = 0
-    return result
+    return from_memory(buf, len, allocator)
 }
 
 // Reset the builder to empty without freeing its buffer.
@@ -180,8 +185,8 @@ pub fn clear(sb: &StringBuilder) {
 // Append a single byte to the builder.
 pub fn append_byte(sb: &StringBuilder, value: u8) {
     sb.reserve(1)
-    const dest = sb.ptr + sb.len
-    dest.* = value
+    const bytes: u8[] = sb.mem.as_slice()
+    bytes[sb.len] = value
     sb.len = sb.len + 1
 }
 
@@ -191,8 +196,8 @@ pub fn append_bytes(sb: &StringBuilder, data: u8[]) {
         return
     }
     sb.reserve(data.len)
-    const dest = sb.ptr + sb.len
-    copy_to(slice_from_raw_parts(data.ptr, data.len), slice_from_raw_parts(dest, data.len))
+    const bytes: u8[] = sb.mem.as_slice()
+    copy_to(data, bytes[sb.len..sb.len + data.len])
     sb.len = sb.len + data.len
 }
 
@@ -211,13 +216,13 @@ pub fn format(self: &StringBuilder, w: Writer, spec: String) {
 // Consumes `s`: the bytes are copied in and the buffer freed, so a temporary - an interpolation, a
 // `to_string()` result - passes straight in without leaking. Append `x.as_view()` to keep `x`.
 pub fn append(sb: &StringBuilder, s: move OwnedString) {
-    s.format(sb.writer(), "")
+    sb.append(s.view())
     s.deinit()
 }
 
 // Consumes `s`, as the unspecced overload does.
 pub fn append(sb: &StringBuilder, s: move OwnedString, spec: String) {
-    s.format(sb.writer(), spec)
+    sb.append(s.view(), spec)
     s.deinit()
 }
 

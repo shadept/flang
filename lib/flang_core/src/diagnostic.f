@@ -76,8 +76,8 @@ pub fn clone_diag(d: &Diagnostic) Diagnostic {
     return .{
         severity = d.severity,
         code = d.code,
-        message = from_view(d.message.view),
-        hint = from_view(d.hint.view),
+        message = from_view(d.message.view()),
+        hint = from_view(d.hint.view()),
         span = d.span,
     }
 }

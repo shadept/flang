@@ -8,56 +8,59 @@ import std.option
 import std.string
 
 pub fn main() i32 {
-    // Create an OwnedString wrapping a string literal (no heap allocation needed)
+    // An owned copy of a string literal
     const sv: String = "  hello world  "
-    const owned = OwnedString { view = sv, allocator = context.allocator }
+    const owned = from_view(sv)
+    defer owned.deinit()
+    const text = owned.view()
 
     // find
-    const idx: usize = owned.find("world") ?? 999
+    const idx: usize = text.find("world") ?? 999
     if idx != 8 {
         return 2
     }
 
     // find - not found
-    const miss = owned.find("xyz")
+    const miss = text.find("xyz")
     if miss.is_some() {
         return 3
     }
 
     // rfind
     const sv2: String = "abcabc"
-    const owned2 = OwnedString { view = sv2, allocator = context.allocator }
-    const ri: usize = owned2.rfind("abc") ?? 999
+    const owned2 = from_view(sv2)
+    defer owned2.deinit()
+    const ri: usize = owned2.view().rfind("abc") ?? 999
     if ri != 3 {
         return 5
     }
 
     // contains
-    if !owned.contains("hello") {
+    if !text.contains("hello") {
         return 6
     }
-    if owned.contains("xyz") {
+    if text.contains("xyz") {
         return 7
     }
 
     // starts_with
-    if !owned.starts_with("  hello") {
+    if !text.starts_with("  hello") {
         return 8
     }
-    if owned.starts_with("hello") {
+    if text.starts_with("hello") {
         return 9
     }
 
     // ends_with
-    if !owned.ends_with("world  ") {
+    if !text.ends_with("world  ") {
         return 10
     }
-    if owned.ends_with("world") {
+    if text.ends_with("world") {
         return 11
     }
 
     // trim
-    const trimmed = owned.trim()
+    const trimmed = text.trim()
     if trimmed.len != 11 {
         return 12
     }
@@ -69,7 +72,7 @@ pub fn main() i32 {
     }
 
     // trim_start
-    const ts = owned.trim_start()
+    const ts = text.trim_start()
     if ts.len != 13 {
         return 15
     }
@@ -78,7 +81,7 @@ pub fn main() i32 {
     }
 
     // trim_end
-    const te = owned.trim_end()
+    const te = text.trim_end()
     if te.len != 13 {
         return 17
     }

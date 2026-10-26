@@ -48,12 +48,11 @@ pub fn deinit(self: move Entry($K, $V)) {
 // zero-initialised value is a valid empty dict. Keys and values are owned: `deinit` deinits each
 // before freeing the table.
 pub type UnmanagedDict = struct(K: Hash + Eq, V) {
-    owned entries: &Entry(K, V)
+    owned mem: Memory
     length: usize
     // Tombstones left by removals. They occupy probe slots until the next rehash, so the load
     // factor must count them or a delete-heavy dict fills up while `length` stays low.
     dead: usize
-    cap: usize
 }
 
 // A hash map from `K` to `V` that owns its table and remembers the allocator it grows and frees
@@ -137,16 +136,23 @@ fn next_pow2_min8(v: usize) usize {
 // Install a table of `cap` empty slots. `cap` must be a power of two.
 fn alloc_table(self: &UnmanagedDict($K, $V), cap: usize, allocator: &Allocator) {
     const alloc_size: usize = cap * size_of(Entry(K, V))
-    const raw: u8[] = allocator.alloc(alloc_size, 8).expect("dict: allocation failed")
-    self.entries = raw.ptr as &Entry(K, V)
-    self.cap = cap
+    const table = allocator.alloc(
+        alloc_size,
+        align_of(Entry(K, V)),
+    ).expect("dict: allocation failed")
+    allocator.dealloc(replace(&self.mem, table))
     mark_empty(self)
+}
+
+// The number of slots in the table.
+pub fn capacity(self: &UnmanagedDict($K, $V)) usize {
+    return self.mem.len / size_of(Entry(K, V))
 }
 
 // Every slot empty: an empty slot is its hash alone, and its key and value bytes are never read.
 fn mark_empty(self: &UnmanagedDict($K, $V)) {
-    for i in 0..self.cap {
-        (self.entries + i).hash = HASH_EMPTY
+    for i in 0..self.capacity() {
+        ((self.mem.ptr as &Entry(K, V)) + i).hash = HASH_EMPTY
     }
 }
 
@@ -177,34 +183,32 @@ fn hash_key(key: $K) usize where K: Hash {
 // `UnmanagedDict.dead`.
 fn ensure_capacity(self: &UnmanagedDict($K, $V), allocator: &Allocator) {
     const slots_needed = self.length + self.dead + 1
-    if self.cap > 0 and slots_needed * 4 <= self.cap * 3 {
+    if self.capacity() > 0 and slots_needed * 4 <= self.capacity() * 3 {
         return
     }
 
     // A rehash that mostly clears tombstones keeps its capacity; only live-entry pressure grows the
     // table. Every branch here must yield a power of two - `probe_slot` masks instead of dividing.
     let new_cap: usize = 8
-    if self.cap > 0 {
-        new_cap = if self.length * 2 <= self.cap { self.cap } else { self.cap * 2 }
+    if self.capacity() > 0 {
+        new_cap = if self.length * 2 <= self.capacity() { self.capacity() } else { self.capacity() * 2 }
     }
 
-    // The entries leave through `self.entries`, the storage this module owns, into a fresh table
-    // that then takes the old one's place.
+    // The entries leave through `(self.mem.ptr as &Entry(K, V))`, the storage this module owns,
+    // into a fresh table that then takes the old one's place.
     let next: UnmanagedDict(K, V)
     next.alloc_table(new_cap, allocator)
-    for i in 0..self.cap {
-        const h = (self.entries + i).hash
+    for i in 0..self.capacity() {
+        const h = ((self.mem.ptr as &Entry(K, V)) + i).hash
         if h >= 2 {
             const slot = next.claim_slot(h)
-            slot.key = move (self.entries + i).key
-            slot.value = move (self.entries + i).value
+            slot.key = move ((self.mem.ptr as &Entry(K, V)) + i).key
+            slot.value = move ((self.mem.ptr as &Entry(K, V)) + i).value
         }
     }
     swap(self, &next)
     // The old buffer is freed without deinit: every live entry was handed over above.
-    if next.cap > 0 {
-        allocator.free(slice_from_raw_parts(next.entries, next.cap))
-    }
+    allocator.dealloc(next.mem)
 }
 
 // Store a key known to be absent in the first tombstone or empty slot on its probe sequence. The
@@ -219,8 +223,11 @@ fn place(self: &UnmanagedDict($K, $V), h: usize, key: move K, value: move V) &En
 // Claims the first tombstone or empty slot on `h`'s probe sequence for a key known to be absent:
 // the slot is counted and hashed, and its key and value are the caller's to store.
 fn claim_slot(self: &UnmanagedDict($K, $V), h: usize) &Entry(K, V) {
-    for i in 0..self.cap {
-        const entry: &Entry(K, V) = self.entries + probe_slot(h, i, self.cap)
+    for i in 0..self.capacity() {
+        const entry: &Entry(
+            K,
+            V,
+        ) = (self.mem.ptr as &Entry(K, V)) + probe_slot(h, i, self.capacity())
         if entry.hash == HASH_EMPTY or entry.hash == HASH_DEAD {
             if entry.hash == HASH_DEAD {
                 self.dead = self.dead - 1
@@ -293,12 +300,12 @@ pub fn get_or_insert_with(
 pub fn set(self: &UnmanagedDict($K, $V), key: move K, value: move V, allocator: &Allocator) {
     const existing = self.find_index(key)
     if existing.is_some() {
-        // Written from `self.entries`, not through a lent `&Entry`: taking out of storage this
-        // module owns is the scoped-mutability right (E2125).
+        // Written from `(self.mem.ptr as &Entry(K, V))`, not through a lent `&Entry`: taking out of
+        // storage this module owns is the scoped-mutability right (E2125).
         const i = existing.unwrap()
-        let old = move (self.entries + i).value
+        let old = move ((self.mem.ptr as &Entry(K, V)) + i).value
         release(old)
-        const entry = self.entries + i
+        const entry = (self.mem.ptr as &Entry(K, V)) + i
         entry.value = move value
         release(key)
         return
@@ -313,9 +320,9 @@ pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V, al
     const existing = self.find_index(key)
     if existing.is_some() {
         const i = existing.unwrap()
-        let old = move (self.entries + i).value
+        let old = move ((self.mem.ptr as &Entry(OwnedString, V)) + i).value
         release(old)
-        const entry = self.entries + i
+        const entry = (self.mem.ptr as &Entry(OwnedString, V)) + i
         entry.value = move value
         return
     }
@@ -323,17 +330,12 @@ pub fn set(self: &UnmanagedDict(OwnedString, $V), key: String, value: move V, al
     const _placed = self.place(hash_key(key), from_view(key, allocator), value)
 }
 
-// Deinits every live key and value, frees the table and resets to empty, so a second call is a
-// no-op.
+// Deinits every live key and value and frees the table.
 pub fn deinit(self: move UnmanagedDict($K, $V), allocator: &Allocator) {
-    if self.cap > 0 {
+    if self.capacity() > 0 {
         self.clear()
-        allocator.free(slice_from_raw_parts(self.entries, self.cap))
     }
-    self.entries = 0usize as &Entry(K, V)
-    self.length = 0
-    self.dead = 0
-    self.cap = 0
+    allocator.dealloc(self.mem)
 }
 
 // Copies every entry of `other` into this dict, overwriting the value under a key both have.
@@ -368,10 +370,10 @@ fn take_entry(self: &UnmanagedDict($K, $V), found: usize?) V? {
         return null
     }
     const i = found.unwrap()
-    const val: V = move (self.entries + i).value
-    let k = move (self.entries + i).key
+    const val: V = move ((self.mem.ptr as &Entry(K, V)) + i).value
+    let k = move ((self.mem.ptr as &Entry(K, V)) + i).key
     release(k)
-    const entry = self.entries + i
+    const entry = (self.mem.ptr as &Entry(K, V)) + i
     entry.hash = HASH_DEAD
     self.length = self.length - 1
     self.dead = self.dead + 1
@@ -380,9 +382,9 @@ fn take_entry(self: &UnmanagedDict($K, $V), found: usize?) V? {
 
 // Removes every entry, deiniting each key and value. The table is kept for reuse.
 pub fn clear(self: &UnmanagedDict($K, $V)) {
-    for i in 0..self.cap {
-        if (self.entries + i).hash >= 2 {
-            let entry = move (self.entries + i).*
+    for i in 0..self.capacity() {
+        if ((self.mem.ptr as &Entry(K, V)) + i).hash >= 2 {
+            let entry = move ((self.mem.ptr as &Entry(K, V)) + i).*
             entry.deinit()
         }
     }
@@ -411,21 +413,22 @@ pub fn update(self: &UnmanagedDict($K, $V), key: K, f: fn(&V)) bool {
 // ends the search. `key` is a `K` or a probe whose `hash` and `==` agree with `K`'s.
 fn find_entry(self: &UnmanagedDict($K, $V), key: $Q) &Entry(K, V)? where Q: Hash {
     return self.find_index(key) match {
-        Some(i) => Some(self.entries + i)
+        Some(i) => Some((self.mem.ptr as &Entry(K, V)) + i)
         None => null
     }
 }
 
 // The slot index holding `key`, or null. What a take goes through: the entry is then written as
-// `(self.entries + i)`, a place this module owns, rather than through a lent `&Entry`.
+// `((self.mem.ptr as &Entry(K, V)) + i)`, a place this module owns, rather than through a lent
+// `&Entry`.
 fn find_index(self: &UnmanagedDict($K, $V), key: $Q) usize? where Q: Hash {
-    if self.cap == 0 {
+    if self.capacity() == 0 {
         return null
     }
     const h: usize = hash_key(key)
-    for i in 0..self.cap {
-        const slot = probe_slot(h, i, self.cap)
-        const entry: &Entry(K, V) = self.entries + slot
+    for i in 0..self.capacity() {
+        const slot = probe_slot(h, i, self.capacity())
+        const entry: &Entry(K, V) = (self.mem.ptr as &Entry(K, V)) + slot
         if entry.hash == HASH_EMPTY {
             return null
         }
@@ -443,7 +446,7 @@ fn find_index(self: &UnmanagedDict($K, $V), key: $Q) usize? where Q: Hash {
 // Bytes the bucket array occupies. Counts every slot, live or not: a dict holds `cap` slots and
 // `len` of them carry an entry. What a key or value owns on the heap of its own is not in here.
 pub fn capacity_bytes(self: &UnmanagedDict($K, $V)) usize {
-    return self.cap * size_of(Entry(K, V))
+    return self.capacity() * size_of(Entry(K, V))
 }
 
 // Returns the number of entries.
@@ -588,15 +591,15 @@ pub fn iter(it: &DictIterator($K, $V)) DictIterator(K, V) {
 // Advances and returns the next entry, or null after the last. The entry is lent, not copied: a
 // dict may hold owned keys and values, and a copy of one would own them twice.
 pub fn next(it: &DictIterator($K, $V)) &Entry(K, V)? {
-    for idx in it.current..it.dict.cap {
-        const entry: &Entry(K, V) = it.dict.entries + idx
+    for idx in it.current..it.dict.capacity() {
+        const entry: &Entry(K, V) = (it.dict.mem.ptr as &Entry(K, V)) + idx
         if entry.hash >= 2 {
             it.current = idx + 1
             // Wrapped explicitly - see the note in core/range.f::next.
             return Some(entry)
         }
     }
-    it.current = it.dict.cap
+    it.current = it.dict.capacity()
     return null
 }
 
@@ -629,18 +632,18 @@ pub fn iter(self: move DictDrain($K, $V)) DictDrain(K, V) {
 // Moves the next key and value out of the dict, in table order, or null when every entry has been
 // taken. The slot it came from is left as a tombstone.
 pub fn next(self: &DictDrain($K, $V)) (K, V)? {
-    for idx in self.current..self.__dict.cap {
-        const entry: &Entry(K, V) = self.__dict.entries + idx
+    for idx in self.current..self.__dict.capacity() {
+        const entry: &Entry(K, V) = (self.__dict.mem.ptr as &Entry(K, V)) + idx
         if entry.hash >= 2 {
             self.current = idx + 1
             self.taken = self.taken + 1
             entry.hash = HASH_DEAD
-            const k = move (self.__dict.entries + idx).key
-            const v = move (self.__dict.entries + idx).value
+            const k = move ((self.__dict.mem.ptr as &Entry(K, V)) + idx).key
+            const v = move ((self.__dict.mem.ptr as &Entry(K, V)) + idx).value
             return Some((move k, move v))
         }
     }
-    self.current = self.__dict.cap
+    self.current = self.__dict.capacity()
     return null
 }
 
@@ -878,20 +881,20 @@ test "a zero-initialised Dict is a valid empty dict" {
 test "a capacity constructor preallocates a power-of-two table" {
     let d: Dict(u32, u32) = dict(100)
     defer d.deinit()
-    assert_eq(d.cap, 128 as usize, "rounded up to the next power of two")
+    assert_eq(d.capacity(), 128 as usize, "rounded up to the next power of two")
     for i in 0..64usize {
         d.set(i as u32, i as u32)
     }
-    assert_eq(d.cap, 128 as usize, "no growth below the load factor")
+    assert_eq(d.capacity(), 128 as usize, "no growth below the load factor")
     assert_eq(d.len(), 64 as usize, "every entry present")
 
     let e: Dict(u32, u32) = dict(32768)
     defer e.deinit()
-    assert_eq(e.cap, 32768 as usize, "an exact power of two is kept")
+    assert_eq(e.capacity(), 32768 as usize, "an exact power of two is kept")
 
     let z: Dict(u32, u32) = dict(0)
     defer z.deinit()
-    assert_eq(z.cap, 0 as usize, "zero stays the lazy empty form")
+    assert_eq(z.capacity(), 0 as usize, "zero stays the lazy empty form")
 }
 
 test "a key whose hash is a reserved state still round-trips" {
@@ -920,7 +923,7 @@ test "delete-heavy churn never fills the table" {
     d.set(7u32, 2u32)
     assert_eq(d.len(), 1 as usize, "one live entry after churn")
     assert_eq(d.get(7u32).unwrap(), 2u32, "the surviving entry reads back")
-    assert_eq(d.cap, 8 as usize, "tombstone rehashes keep the capacity")
+    assert_eq(d.capacity(), 8 as usize, "tombstone rehashes keep the capacity")
 }
 
 test "string keys are copied on insert and looked up by view" {
