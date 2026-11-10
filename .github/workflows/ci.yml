@@ -10,7 +10,43 @@ permissions:
   contents: read
 
 jobs:
+  # Decides whether anything the build reads changed. A change that touches
+  # only docs, Markdown, LICENSE or .claude/ skips the jobs below; anything
+  # else, or a base that cannot be diffed (first push, force push), builds.
+  # Skipped jobs report success, so they do not block a merge.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      # History and trees only: the diff needs no file contents, and the
+      # sparse checkout keeps the seeds out of the working tree.
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: .github
+
+      - id: filter
+        shell: bash
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if ! git cat-file -e "$BASE^{commit}" 2>/dev/null || ! files=$(git diff --name-only "$BASE...$HEAD"); then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "$files"
+          if grep -qvE '^(docs/|\.claude/)|\.md$|^LICENSE$' <<< "$files"; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-and-test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -60,6 +96,8 @@ jobs:
   # feature the seed lacks) in one job. Skips until the first promote
   # commits a seed. See boot/README.md and promote.cs.
   bootstrap:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
