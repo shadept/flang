@@ -51,4 +51,5 @@ Type: language, compiler, stdlib, tooling.
 | [039](039-lambda-syntax.md) | Lambda syntax | language | implemented | 2026-10-17 | 2026-10-18 |
 | [040](040-coalesce-via-op-try.md) | `??` through `op_try` | language | implemented | 2026-10-18 | 2026-10-18 |
 | [041](041-native-calling-convention.md) | Native calling convention | compiler | draft | 2026-10-18 |  |
+| [042](042-loop-labels.md) | Loop labels | language | draft | 2026-11-10 |  |
 | [099](099-stack-only-types-and-bindings.md) | `#stack` types and stack-only bindings | language | deferred | 2026-08-27 |  |
