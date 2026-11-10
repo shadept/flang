@@ -82,6 +82,18 @@ it by about 100x. Quote them as FIR pressure and C volume, which is what they me
 | GVN | Match identical computations across blocks. Heavyweight; unlikely to fire much until generics monomorphise into similar functions in large quantities. |
 | LICM | The C compiler is great at this. Only do FIR-level LICM if profiling shows specific patterns the C compiler misses. |
 | Tail-call optimization | Add only when needed for a specific feature (e.g. effect handlers, CPS). |
+| Jump threading on known values | See below. clang does it at `-O2`; worth doing in FIR only for `-O0` output and C size. Needs mem2reg first. |
+
+#### Jump threading on known values
+
+The state-machine pattern from RFC-042 §4 (`state = X; continue scan` into a loop whose body is
+`state match { ... }`) stores a variant, jumps to the head, and tests the tag again through the
+`br_if` cascade a match lowers to. When the value reaching the head along one edge is a known
+constant, that edge can go straight to the arm the cascade would pick, passing the payload as the
+arm's block arguments. Once mem2reg has turned `state` into a block parameter of the loop head,
+this is: for each incoming edge passing a constant to a parameter the head's `br_if` cascade
+tests, fold the cascade along that edge and redirect the edge to the block it reaches. The pass is
+general (any `br_if` on a value known on an incoming edge), not specific to state machines.
 
 ### Pass ordering
 

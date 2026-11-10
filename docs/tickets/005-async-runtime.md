@@ -2,6 +2,7 @@
 status: draft
 type: language
 created: 2026-04-21
+relates: [RFC-042]
 ---
 
 # RFC-005: Async / Coroutines
@@ -46,7 +47,7 @@ FLang needs concurrency to be a viable systems language. The bar:
 |---|---|
 | OS threads only | No cheap concurrency for I/O fan-out; doesn't solve "same code sync/async". |
 | Stackless futures (Rust-style `async fn`) | Requires a compiler state-machine transform, forces function coloring at signature level, conflicts with "code doesn't know it's async". |
-| Stackless state-machine coroutines (SFEX-style, see §3.10) | Compelling: zero-stack, deterministic, allocation can be hidden inside a parent struct or arena, and (with compiler support) we could lower transparently *without* coloring at the signature level. Kept as a serious alternative to evaluate before implementation — see §3.10. |
+| Stackless state-machine coroutines (SFEX-style, see §3.10) | Compelling: zero-stack, deterministic, allocation can be hidden inside a parent struct or arena, and (with compiler support) we could lower transparently *without* coloring at the signature level. Rejected 2026-11-10: a compiler-generated machine cannot stay uncolored past function values, foreign calls and recursion. See §3.10. |
 | Fully colorless stackful (Go-style, no `Future`) | Can't express `race` / `all` / `timeout` as first-class combinators — the deferred value has no handle. Forces every composition through `spawn` + `chan` + `select`. |
 | Callback-based futures, no await | Ugly for sequential flows, re-introduces colored continuations. |
 
@@ -64,7 +65,7 @@ The self-hosted compiler does not itself need to be async — compiler passes ar
 
 A coroutine owns:
 
-- **A stack.** Independently allocated (not on the OS thread stack). Size TBD — initial proposal: 64 KiB mmap'd with a guard page at the base, fail-fast on overflow; growable stacks deferred.
+- **A stack.** Independently allocated (not on the OS thread stack). A lazily committed virtual reservation with a guard page at the base, fail-fast on overflow; stacks never grow or move (§7 q8).
 - **A scheduler record.** Contains: saved machine context (registers + SP), state (runnable / suspended / completed / cancelled), pointer to current `Context` chain, result slot, cancellation flag.
 - **No implicit allocator, heap, or local storage.** All memory comes from allocators passed in via args or context.
 
@@ -255,7 +256,7 @@ No changes to existing discipline:
 - Async does not introduce "free cleanup via coroutine exit." Async is not gc-via-scope.
 - Recommendation: provide a `TracingAllocator` in stdlib that wraps another allocator and reports outstanding allocations on `reset()` / `deinit()`. Fits the existing `AllocatorVTable` model (§4.1). Not blocking for this RFC; bolt on as a debug aid.
 
-### 3.10 Inspiration: SFEX-style stackless state machines (alternative model under consideration)
+### 3.10 Rejected: SFEX-style stackless state machines
 
 Reference: <https://vittorioromeo.com/index/blog/sfex_coroutine.html>.
 
@@ -273,7 +274,15 @@ The SFEX post describes a stackless coroutine model where a coroutine *is* a str
 - Cancellation, `defer`-on-unwind, and the netpoller integration become a runtime-controlled state-transition rather than a stack manipulation.
 - We lose the "any C function can yield transparently" property — yielding requires a lowered call site. This is the trade.
 
-**Status: open design question, not yet a decision.** Locking the stackful model in the RFC body remains the conservative path because it requires no compiler work. Before implementing this RFC (which is gated on self-host anyway, §6 Phase 0), we will revisit and decide between (a) stackful as currently specified and (b) stackless-with-compiler-lowering as sketched here. The stdlib API surface in §3.2–§3.5 is intentionally compatible with either choice — `Future(T)`, `spawn`, `Channel(T)`, `Context` all describe the same observable contract regardless of the lowering strategy underneath.
+**Decision (2026-11-10): rejected; the runtime is stackful as specified in §3.1.** The requirement is `.await()` with no coloring, goroutine-style. The "colorless via transitive lowering" claim above does not survive three cases:
+
+- **Function values.** A call through an `fn` value has no known target, so the compiler cannot tell whether it suspends. Either every function value is assumed to suspend (every one pays), or suspension becomes part of the function type, which is coloring.
+- **Foreign calls.** A `#foreign` callee is never lowered, so a C callback that reaches a suspending FLang function cannot suspend.
+- **Recursion.** A recursive suspending function has an unbounded frame; it must box its recursive calls, and that shows at the call site.
+
+The alternatives considered were: (1) stackful, as in §3.1; (2) stackless with state machines written by hand (an enum plus a `step` function), which needs no compiler work but is tedious for application code; (3) stackless with compiler-generated machines, which brings the cases above plus references across a suspension point (a frame that holds a reference into itself cannot move), defers live at a suspension point, and which runtime context a resumed frame sees. Only (1) meets the requirement.
+
+**State machines in application code** do not need async. A machine that runs several transitions in one go is a state variable, a labeled `loop` and a `match` (RFC-042 §4). A machine that waits between steps (one loaded from a database, or driven by events) is a function: load the state, run until it must wait, store the new state, return. Nothing in this RFC changes either.
 
 ---
 
@@ -452,7 +461,7 @@ New directory: `stdlib/std/runtime/`. Companion `.c` files follow the existing B
 **Components:**
 
 1. **Coroutine context switching.** Start with `ucontext.h` (POSIX, portable). Plan: replace with fcontext-style assembly (x86_64, arm64) for speed in a follow-up. Windows: Fibers API.
-2. **Stack allocation.** mmap 64 KiB + 4 KiB guard page per coroutine. Stack overflow = SIGSEGV on guard, fail-fast with a diagnostic. Growable stacks deferred.
+2. **Stack allocation.** Reserve a virtual range per coroutine with a guard page at its base, and let the OS commit pages only as they are touched (§7 q8). Stack overflow = SIGSEGV on guard, fail-fast with a diagnostic. Stacks never grow or move (§9).
 3. **Scheduler.** `Worker` struct per OS thread. Local run queue = fixed-size Chase–Lev deque (256 slots); overflow pushes to shared global queue. Idle workers steal from a random sibling's tail; failed steal rounds park on `pthread_cond_t` / `WaitForSingleObject`.
 4. **Netpoller.** `io_uring` (Linux ≥5.6, primary; falls back to `epoll` on older kernels), `kqueue` (macOS, BSD), `IOCP` (Windows). Detection is runtime: probe `io_uring_setup` at startup and select epoll if unavailable or if a feature flag forces it. The netpoller abstraction is **completion-oriented** (matching io_uring and IOCP); readiness-based backends (kqueue, epoll fallback) emulate completion on top — read/write happen on the worker side after the readiness event, with the result delivered to the registered Future. Dedicated poller per platform's native idiom (Linux runs inline on an idle worker; Windows IOCP gets a pool). Events translate to waker invocations on registered Futures. Future work: linked SQE chains for fused submit-and-await on io_uring.
 5. **Timer wheel.** Hierarchical (tick = 1 ms). Per-worker local wheel; global merge on idle. Used by `sleep` and `.timeout`.
@@ -567,7 +576,7 @@ These are intentionally undecided. Reviewing them is the primary purpose of the 
 5. **Channel double-close.** (a) Panic (Go). (b) `close` returns `Result(void, AlreadyClosed)`. **Proposal: (a) panic** — it's a bug, surface it loudly.
 6. **Sync I/O after async lands.** Does `std.io` retain synchronous-blocking variants, or does every I/O call return a Future and blocking is implemented as `.await()` on the main coroutine? **Proposal: all I/O returns Future; there is no "sync" variant; blocking at top-level is `.await()` on `main`.** Simpler surface; relies on `main`-as-root-coroutine.
 7. **`SyncAllocator` wrapper.** Needed for the common case of a shared allocator across sibling coroutines (§3.8 rule 4). Out of scope for this RFC but a required sibling feature before the design is practically usable. Track as follow-up ticket.
-8. **Stack size policy.** Fixed 64 KiB + guard vs initial-small-with-growth. Proposal: **fixed for v1**, growth deferred. Guard-page SIGSEGV → diagnostic with "increase stack size" hint.
+8. **Stack size policy.** A C stack cannot be moved once it exists: raw pointers point into it, and unlike Go's runtime we do not know where every pointer is. So "start small and grow" is not available. The cheap option is a large virtual reservation per coroutine (proposal: 1 MiB) of which only the touched pages are committed, so an idle coroutine costs a page or two of real memory. Open: the default reservation, whether `spawn` can override it, and the Windows equivalent (reserve with `VirtualAlloc(MEM_RESERVE)`, commit through a guard page). Guard-page SIGSEGV → diagnostic with an "increase stack size" hint.
 9. **Number of workers.** Default = CPU count. Env var `FLANG_WORKERS`. Low-priority decision, safe default.
 
 ---
@@ -582,6 +591,7 @@ These are intentionally undecided. Reviewing them is the primary purpose of the 
 - **Channel copy-in cost.** Large-payload channels pay a `memcpy` per message. Acceptable for v1; zero-copy transfer is a future optimization (transfer-with-allocator, per §3.4).
 - **`Future(T)` is heap-allocated (the `FutureState`).** Every `spawn` and every `race`/`all` etc. allocates. Acceptable; matches Tokio's `Arc<Task>` cost.
 - **Debugging experience.** Stackful coroutines don't show cleanly in gdb backtraces without coroutine-aware pretty-printers. Accept as known limitation; revisit if self-host tooling needs it.
+- **`errno` and thread-locals across `.await()`.** Work-stealing lets a coroutine park on one worker thread and resume on another. C code that reads `errno`, or any other thread-local, after a suspension reads the new thread's value. Mitigation: the context switch saves and restores `errno` with the coroutine. Other foreign thread-locals cannot be relied on across an `.await()`; document it, and pin a coroutine to its worker for code that needs them (future).
 - **Interaction with `#foreign` C code.** Foreign C that blocks on syscalls will block the underlying worker, starving other coroutines on that worker. Mitigation: mark known-blocking foreign calls with `#foreign_blocking` (future) and have the scheduler promote the worker to a dedicated OS thread for the duration. **Out of scope for this RFC.**
 
 ---
@@ -594,5 +604,5 @@ These are intentionally undecided. Reviewing them is the primary purpose of the 
 - **`SyncAllocator` variants.** Atomic arena, sync-wrapper vtable. Required sibling feature (§7 q7), separate ticket.
 - **Blocking-C-call isolation (`#foreign_blocking`).** Listed in risks; separate work.
 - **Cancellation error-hierarchy design.** If user code wants typed cancellation reasons (timeout vs user-requested), that's beyond the `Cancelled` binary signal proposed here.
-- **Growable stacks.** v1 is fixed-size.
+- **Growable stacks.** Not planned: a C stack cannot move (§7 q8). Lazily committed reservations give most of the benefit.
 - **Compile-time `#no_suspend` diagnostic.** Optional future hardening.
