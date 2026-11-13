@@ -1,5 +1,5 @@
 ---
-status: superseded
+status: implemented
 type: stdlib
 created: 2026-05-03
 implemented: 2026-05-03

@@ -2604,6 +2604,19 @@ A bare overloaded name passed to a `fn(...)` parameter picks the overload whose 
 
 ---
 
+### Iterator `flat_map` Has No Lazy Adapter
+
+**Status:** Open
+**Affected:** `std.collections.iter`
+
+The iterator adapters have no `flat_map`. Its adapter must store the inner iterator `f` returns, a type known only by calling `f`; when RFC-019 recorded this (§5), constructor-time inference could not name it. RFC-036's projection may now express it (`F: fn(I.Item) $J where J: Iterator`), untried.
+
+**Workaround:** `List.flat_map` covers the materialized case.
+
+**Fix:** write `FlatMapIter(I, F)` against RFC-036 bounds; if the field type still cannot be named, the gap is in projection through a callable's return.
+
+---
+
 ### `#foreign fn`: Aggregates by Value
 
 **Status:** Open

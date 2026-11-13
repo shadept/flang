@@ -1,7 +1,8 @@
 ---
-status: provisional
+status: implemented
 type: language
 created: 2026-05-05
+implemented: 2026-08-20
 ---
 
 # RFC-014: `op_call` and closure literals

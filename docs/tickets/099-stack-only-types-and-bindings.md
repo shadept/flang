@@ -1,5 +1,5 @@
 ---
-status: deferred
+status: draft
 type: language
 created: 2026-08-27
 requires: [RFC-014]

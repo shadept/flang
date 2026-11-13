@@ -1,5 +1,5 @@
 ---
-status: superseded
+status: dropped
 type: language
 created: 2026-09-01
 superseded-by: RFC-033
