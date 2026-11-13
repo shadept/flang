@@ -1,7 +1,8 @@
 ---
-status: draft
+status: implemented
 type: language
 created: 2026-11-10
+implemented: 2026-11-13
 relates: [RFC-005, RFC-015]
 ---
 
@@ -99,14 +100,13 @@ continue_stmt:= 'continue' IDENT?
 
 ## 3. Diagnostics
 
-Codes are assigned when this is implemented and registered in `docs/error-codes.md` then.
-
-| Case | Severity |
+| Case | Code |
 |---|---|
-| `break l` / `continue l` where no enclosing loop is labeled `l` | error |
-| A label that reuses the name of an enclosing loop's label | error |
-| A label that no `break` or `continue` names | warning |
-| A label in front of anything but `for`, `while` or `loop` | error |
+| `break l` / `continue l` where no enclosing loop is labeled `l` | E1055 |
+| A label that reuses the name of an enclosing loop's label | E1056 |
+| A label that no `break` or `continue` names | W1005 |
+| A label in front of anything but `for`, `while` or `loop` | E1057 |
+| A value after `break` or `continue` | E1002 |
 
 The "unknown label" message lists the labels in scope, nearest first.
 

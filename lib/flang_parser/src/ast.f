@@ -32,7 +32,15 @@ import flang_core.span
 pub type Module = struct {
     span: SourceSpan
     decls: List(Decl)
+    labels: LabelRef[]
     arena: ArenaAllocator
+}
+
+// A loop label occurrence and the declaration it resolves to (RFC-042). A declaration refers to
+// itself.
+pub type LabelRef = struct {
+    decl: SourceSpan
+    site: SourceSpan
 }
 
 // Scoped mutability: `decls` is writable only in this file. Installs the resolved decl list after
@@ -349,13 +357,15 @@ pub type DeferStmt = struct {
     expr: &Expr
 }
 
-// Bare `break` / `continue`. FLang has no loop labels.
+// `break` / `continue`. A label names the loop acted on; without one, the innermost (RFC-042).
 pub type BreakStmt = struct {
     span: SourceSpan
+    label: String?
 }
 
 pub type ContinueStmt = struct {
     span: SourceSpan
+    label: String?
 }
 
 // `for name in iterable { body }` - loop variable is a single identifier. FLang has no
@@ -363,6 +373,7 @@ pub type ContinueStmt = struct {
 // not expressions.
 pub type ForStmt = struct {
     span: SourceSpan
+    label: String?
     var_name: String
     // The loop variable token's own span; equals `span` when error recovery produced no name.
     var_span: SourceSpan
@@ -375,6 +386,7 @@ pub type ForStmt = struct {
 // `while cond { body }` - statement form, evaluates to no value.
 pub type WhileStmt = struct {
     span: SourceSpan
+    label: String?
     condition: &Expr
     body: &BlockExpr
 }
@@ -382,6 +394,7 @@ pub type WhileStmt = struct {
 // `loop { body }` - unconditional, statement form. Exit via `break` or `return`.
 pub type LoopStmt = struct {
     span: SourceSpan
+    label: String?
     body: &BlockExpr
 }
 

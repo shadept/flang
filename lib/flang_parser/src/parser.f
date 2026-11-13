@@ -14,6 +14,7 @@
 
 import std.allocator
 import std.collections.list
+import std.option
 import std.string
 import std.string_builder
 
@@ -54,11 +55,19 @@ pub type Parser = struct {
     // True while parsing the condition of an `if`/`for`/`while` without parens - `{` then
     // terminates the expression instead of starting a struct construction or block literal.
     stop_at_brace: bool
-    // Enclosing loop bodies being parsed. `break` / `continue` outside every one of them is E1006 /
-    // E1007. A lambda body starts it again at zero: a loop outside the lambda is out of reach.
-    loop_depth: usize
+    // Enclosing loop bodies being parsed, innermost last. `break` / `continue` act on the ones from
+    // `loop_floor` up: a lambda body raises the floor, since a loop outside the lambda is out of
+    // reach (RFC-042).
+    loops: List(OpenLoop)
+    loop_floor: usize
     // Enclosing lambda bodies being parsed. `return` inside one is E1054 (RFC-039).
     lambda_depth: usize
+}
+
+type OpenLoop = struct {
+    label: Token?
+    // Whether a `break` or `continue` named the label.
+    used: bool
 }
 
 // Construct a Parser over the given token list. The list is borrowed - every CST node will
@@ -78,7 +87,8 @@ pub fn parser(
         diagnostics = list(0, allocator),
         file_id = -1,
         stop_at_brace = false,
-        loop_depth = 0,
+        loops = list(0, allocator),
+        loop_floor = 0,
         lambda_depth = 0,
     }
 }
@@ -89,6 +99,7 @@ pub fn parser(
 pub fn deinit(self: move Parser) {
     self.diagnostics.deinit()
     self.scratch.deinit()
+    self.loops.deinit()
     self.tree.deinit()
 }
 
@@ -1081,12 +1092,17 @@ fn parse_statement(self: &Parser) CstNodeId {
         // disallows them on local types.
         Type => self.parse_type_decl_with_directives(list(0, self.allocator))
         Return => self.parse_return_stmt()
-        Break => self.parse_single_keyword_stmt(NodeKind.BreakStmt)
-        Continue => self.parse_single_keyword_stmt(NodeKind.ContinueStmt)
+        Break => self.parse_jump_stmt(NodeKind.BreakStmt)
+        Continue => self.parse_jump_stmt(NodeKind.ContinueStmt)
         Defer => self.parse_defer_stmt()
-        For => self.parse_for_loop()
-        Loop => self.parse_loop_expr()
-        While => self.parse_while_loop()
+        For => self.parse_for_loop(null)
+        Loop => self.parse_loop_expr(null)
+        While => self.parse_while_loop(null)
+        Identifier => if self.peek_kind(1) == TokenKind.Colon {
+            self.parse_labeled_stmt()
+        } else {
+            self.parse_expression_stmt()
+        }
         If => self.parse_if_expr()
         OpenBrace => if self.at_lambda_brace() {
             self.parse_expression_stmt()
@@ -1151,33 +1167,179 @@ fn is_bare_return_terminator(self: &Parser) bool {
 
 // Whether the current token opens a line the previous token did not sit on.
 fn at_line_start(self: &Parser) bool {
-    if self.position == 0 or self.position >= self.tree.tokens.len {
+    return self.starts_line(self.position)
+}
+
+// Whether token `index` opens a line the token before it did not sit on.
+fn starts_line(self: &Parser, index: usize) bool {
+    if index == 0 or index >= self.tree.tokens.len {
         return false
     }
-    const prev = self.tree.tokens[self.position - 1]
+    const prev = self.tree.tokens[index - 1]
     return spans_newline(
         self.tree.source,
         prev.offset + prev.text.len,
-        self.tree.tokens[self.position].offset,
+        self.tree.tokens[index].offset,
     )
 }
 
-fn parse_single_keyword_stmt(self: &Parser, kind: NodeKind) CstNodeId {
+// `break` / `continue`, optionally naming a loop label on the same line (RFC-042).
+fn parse_jump_stmt(self: &Parser, kind: NodeKind) CstNodeId {
     let b = self.open(kind)
-    // `break` / `continue` need a loop to act on (E1006 / E1007).
-    if self.loop_depth == 0 {
-        kind match {
-            BreakStmt => self.record_error_here("E1006", from_view("`break` outside of a loop"))
-            ContinueStmt => self.record_error_here(
-                "E1007",
-                from_view("`continue` outside of a loop"),
-            )
+    const keyword = self.current()
+    self.eat_into(&b)
+    const named = self.current_kind() == TokenKind.Identifier and !self.at_line_start()
+    if named {
+        const label = self.current()
+        self.eat_into(&b)
+        self.resolve_label(label)
+    } else if self.loops.len == self.loop_floor {
+        const code = if kind == NodeKind.BreakStmt { "E1006" } else { "E1007" }
+        const msg = $"`{keyword.text}` outside of a loop"
+        self.record_error_at(code, msg, keyword.offset, keyword.text.len)
+    }
+    if !self.is_bare_return_terminator() {
+        self.record_error_here("E1002", $"`{keyword.text}` takes no value")
+    }
+    self.eat_optional_semicolon(&b)
+    return self.finish(b)
+}
+
+// The nearest open loop labeled `label.text` gets the use; none in reach is E1055.
+fn resolve_label(self: &Parser, label: Token) {
+    const at = self.find_label(label.text)
+    if at.is_some() {
+        self.loops[at.unwrap()].used = true
+        self.link_label(self.loops[at.unwrap()].label.unwrap(), label)
+        return
+    }
+    self.record_error_at(
+        "E1055",
+        self.unknown_label_message(label.text),
+        label.offset,
+        label.text.len,
+    )
+}
+
+// Lists the labels in reach, nearest first.
+fn unknown_label_message(self: &Parser, name: String) OwnedString {
+    let sb = string_builder(64)
+    defer sb.deinit()
+    sb.append($"no enclosing loop is labeled `{name}`")
+    let first = true
+    let i = self.loops.len
+    while i > self.loop_floor {
+        i = i - 1
+        const decl = self.loops[i].label
+        if decl.is_none() {
+            continue
+        }
+        sb.append(if first { "; labels in scope: `" } else { ", `" })
+        sb.append(decl.unwrap().text)
+        sb.append("`")
+        first = false
+    }
+    return sb.to_string()
+}
+
+fn link_label(self: &Parser, decl: Token, site: Token) {
+    self.tree.labels.push(LabelLink {
+        decl = decl.offset as u32,
+        site = site.offset as u32,
+        len = site.text.len as u32,
+    })
+}
+
+// A label reusing the name of a loop it sits inside is E1056: it would hide the outer one.
+fn enter_loop(self: &Parser, label: Token?) {
+    label match {
+        Some(l) => {
+            if self.find_label(l.text).is_some() {
+                self.record_error_at(
+                    "E1056",
+                    $"label `{l.text}` is already used by an enclosing loop",
+                    l.offset,
+                    l.text.len,
+                )
+            }
+            self.link_label(l, l)
+        }
+        None => {}
+    }
+    self.loops.push(OpenLoop { label = label, used = false })
+}
+
+// The innermost loop in reach labeled `name`.
+fn find_label(self: &Parser, name: String) usize? {
+    let i = self.loops.len
+    while i > self.loop_floor {
+        i = i - 1
+        const decl = self.loops[i].label
+        if decl.is_some() and decl.unwrap().text == name {
+            return Some(i)
+        }
+    }
+    return null
+}
+
+// A label no `break` or `continue` names is W1005.
+fn leave_loop(self: &Parser) {
+    const open = self.loops.pop().unwrap()
+    if open.used or open.label.is_none() {
+        return
+    }
+    const l = open.label.unwrap()
+    let empty_hint: OwnedString
+    self.diagnostics.push(Diagnostic {
+        severity = Severity.Warning,
+        code = "W1005",
+        message = $"label `{l.text}` is never used",
+        hint = move empty_hint,
+        span = SourceSpan { file_id = self.file_id, start = l.offset, length = l.text.len },
+    })
+}
+
+// `name:` before a statement. Only `for`, `while` and `loop` on the same line take a label;
+// anything else is E1057, and the label and colon become an error node ahead of the statement.
+fn parse_labeled_stmt(self: &Parser) CstNodeId {
+    const label = self.current()
+    if !self.starts_line(self.position + 2) {
+        self.peek_kind(2) match {
+            For => return self.parse_for_loop(Some(label))
+            While => return self.parse_while_loop(Some(label))
+            Loop => return self.parse_loop_expr(Some(label))
             _ => {}
         }
     }
+    self.record_error_here(
+        "E1057",
+        from_view("a label goes in front of `for`, `while` or `loop`, on the same line"),
+    )
+    let b = self.open(NodeKind.Error)
     self.eat_into(&b)
-    self.eat_optional_semicolon(&b)
+    self.eat_into(&b)
     return self.finish(b)
+}
+
+// Opens a loop node, taking a label's `name:` as its first two children.
+fn open_loop(self: &Parser, kind: NodeKind, label: Token?) NodeBuilder {
+    let b = self.open(kind)
+    if label.is_some() {
+        self.eat_into(&b)
+        self.eat_into(&b)
+    }
+    self.eat_into(&b)
+    return b
+}
+
+fn parse_loop_body_into(self: &Parser, b: &NodeBuilder, label: Token?) {
+    if self.current_kind() != TokenKind.OpenBrace {
+        return
+    }
+    self.enter_loop(label)
+    const body = self.parse_block_expr()
+    self.leave_loop()
+    self.push_node_into(b, body)
 }
 
 fn parse_defer_stmt(self: &Parser) CstNodeId {
@@ -1297,9 +1459,8 @@ fn parse_if_expr(self: &Parser) CstNodeId {
     return self.finish(b)
 }
 
-fn parse_for_loop(self: &Parser) CstNodeId {
-    let b = self.open(NodeKind.ForLoopExpr)
-    self.eat_into(&b) // `for`
+fn parse_for_loop(self: &Parser, label: Token?) CstNodeId {
+    let b = self.open_loop(NodeKind.ForLoopExpr, label)
     // `for (i in 0..5) { … }` - the parenthesised header form was removed
     // (RFC-006). Parsed defensively so the body still reads (E1010).
     let parenthesised = self.current_kind() == TokenKind.OpenParenthesis
@@ -1324,38 +1485,21 @@ fn parse_for_loop(self: &Parser) CstNodeId {
     if parenthesised and self.current_kind() == TokenKind.CloseParenthesis {
         self.eat_into(&b)
     }
-    if self.current_kind() == TokenKind.OpenBrace {
-        self.loop_depth = self.loop_depth + 1
-        const body = self.parse_block_expr()
-        self.loop_depth = self.loop_depth - 1
-        self.push_node_into(&b, body)
-    }
+    self.parse_loop_body_into(&b, label)
     return self.finish(b)
 }
 
-fn parse_loop_expr(self: &Parser) CstNodeId {
-    let b = self.open(NodeKind.LoopExpr)
-    self.eat_into(&b) // `loop`
-    if self.current_kind() == TokenKind.OpenBrace {
-        self.loop_depth = self.loop_depth + 1
-        const body = self.parse_block_expr()
-        self.loop_depth = self.loop_depth - 1
-        self.push_node_into(&b, body)
-    }
+fn parse_loop_expr(self: &Parser, label: Token?) CstNodeId {
+    let b = self.open_loop(NodeKind.LoopExpr, label)
+    self.parse_loop_body_into(&b, label)
     return self.finish(b)
 }
 
-fn parse_while_loop(self: &Parser) CstNodeId {
-    let b = self.open(NodeKind.WhileExpr)
-    self.eat_into(&b) // `while`
+fn parse_while_loop(self: &Parser, label: Token?) CstNodeId {
+    let b = self.open_loop(NodeKind.WhileExpr, label)
     const cond = self.parse_condition_expression()
     self.push_node_into(&b, cond)
-    if self.current_kind() == TokenKind.OpenBrace {
-        self.loop_depth = self.loop_depth + 1
-        const body = self.parse_block_expr()
-        self.loop_depth = self.loop_depth - 1
-        self.push_node_into(&b, body)
-    }
+    self.parse_loop_body_into(&b, label)
     return self.finish(b)
 }
 
@@ -1424,8 +1568,8 @@ fn parse_match_arm(self: &Parser) CstNodeId {
 fn parse_arm_body(self: &Parser) CstNodeId {
     return self.current_kind() match {
         Return => self.parse_return_stmt()
-        Break => self.parse_single_keyword_stmt(NodeKind.BreakStmt)
-        Continue => self.parse_single_keyword_stmt(NodeKind.ContinueStmt)
+        Break => self.parse_jump_stmt(NodeKind.BreakStmt)
+        Continue => self.parse_jump_stmt(NodeKind.ContinueStmt)
         OpenBrace => if self.at_lambda_brace() {
             self.parse_expression()
         } else {
@@ -1723,9 +1867,9 @@ fn parse_primary_expression(self: &Parser) CstNodeId {
             self.parse_block_expr()
         }
         If => self.parse_if_expr()
-        For => self.parse_for_loop()
-        Loop => self.parse_loop_expr()
-        While => self.parse_while_loop()
+        For => self.parse_for_loop(null)
+        Loop => self.parse_loop_expr(null)
+        While => self.parse_while_loop(null)
         Fn => self.parse_lambda_expression()
         Context => if self.peek_kind(1) == TokenKind.OpenParenthesis {
             self.parse_context_bind()
@@ -2030,10 +2174,10 @@ fn parse_brace_lambda_params(self: &Parser, b: &NodeBuilder) {
 fn parse_lambda_body(self: &Parser) CstNodeId {
     const saved_brace = self.suspend_brace_stop()
     defer self.restore_brace_stop(saved_brace)
-    const saved_loops = self.loop_depth
-    self.loop_depth = 0
+    const saved_floor = self.loop_floor
+    self.loop_floor = self.loops.len
     self.lambda_depth = self.lambda_depth + 1
-    defer self.leave_lambda(saved_loops)
+    defer self.leave_lambda(saved_floor)
     let b = self.open(NodeKind.BlockExpr)
     while !self.at_eof() and self.current_kind() != TokenKind.CloseBrace {
         const stmt = self.parse_statement()
@@ -2043,8 +2187,8 @@ fn parse_lambda_body(self: &Parser) CstNodeId {
     return self.finish(b)
 }
 
-fn leave_lambda(self: &Parser, saved_loops: usize) {
-    self.loop_depth = saved_loops
+fn leave_lambda(self: &Parser, saved_floor: usize) {
+    self.loop_floor = saved_floor
     self.lambda_depth = self.lambda_depth - 1
 }
 

@@ -76,7 +76,7 @@ pub fn analyze(source: move OwnedString, path: String) AnalyzedUnit {
     p.deinit()
 
     // A file that didn't parse is not type-checked.
-    let checked = count_errors(&diagnostics) == 0
+    let checked = count_errors(diagnostics.as_slice()) == 0
     let result = empty_result()
     if checked {
         let modules: List(Module) = list(1)
@@ -229,7 +229,7 @@ pub fn deinit(self: move AnalyzedUnit) {
 
 // Error-severity diagnostics only - warnings and hints don't fail a build.
 pub fn error_count(self: &AnalyzedUnit) usize {
-    return count_errors(&self.diagnostics)
+    return count_errors(self.diagnostics.as_slice())
 }
 
 // Move every diagnostic from `src` into `dst`, leaving `src` empty.
@@ -237,16 +237,6 @@ fn drain_diagnostics(dst: &List(Diagnostic), src: &List(Diagnostic)) {
     for d in src.drain() {
         dst.push(d)
     }
-}
-
-fn count_errors(diags: &List(Diagnostic)) usize {
-    let n: usize = 0
-    for i in 0..diags.len {
-        if diags[i].severity == Severity.Error {
-            n = n + 1
-        }
-    }
-    return n
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -440,7 +430,7 @@ fn check_project(
     }
     install(&self.diagnostics, replayed)
 
-    self.checked = count_errors(&self.diagnostics) == 0
+    self.checked = count_errors(self.diagnostics.as_slice()) == 0
     if !self.checked {
         return
     }
@@ -510,7 +500,8 @@ fn check_project(
     // the edges and need no allowance, and when they were not, every non-`pub` function of a
     // test-bearing module is rooted conservatively. Only on a clean check: with errors present the
     // tables are partial and reachability would be noise on top of the real problem.
-    if ctx.warn_unused and self.project_origin.len > 0 and count_errors(&self.diagnostics) == 0 {
+    if ctx.warn_unused and self.project_origin.len > 0
+        and count_errors(self.diagnostics.as_slice()) == 0 {
         let w = unused_functions(
             &self.result,
             &self.modules,
@@ -733,7 +724,7 @@ pub fn analyze_source_set(srcs: move List(OwnedString), fqns: &List(String)) Ana
     for &d in parse_diags {
         diagnostics.push(clone_diag(d))
     }
-    let checked = count_errors(&diagnostics) == 0
+    let checked = count_errors(diagnostics.as_slice()) == 0
     let result = empty_result()
     let generated = empty_template_output()
     // The checker rides on the returned unit like `analyze_project`'s does - consumers (the LSP)
@@ -809,7 +800,7 @@ pub fn write_generated(self: &AnalyzedProject) usize {
 
 // Total error-severity diagnostics across every module.
 pub fn project_error_count(self: &AnalyzedProject) usize {
-    return count_errors(&self.diagnostics)
+    return count_errors(self.diagnostics.as_slice())
 }
 
 fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List(Diagnostic)) Module {

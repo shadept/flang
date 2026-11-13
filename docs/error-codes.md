@@ -2921,6 +2921,9 @@ Report the issue with sample code that reproduces the error.
 | **E1005** | Parsing           | Invalid array repeat count (non-integer)     |
 | **E1006** | Parsing           | `break` outside of loop                      |
 | **E1007** | Parsing           | `continue` outside of loop                   |
+| **E1055** | Parsing           | Unknown loop label                           |
+| **E1056** | Parsing           | Label hides an enclosing label               |
+| **E1057** | Parsing           | Label without a loop                         |
 
 ### E2XXX: Semantic Analysis
 
@@ -3231,6 +3234,71 @@ with_c_path(path) { p =>
     check(open(p), err)?            // early exit: `?`, `if`/`else` or `match`
     Ok(fd)
 }
+```
+
+---
+
+### E1055: Unknown Loop Label
+
+**Category**: Parsing
+**Severity**: Error
+
+#### Description
+
+A `break` or `continue` names a label no enclosing loop carries (RFC-042). A lambda body is outside
+every enclosing loop, so a label from outside it is unknown inside. The message lists the labels in
+reach, nearest first.
+
+#### Example
+
+```flang
+outer: for i in 0..3 {
+    inner: for j in 0..3 {
+        if j == i { break outr }   // error[E1055]: no enclosing loop is labeled `outr`; labels in scope: `inner`, `outer`
+    }
+}
+```
+
+---
+
+### E1056: Label Hides an Enclosing Label
+
+**Category**: Parsing
+**Severity**: Error
+
+#### Description
+
+A loop label reuses the name of a loop it sits inside (RFC-042). A jump naming it could only reach
+the inner loop, so the outer one would be unreachable by name. A lambda body starts afresh: a label
+inside it may reuse an outer name.
+
+#### Example
+
+```flang
+outer: for i in 0..3 {
+    outer: for j in 0..3 { break outer }   // error[E1056]: label `outer` is already used by an enclosing loop
+}
+```
+
+---
+
+### E1057: Label Without a Loop
+
+**Category**: Parsing
+**Severity**: Error
+
+#### Description
+
+`name:` at the start of a statement is a loop label, and only `for`, `while` and `loop` take one, on
+the same line as the label (RFC-042).
+
+#### Example
+
+```flang
+check: if n == 0 { n = 1 }   // error[E1057]
+
+scan:                        // error[E1057]: the loop is on the next line
+loop { break }
 ```
 
 ---
@@ -4899,6 +4967,29 @@ pub fn main() i32 {
 #### Solution
 
 Remove the import.
+
+---
+
+### W1005: Unused Loop Label
+
+**Category**: Code Quality
+**Severity**: Warning
+
+#### Description
+
+A loop carries a label no `break` or `continue` names (RFC-042).
+
+#### Example
+
+```flang
+outer: for i in 0..3 {   // warning[W1005]: label `outer` is never used
+    total = total + i
+}
+```
+
+#### Solution
+
+Remove the label.
 
 ---
 

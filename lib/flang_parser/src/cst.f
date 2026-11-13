@@ -276,8 +276,18 @@ pub type Cst = struct {
     nodes: List(CstNodeData)
     tokens: List(Token)
     children: List(CstChildSlot)
+    // Every loop label occurrence, resolved to the label it names (RFC-042).
+    labels: List(LabelLink)
     root: CstNodeId
     allocator: &Allocator
+}
+
+// One occurrence of a loop label and the declaration it resolves to, as byte offsets of the name. A
+// declaration links to itself, so every label has at least one link.
+pub type LabelLink = struct {
+    decl: u32
+    site: u32
+    len: u32
 }
 
 pub fn cst(tokens: move List(Token), source: String, allocator: &Allocator = context.allocator) Cst {
@@ -286,6 +296,7 @@ pub fn cst(tokens: move List(Token), source: String, allocator: &Allocator = con
         nodes = list(64, allocator),
         tokens = move tokens,
         children = list(256, allocator),
+        labels = list(0, allocator),
         root = 0,
         allocator = allocator,
     }
@@ -300,6 +311,7 @@ pub fn set_root(self: &Cst, id: CstNodeId) {
 pub fn deinit(self: move Cst) {
     self.nodes.deinit()
     self.children.deinit()
+    self.labels.deinit()
     self.tokens.deinit()
 }
 

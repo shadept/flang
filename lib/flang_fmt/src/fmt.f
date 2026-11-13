@@ -30,6 +30,7 @@ import std.string
 import std.string_builder
 import std.test
 
+import flang_core.diagnostic
 import flang_parser.cst
 import flang_parser.lexer
 import flang_parser.parser
@@ -255,7 +256,7 @@ fn format_once(source: String, cfg: &FmtConfig) Result(OwnedString, FmtError) {
     defer p.deinit()
     const cst = p.tree.node_at(p.parse_module())
 
-    const parse_errors = p.diagnostics.len
+    const parse_errors = count_errors(p.diagnostics.as_slice())
     if parse_errors > 0 {
         return Err(FmtError.ParseFailed(parse_errors))
     }
@@ -2104,7 +2105,7 @@ fn verify_output(tokens: &List(Token), cst: &CstNode, output: String) bool {
     let p = parser(lx.tokenize(), output)
     defer p.deinit()
     const out_cst = p.tree.node_at(p.parse_module())
-    if p.diagnostics.len > 0 {
+    if count_errors(p.diagnostics.as_slice()) > 0 {
         return false
     }
 
@@ -2432,6 +2433,13 @@ test "a comment with no space after the slashes is a marker and passes verbatim"
     const out = format_source("//! TEST: t\n//! STDOUT: hi\n\nfn f() {}\n", &cfg).unwrap()
     defer out.deinit()
     assert_eq(out.view(), "//! TEST: t\n//! STDOUT: hi\n\nfn f() {}\n", "markers untouched")
+}
+
+test "a parse warning does not stop formatting, and a label keeps one space after its colon" {
+    const cfg = default_config()
+    const out = format_source("fn f() {\n    outer  :loop { }\n}\n", &cfg).unwrap()
+    defer out.deinit()
+    assert_eq(out.view(), "fn f() {\n    outer: loop {}\n}\n", "unused label W1005 is a warning")
 }
 
 test "line hygiene: trailing ws stripped, final newline added" {

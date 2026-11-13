@@ -40,6 +40,34 @@ pub fn span_contains(span: SourceSpan, offset: usize) bool {
     return offset >= span.start and offset < span.start + span.length
 }
 
+// Every occurrence of the loop label under `offset`, its declaration first, then the jumps naming
+// it; empty when the cursor touches no label (RFC-042).
+pub fn label_sites(module: &Module, offset: usize) List(SourceSpan) {
+    let out: List(SourceSpan) = list(0)
+    const decl = label_decl_at(module, offset)
+    if decl.is_none() {
+        return out
+    }
+    const d = decl.unwrap()
+    out.push(d)
+    for &r in module.labels {
+        if r.decl.start == d.start and r.site.start != d.start {
+            out.push(r.site)
+        }
+    }
+    return out
+}
+
+// A cursor right after the name still touches it, as it does a word.
+fn label_decl_at(module: &Module, offset: usize) SourceSpan? {
+    for &r in module.labels {
+        if offset >= r.site.start and offset <= r.site.start + r.site.length {
+            return Some(r.decl)
+        }
+    }
+    return null
+}
+
 // An `import` declaration under the cursor: its dotted path and the span of that path in the source
 // (the keyword and any `pub` excluded), which is what a link highlights.
 pub type ImportRef = struct {

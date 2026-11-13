@@ -1823,6 +1823,14 @@ fn on_definition(self: &LspServer, msg: &RpcMessage) {
         return
     }
 
+    let labels = label_sites(&unit.modules[fid as usize], offset)
+    defer labels.deinit()
+    if labels.len > 0 {
+        locs.push(self.span_location(pi, labels[0]))
+        self.out.respond(msg.id().unwrap(), &locs)
+        return
+    }
+
     const word = identifier_at(text, offset)
 
     let found = false
@@ -1939,6 +1947,19 @@ fn on_references(self: &LspServer, msg: &RpcMessage) {
     const result = &unit.result
     const include_decl = references_include_decl(msg)
 
+    let locs: List(Location) = list(0)
+    defer locs.deinit()
+    let labels = label_sites(&unit.modules[fid as usize], offset)
+    defer labels.deinit()
+    if labels.len > 0 {
+        const from: usize = if include_decl { 0 } else { 1 }
+        for i in from..labels.len {
+            locs.push(self.span_location(pi, labels[i]))
+        }
+        self.out.respond(msg.id().unwrap(), &locs)
+        return
+    }
+
     let targets: List(ResolvedTarget) = list(2)
     defer targets.deinit()
     const tg = target_at(result, fid, offset)
@@ -1959,8 +1980,6 @@ fn on_references(self: &LspServer, msg: &RpcMessage) {
         }
     }
 
-    let locs: List(Location) = list(0)
-    defer locs.deinit()
     for &t in targets {
         if include_decl {
             // ponytail: an RtConst target double-lists its decl (the ConstDecl node carries its own
@@ -2320,6 +2339,10 @@ fn on_prepare_rename(self: &LspServer, msg: &RpcMessage) {
     if !msg.is_request() {
         return
     }
+    const cur = self.cursor_at(msg)
+    if cur.is_some() and self.prepare_label_rename(msg, cur.unwrap()) {
+        return
+    }
     const site = self.rename_site(msg)
     if site.is_err() {
         self.out.respond_error(msg.id().unwrap(), REQUEST_FAILED, site.unwrap_err())
@@ -2352,6 +2375,10 @@ fn on_rename(self: &LspServer, msg: &RpcMessage) {
         )
         return
     }
+    const cur = self.cursor_at(msg)
+    if cur.is_some() and self.rename_label(msg, cur.unwrap(), new_name) {
+        return
+    }
     const site = self.rename_site(msg)
     if site.is_err() {
         self.out.respond_error(msg.id().unwrap(), REQUEST_FAILED, site.unwrap_err())
@@ -2378,6 +2405,56 @@ fn on_rename(self: &LspServer, msg: &RpcMessage) {
     let edit = WorkspaceEdit { document_changes = move changes }
     defer edit.deinit()
     self.out.respond(msg.id().unwrap(), &edit)
+}
+
+// Answers the request when the cursor is on a loop label and the buffer matches the last check, and
+// says whether it did. A label's occurrences all sit in the cursor's file.
+fn prepare_label_rename(self: &LspServer, msg: &RpcMessage, c: Cursor) bool {
+    const unit = &self.ws.projects[c.pi].unit
+    const text = unit.sources[c.fid as usize].view()
+    let sites = label_sites(&unit.modules[c.fid as usize], c.offset)
+    defer sites.deinit()
+    if sites.len == 0 or self.is_stale(unit.file_paths[c.fid as usize].view(), text) {
+        return false
+    }
+    const decl = sites[0]
+    let at = decl
+    for &s in sites {
+        if c.offset >= s.start and c.offset <= s.start + s.length {
+            at = s.*
+        }
+    }
+    let lidx = line_index(text)
+    defer lidx.deinit()
+    const result = PrepareRenameResult {
+        range = lsp_range(&lidx, text, at, self.encoding),
+        placeholder = text[decl.start..decl.start + decl.length],
+    }
+    self.out.respond(msg.id().unwrap(), &result)
+    return true
+}
+
+fn rename_label(self: &LspServer, msg: &RpcMessage, c: Cursor, new_name: String) bool {
+    const unit = &self.ws.projects[c.pi].unit
+    const path = unit.file_paths[c.fid as usize].view()
+    const text = unit.sources[c.fid as usize].view()
+    let sites = label_sites(&unit.modules[c.fid as usize], c.offset)
+    defer sites.deinit()
+    if sites.len == 0 or self.is_stale(path, text) {
+        return false
+    }
+    let starts: List(usize) = list(sites.len)
+    for &s in sites {
+        starts.push(s.start)
+    }
+    let f = FileEdits { path = path, text = text, starts = move starts }
+    defer f.deinit()
+    let changes: List(TextDocumentEdit) = list(1)
+    changes.push(self.document_edit(&f, sites[0].length, new_name))
+    let edit = WorkspaceEdit { document_changes = move changes }
+    defer edit.deinit()
+    self.out.respond(msg.id().unwrap(), &edit)
+    return true
 }
 
 // One file's rename sites: its path and analyzed text (views into a project unit) and the name's
@@ -3577,7 +3654,7 @@ test "malformed body gets a ParseError response and the loop continues" {
 // A project for the rename tests: /r/m.f declares a struct, an enum, a context field, functions and
 // locals that reference each other; /r/dep.f stands in for a dependency (not project-origin), and
 // `core.runtime` supplies the `Context` the context field joins.
-const RENAME_SRC: String = "pub type P = struct { x: i32 }\npub type E = enum { A B(i32) }\ncontext depth: i32 = 0\npub fn mk(v: i32) P { return P { x = v } }\npub fn get(p: &P) i32 { return p.x }\npub fn pick(e: E) i32 {\n    return e match {\n        A => context.depth\n        E.B(n) => n\n    }\n}\npub fn run() i32 {\n    let total = get(&mk(1)) + pick(E.B(2)) + pick(E.A)\n    context(depth = 2) { total = total + 1 }\n    return total\n}\npub fn call_dep() i32 { return helper() }\npub type Dir = enum {\n    // Heading up.\n    Up(i32)\n    Down\n}\npub fn go_up() Dir { return Dir.Up(1) }\n#if platform.os == \"nowhere\" {\n    pub fn never() { }\n} else {\n    pub fn always() { }\n}\npub fn branchy() i32 {\n    #if runtime.testing {\n        let t = 1\n        return t\n    }\n    return 0\n}\n// Makes a twin.\n#define(twin, N: Ident) {\n    pub fn #(N)_twice() i32 { return 2 }\n}\n#twin(foo)\n#twin(Dir)\n"
+const RENAME_SRC: String = "pub type P = struct { x: i32 }\npub type E = enum { A B(i32) }\ncontext depth: i32 = 0\npub fn mk(v: i32) P { return P { x = v } }\npub fn get(p: &P) i32 { return p.x }\npub fn pick(e: E) i32 {\n    return e match {\n        A => context.depth\n        E.B(n) => n\n    }\n}\npub fn run() i32 {\n    let total = get(&mk(1)) + pick(E.B(2)) + pick(E.A)\n    context(depth = 2) { total = total + 1 }\n    return total\n}\npub fn call_dep() i32 { return helper() }\npub type Dir = enum {\n    // Heading up.\n    Up(i32)\n    Down\n}\npub fn go_up() Dir { return Dir.Up(1) }\n#if platform.os == \"nowhere\" {\n    pub fn never() { }\n} else {\n    pub fn always() { }\n}\npub fn branchy() i32 {\n    #if runtime.testing {\n        let t = 1\n        return t\n    }\n    return 0\n}\n// Makes a twin.\n#define(twin, N: Ident) {\n    pub fn #(N)_twice() i32 { return 2 }\n}\n#twin(foo)\n#twin(Dir)\npub fn scan() i32 {\n    outer: for i in 0..3 {\n        for j in 0..3 {\n            if j == i { continue outer }\n            if j > i { break outer }\n        }\n    }\n    return 0\n}\n"
 
 // Opens /r/m.f, then sends each of `requests`.
 fn rename_run(requests: String[], out: &StringBuilder) {
@@ -3762,6 +3839,51 @@ fn rename_refused(id: i32, method: String, line: i32, ch: i32, fresh: String, co
     const want = $"\"id\":{id},\"error\":{{\"code\":{code}"
     defer want.deinit()
     return contains(out.as_view(), want.view())
+}
+
+test "rename rewrites a loop label at its declaration and every jump naming it" {
+    assert_eq(rename_count(120, 42, 5, "rows"), 3 as usize, "from the declaration")
+    assert_eq(rename_count(121, 44, 35, "rows"), 3 as usize, "from a jump")
+}
+
+test "prepareRename on a loop label answers the word under the cursor" {
+    let out = string_builder(4096)
+    defer out.deinit()
+    rename_run(
+        [
+            "{\"jsonrpc\":\"2.0\",\"id\":122,\"method\":\"textDocument/prepareRename\",\"params\":{\"textDocument\":{\"uri\":\"file:///r/m.f\"},\"position\":{\"line\":45,\"character\":31}}}",
+        ],
+        &out,
+    )
+    assert_true(
+        contains(
+            out.as_view(),
+            "\"id\":122,\"result\":{\"range\":{\"start\":{\"line\":45,\"character\":29},\"end\":{\"line\":45,\"character\":34}},\"placeholder\":\"outer\"}",
+        ),
+        "the jump's word, the label as the placeholder",
+    )
+}
+
+test "definition and references on a loop label" {
+    let out = string_builder(8192)
+    defer out.deinit()
+    rename_run(
+        [
+            "{\"jsonrpc\":\"2.0\",\"id\":123,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"file:///r/m.f\"},\"position\":{\"line\":45,\"character\":30}}}",
+            "{\"jsonrpc\":\"2.0\",\"id\":124,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"file:///r/m.f\"},\"position\":{\"line\":44,\"character\":34},\"context\":{\"includeDeclaration\":true}}}",
+        ],
+        &out,
+    )
+    assert_true(
+        contains(
+            out.as_view(),
+            "\"id\":123,\"result\":[{\"uri\":\"file:///r/m.f\",\"range\":{\"start\":{\"line\":42,\"character\":4}",
+        ),
+        "the jump goes to its label",
+    )
+    assert_eq(count(out.as_view(), "\"line\":42,\"character\":4"), 2 as usize, "declaration, twice")
+    assert_true(contains(out.as_view(), "\"line\":44,\"character\":33"), "the continue")
+    assert_true(contains(out.as_view(), "\"line\":45,\"character\":29"), "the break")
 }
 
 test "rename refuses dependencies, keywords, bad names and empty space" {

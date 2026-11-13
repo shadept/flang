@@ -63,7 +63,60 @@ pub fn project_module(cst: CstNode, file_id: i32, diags: &List(Diagnostic)? = nu
         }
     }
 
-    return Module { span = p.span_from(cst), decls = move decls, arena = move arena }
+    return Module {
+        span = p.span_from(cst),
+        decls = move decls,
+        labels = p.project_labels(&cst.cst.labels),
+        arena = move arena,
+    }
+}
+
+fn project_labels(self: &Projector, links: &List(LabelLink)) LabelRef[] {
+    let out: List(LabelRef) = list(links.len, self.alloc)
+    for &l in links {
+        out.push(LabelRef {
+            decl = SourceSpan {
+                file_id = self.file_id,
+                start = l.decl as usize,
+                length = l.len as usize,
+            },
+            site = SourceSpan {
+                file_id = self.file_id,
+                start = l.site as usize,
+                length = l.len as usize,
+            },
+        })
+    }
+    return frozen(out)
+}
+
+// A labeled loop's first two children are its `name:`.
+fn loop_label(cst: CstNode) String? {
+    const name = token_child(cst, 0)
+    const colon = token_child(cst, 1)
+    if name.is_none() or colon.is_none() or colon.unwrap().kind != TokenKind.Colon {
+        return null
+    }
+    return Some(name.unwrap().text)
+}
+
+// `break name` / `continue name`: the name follows the keyword.
+fn jump_label(cst: CstNode) String? {
+    const name = token_child(cst, 1)
+    if name.is_none() or name.unwrap().kind != TokenKind.Identifier {
+        return null
+    }
+    return Some(name.unwrap().text)
+}
+
+fn token_child(cst: CstNode, i: usize) &Token? {
+    if i >= cst.child_count() {
+        return null
+    }
+    return cst.child(i) match {
+        TokenChild(tok) => Some(tok)
+        NodeChild(_) => null
+    }
 }
 
 // True for CST kinds that round-trip to an AST `Decl`. Everything else at module level (stray
@@ -1030,8 +1083,14 @@ fn project_stmt(self: &Projector, cst: CstNode) Stmt? {
         ExpressionStmt => Some(Stmt.Expression(self.project_expression_stmt(cst)))
         ReturnStmt => Some(Stmt.Return(self.project_return_stmt(cst)))
         DeferStmt => Some(Stmt.Defer(self.project_defer_stmt(cst)))
-        BreakStmt => Some(Stmt.Break(BreakStmt { span = self.span_from(cst) }))
-        ContinueStmt => Some(Stmt.Continue(ContinueStmt { span = self.span_from(cst) }))
+        BreakStmt => Some(Stmt.Break(BreakStmt {
+            span = self.span_from(cst),
+            label = jump_label(cst),
+        }))
+        ContinueStmt => Some(Stmt.Continue(ContinueStmt {
+            span = self.span_from(cst),
+            label = jump_label(cst),
+        }))
         ForLoopExpr => Some(Stmt.For(self.project_for_stmt(cst)))
         WhileExpr => Some(Stmt.While(self.project_while_stmt(cst)))
         LoopExpr => Some(Stmt.Loop(self.project_loop_stmt(cst)))
@@ -1189,6 +1248,7 @@ fn project_for_stmt(self: &Projector, cst: CstNode) ForStmt {
     }
     return .{
         span = self.span_from(cst),
+        label = loop_label(cst),
         var_name = var_name,
         var_span = var_span,
         by_ref = by_ref,
@@ -1220,6 +1280,7 @@ fn project_while_stmt(self: &Projector, cst: CstNode) WhileStmt {
     }
     return .{
         span = self.span_from(cst),
+        label = loop_label(cst),
         condition = self.boxed(condition),
         body = self.boxed(body),
     }
@@ -1241,7 +1302,7 @@ fn project_loop_stmt(self: &Projector, cst: CstNode) LoopStmt {
             TokenChild(_) => {}
         }
     }
-    return .{ span = self.span_from(cst), body = self.boxed(body) }
+    return .{ span = self.span_from(cst), label = loop_label(cst), body = self.boxed(body) }
 }
 
 fn project_if_directive_stmt(self: &Projector, cst: CstNode) IfDirectiveStmt {

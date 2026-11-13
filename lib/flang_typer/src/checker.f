@@ -13102,17 +13102,9 @@ type OwnPass = struct {
     // Storage for the field paths `moved` refers to.
     paths: List(OwnedString)
     defers: List(DeferRec)
-    // Moved sets carried out of the innermost loop, by `break` and by `continue` respectively. A
-    // break feeds the loop's exit; a continue feeds the next iteration's entry.
-    escaped: List(MovedRec)
-    continued: List(MovedRec)
-    // Whether a `break`, a `continue` of the innermost loop was reached, so `escaped`, `continued`
-    // hold a path.
-    broke: bool
-    went_on: bool
+    // The loops the walk is inside, innermost last.
+    loops: List(OwnLoop)
     scope: usize
-    loop_scope: usize
-    in_loop: bool
     // Control left this path, so the rest of the block is unreachable and its state does not reach
     // the next merge.
     diverged: bool
@@ -13146,6 +13138,26 @@ type OwnPass = struct {
     taker: String
     // What the open scopes own, innermost last.
     owned: List(OwnedRec)
+}
+
+// A loop the walk is inside. A break feeds the loop's exit; a continue feeds the next iteration's
+// entry.
+type OwnLoop = struct {
+    label: String?
+    // The scope its body opens: a jump out of the loop leaves every scope from here up.
+    scope: usize
+    // Moved sets carried out of the loop, by `break` and by `continue` respectively.
+    escaped: List(MovedRec)
+    continued: List(MovedRec)
+    // Whether a `break`, a `continue` of the loop was reached, so `escaped`, `continued` hold a
+    // path.
+    broke: bool
+    went_on: bool
+}
+
+pub fn deinit(self: move OwnLoop) {
+    self.escaped.deinit()
+    self.continued.deinit()
 }
 
 // A non-copyable value a scope owns and has to see leave: a `let`, a `move` parameter, a `for`
@@ -13253,13 +13265,8 @@ fn own_run(
         moved = list(0),
         paths = list(0),
         defers = list(0),
-        escaped = list(0),
-        continued = list(0),
-        broke = false,
-        went_on = false,
+        loops = list(0),
         scope = 0usize,
-        loop_scope = 0usize,
-        in_loop = false,
         diverged = false,
         report = true,
         firing = false,
@@ -13366,8 +13373,7 @@ fn own_deinit(p: move OwnPass) {
     p.moved.deinit()
     p.paths.deinit()
     p.defers.deinit()
-    p.escaped.deinit()
-    p.continued.deinit()
+    p.loops.deinit()
     p.seen.deinit()
     p.lent.deinit()
     p.captured.deinit()
@@ -15448,8 +15454,8 @@ fn own_stmt(self: &Checker, p: &OwnPass, st: &Stmt) {
         Expression(es) => own_expr(self, p, es.expr, OwnSlot.Read)
         Return(rs) => own_return(self, p, &rs)
         Defer(ds) => p.defers.push(DeferRec { expr = ds.expr, scope = p.scope })
-        Break(bs) => own_escape(self, p, true, bs.span)
-        Continue(cs) => own_escape(self, p, false, cs.span)
+        Break(bs) => own_escape(self, p, true, bs.label, bs.span)
+        Continue(cs) => own_escape(self, p, false, cs.label, cs.span)
         For(fs) => {
             // A temporary iterable is the loop's own once `record_iter_release` gave it a release.
             const loop_owned = self.results.resolved_ops.get(self.node_of(fs.var_span)).is_some()
@@ -15459,13 +15465,13 @@ fn own_stmt(self: &Checker, p: &OwnPass, st: &Stmt) {
             } else {
                 own_protocol(self, p, fs.body.span, fs.iterable)
             }
-            own_loop(self, p, fs.body, Some(&fs), true)
+            own_loop(self, p, fs.body, Some(&fs), fs.label, true)
         }
         While(ws) => {
             own_expr(self, p, ws.condition, OwnSlot.Read)
-            own_loop(self, p, ws.body, null, true)
+            own_loop(self, p, ws.body, null, ws.label, true)
         }
-        Loop(ls) => own_loop(self, p, ls.body, null, false)
+        Loop(ls) => own_loop(self, p, ls.body, null, ls.label, false)
         IfDirective(ifd) => own_if_directive(self, p, &ifd)
     }
 }
@@ -15532,22 +15538,38 @@ fn own_return(self: &Checker, p: &OwnPass, rs: &ReturnStmt) {
     p.diverged = true
 }
 
-// `break` and `continue` unwind the block's defers on their way out, and carry the state they leave
-// with - to the loop's exit and to its next iteration respectively.
-fn own_escape(self: &Checker, p: &OwnPass, is_break: bool, span: SourceSpan) {
-    if p.in_loop {
-        own_fire_defers(self, p, p.loop_scope)
+// `break` and `continue` unwind every scope up to the loop they name, firing its defers, and carry
+// the state they leave with - to that loop's exit and to its next iteration respectively.
+fn own_escape(self: &Checker, p: &OwnPass, is_break: bool, label: String?, span: SourceSpan) {
+    const target = own_jump_target(p, label)
+    if target.is_some() {
+        const i = target.unwrap()
+        const scope = p.loops[i].scope
+        own_fire_defers(self, p, scope)
         const what = if is_break { "break" } else { "continue" }
-        own_check_exit(self, p, p.loop_scope, Some(OwnExit { span = span, what = what }))
+        own_check_exit(self, p, scope, Some(OwnExit { span = span, what = what }))
         if is_break {
-            own_gather(&p.escaped, p.broke, &p.moved)
-            p.broke = true
+            own_gather(&p.loops[i].escaped, p.loops[i].broke, &p.moved)
+            p.loops[i].broke = true
         } else {
-            own_gather(&p.continued, p.went_on, &p.moved)
-            p.went_on = true
+            own_gather(&p.loops[i].continued, p.loops[i].went_on, &p.moved)
+            p.loops[i].went_on = true
         }
     }
     p.diverged = true
+}
+
+// The innermost loop, or the innermost one carrying `label`.
+fn own_jump_target(p: &OwnPass, label: String?) usize? {
+    let i = p.loops.len
+    while i > 0 {
+        i = i - 1
+        const l = p.loops[i].label
+        if label.is_none() or (l.is_some() and l.unwrap() == label.unwrap()) {
+            return Some(i)
+        }
+    }
+    return null
 }
 
 // The body runs an unknown number of times, so whatever it moves is moved on entry to the next
@@ -15557,26 +15579,31 @@ fn own_escape(self: &Checker, p: &OwnPass, is_break: bool, span: SourceSpan) {
 // variable is bound anew on every iteration, so a body that moves it leaves nothing moved for the
 // next one, nor on the way out. A `for` and a `while` also leave at their head, before any
 // iteration or after one; a `loop` leaves only through `break`.
-fn own_loop(self: &Checker, p: &OwnPass, body: &BlockExpr, fs: &ForStmt?, exits_at_head: bool) {
+fn own_loop(
+    self: &Checker,
+    p: &OwnPass,
+    body: &BlockExpr,
+    fs: &ForStmt?,
+    label: String?,
+    exits_at_head: bool,
+) {
     const var_decl: NodeId? = fs match {
         Some(f) => Some(self.node_of(f.var_span))
         None => null
     }
-    const was_in = p.in_loop
-    const was_scope = p.loop_scope
     const was_div = p.diverged
-    const was_broke = p.broke
-    const was_went_on = p.went_on
-    let outer_escaped = own_snapshot(self, &p.escaped)
-    defer outer_escaped.deinit()
-    let outer_continued = own_snapshot(self, &p.continued)
-    defer outer_continued.deinit()
     let entry = own_snapshot(self, &p.moved)
     defer entry.deinit()
 
-    p.in_loop = true
-    p.loop_scope = p.scope + 1
-    own_loop_reset(p)
+    p.loops.push(OwnLoop {
+        label = label,
+        scope = p.scope + 1,
+        escaped = list(0),
+        continued = list(0),
+        broke = false,
+        went_on = false,
+    })
+    const at = p.loops.len - 1
 
     const was_report = p.report
     p.report = false
@@ -15597,42 +15624,40 @@ fn own_loop(self: &Checker, p: &OwnPass, body: &BlockExpr, fs: &ForStmt?, exits_
 
     let exit = own_snapshot(self, &entry)
     defer exit.deinit()
+    const broke = p.loops[at].broke
     if exits_at_head {
         own_join_tail(p, &exit)
-        if p.broke {
-            own_join(&exit, &p.escaped)
+        if broke {
+            own_join(&exit, &p.loops[at].escaped)
         }
-    } else if p.broke {
-        own_restore(&exit, &p.escaped)
+    } else if broke {
+        own_restore(&exit, &p.loops[at].escaped)
     }
     own_drop_decl(&exit, var_decl)
     own_restore(&p.moved, &exit)
-    const leaves = exits_at_head or p.broke
+    const leaves = exits_at_head or broke
 
-    own_restore(&p.escaped, &outer_escaped)
-    own_restore(&p.continued, &outer_continued)
-    p.broke = was_broke
-    p.went_on = was_went_on
-    p.in_loop = was_in
-    p.loop_scope = was_scope
+    p.loops.pop().unwrap().deinit()
     p.diverged = was_div or !leaves
 }
 
 fn own_loop_reset(p: &OwnPass) {
-    p.escaped.clear()
-    p.continued.clear()
-    p.broke = false
-    p.went_on = false
+    const at = p.loops.len - 1
+    p.loops[at].escaped.clear()
+    p.loops[at].continued.clear()
+    p.loops[at].broke = false
+    p.loops[at].went_on = false
 }
 
-// Joins into `head` the paths that come back to the loop's head after an iteration: falling off the
-// body, and every `continue`.
+// Joins into `head` the paths that come back to the innermost loop's head after an iteration:
+// falling off the body, and every `continue`.
 fn own_join_tail(p: &OwnPass, head: &List(MovedRec)) {
     if !p.diverged {
         own_join(head, &p.moved)
     }
-    if p.went_on {
-        own_join(head, &p.continued)
+    const at = p.loops.len - 1
+    if p.loops[at].went_on {
+        own_join(head, &p.loops[at].continued)
     }
 }
 

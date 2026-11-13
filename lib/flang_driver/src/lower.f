@@ -274,6 +274,7 @@ type LoopFrame = struct {
     latch: String
     // Where `break` goes: the first block after the loop.
     exit: String
+    label: String?
     // `ctx.defers.len` when the loop was entered: `break` / `continue` fire every defer registered
     // past this point - the scopes the jump escapes through - before branching.
     defer_depth: usize
@@ -2203,8 +2204,8 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
         While(w) => lower_while(ctx, bb, env, &w)
         Loop(l) => lower_loop(ctx, bb, env, &l)
         For(f) => lower_for(ctx, bb, env, &f)
-        Break(_) => return lower_jump(ctx, bb, env, true)
-        Continue(_) => return lower_jump(ctx, bb, env, false)
+        Break(b) => return lower_jump(ctx, bb, env, true, b.label)
+        Continue(c) => return lower_jump(ctx, bb, env, false, c.label)
 
         // `defer expr` - registered on the schedule; it fires at the enclosing scope's exit and at
         // every escaping jump that passes through it (`return`, `break`, `continue`, `?`). The
@@ -2235,21 +2236,23 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
     return false
 }
 
-// `break` / `continue`. Outside a loop both are checker errors; lowering emits nothing rather than
-// branching to a label that does not exist. The jump escapes every scope opened since loop entry,
-// so their defers fire first (the scopes still pop their own stack suffix - see
-// `emit_defers_down_to`).
-fn lower_jump(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, is_break: bool) bool {
+// `break` / `continue`, acting on the innermost loop or the one `label` names. Outside a loop, or
+// naming no enclosing label, both are parser errors; lowering emits nothing rather than branching
+// to a label that does not exist. The jump escapes every scope opened since that loop's entry, so
+// their defers and the iterators of the loops it leaves fire first (the scopes still pop their own
+// stack suffix - see `emit_defers_down_to`).
+fn lower_jump(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, is_break: bool, label: String?) bool {
     // An escape from inside a deferred expression would re-enter the flush that is emitting it -
     // refuse (see `LowerCtx.flushing`).
     if ctx.flushing {
         let _u = unlowerable(ctx)
         return false
     }
-    if ctx.loops.len == 0 {
+    const target = jump_target(ctx, label)
+    if target.is_none() {
         return false
     }
-    let frame = ctx.loops[ctx.loops.len - 1]
+    let frame = target.unwrap()
     emit_defers_down_to(ctx, bb, env, frame.defer_depth)
     if is_break {
         bb.br(frame.exit)
@@ -2257,6 +2260,22 @@ fn lower_jump(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, is_break: bool) bool
         bb.br(frame.latch)
     }
     return true
+}
+
+// The innermost loop, or the innermost one carrying `label`.
+fn jump_target(ctx: &LowerCtx, label: String?) LoopFrame? {
+    let i = ctx.loops.len
+    while i > 0 {
+        i = i - 1
+        const frame = ctx.loops[i]
+        if label.is_none() {
+            return Some(frame)
+        }
+        if frame.label.is_some() and frame.label.unwrap() == label.unwrap() {
+            return Some(frame)
+        }
+    }
+    return null
 }
 
 // `return expr` evaluates `expr` FIRST, then fires every active defer (LIFO), then transfers - spec
@@ -2662,6 +2681,7 @@ fn lower_while(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, w: &WhileStmt) {
     ctx.loops.push(LoopFrame {
         latch = head.label(),
         exit = exit.label(),
+        label = w.label,
         defer_depth = ctx.defers.len,
     })
     let r = lower_block(ctx, bb, env, w.body)
@@ -2685,6 +2705,7 @@ fn lower_loop(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, l: &LoopStmt) {
     ctx.loops.push(LoopFrame {
         latch = head.label(),
         exit = exit.label(),
+        label = l.label,
         defer_depth = ctx.defers.len,
     })
     let r = lower_block(ctx, bb, env, l.body)
@@ -2837,6 +2858,7 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
     ctx.loops.push(LoopFrame {
         latch = head.label(),
         exit = exit.label(),
+        label = f.label,
         defer_depth = ctx.defers.len,
     })
     let r = lower_block(ctx, bb, env, f.body)
@@ -2924,6 +2946,7 @@ fn lower_for_range(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt, rn
     ctx.loops.push(LoopFrame {
         latch = latch.label(),
         exit = exit.label(),
+        label = f.label,
         defer_depth = ctx.defers.len,
     })
     let r = lower_block(ctx, bb, env, f.body)

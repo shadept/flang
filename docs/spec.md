@@ -865,7 +865,7 @@ A lambda is a brace block with its parameters before `=>` (RFC-039):
 ```
 
 - Parameters take the forms function parameters take, without defaults or variadics.
-- The body is a block: statements, then an optional trailing expression that is its value. `return` inside a lambda is E1054, which keeps `return` meaning "leave the enclosing function" wherever it is written; leave a lambda early with `?`, `if`/`else` or `match`. A lambda body is outside every enclosing loop, so `break` and `continue` there are E1006 / E1007.
+- The body is a block: statements, then an optional trailing expression that is its value. `return` inside a lambda is E1054, which keeps `return` meaning "leave the enclosing function" wherever it is written; leave a lambda early with `?`, `if`/`else` or `match`. A lambda body is outside every enclosing loop, so `break` and `continue` there are E1006 / E1007, and a label from outside it is E1055 (§7.4.1).
 - There is no return-type slot. The return type comes from the expected function type or bound, else from the body; where nothing pins it, annotate the binding (`const f: fn(i32) i32 = { x => x + 1 }`). Where the expected function returns nothing, the body's last value is discarded.
 - A lambda passed as an argument is checked after its call resolves, against the parameter it fills: its unannotated parameters take that function type's parameter types before the body is checked.
 - The removed form `fn(x: i32) i32 { ... }` is E1053.
@@ -947,7 +947,7 @@ A `for` loop comes in two forms. They differ in what the loop variable binds, an
 
 `for x in xs.iter_ref()` is the reference form spelled out.
 
-**The loop owns what it iterates with**, as `for_each(it: move $I, body)` would: the state `iter` returned, when that state is not copyable (a drain), or else a non-copyable temporary iterable that `iter` only borrowed (`for e in walk_dir(p)?`). The loop releases it on every exit - the end of the iteration, `break`, `return`, `?` - with its `deinit`. An iterator's own `iter` that takes `move self` consumes a named iterator: `for x in d` leaves `d` dead. A copyable state, or an iterable named by a binding and borrowed, is not the loop's to release.
+**The loop owns what it iterates with**, as `for_each(it: move $I, body)` would: the state `iter` returned, when that state is not copyable (a drain), or else a non-copyable temporary iterable that `iter` only borrowed (`for e in walk_dir(p)?`). The loop releases it on every exit - the end of the iteration, `break`, `return`, `?`, and a labeled `break` or `continue` that leaves it for an enclosing loop (§7.4.1) - with its `deinit`. An iterator's own `iter` that takes `move self` consumes a named iterator: `for x in d` leaves `d` dead. A copyable state, or an iterable named by a binding and borrowed, is not the loop's to release.
 
 **A collection is not modified while it is being iterated.** An iterator is a snapshot of the
 storage as it was when `iter` ran: a `List`'s iterator is the slice iterator over its elements at
@@ -965,6 +965,28 @@ Which types iterate, and how:
 - **Fixed arrays `[T; N]`** — decay to a slice, so both forms work: `iter(&T[])` and `iter_ref(&T[])`. `for &el in arr { el.* = ... }` mutates the array in place.
 - **A slice does not decay to a reference.** `T[]` in a `&T` slot is an error (**E2011**), including at a `#foreign` boundary: `&T` is non-null by type where a slice's `ptr` need not be, and the length would be dropped with nothing in the syntax marking it. Pass `s.ptr`, or the address of an element.
 - **`String`** — **not** iterable by itself. Bytes or characters is a choice only the caller can make; index it instead.
+
+### 7.4.1 Loop Labels
+
+A `for`, `while` or `loop` can carry a label, written in front of it on the same line; `break` and `continue` can name the loop they act on (RFC-042):
+
+```
+outer: for row in rows {
+    for cell in row {
+        if cell.bad { continue outer }
+        if cell.done { break outer }
+    }
+}
+```
+
+- **Resolution.** A label names the nearest enclosing loop that carries it; none in reach is E1055. Labels live in their own namespace, so a label and a variable may share a name. A label reusing the name of a loop it sits inside is E1056, and a label in front of anything but a loop is E1057. A label no jump names is W1005.
+- **`break l`** continues after loop `l`. **`continue l`** starts `l`'s next iteration: `while` evaluates its condition again, `for` advances its iterator, `loop` runs its body again.
+- **Exits run cleanup innermost first.** Every scope the jump leaves fires its defers, and every `for` it leaves releases what it iterates with (§7.4), in the order those scopes close. `continue l` releases the iterators of the loops nested inside `l`, not `l`'s own. The ownership pass carries the state at the jump to `l`'s exit or to its next iteration, as it does for a bare jump and the innermost loop.
+- **Lambdas.** A lambda body is outside every enclosing loop (§7.3), so it sees no label outside itself, and a label inside it may reuse an outer one's name.
+- **`context(...) { }`** is a block, not a boundary: a labeled jump passes through it as `return` does (§4.4).
+- **No values.** `break` and `continue` take no value: anything but the end of the statement after the jump, on its line, is E1002 (`break outer 3`). A label after `break` or `continue` sits on the keyword's line, so `break` with `foo()` on the next line is a bare `break`.
+
+Labels work wherever `break` and `continue` do, including the right side of `??` and a match arm body: `let job = queue.pop() ?? break outer`. A state machine needs nothing more: a state variable, a labeled `loop` and a `match` whose arms end in `continue l` or `break l` (RFC-042 §4).
 
 ### 7.5 Match Expression
 

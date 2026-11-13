@@ -24,6 +24,7 @@ listed here, it does not exist in FLang.
 | Case is syntax | Types start uppercase, functions lowercase: `Point { x = 1 }` constructs, `spawn { ... }` passes a lambda | free naming |
 | Closures capture by reference | Every captured name is a reference to the enclosing binding (RFC-033); no capture-list syntax | `move` closures, capture lists |
 | No `elif`/`else if` | Chain `else if` (two keywords) | `elif` |
+| Loop labels | `outer: for ...`, `break outer` (no value) | `'outer: for`, `break 'outer value` |
 | Associated types | `I.Item`, `Iterator(Item = i32)` | `I::Item`, `<I as Iterator>::Item`, `Iterator<Item = i32>` |
 | Scoped runtime state | `context(allocator = &a) { ... }` rebinds a declared field for a block | thread-locals, `with` blocks, global setters |
 
@@ -213,6 +214,14 @@ for i in 0..5 { /* 0,1,2,3,4 */ }    // half-open: `..` only, no `..=`
 
 // loop (infinite, use break/continue)
 loop { if done { break } }
+
+// labels (RFC-042): `name:` in front of for/while/loop, same line; break/continue name the loop
+outer: for row in rows {
+    for cell in row {
+        if cell.bad { continue outer }
+        if cell.done { break outer }
+    }
+}
 
 // while (predicate at loop head, condition must be bool)
 while n < 10 { n = n + 1 }

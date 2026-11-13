@@ -47,6 +47,16 @@ pub fn deinit(self: move Diagnostic, allocator: &Allocator) {
     self.deinit()
 }
 
+pub fn count_errors(diags: Diagnostic[]) usize {
+    let n: usize = 0
+    for &d in diags {
+        if d.severity == Severity.Error {
+            n = n + 1
+        }
+    }
+    return n
+}
+
 pub fn error(code: String, message: move OwnedString, span: SourceSpan) Diagnostic {
     let empty_hint: OwnedString
     return .{

@@ -80,7 +80,7 @@ pub fn main() i32 {
     let ast = project_module(cst, 0i32)
     defer ast.deinit()
     print_json(opts.path, source.view(), &p.tree.tokens, &cst, &ast, &p.diagnostics)
-    return if p.diagnostics.len > 0 { 1i32 } else { 0i32 }
+    return if count_errors(p.diagnostics.as_slice()) > 0 { 1i32 } else { 0i32 }
 }
 
 fn read_source(path: String) OwnedString? {
