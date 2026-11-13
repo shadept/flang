@@ -1,0 +1,10 @@
+[project]
+name = "sdl3"
+version = "0.1.0"
+kind = "exe"
+
+[build.windows]
+libs = ["${SDL3_PATH}/lib/x64/SDL3.lib"]
+
+[build.linux]
+libs = ["SDL3"]
