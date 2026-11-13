@@ -1,9 +1,10 @@
 ---
-status: provisional
+status: implemented
 type: language
 created: 2026-10-11
 implemented: 2026-10-11
-relates: [RFC-019, RFC-029, RFC-033, RFC-014, RFC-036]
+supersedes: [RFC-019]
+relates: [RFC-029, RFC-033, RFC-014, RFC-036]
 ---
 
 # RFC-035: Contracts

@@ -1,5 +1,5 @@
 ---
-status: superseded
+status: dropped
 type: compiler
 created: 2026-05-03
 superseded-by: RFC-021

@@ -1,5 +1,5 @@
 ---
-status: deferred
+status: draft
 type: compiler
 created: 2026-10-25
 relates: [RFC-038, RFC-041]

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: in-progress
 type: tooling
 created: 2026-08-25
 requires: [RFC-022]
@@ -365,7 +365,7 @@ operator references (`resolved_ops` not inverted), cross-project
 references.
 - [ ] 8. completion
 - [ ] 9. flang/generatedContent
-- [ ] 10. extension switched to `flang lsp`
+- [x] 10. ~~extension switched to `flang lsp`~~ moot: the reference server was retired with the C# compiler, 2026-08-29
 
 ## Out of scope
 

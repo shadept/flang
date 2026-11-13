@@ -1,16 +1,23 @@
 ---
-status: draft
+status: dropped
 type: language
 created: 2026-08-20
-relates: [RFC-035]
+superseded-by: [RFC-035, RFC-036]
 ---
 
 # 019 — Deferred designs from the lambda/stdlib-combinator milestone
 
-Status: open design notes (2026-08-20). Successor to ticket 018's
-"promotion" thread after the `$F` duck-typing decision. Each section is
-an independent design; revisit once real stdlib-combinator usage has
-accumulated.
+Dropped: every section has moved elsewhere.
+
+- §1, argument adaptation: settled by parameter modes (RFC-033) and function-value mode rules (RFC-037).
+- §2, generic constraints: replaced by RFC-035. §2.6, the `copyable` bound, shipped 2026-09-15 under RFC-033.
+- §3, higher-kinded parameters: the motivating case is projection, RFC-036 (`I.Item`).
+- §4, overloaded names as values: known-issues, "Overloaded Functions Can't Fill a Generic Callable Slot".
+- §5, iterator `flat_map`: known-issues, "Iterator `flat_map` Has No Lazy Adapter".
+- §6, eager template checks: moot, the reference compiler was retired 2026-08-29.
+
+Written 2026-08-20 as the successor to ticket 018's "promotion" thread after the `$F` duck-typing
+decision.
 
 ## 1. Argument adaptation (the copy-vs-ref endgame)
 

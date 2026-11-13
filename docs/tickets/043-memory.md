@@ -1,7 +1,8 @@
 ---
-status: provisional
+status: implemented
 type: language
 created: 2026-10-25
+implemented: 2026-10-26
 relates: [RFC-016, RFC-028, RFC-033, RFC-034]
 ---
 

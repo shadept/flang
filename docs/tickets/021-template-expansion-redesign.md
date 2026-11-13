@@ -1,7 +1,8 @@
 ---
-status: draft
+status: implemented
 type: compiler
 created: 2026-08-23
+implemented: 2026-08-24
 supersedes: [RFC-011]
 relates: [ADR-0006]
 ---
@@ -315,13 +316,13 @@ harness expectations can be shared.
    `TypeKind.*`, `type_named`, `#elif`, `"#(x)"`, E2120; primitives accepted
    as `Type` args. Stdlib templates and fixtures rewritten. Harness 550/550
    with `rtti_enum_variants` and `define_elif_string_interp` added.
-4. **Self-host.** `flang_parser`: parse `#define` bodies into
+4. ~~**Self-host.**~~ landed 2026-08-24: `flang_parser`: parse `#define` bodies into
    verbatim/interpolation/for/if nodes instead of `consume_balanced`. New
    `lib/flang_driver/src/expand.f` (or a `flang_template` lib) implementing §2
    over the collected nominals, plus the CST printer/normalizer of §7. Delete
    all sidecar code. Self-build from a clean clone must succeed; stage-2 =
    stage-3 fixpoint must hold.
-5. Docs: `spec.md` §7.8 rewritten; `architecture.md` pipeline; `self-host.md`
+5. ~~Docs~~ landed with phase 4: `spec.md` §7.8 rewritten; `architecture.md` pipeline; `self-host.md`
    template rows → ✅; `known-issues.md` sidecar entries closed; `error-codes.md`
    E2119, E2120.
 
