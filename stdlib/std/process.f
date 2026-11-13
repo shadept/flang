@@ -19,6 +19,8 @@
 //   `inherit_env()` snapshots the parent process environment - call this
 //   before any explicit `env()` overrides if you want both.
 
+import core.foreign
+
 import std.allocator
 import std.collections.list
 import std.interface
@@ -78,12 +80,11 @@ pub type ChildStdin = struct { owned __fd: i32 }
 // =============================================================================
 
 #foreign fn __flang_proc_spawn(
-    prog: &u8,
-    argv: &usize,
+    argv: &FString,
     argc: usize,
-    envp: &usize,
+    envp: &FString,
     envc: usize,
-    cwd: &u8?,
+    cwd: FString,
     has_cwd: i32,
     stdin_mode: i32,
     stdout_mode: i32,
@@ -199,33 +200,29 @@ pub fn stderr_mode(self: &Command, m: Stdio) &Command {
 // Spawning
 // =============================================================================
 
-#allow(W2004)
 pub fn spawn(self: &Command) Result(Child, ProcessError) {
     if self.__args.len == 0 {
         return Err(ProcessError.InvalidArgument)
     }
 
-    // Pack argv pointers as a usize array - matches char** on the C side.
-    let argv_ptrs: List(usize) = list(self.__args.len, self.__allocator)
-    defer argv_ptrs.deinit()
+    let argv = list(self.__args.len, self.__allocator)
+    defer argv.deinit()
     for &a in self.__args {
-        argv_ptrs.push(a.view().ptr as usize)
+        argv.push(a.view().to_fstr())
     }
 
-    let envp_ptrs: List(usize) = list(self.__env_pairs.len, self.__allocator)
-    defer envp_ptrs.deinit()
+    let envp = list(self.__env_pairs.len, self.__allocator)
+    defer envp.deinit()
     for &e in self.__env_pairs {
-        envp_ptrs.push(e.view().ptr as usize)
+        envp.push(e.view().to_fstr())
     }
 
-    const prog: &u8 = self.__args[0].view().ptr
-
-    let cwd_ptr: &u8? = null
+    let cwd = "".to_fstr()
     let has_cwd: i32 = 0
     if self.__has_cwd {
         self.__cwd match {
             Some(c) => {
-                cwd_ptr = Some(c.view().ptr)
+                cwd = c.view().to_fstr()
                 has_cwd = 1
             }
             None => {}
@@ -239,12 +236,11 @@ pub fn spawn(self: &Command) Result(Child, ProcessError) {
     let err_code: i32 = 0
 
     const status = __flang_proc_spawn(
-        prog,
-        argv_ptrs.as_slice().ptr,
-        argv_ptrs.len,
-        envp_ptrs.as_slice().ptr,
-        envp_ptrs.len,
-        cwd_ptr,
+        argv.as_slice().ptr,
+        argv.len,
+        envp.as_slice().ptr,
+        envp.len,
+        cwd,
         has_cwd,
         self.__stdin,
         self.__stdout,

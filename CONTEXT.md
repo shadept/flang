@@ -100,6 +100,10 @@ _Avoid_: heap string, allocated string
 An owning, mutable, growable buffer. `to_string()` transfers the buffer into a fresh `OwnedString` (move semantics — the builder resets).
 _Avoid_: rope, buffer
 
+**FString**:
+A foreign String: text laid out for C, `{ ptr, len }` (`core.foreign`), made with `s.to_fstr()`. Not NUL-terminated.
+_Avoid_: CString, C string (both mean a NUL-terminated `char*`)
+
 **Memory**:
 An owned block of heap bytes `{ ptr, len }` (RFC-043): what an allocator hands out and takes back. `unallocated()` is the block that owns nothing; `as_slice()` borrows a block as elements, and the slice owns nothing.
 _Avoid_: block, buffer, allocation (for the owner type)

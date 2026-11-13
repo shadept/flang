@@ -70,6 +70,17 @@ reader's parse left one empty field list behind. All released now; the CSV tests
 
 ---
 
+### Skipped Process Tests No Longer Compile
+
+**Status:** open. **Affected:** `tests/harness/stdlib/process_env.f`, `process_pipe.f`.
+
+Both are `SKIP: failing CI`, so the harness never builds them, and they have rotted: they call
+`read_to_end` and `as_view` on a child pipe, which the reader API no longer has. `process_basic.f`,
+skipped the same way, still compiles and passes when built by hand. Fix: port both to the current
+`std.io.reader` API, then decide whether the CI failure that skipped them still holds.
+
+---
+
 ### RFC-033 Ownership Gaps After the Checker Step
 
 **Status:** Open

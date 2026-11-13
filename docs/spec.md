@@ -1063,6 +1063,8 @@ pub type Color = #foreign struct {
 }
 ```
 
+**Text across the boundary.** `String` is a plain struct, so it does not cross `#foreign`. `core.foreign` declares `FString`, a `#foreign struct { ptr: &u8, len: usize }`, with `s.to_fstr()` from a `String` and `c.view()` back. It is not NUL-terminated: the C side reads the length from `len` and makes its own terminated copy where an API needs one, refusing a text that holds a NUL rather than cutting it there. `std.process` hands every argument, environment pair and working directory to its shim this way.
+
 Note: `#foreign` and `#simd` must appear inline after `=` in type declarations (not as detached directives above the declaration). A field holding a callback is a `#foreign fn`; a `fn(...)` field is E2157.
 
 ### 7.6.1 C FFI Binding Generation
