@@ -1,7 +1,7 @@
 ---
-status: implemented
 type: stdlib
 created: 2026-05-03
+linear: SH-35
 implemented: 2026-05-03
 superseded-by: RFC-033
 ---

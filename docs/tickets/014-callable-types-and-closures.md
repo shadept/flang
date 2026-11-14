@@ -1,7 +1,7 @@
 ---
-status: implemented
 type: language
 created: 2026-05-05
+linear: SH-37
 implemented: 2026-08-20
 ---
 

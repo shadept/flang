@@ -1,7 +1,7 @@
 ---
-status: implemented
 type: language
 created: 2026-10-11
+linear: SH-50
 implemented: 2026-10-11
 supersedes: [RFC-019]
 relates: [RFC-035]

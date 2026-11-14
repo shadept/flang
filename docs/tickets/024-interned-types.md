@@ -1,7 +1,7 @@
 ---
-status: implemented
 type: compiler
 created: 2026-08-26
+linear: SH-42
 implemented: 2026-08-26
 relates: [RFC-022]
 ---

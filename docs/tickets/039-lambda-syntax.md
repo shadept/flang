@@ -1,7 +1,7 @@
 ---
-status: implemented
 type: language
 created: 2026-10-17
+linear: SH-53
 implemented: 2026-10-18
 relates: [RFC-014, RFC-033, RFC-035, RFC-037, RFC-038]
 ---

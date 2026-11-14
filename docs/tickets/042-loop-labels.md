@@ -1,7 +1,7 @@
 ---
-status: implemented
 type: language
 created: 2026-11-10
+linear: SH-55
 implemented: 2026-11-13
 relates: [RFC-005, RFC-015]
 ---

@@ -1,7 +1,7 @@
 ---
-status: implemented
 type: compiler
 created: 2026-05-15
+linear: SH-38
 implemented: 2026-08-29
 ---
 

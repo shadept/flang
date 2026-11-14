@@ -1,7 +1,7 @@
 ---
-status: draft
 type: language
 created: 2026-05-11
+linear: SH-15
 ---
 
 # RFC-016: `#auto_deinit` directive and the managed-lifecycle contract

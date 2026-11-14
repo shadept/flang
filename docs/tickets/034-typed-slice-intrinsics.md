@@ -1,7 +1,7 @@
 ---
-status: implemented
 type: language
 created: 2026-10-10
+linear: SH-48
 implemented: 2026-10-10
 requires: [RFC-033]
 relates: [RFC-019, RFC-029]

@@ -21,9 +21,19 @@ You own and maintain these docs. They are the source of truth for the project. W
 - `docs/syntax.md` — syntax reference and FLang-vs-Rust disambiguation
 - `docs/architecture.md` — compiler pipeline, AST design, IR, optimization passes, LSP, testing strategy
 - `docs/error-codes.md` — error code registry (add entries when creating new error codes)
-- `docs/known-issues.md` — known bugs, limitations, technical debt (add entries when discovering issues)
+- `docs/known-issues.md` — limitations by design, plus the older bug backlog. New bugs go to Linear, not here; an old entry moves to Linear when you start on it (rules at the top of the file)
 - `docs/self-host.md` — self-host feature coverage matrix and milestone roadmap (update in the same commit as any lowering-coverage change)
-- `docs/tickets/` — RFCs. YAML frontmatter (`status`, `type`, `created`, optional `accepted`/`implemented`/`requires`/`supersedes`/`superseded-by`/`relates`), free-form body; statuses, index and the steps for moving an RFC in `docs/tickets/README.md`. Implement only `accepted` or `in-progress` RFCs; a `draft` needs the owner's approval first.
+- `docs/tickets/` — RFCs: the design text, kept in git. YAML frontmatter (`type`, `created`, `linear`, optional `accepted`/`implemented`/`dropped`/`requires`/`supersedes`/`superseded-by`/`relates`), free-form body; index and the steps for moving an RFC in `docs/tickets/README.md`. Live state (what's open, which phase is next) is in Linear, not in the file. Implement only RFCs with `accepted:` set; one without `accepted`, `implemented` or `dropped` is a draft and needs the owner's approval first.
+
+## Work tracking
+
+All FLang work is tracked in Linear, team Shade (`SH`), label `flang`. Linear is the source of truth for what is open and who acts next; the repo is the source of truth for designs and specs. See `docs/agents/issue-tracker.md`.
+
+- Before starting, find the Linear issue for the task (or create one) and move it to In Progress. Put its id in the branch name or PR title. If no Linear tools are available in your session, say so once and carry on; don't invent ids.
+- When choosing work yourself, pick up only issues labeled `agent-ready` or assigned to you. Never start an issue that is blocked by an open one.
+- If you need an answer from the owner, add `needs-info`, remove `agent-ready`, and ask in an issue comment.
+- New bugs and follow-up work become new Linear issues, not TODO comments or new `docs/known-issues.md` entries.
+- Never write progress or status into an RFC file. Update the Linear issue or project instead.
 
 ## Rules
 
@@ -62,11 +72,11 @@ Long term maintainability is a core priority. If you add new functionality, firs
 
 ### Issue tracker
 
-Issues live as markdown files under `.scratch/<feature>/` in this repo. See `docs/agents/issue-tracker.md`.
+Linear, team Shade (`SH`), label `flang`. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default canonical label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+The canonical roles map to Linear statuses and the labels `needs-info` and `agent-ready`. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 

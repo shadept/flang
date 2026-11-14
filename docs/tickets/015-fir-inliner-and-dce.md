@@ -1,12 +1,11 @@
 ---
-status: in-progress
 type: compiler
 created: 2026-05-05
+linear: P-SH-5
+accepted: 2026-05-15
 ---
 
 # RFC-015: FIR optimization pipeline (inliner + DCE + cleanup passes)
-
-In progress - phase 3 landed 2026-05-15 (`inline_shims` in `lib/flang_codegen/src/shim_inliner.f`, exercised by `tools/inliner_test`, not yet wired into the build). Next: phase 0, the verifier.
 
 This RFC replaces the C#-IR-era skeleton with a FIR-era plan informed by what implementing the C# compiler taught us.
 
