@@ -515,6 +515,18 @@ Language rules are spec §4.4; this is how the pipeline carries them.
 
 **Rebinding.** `lower_context_bind` builds the new link flat: it copies the current context into a frame slot, stores each named field at its offset, and lowers the body with `cur_ctx` pointing at the slot; afterwards `cur_ctx` is the outer operand again. Exits need no code. A `defer` records the `cur_ctx` of its registration site (`DeferCode.cx`, `IterRelease.cx`) and runs under it wherever it fires. A by-value field handed to a `&T` receiver is copied first (`in_current_context`), so the current context is never written.
 
+## Coroutine Runtime (RFC-005)
+
+`std.runtime.coro` (`stdlib/std/runtime/coro.c`, bound by `coro.f`) is the stackful runtime under the future `std.task`. It is internal: programs reach concurrency through `std.task`, not through it. No compiler support is involved; every build compiles `coro.c` like any other companion `.c`.
+
+- **One worker.** `run` drives every runnable coroutine on the calling thread from a FIFO run queue and returns once none is runnable. The scheduler is plain static state, single-threaded by design until work-stealing lands.
+- **Switching.** Windows uses Fibers (the thread converts itself for the duration of `run`). POSIX uses `flang_coro_switch`, top-level assembly in `coro.c` for x86_64 (System V) and arm64 (AAPCS64): it pushes the callee-saved registers on the current stack, swaps stack pointers and pops the other side's, all in user mode. x86_64 also carries MXCSR and the x87 control word; arm64 leaves x18 alone for Apple. A new coroutine's stack is pre-built so the first switch returns into `coro_main`, with a null return address or frame pointer ending backtraces there. Any other architecture is a compile error. `ucontext` was not used: it is removed from POSIX, deprecated on macOS, absent from musl, and costs a signal-mask syscall per switch. Shadow-stack enforcement (x86 CET) would reject the cross-stack return; it is off by default on Linux.
+- **Stacks.** 1 MiB by default, reserved at spawn and committed by the OS as touched, with a guard page at the low end: `CreateFiberEx` on Windows, `mmap` plus a `PROT_NONE` page on POSIX. A finished coroutine's stack is released by `run`, its record by `deinit`. Overflow faults on the guard page with no diagnostic yet.
+- **Park and wake.** A wake on a coroutine that is not parked is kept, so its next `park` returns at once; a wake on a finished one is ignored.
+- **`errno`** is saved and restored around every suspension, so it belongs to the coroutine.
+- **Entries** are `#foreign fn(&u8)`: a coroutine body runs under the root context. Carrying a scope's context link into a task is `std.task`'s job (RFC-005 §3.10).
+- **Testing.** `std.runtime.coro`'s `test {}` blocks and `tests/harness/async/`. A `#foreign fn` body keeps its bare C name in every program that imports its module, so a test callback in a stdlib module carries a module prefix.
+
 ## Optimization Passes
 
 Entry point: `IrOptimizer.Run(module)`. The compiler does not manage passes or cascade loops directly — `IrOptimizer` owns the full lifecycle and iterates internally until the module is stable. Adding, removing, or reordering passes is transparent to `Compiler.cs`.
@@ -544,7 +556,7 @@ The following are redundancies in the generated IR that Clang eliminates at `-O2
 
 ## Build Cache — NOT IMPLEMENTED
 
-Companion `.c` files (stdlib's `simd.c`, `bits.c`, `io/internal/fs.c`, `atomic.c`, plus any project-local C) are recompiled on every build. `flang_codegen/src/backend.f` reserves the seam — `IrModule` carries pre-compiled objects to link as-is — but nothing populates it, so a warm build pays the same C compile as a cold one.
+Companion `.c` files (stdlib's `simd.c`, `bits.c`, `io/internal/fs.c`, `atomic.c`, `runtime/coro.c`, plus any project-local C) are recompiled on every build. `flang_codegen/src/backend.f` reserves the seam — `IrModule` carries pre-compiled objects to link as-is — but nothing populates it, so a warm build pays the same C compile as a cold one.
 
 The design below is the shape to build against, kept because it was implemented once and the constraints still hold. A `build/cache/` directory in a working tree is a leftover, not a live cache.
 

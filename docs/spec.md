@@ -588,6 +588,15 @@ fn handle(req: &Request) {
 
 **ABI.** Every FLang function, closure body and test block takes two hidden parameters after its own, and after the result buffer of an aggregate return: the address of the current context (`const Context *`), then `env`, the state of the function being called (RFC-037). Every call passes both; a direct call passes a null `env`, which only a closure body reads. `#foreign` functions take neither, a body declared `#foreign` included: it runs under the root context. A `fn` value calls through the same convention; a `#foreign fn` value is one C code pointer called with the arguments alone (§7.6). A rebind builds the new link in the caller's frame, laid out flat: the parent's fields copied, the named ones replaced, so a read is one load at a fixed offset. It passes the link's address within the body; leaving the body needs no code. The layout of `Context` holds every field of the program, ordered by module FQN then declaration order; separately compiled libraries are RFC-098.
 
+### 4.5 Coroutine Stacks
+
+A coroutine (RFC-005) runs on a stack of its own: 1 MiB, reserved when the coroutine is created and committed by the OS page by page as it is touched. It never grows past that and never moves; overflowing it faults on a guard page and ends the process. A coroutine costs the pages it touches, so code that may run in one keeps its stack shallow:
+
+- **Stack-backed allocators are discouraged.** A fixed-buffer allocator over a local array holds the whole buffer on the coroutine's stack for the life of the frame. Use `context.temp_allocator`, or an arena over the heap.
+- **Deep recursion is discouraged.** Every frame is paid on the fixed stack. Bound the depth or iterate.
+
+Provisional: the stack size and these rules are to be reviewed with the runtime's performance work.
+
 ---
 
 ## 5. Operators
