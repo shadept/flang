@@ -2,32 +2,52 @@
 type: language
 created: 2026-04-21
 linear: SH-14
-relates: [RFC-042]
+relates: [RFC-037, RFC-038, RFC-039, RFC-042, RFC-098, RFC-099]
 ---
 
 # RFC-005: Async / Coroutines
 
 ## Summary
 
-Add concurrency to FLang as a **stackful M:N coroutine runtime** with **explicit `Future(T)` at the type level**, composed via `.await()` and combinators (`race`, `all`, `timeout`, `map`, `then`, `or_else`). Key properties:
+Concurrency for FLang as a **stackful M:N coroutine runtime** with **structured concurrency**:
+coroutines start inside a scope that waits for them, a job tree carried by the runtime context
+propagates cancellation downward, and results come back as values through `.await()`. Kotlin's
+coroutine library is the comparison baseline for scopes, jobs, cancellation and channels; its
+`suspend` colouring and its exception machinery are not imported (§2).
 
-| Property | Choice |
-|---|---|
-| Coroutine model | Stackful (own stack, swapped by runtime) |
-| Scheduler | M:N work-stealing across worker threads |
-| Function coloring | **None** at signature level — no `async fn` |
-| Suspension visibility | `.await()` at every call site that yields; plain calls don't |
-| Composition | `Future(T)` is a first-class value; combinators are stdlib functions |
-| Concurrency primitive | `spawn(&alloc, args..., fn) Future(T)` — **no captures**, args explicit |
-| Cross-coroutine transport | `Channel(T)` with `.send().await()`, `.recv().await()`, `.close()` |
-| Allocator binding | Coroutine-local context slot; `or_global()` inside a coroutine resolves to spawn-supplied allocator |
-| User-extensible context | Typed-key slots, parent-chain, inherited on `spawn` |
-| Top-level | `main` is the root coroutine; runtime always live |
-| Cancellation | Every `Future(T)` is cancellable; mechanism [OPEN] |
+| Property | Position | Settled? |
+|---|---|---|
+| Coroutine model | Stackful: each coroutine owns a stack, swapped by the runtime | Constraint |
+| Function colouring | **None.** No `async fn`, no `suspend`, no suspend function types, no rule on who may call what | Constraint |
+| Waiting syntax | `.await()`, an ordinary method on an awaitable value | Constraint |
+| Scheduler | M:N work-stealing over worker threads | Proposed |
+| Structure | `concurrent` waits for every child it started; tasks are bound to their scope | Proposed |
+| Builders | `spawn` returning `Task(T)`; a result-less form is open | **D2** |
+| `.await()` result | `T`; cancellation reaches code as values from the primitives that suspend | **D4** |
+| Cancellation | Cooperative; a job tree in a `context` field; checked at suspension points | Proposed |
+| Failure | Errors are values; fail-fast vs supervision is open | **D5** |
+| Transport | `Channel(T)` with `send`/`recv` awaitables, `close` | Proposed |
+| Context | RFC-038 `context` fields; a structured child keeps its parent's link | Settled by RFC-038 |
+| Allocators | `context.allocator`; what a parallel child inherits is open | **D6** |
+| Detached work | Not in v1 by recommendation | **D7** |
+| Runtime start | `main` is plain; the first `concurrent` scope starts the runtime if none is running | Proposed; details **D11** |
 
-**Justification.** FLang already commits to explicit allocators (§4.1) and deterministic cleanup (§4.1 rule 4). Stackful coroutines let suspension be transparent at the runtime level while the type system keeps deferred values visible as `Future(T)` — you see *where* you suspend without being forced to color every function that might transitively do so. Work-stealing gives parallelism on multi-core without the developer managing thread pools. The coroutine-local allocator context makes the same stdlib code work in both sync and async contexts without API changes. The whole stack is stdlib + runtime (C); the compiler is essentially unchanged.
+**Nothing here exists yet.** No `std.task`, `Task`, `Scope`, `Channel` or runtime is in the
+tree. The signatures below are proposals. §1 says which of them the current checker would
+accept as written; §7 lists every decision this draft leaves to the owner.
 
-**What this RFC is not.** It is not a full async I/O library catalog. It defines the primitives and the semantic contract; individual async-aware I/O wrappers in `std.io`, `std.net`, etc. are follow-up work.
+**What this RFC is not.** An async I/O catalog. It defines the primitives and their contract;
+async-aware wrappers in `std.io`, `std.net` and `std.net.http` are follow-up work.
+
+## 1. Reading this document
+
+- **Expressible today**: a declaration or snippet in current FLang syntax (RFC-037 function
+  values, RFC-038 context, RFC-039 lambdas, RFC-043 ownership) that the checker would accept if
+  the declared functions existed. It is still a proposal.
+- **Needs a feature**: marked with the feature it needs (RFC-099 `#stack`, a block construct,
+  owning closures). Those features are not implemented.
+- **Illustrative**: pseudocode for shape only; marked where it appears.
+- **Dn**: an open decision (§7). The text gives a recommendation, never a decision.
 
 ---
 
@@ -35,574 +55,797 @@ Add concurrency to FLang as a **stackful M:N coroutine runtime** with **explicit
 
 FLang needs concurrency to be a viable systems language. The bar:
 
-1. **Compose I/O** — fetch N URLs in parallel, race with a timeout, cancel losers.
-2. **Share stdlib between sync and async** — `Dict`, `StringBuilder`, `list(T)` shouldn't know or care which context they run in.
-3. **Deterministic resources** — no GC, no surprise background lifetimes. `defer`, allocators, `deinit` still work.
-4. **Implementable without a compile-time async transform** — we don't want to build a state-machine lowering pass in both the current C# compiler and the self-hosted one.
-5. **Stay FLang-grain** — UFCS methods, named args, explicit allocators, no function coloring.
+1. **Compose I/O**: fetch N URLs in parallel, bound each by a timeout, cancel the losers.
+2. **Share code between sync and async**: `Dict`, `StringBuilder`, `list` and any user function
+   neither know nor care whether they run in a coroutine.
+3. **Deterministic resources**: no GC, no surprise background lifetimes. `defer`, allocators and
+   `deinit` work unchanged.
+4. **No compile-time async transform**: no state-machine lowering in the self-hosted compiler.
+5. **Stay FLang-grain**: UFCS methods, trailing lambdas, the runtime context, ownership.
 
 ### Alternatives considered
 
 | Model | Rejected because |
 |---|---|
 | OS threads only | No cheap concurrency for I/O fan-out; doesn't solve "same code sync/async". |
-| Stackless futures (Rust-style `async fn`) | Requires a compiler state-machine transform, forces function coloring at signature level, conflicts with "code doesn't know it's async". |
-| Stackless state-machine coroutines (SFEX-style, see §3.10) | Compelling: zero-stack, deterministic, allocation can be hidden inside a parent struct or arena, and (with compiler support) we could lower transparently *without* coloring at the signature level. Rejected 2026-11-10: a compiler-generated machine cannot stay uncolored past function values, foreign calls and recursion. See §3.10. |
-| Fully colorless stackful (Go-style, no `Future`) | Can't express `race` / `all` / `timeout` as first-class combinators — the deferred value has no handle. Forces every composition through `spawn` + `chan` + `select`. |
-| Callback-based futures, no await | Ugly for sequential flows, re-introduces colored continuations. |
+| Stackless futures (Rust `async fn`) | A compiler state-machine transform, and colouring at the signature level. |
+| Stackless with compiler-generated machines, uncoloured | Rejected 2026-11-10; does not stay uncoloured past function values, foreign calls and recursion (§3.13). |
+| Kotlin-style `suspend` (stackless CPS, coloured) | Colouring is the price of being stackless: "You can only call a suspending function from another suspending function." Excluded by constraint. Its structured-concurrency model is adopted (§2). |
+| Fully colourless stackful with no handle (Go) | No value to compose or cancel; every join goes through channels. |
+| Callback futures, no await | Sequential flows become continuation chains. |
 
-**Chosen model** = stackful M:N + explicit `Future(T)` + `.await()`. Stackful is the runtime technique; explicit Future is the type-level handle for composition. Complementary, not competing.
+**Chosen model** = stackful M:N runtime + structured scopes + `.await()` on task and operation
+values. Stackful is what makes the absence of colouring possible; scopes are what make
+FLang's by-reference closures and borrowed `fn` values sound across concurrency (§3.3).
 
 ### Self-hosting relationship
 
-The self-hosted compiler does not itself need to be async — compiler passes are batch transformations over an AST. LSP and parallel module compilation can use OS threads + channels, or opt into the coroutine runtime later. **Lock the async design now** so the stdlib shape (especially `std.io`) is forward-compatible; **implement after self-host** so we only write the runtime once.
+The compiler does not need async. The self-host gate (Phase 0 of the original plan) is met: the
+C# reference compiler was retired 2026-08-28 (`docs/self-host.md`), so the runtime is written
+once, in C and FLang.
 
 ---
 
-## Design
+## 2. Kotlin as the baseline
+
+Kotlin's behaviour below is taken from kotlinlang.org (Sources at the end); a claim not found
+there is marked unverified.
+
+### What Kotlin does
+
+- **Colouring.** A suspending function is declared `suspend`, and "you can only call a
+  suspending function from another suspending function." Builders take
+  `block: suspend CoroutineScope.() -> T`.
+- **Structure.** Builders are extensions on `CoroutineScope`. "A parent coroutine waits for its
+  children to complete before it finishes. If the parent coroutine fails or gets canceled, all its
+  child coroutines are recursively canceled too." `coroutineScope { }` waits for the block and
+  every coroutine launched in it. `runBlocking { }` runs a block "in a new coroutine …
+  blocking the current thread until its completion"; it bridges plain code (`main`, tests,
+  callbacks) to suspending code, and "calling `runBlocking` from a suspend function is
+  redundant" and risks thread starvation.
+- **Jobs.** `launch` returns a `Job`; `async` returns a `Deferred`, "a Job with a result".
+  `await()` returns the value "or throws the exception if the deferred was cancelled".
+- **Failure.** An exception other than `CancellationException` in a child "cancels its parent
+  with that exception"; `SupervisorJob` / `supervisorScope` stop that, and still wait for every
+  child.
+- **Cancellation is cooperative.** It is observed at suspension, by `isActive`, `ensureActive()`
+  or `yield()`. `withTimeout(1.seconds) { Thread.sleep(10_000) }` runs the full ten seconds. A
+  cancelled coroutine unwinds with `CancellationException`, so `finally` runs; cleanup that must
+  suspend uses `withContext(NonCancellable)`, which is documented as not for use with `launch`
+  or `async` because it severs the parent-child link.
+- **Context.** A set of elements, chiefly the `Job` and the dispatcher, inherited by children;
+  `GlobalScope` or an explicit `Job()` breaks the parent link. A thread-local follows a coroutine
+  only through `asContextElement`, which restores it at each switch.
+- **Dispatchers.** `Default` (shared pool, CPU work), `IO` (elastic pool for blocking calls),
+  `limitedParallelism(n)`.
+- **Channels.** Suspending `send` and `receive`; rendezvous unless buffered; `close` is a token
+  after every earlier element; FIFO-fair.
+
+### What FLang takes, adapts and refuses
+
+| Kotlin | FLang | |
+|---|---|---|
+| `suspend`, suspend function types | Nothing. Any function may reach a suspension point | **Refused** (constraint) |
+| `coroutineScope { }` and `runBlocking { }` | `concurrent { s => ... }`, one function for both (§3.3, §3.10) | Adapted; form open (**D1**) |
+| `async` / `Deferred.await()` | `s.spawn { ... }` / `Task(T).await()` | Adapted |
+| `launch` / `Job` | Open (**D2**) | |
+| Job tree | A `context` field rebound per scope (§3.4) | Adapted |
+| `CancellationException` unwinding | Cancellation as a value from suspending primitives, propagated with `?`; `defer` runs as on any exit (§3.4) | Adapted: FLang has no exceptions |
+| `NonCancellable` | `context(job = &non_cancellable) { ... }` | Adapted, same scoping rule |
+| Child failure cancels parent | Open (**D5**) | |
+| Dispatchers | One pool; blocking offload and dispatcher choice open (**D8**) | |
+| `asContextElement` | Not needed: `context` is a hidden parameter, not thread-local storage, so it follows a coroutine across workers | FLang advantage |
+| `Deferred.map` etc. | Not in Kotlin's core surface either; sequential code inside a task | Dropped from this RFC |
+| `Channel` | `Channel(T)`, `move` on send (§3.6) | Adapted |
+
+---
+
+## 3. Design
 
 ### 3.1 Runtime model
 
 A coroutine owns:
 
-- **A stack.** Independently allocated (not on the OS thread stack). A lazily committed virtual reservation with a guard page at the base, fail-fast on overflow; stacks never grow or move (§7 q8).
-- **A scheduler record.** Contains: saved machine context (registers + SP), state (runnable / suspended / completed / cancelled), pointer to current `Context` chain, result slot, cancellation flag.
-- **No implicit allocator, heap, or local storage.** All memory comes from allocators passed in via args or context.
+- **A stack.** Its own allocation, not the OS thread stack: a lazily committed virtual
+  reservation with a guard page at its base, fail-fast on overflow. Stacks never grow or move
+  (§8 q3).
+- **A scheduler record.** Saved machine context (registers, SP), state (runnable / suspended /
+  completed), its job, its result slot.
+- **No implicit allocator or local storage.** Memory comes from allocators, through
+  `context.allocator` or a parameter. Stacks and task records come from the runtime's own pool
+  of reservations (§3.8).
 
 **Scheduler.** M:N work-stealing:
-- `N_worker` OS threads (default: number of CPU cores; configurable via env).
-- Each worker has a local run queue (Chase–Lev deque) + a shared global queue.
-- When local is empty, steal from a random sibling's tail; failing that, park on a condvar/futex until signaled.
-- Coroutines suspended on I/O are registered with a **netpoller** (epoll / kqueue / IOCP); readiness events push the coroutine back onto the scheduler.
-- Timers (for `sleep`, `timeout`) use a coarse hierarchical timing wheel per worker; global merge on idle.
 
-**No function coloring.** Any FLang function can be called from a coroutine. "Sync code" is just code that doesn't happen to call anything that suspends. There is no `async fn` keyword; `.await()` is a method on `Future(T)`, not a language construct.
+- `N_worker` OS threads (default: CPU count; `FLANG_WORKERS` overrides).
+- Each worker has a local run queue (Chase–Lev deque) and shares a global queue.
+- An idle worker steals from a random sibling's tail; failing that, it parks on a condvar/futex.
+- Coroutines waiting on I/O are registered with a **netpoller** (io_uring/epoll, kqueue, IOCP);
+  completion puts them back on a run queue.
+- Timers (`sleep`, timeouts) use a hierarchical timing wheel per worker, merged on idle.
 
-### 3.2 `Future(T)`
+**No colouring.** Any FLang function can run in a coroutine and any can reach a suspension
+point. There is no `async fn`; `.await()` is a method, not a construct; a function type says
+nothing about suspension (RFC-037 function values stay one type).
+
+**The root context crosses workers for free.** RFC-038's context is the hidden `const Context *`
+parameter. A coroutine resumed on another worker keeps its stack, and with it every context
+pointer in its frames. Context links are immutable and live in frames that do not move, so
+concurrent reads from several workers need no synchronization.
+
+### 3.2 Suspension and `.await()`
+
+**What `.await()` marks.** Without colouring, a call never shows whether its callee suspends:
+`fetch_all(urls)` may wait inside its body while its caller writes no `.await()`, as any call
+may block today. `.await()` marks the point where *the function writing it* waits on a value it
+holds. This is weaker than Kotlin, where every call to a `suspend` function is a visible
+suspension point; that visibility is what colouring buys, and FLang does not pay for it.
+
+**An awaitable is a value with an `await` method.** A task handle is one; so is the value a
+channel operation returns. An operation's value can be a small struct whose `await` performs the
+suspension, so `.await()` everywhere costs no allocation per operation. Whether a contract names
+the shape (`Awaitable`, RFC-035) is open (**D9**).
+
+**Recommendation for what `.await()` returns (D4):**
+
+- `Task(T).await()` returns `T`. Awaiting a task does not fail on its own account.
+- Cancellation reaches code through the **leaf** primitives that suspend (`recv`, `send`,
+  `sleep`, socket I/O, `check_cancelled`): each returns a `Result` whose error includes
+  cancellation. Code propagates it with `?`, so every `defer` runs on the way out.
+- A task body decides what its `T` is when cancelled: usually a `Result` whose error includes
+  cancellation.
+- When the awaiter's job is cancelled, the awaited child is cancelled with it (§3.4), so the wait
+  ends once the child returns.
+
+Cost: a child that never yields delays its awaiter until it finishes, as a Kotlin scope waits
+for an uncooperative child. The alternative, every `.await()` returning
+`Result(T, Cancelled)`, makes the awaiter interruptible at the price of an `?` or `unwrap` on
+every await, and still leaves the child running. The original draft held both positions
+(its §3.7 "decided" `T`; its §7 q2 proposed `Result`); this revision recommends the first and leaves
+the choice open.
+
+### 3.3 Scopes and tasks
+
+Proposed module `std.task`. Signatures in current syntax; none of them exist.
 
 ```flang
-pub type Future = struct(T) {
-    __state: &FutureState(T)
+pub type Scope = struct {
+    __state: &u8                    // runtime-owned: the scope's job and its task slots
+}
+
+pub type Task = struct(T) {
+    owned __slot: &TaskSlot(T)      // non-copyable: dropping one unawaited is W2006
+}
+
+// coroutineScope { } (runBlocking { } off the runtime, §3.10): run `body`, then wait
+// for every task it started.
+pub fn concurrent(body: fn(&Scope) $R) R
+
+// async { }: start `body` as a child of `self`.
+pub fn spawn(self: &Scope, body: fn() $T) Task(T)
+
+// Wait for the result. Consuming: a second await of one task is E2123.
+pub fn await(self: move Task($T)) T
+
+// Cancel every task of this scope, and their descendants.
+pub fn cancel(self: &Scope)
+```
+
+```flang
+const total = concurrent { s =>
+    const a = s.spawn { count_words(url_a) }   // captures url_a by reference
+    const b = s.spawn { count_words(url_b) }
+    a.await() + b.await()
 }
 ```
 
-`FutureState` is ref-counted (atomic) so both the producing coroutine and the consumer hold handles without lifetime drama. It contains: the result slot (zero-initialized `T` + readiness flag), waker registration, and cancellation signaling.
+**Name.** `concurrent` (alternative: `concurrent_scope`). The type stays `Scope`. The same name
+serves either form D1 chooses, a function taking a lambda or a block construct.
 
-**Methods:**
+**Why a scope makes the closures sound.** Captures are by reference (RFC-033, spec §7.3) and a
+`fn` value borrows the closure it was made from (RFC-037). A scope returns only after every
+child has finished, so the frame a child's closure points into outlives the child. A detached
+task has no such guarantee (§3.9).
+
+**Ownership.** `Task(T)` holds an `owned` field, as `Rc` does: leaving one unawaited is W2006 at
+compile time, and awaiting consumes it. W2006 is a warning, so a scope can still end with
+tasks never awaited; the scope then waits for them and releases their results with `release`. Whether the scope also cancels them first is part of
+**D2**.
+
+**Expressibility.** The declarations above are current syntax. Three properties are not
+enforceable with what exists:
+
+- **`return` inside a lambda is E1054.** A `concurrent { }` body cannot return from the enclosing
+  function or `break` an outer loop; bind the result instead. Kotlin's `coroutineScope` allows
+  this because it is inline. The alternatives are a block construct (`concurrent { }`, as
+  RFC-099 and `docs/notes/concurrency-patterns.md` sketch) or Kotlin-style non-local return,
+  which RFC-039 keeps E1054 free for. **D1.**
+- **A task can escape its scope** by being returned out of the body, then awaited after its slot
+  is freed. Preventing it needs RFC-099 `#stack` (a draft, unimplemented) on `Task` and `Scope`,
+  or a runtime generation check that panics. **D3.**
+- **`spawn`'s body is a borrowed `fn`.** Sound only because of the scope; a builder that lets a
+  task outlive its scope must not take one (§3.9).
+
+**`race`, `all`, `any`.** `all` is `tasks` awaited in order. `race` (first result wins, the
+rest are cancelled) and an `any`/`select` over awaitables are scope helpers; their signatures
+are open (**D9**). The original draft's `Future(T).map`, `.then` and `.or_else` are dropped:
+each stored a callback in shared state to run later, possibly on another worker after the
+creating frame returned, which a borrowed `fn` value does not survive. Sequential code inside a
+task replaces them, as in Kotlin.
+
+### 3.4 Jobs and cancellation
+
+Proposed declarations, current syntax:
 
 ```flang
-fn Future(T).await(self)                          T                    // also: await(timeout=ms, ctx=&Context, cancel=&CancelToken)
-fn Future(T).cancel(self)                         void                 // requests cancellation of this specific future
-fn Future(T).detach(self)                         void                 // consume handle; coroutine runs to completion, result discarded
-fn Future(T).is_ready(self)                       bool                 // non-blocking peek
-fn Future(T).deinit(self)                         void                 // see §3.9
+pub type Job = struct { __state: &u8? }      // runtime-owned job record
+pub type Cancelled = struct {}
+
+const non_cancellable = Job { __state = null }   // the runtime's sentinel; representation open
+pub context job: &Job = &non_cancellable
+
+pub fn is_cancelled() bool                         // isActive, negated; reads context.job
+pub fn check_cancelled() Result((), Cancelled)     // ensureActive, for `?`
+pub fn yield_now() Result((), Cancelled)           // yield(): check, then let others run
 ```
 
-**Combinators (stdlib, not magic):**
+**The job tree is the context.** `concurrent` creates a job whose parent is `context.job` and runs
+its body, and every child, under `context(job = &child_job) { ... }`. RFC-038 §Semantics 4
+already says a structured child keeps the parent's link; the link now names the job that
+cancels it. Cancelling a job cancels its descendants; it never cancels its parent.
+
+**Cooperative.** A cancelled coroutine is not unwound. Its next leaf suspension (or
+`check_cancelled`) returns the cancellation as a value; the code returns it with `?`. A
+coroutine that never suspends and never checks runs to completion (Kotlin's `Thread.sleep`
+example applies unchanged).
+
+**`defer` and cleanup.** A deferred body runs under the context where it was written (spec §4.4
+semantics 3), which is the cancelled one, so a suspending cleanup gets `Cancelled` back at once.
+Cleanup that must wait rebinds: `context(job = &non_cancellable) { conn.close().await() }`. As
+with Kotlin's `NonCancellable`, this belongs around cleanup code only; a `concurrent` scope started inside
+it is a tree of its own.
+
+**Tokens.** The original draft's `CancelToken` (one flag shared by many futures and awaiters)
+becomes the job: `Scope.cancel` is "cancel the token", and running under a scope is "spawn with
+the token". An explicit standalone token is not proposed.
+
+**Panics** stay fatal to the process (spec §9.2). Under `flang test` a panic is caught with
+`longjmp` (`stdlib/std/test.c`), which cannot cross from a coroutine stack to the runner's;
+how a panicking task fails its test is open (**D10**).
+
+### 3.5 Failure and supervision
+
+FLang has no exceptions, so Kotlin's rule "a failing child cancels its parent" has no carrier:
+the runtime cannot tell failure in an arbitrary `T`. Failure is a value the body returns.
+
+**Recommendation (D5):** `concurrent` behaves as Kotlin's `supervisorScope`: no child cancels its
+siblings, and each result is the awaiter's to inspect. Fail-fast is opt-in through a variant
+for `Result` bodies, which cancels the scope on the first `Err` (sketch, current syntax):
 
 ```flang
-fn race(T: Type, a: Future(T), b: Future(T))      Future(T)            // first to resolve wins, other is cancelled
-fn all (T: Type, fs: Future(T)[])                 Future(T[])          // all-or-nothing; any failure cancels siblings
-fn any (T: Type, fs: Future(T)[])                 Future((usize, T))   // first ready, return (index, value)
-fn Future(T).timeout(self, ms: i64)               Future(Result(T, Timeout))
-fn Future(T).map(self, f: fn(T) U)                Future(U)
-fn Future(T).then(self, f: fn(T) Future(U))       Future(U)
-fn Future(T).or_else(self, f: fn(E) Future(T))    Future(T)             // on Future(Result(T, E))
+pub fn try_concurrent(body: fn(&TryScope($E)) Result($R, E)) Result(R, E)
+pub fn spawn(self: &TryScope($E), body: fn() Result($T, E)) Task(Result(T, E))
 ```
 
-`.await()` extensions via named args (§7.1 pattern):
+This reverses Kotlin's default. Choosing Kotlin's default instead means `concurrent` itself is
+restricted to `Result` bodies. Either way there is no `CoroutineExceptionHandler`.
+
+### 3.6 Channels
+
+Proposed, current syntax; the element type is inferred from use (`let ch = channel()` then
+`ch.send(3i32)`):
 
 ```flang
-fut.await()                              // block until done
-fut.await(timeout = 5_000)               // → Result(T, Timeout)
-fut.await(ctx = my_ctx)                  // override inherited context for this await
-fut.await(cancel = &tok)                 // → Result(T, Cancelled); see §3.7
+pub type Channel = struct(T) { owned __state: &u8 }
+pub type RecvError = enum { Closed, Cancelled }
+pub type SendError = enum(T) { Closed(T), Cancelled(T) }   // the value comes back
+
+pub fn channel(capacity: usize = 0, allocator: &Allocator = context.allocator) Channel($T)
+pub fn send(self: &Channel($T), value: move T) SendOp(T)
+pub fn await(self: move SendOp($T)) Result((), SendError(T))
+pub fn recv(self: &Channel($T)) RecvOp(T)
+pub fn await(self: move RecvOp($T)) Result(T, RecvError)
+pub fn try_send(self: &Channel($T), value: move T) Result((), SendError(T))
+pub fn try_recv(self: &Channel($T)) Result(T?, RecvError)
+pub fn close(self: &Channel($T))
+pub fn deinit(self: move Channel($T))
 ```
 
-`.await()` yields the current coroutine to the scheduler. Scheduler registers current coroutine as the waker on the Future, switches to another runnable coroutine (or parks). When the Future resolves, the waiter is enqueued and eventually resumed — possibly on a different worker.
+- `capacity = 0` is rendezvous; `N` is buffered. Multi-producer, multi-consumer, FIFO-fair.
+- `send` takes `value` by `move`; a send that fails gives it back in `SendError`, so a
+  non-copyable value never leaks. On `recv` ownership passes to the receiver. This replaces the
+  original "the sender's copy remains logically valid" convention with the checker's.
+- v1 copies the bytes into a slot from the channel's allocator; zero-copy transfer is later.
+- `close` lets receivers drain every element sent before it, then `Err(Closed)`; pending and
+  later senders get `Err(Closed(v))`. Double close: panic (Go) recommended; still open (§8 q1).
+- `for v in ch` would suspend inside `next()` with no `.await()` written; whether channels
+  implement the iterator protocol is part of **D9**.
+- The allocator parameter is last (CLAUDE.md rule); the original `chan(T, alloc, capacity)` put
+  it first.
 
-### 3.3 `spawn`
+### 3.7 Timeouts and sleep
 
 ```flang
-fn spawn(alloc: &Allocator, args..., f: fn(args...) T,
-         cancel_with: &CancelToken? = null) Future(T)
+pub fn sleep(ms: i64) SleepOp                      // await: Result((), Cancelled)
+pub fn with_timeout(ms: i64, body: fn() $T) T?     // withTimeoutOrNull
 ```
 
-- `alloc` is the coroutine's allocator. Bound to the coroutine's context slot; `or_global()` inside the coroutine returns `alloc`. Must be safe under the caller's concurrency discipline (§3.8).
-- `cancel_with` (optional) wires the spawned coroutine to a cancellation token (§3.7). If `tok.cancel()` fires, this coroutine observes the cancellation at its next suspension point and unwinds. If `null`, the coroutine is only cancellable via its own `Future.cancel()`.
-- `args...` are passed explicitly. **`spawn`'s `f` parameter is typed as a bare `fn(args...) T` — capturing closures don't coerce into that slot (§7.3, E2111), so the entry lambda is forced to be non-capturing.** Now that RFC-014 lets lambdas capture by default, this is a *deliberate* RFC-005 isolation rule rather than a language-wide limitation: the only boundary crossings are `spawn`, `send`, `recv`, which are all stdlib choke points that can enforce isolation by typing their callable parameters as bare fn pointers.
-- `args` are **deep-copied** into `alloc` at spawn time. After spawn returns, the child owns its copies; the parent's originals are untouched. Rationale: eliminates arg-aliasing races by construction. Reference args (`&T`) are preserved as-is and carry §3.6 "your problem" semantics — use them deliberately.
-- Returns `Future(T)` bound to `alloc`'s lifetime. Since the caller owns `alloc`, return-value lifetime is automatic.
+`with_timeout` runs `body` in a child scope and cancels that scope's job when the timer fires.
+The body still has to cooperate (§3.4); a body that completes after the timer fired returns its
+value (Kotlin documents the opposite race as losing the value). A typed `Timeout` error instead
+of `T?` is open (**D9**).
 
-### 3.4 Channels
+### 3.8 Context and allocators
+
+The original §3.5 library `Context` (a parent chain of type-keyed slots, `current_context()`,
+`ctx.with(v)`, `spawn_in`) is replaced by RFC-038, which is implemented: `context` fields,
+rebinding with `context(f = v) { }`, no context values (E2149), `or_global` removed. A
+request-scoped value is a field rebound around the work:
 
 ```flang
-pub type Channel = struct(T) { /* opaque */ }
+pub context request_id: u64 = 0
 
-fn chan(T: Type, alloc: &Allocator, capacity: usize = 0) Channel(T)
-
-fn Channel(T).send(self, v: T)      Future(Result(void, ChannelClosed))
-fn Channel(T).recv(self)            Future(T?)                          // None when closed + empty
-fn Channel(T).try_send(self, v: T)  Result(void, ChannelFullOrClosed)
-fn Channel(T).try_recv(self)        Result(T?, ChannelEmpty)
-fn Channel(T).close(self)           void                                 // idempotent; subsequent sends error
-fn Channel(T).deinit(self)          void
+context(request_id = next_id(), logger = &req.log) {
+    concurrent { s => handle(s, req) }       // every child reads context.request_id
+}
 ```
 
-**Semantics.**
-- `capacity = 0` = rendezvous (send blocks until recv). `capacity = N` = buffered.
-- `send(v)` transfers ownership of `v` (including any backing allocations via the "allocator follows the value" rule) into the channel. On `recv`, ownership transfers to the receiver.
-- v1 implementation: **copy-in on send** (bytes copied into a channel-owned slot allocated from the channel's `alloc`). Simpler; allocator migration across the boundary handled by the copy. Zero-copy transfer is a future optimization.
-- `close()` wakes all pending receivers with `None`, wakes all pending senders with `Err(ChannelClosed)`.
-- Channels are multi-producer / multi-consumer. Close semantics match Go: only producers close; double-close panics (or returns error — [OPEN]).
+**What a child inherits.** A structured child runs under its scope's link, so it sees every field
+its parent saw, including `allocator` and `temp_allocator`. Those default to the global
+(malloc) allocator, which is thread-safe; an arena, fixed-buffer or tracking allocator is not.
+Rebinding `allocator` to an arena and then starting parallel children is a data race the type
+system does not see (spec §3.6). Options (**D6**):
 
-### 3.5 Context
+- (a) Children inherit as is; document the race; a `SyncAllocator` wrapper is a required
+  sibling feature before servers use arenas.
+- (b) `concurrent` rebinds `temp_allocator` per task to a task-local arena it frees at task end.
+- (c) A field (or allocator vtable flag) marks an allocator thread-safe, and `concurrent` panics on a
+  child starting under one that is not.
 
-> Superseded by [RFC-038](038-runtime-context.md): the runtime context is a language feature, `context` fields assembled by the compiler and passed to every FLang function, not this library `Context` chain. `spawn` captures it per RFC-038 §Semantics 4.
+Recommendation: (a) with (b) for `temp_allocator`, since a per-request temp arena is the field's
+purpose. Separately: a null `&Allocator` resolves to the current context per call (spec §4.1
+rule 2), so a zero-initialized container grown in a child reaches the child's allocator.
+
+**Runtime memory.** Stacks and task slots come from the runtime's reservation pool, not from
+`context.allocator`, so a scope does not need an allocator argument. The original
+`spawn(&alloc, ...)` conflicted with two project rules (allocator last; no pass-through
+allocators in `compiler/` and `lib/*`); a caller wanting another allocator rebinds the context.
+
+**RFC-098.** A separately compiled library adds context tails; a structured child shares them
+with its parent's link and needs no snapshot.
+
+### 3.9 Detached work
+
+Kotlin's `GlobalScope.launch` has no parent job. In FLang, detached work is the case where by-reference
+captures and borrowed `fn` values dangle, and where RFC-038 §Semantics 4 says the task starts from
+the root context plus the fields its spawn names.
+
+Arguments cannot cross the way the original draft proposed (`spawn(alloc, args..., f)` with a
+deep copy): variadic parameters are one element type (spec §7.1), and there is no general deep
+copy. Two shapes would work:
+
+- **Owned argument, non-capturing body** (expressible except the "no captures" check, which is a
+  new rule or a `#foreign fn`-like type): `detach(arg: move $A, body: fn(move A))`. The body
+  rebinds the fields it needs from `arg`.
+- **Owning closures**, which RFC-037 lists as out of scope.
+
+Recommendation (**D7**): no detached work in v1. A server's accept loop is a long-lived
+`concurrent` scope; per-connection work is a child of it (§3.10).
+
+### 3.10 Starting the runtime
+
+`main` is an ordinary function; it is not a coroutine and the runtime is not running when it
+starts. Concurrency always begins by opening a `concurrent` scope, and the runtime is a stdlib
+feature that the first such scope starts:
+
+- **Off the runtime** (a thread that is not a runtime worker running a coroutine: `main`'s thread,
+  a test, a C callback), `concurrent` starts the runtime if none is running, runs `body` as a
+  coroutine on it, and blocks the calling OS thread until the scope has joined. This is Kotlin's
+  `runBlocking`.
+- **On the runtime** (inside a coroutine), `concurrent` creates a child scope and suspends the
+  current coroutine until it joins; the worker thread stays free. This is Kotlin's
+  `coroutineScope`.
+
+Kotlin keeps these as two functions because colouring decides which one a call site may use, and
+documents `runBlocking` from a suspend function as a thread-starvation hazard. Without colouring,
+the caller cannot know which side it is on, so one function checks at run time. Calling
+`concurrent` in a coroutine never blocks a worker.
+
+Illustrative (`std.net.http` and its `Server` are not designed yet):
 
 ```flang
-pub type Context = struct {
-    parent: &Context?,
-    key:    TypeId,
-    value:  &u8,          // opaque, type-keyed
+// A library: run() is not awaitable and looks synchronous to its caller.
+pub fn run(self: &Server) {
+    concurrent { s =>                 // starts the runtime if none is running
+        loop {
+            const conn = self.listener.accept().await() match {
+                Ok(c) => c,
+                Err(_) => break,
+            }
+            s.spawn { self.handle(conn) }   // §4.3 has the capture hazard here
+        }
+    }                                 // blocks main's thread until the accept loop ends
 }
 
-fn Context.get(ctx: &Context, T: Type) T?        // walks parent chain, returns first match
-fn Context.with(ctx: &Context, v: T)  Context    // cons a new frame; returns child context
-fn current_context() &Context                     // returns current coroutine's context root
+// An application: no runtime setup, no async main.
+pub fn main() {
+    const server = http.server(8080)
+    server.run()
+}
 ```
 
-- **Well-known slot:** `Allocator`. Always populated at the root (from the process allocator at `main`); replaced at each `spawn` with the allocator supplied.
-- **User slots:** any user type is its own key via `Type(T)` (§2.9). Example: `Logger`, `Deadline`, `RequestId`, `TraceContext`.
-- **Inheritance:** each `spawn` starts the child with a context derived from the parent's current context. Adding an entry (`ctx.with(v)`) produces a new chain frame — O(1) prepend, O(chain-depth) lookup. Chains are shallow in practice.
-- **`or_global()`** (updates `std/allocator.f:106`):
+Every library on the stdlib runtime does the same, so an HTTP server, a client and an
+application share one runtime with nothing to configure. A library called from inside a
+coroutine nests its scope in the caller's job tree, so cancelling the caller's scope reaches the
+library's tasks.
 
-  ```flang
-  pub fn or_global(alloc: &Allocator?) &Allocator {
-      if alloc != null { return alloc.unwrap() }
-      const coro = current_coroutine_allocator()    // reads context slot; null on bare main outside spawn
-      return coro ?? &global_allocator
-  }
-  ```
+The outermost scope's job has `non_cancellable` as its parent, the default of `context.job`.
+The body runs on a worker under the caller's context link; the caller's frames stay alive because
+the caller is blocked, so the reads are safe (§3.1). With no detached work (D7), every task has
+joined when the outermost `concurrent` returns, so `main` returning has nothing to drain.
 
-  This makes every existing stdlib function (which already takes `&Allocator? = null`) context-aware without any API change.
+Open (**D11**):
 
-### 3.6 `main` as root coroutine
+- **Awaiting off the runtime.** `sleep(10).await()` or `ch.recv().await()` in plain `main`, with
+  no scope open. Options: block the OS thread (the operation runs synchronously); panic; or wrap
+  it in an implicit one-shot `concurrent`. Recommendation: block the thread, so a function using
+  awaitables works whether or not its caller opened a scope (Motivation 2).
+- **Runtime lifetime.** Once started, the runtime lives for the process (idle workers park), or
+  it shuts down when the last outermost scope joins and restarts on the next. Recommendation:
+  live for the process; starting worker threads per call is expensive.
+- **Several OS threads** opening outermost scopes at once share one runtime. Start-up must be
+  once-only and thread-safe; each caller blocks on its own scope.
+- **Configuration.** How a program picks the worker count before the first scope starts, given
+  `FLANG_WORKERS` and no runtime-init call in `main`.
 
-`main` is implicitly spawned on the runtime at process start. Consequences:
-- `main` has a context: allocator = `global_allocator`, no deadline, no cancellation.
-- `.await()` works at top-level without ceremony.
-- The runtime is always live for the lifetime of the process.
-- `main` returning causes the runtime to drain outstanding coroutines (`.detach()`'d) up to a graceful-shutdown timeout, then exit with `main`'s return code.
+### 3.11 Dispatchers and blocking calls
 
-### 3.7 Cancellation
+v1 has one worker pool. A `#foreign` call that blocks (a syscall, a C library) blocks its worker.
 
-Cancellation is **token-based**. A `CancelToken` is a first-class value that can be observed by *both* the producer side (a coroutine that wants to bail when cancelled) and the consumer side (an `.await()` call that wants to bail when cancelled). The same token can be shared across many futures and many awaiters — cancellation is a fan-out signal, not a per-future flag.
+**D8**: whether there is a `blocking { ... }` helper that moves the current coroutine to an
+elastic pool for the duration (Kotlin's `Dispatchers.IO`), a `#foreign_blocking` directive, or
+nothing in v1; and whether a scope can name its executor through a `context` field (Kotlin's
+`withContext(dispatcher)`), which would need the runtime to migrate a coroutine on rebind.
 
-```flang
-pub type CancelToken = struct { /* opaque, internally an atomic flag + waker list */ }
+### 3.12 Soundness model
 
-fn cancel_token()                                CancelToken
-fn CancelToken.cancel(self)                      void                  // idempotent; signals all observers
-fn CancelToken.is_cancelled(self)                bool                  // non-blocking peek
-fn CancelToken.deinit(self)                      void
-```
+Spec §3.6 leaves data races to the programmer. Within that, the rules are:
 
-**Two observation points:**
+1. **A task lives inside its scope.** Its closure may capture by reference because the scope
+   joins it. Enforcement of "a `Task` does not leave its scope" is **D3**.
+2. **No detached closures** (D7). Nothing borrowed crosses a boundary the scope does not
+   enclose.
+3. **Channel transfer is a `move`**, checked by E2123.
+4. **A task must be awaited**, checked by W2006 on its `owned` field.
+5. **Shared allocators** follow D6.
+6. **Foreign thread-locals do not follow a coroutine** across workers. The context switch saves
+   and restores `errno`; any other C thread-local is unreliable after a suspension.
 
-1. **Consumer-side** — `.await(cancel = &tok)` returns `Err(Cancelled)` immediately when `tok` fires. The producer is *not* affected — the running coroutine continues. This is "I'll wait, but only this long / under this condition."
+### 3.13 Leak and lifetime model
 
-2. **Producer-side** — `spawn(..., cancel_with = &tok)` makes the spawned coroutine observe `tok`. When `tok.cancel()` fires, the running coroutine sees cancellation at its next suspension point and unwinds. This is "stop the work."
+Unchanged from the original draft. `defer x.deinit()` applies inside tasks. Memory a task
+allocates through `context.allocator` and forgets to release is charged to that allocator.
+Ending a coroutine releases nothing on its own. A tracing allocator that reports outstanding
+allocations at `deinit` is a debugging aid, not part of this RFC.
 
-The two are independent. A typical pattern uses both: spawn with `cancel_with = &tok` so the work stops, await with `cancel = &tok` so the wait also returns. Cancelling the token does both at once.
-
-**Decided:**
-
-- `CancelToken` is a value type bound to its creator's allocator (typed-key context entry, inheritable).
-- `tok.cancel()` is idempotent and thread-safe (atomic flag + waker fan-out).
-- `.await(cancel = &tok)` returns `Result(T, Cancelled)`; `.await()` with no token returns `T` directly. (See §7 q2 — every `.await()` overload returns either `T` or `Result(T, Cancelled)` based on whether you opt in.)
-- `Future(T).cancel(self)` remains for the simple "cancel this one future" case — it's equivalent to spawning with a private token and cancelling that token.
-- `race(a, b)` internally uses a token: spawn each side with `cancel_with = &internal_tok`, when one wins, fire the token, the loser unwinds.
-- `.timeout(ms)` is a one-liner: spawn a timer that calls `tok.cancel()`; await with the same token.
-- Cancellation checks occur at every suspension point (`.await()`, channel `send`/`recv`, `sleep`). Compute-bound coroutines that never yield are uninterruptible (matches Go, Kotlin).
-- Cancellation is **cooperative** (flag, checked at yield points) — not a forced stack unwind. `defer` runs in normal order during the cooperative unwind.
-
-**Why tokens beat per-Future cancellation:**
-- Cancel a tree of work with one call (`tok.cancel()` stops every coroutine spawned with that token).
-- Same future can be awaited by multiple consumers with different cancellation policies.
-- Maps cleanly to the established "request context" pattern (Go's `context.Context`) without inventing a parallel mechanism — the token can live as a slot in the `Context` chain (§3.5).
-- `.timeout` and `race` collapse to library code with no runtime magic.
-
-**Still open — [§7]:** Whether dropping a Future without `await`/`detach` cancels its associated token or detaches; precise interaction of cancel-during-defer.
-
-### 3.8 Soundness model
-
-The existing §3.6 "memory safety is programmer's responsibility" posture extends into concurrency with the following **added rules** enforced by convention and stdlib API shape, not the type checker:
-
-1. **No captures in coroutine entry lambdas.** Enforced by typing `spawn`'s `f` parameter as a bare `fn(args...) T`: per §7.3 / E2111, a capturing closure has an anonymous nominal type and cannot decay into a bare fn pointer slot. RFC-014 made captures the default for lambdas elsewhere; `spawn` keeps them out by signature.
-2. **`spawn` deep-copies positional non-reference args.** Enforced by stdlib `spawn` implementation.
-3. **Reference args (`&T`) passed to `spawn` carry §3.6 liability.** Same rule as any other shared reference.
-4. **The allocator passed to `spawn` must tolerate concurrent use**, if the caller continues to allocate from it while the child runs. Two practical choices:
-   - Caller stays passive on that allocator for the coroutine's lifetime, OR
-   - Caller uses a thread-safe allocator variant (a `SyncAllocator` wrapper — not in this RFC, future work).
-5. **Values sent through a `Channel` transfer ownership.** After `ch.send(v)`, the sender may not use `v`. Enforced by copy-in-on-send: the sender's copy remains logically valid but refers to freed-after-recv bytes in the channel buffer — same lifetime discipline as any `OwnedString` transfer.
-6. **A `Future(T)` must be explicitly disposed.** `await()`, `cancel()`, or `detach()` consumes it. Dropping without one of those is a bug, same class as leaking an `OwnedString`. Runtime behavior of an undisposed Future going out of scope: [OPEN] (proposal: `deinit` cancels).
-
-### 3.9 Leak and lifetime model
-
-No changes to existing discipline:
-- `defer x.deinit()` still applies inside coroutines.
-- Memory allocated inside a coroutine using `or_global()` is allocated from the spawn-supplied allocator. If the coroutine leaks it (forgets to `deinit`), the leak is charged to the spawn-supplied allocator, freed when that allocator is destroyed.
-- Async does not introduce "free cleanup via coroutine exit." Async is not gc-via-scope.
-- Recommendation: provide a `TracingAllocator` in stdlib that wraps another allocator and reports outstanding allocations on `reset()` / `deinit()`. Fits the existing `AllocatorVTable` model (§4.1). Not blocking for this RFC; bolt on as a debug aid.
-
-### 3.10 Rejected: SFEX-style stackless state machines
+### 3.14 Rejected: stackless state machines (SFEX-style)
 
 Reference: <https://vittorioromeo.com/index/blog/sfex_coroutine.html>.
 
-The SFEX post describes a stackless coroutine model where a coroutine *is* a struct, state *is* one integer, and suspension *is* a controlled return. The macro layer expands to a `switch` over `__COUNTER__`-derived state values; persistent state lives as struct members; no heap allocation, no compiler scaffolding hidden from the user. Composition (`SFEX_CO_AWAIT`) is sub-coroutine ownership: the child is a member, the parent runs it to completion and propagates yields.
+The SFEX post describes a stackless coroutine where a coroutine *is* a struct, its state *is* one
+integer, and suspension *is* a controlled return. Allocation is the parent's choice (inline, arena,
+pool), which is attractive next to a stack and a shared state record per task. With compiler
+support the lowering could be done for the user: lift locals into a state struct, lower the body
+into a `switch`-driven resume function, and do it for any function that transitively reaches a
+suspension point, so signatures stay uncoloured.
 
-**Why this is interesting for FLang specifically.** Our previous discussions on this RFC repeatedly came back to allocation cost — every `Future(T)` heap-allocates its `FutureState`, every `spawn` allocates a 64 KiB stack, every combinator (`race`, `all`) allocates more state. SFEX inverts that: the coroutine frame is the struct, allocation strategy is whatever the parent chose, and a `Future(T)`-equivalent can live inline in the awaiter's frame, in an arena, in a pool — same flexibility we already give every other type via explicit allocators.
+**Decision (2026-11-10): rejected; the runtime is stackful (§3.1).** The requirement is `.await()`
+with no colouring. Transitive lowering does not stay uncoloured past three cases:
 
-**Compiler support is the unlock.** The C / hand-written-macro version forces awkward expression-level encoding (no locals across yield points unless promoted to struct members). With compiler support we can do the lowering ourselves: take a function containing `.await()` calls, lift its locals into a generated state struct, lower the body into a `switch`-driven resume function. This is the Rust/C++20 lowering, but **without function coloring at the signature level** — the lowering is performed on any function that transitively calls a yielding primitive, the resulting state struct *is* the `Future(T)`, and call sites see no signature change. Colorless async via stackless lowering, paid for in compiler complexity instead of stack memory.
+- **Function values.** A call through an `fn` value has no known target. Either every function
+  value is assumed to suspend (every one pays), or suspension becomes part of the function type,
+  which is colouring. Kotlin takes the second path: suspend function types.
+- **Foreign calls.** A `#foreign` callee is never lowered, so a C callback that reaches a
+  suspending FLang function cannot suspend.
+- **Recursion.** A recursive suspending function has an unbounded frame; it must box its
+  recursive calls, and that shows at the call site.
 
-**What this would change vs. the current design:**
+The alternatives were: (1) stackful; (2) stackless with machines written by hand, an enum plus a
+`step` function; (3) stackless with compiler-generated machines, which adds the cases above plus
+references across a suspension point (a frame holding a reference into itself cannot move),
+defers live at a suspension point, and which context a resumed frame sees. Only (1) meets the
+requirement.
 
-- `Future(T)` becomes a value type (the lowered state struct) instead of a refcounted handle. Allocation strategy becomes the awaiter's choice — inline, arena, heap — same shape as every other FLang type.
-- `spawn` no longer allocates a stack. It allocates the lowered state struct (size known at compile time per coroutine type) and registers it with the scheduler.
-- Combinators (`race`, `all`) compose state structs rather than heap-allocating fresh ones — the `race(a, b)` Future contains `a` and `b` by value.
-- Cancellation, `defer`-on-unwind, and the netpoller integration become a runtime-controlled state-transition rather than a stack manipulation.
-- We lose the "any C function can yield transparently" property — yielding requires a lowered call site. This is the trade.
-
-**Decision (2026-11-10): rejected; the runtime is stackful as specified in §3.1.** The requirement is `.await()` with no coloring, goroutine-style. The "colorless via transitive lowering" claim above does not survive three cases:
-
-- **Function values.** A call through an `fn` value has no known target, so the compiler cannot tell whether it suspends. Either every function value is assumed to suspend (every one pays), or suspension becomes part of the function type, which is coloring.
-- **Foreign calls.** A `#foreign` callee is never lowered, so a C callback that reaches a suspending FLang function cannot suspend.
-- **Recursion.** A recursive suspending function has an unbounded frame; it must box its recursive calls, and that shows at the call site.
-
-The alternatives considered were: (1) stackful, as in §3.1; (2) stackless with state machines written by hand (an enum plus a `step` function), which needs no compiler work but is tedious for application code; (3) stackless with compiler-generated machines, which brings the cases above plus references across a suspension point (a frame that holds a reference into itself cannot move), defers live at a suspension point, and which runtime context a resumed frame sees. Only (1) meets the requirement.
-
-**State machines in application code** do not need async. A machine that runs several transitions in one go is a state variable, a labeled `loop` and a `match` (RFC-042 §4). A machine that waits between steps (one loaded from a database, or driven by events) is a function: load the state, run until it must wait, store the new state, return. Nothing in this RFC changes either.
+**State machines in application code** do not need async. One that runs several transitions in
+one go is a state variable, a labeled `loop` and a `match` (RFC-042 §4). One that waits between
+steps is a function: load the state, run until it must wait, store it, return.
 
 ---
 
-## 4. Worked Examples
+## 4. Worked examples
 
-### 4.1 Parallel URL fetcher with per-URL timeout
+Illustrative: they call the proposed `std.task`, `std.net.http` and channel APIs, none of which
+exist. The syntax around them is current FLang.
 
-```flang
-import std.io
-import std.thread           // spawn, Future, race, timeout
-import std.chan             // Channel, chan, send, recv
-import std.net.http         // http.get : fn(String) Future(Result(Response, HttpError))
-import std.time             // sleep : fn(i64) Future(void)
-import std.collections      // Dict, dict
-import std.text
-
-pub type UrlCount = struct {
-    url:   OwnedString,
-    words: i64,
-}
-
-pub type FetchError = enum {
-    Http(HttpError),
-    Timeout,
-}
-
-pub fn count_words_across_urls(
-    urls:  String[],
-    alloc: &Allocator,
-) Dict(OwnedString, i64) {
-    let results = chan(Result(UrlCount, FetchError), alloc, capacity = 8)
-    defer results.deinit()
-
-    // Fan out: one coroutine per URL.
-    for url in urls {
-        spawn(&alloc, url, &results, fn(u: String, out: &Channel(Result(UrlCount, FetchError))) {
-            // Inside the coroutine: or_global() resolves to `alloc` via context slot.
-
-            // Race the request against a 5s timeout. If the timeout wins,
-            // the http.get future is cancelled.
-            let response = race(
-                http.get(u),
-                sleep(5_000).map(fn(_) Err(Timeout)),
-            ).await()
-
-            response match {
-                Ok(body) => {
-                    defer body.deinit()
-                    let count: i64 = 0
-                    for _ in body.as_view().split_whitespace() { count += 1 }
-                    out.send(Ok(UrlCount {
-                        url   = from_view(u, or_global()),
-                        words = count,
-                    })).await().unwrap()
-                },
-                Err(e) => {
-                    out.send(Err(e)).await().unwrap()
-                },
-            }
-        })
-    }
-
-    // Fan in: known count (urls.len).
-    let merged = dict(OwnedString, i64)   // allocates from or_global() → alloc
-    for _ in 0..urls.len {
-        results.recv().await() match {
-            Some(Ok(r))  => merged[r.url] = r.words,
-            Some(Err(e)) => io.eprintln($"fetch failed: {e}"),
-            None         => break,         // channel closed prematurely
-        }
-    }
-    return merged
-}
-```
-
-**What this exercises:**
-- `spawn(&alloc, args..., fn)` with positional args and no captures.
-- Transparent allocator inheritance via context (`from_view(u, or_global())` picks up `alloc`).
-- `race(...)` composing two Futures.
-- `.map` as a combinator on `Future(T)`.
-- `.timeout` alternatively available — equivalent form: `http.get(u).timeout(5_000).await()`.
-- `Channel.send().await()` yielding when buffered channel is full.
-- `Channel.recv().await()` yielding when channel is empty.
-- `None` on `recv` signals "channel closed, drained" — unreachable here because we don't close; present for streaming (§4.2).
-- Nothing in `count_words_across_urls` needed an `async fn` annotation. Nothing in `http.get` or `from_view` did either.
-
-### 4.2 Streaming producer/consumer with `close()`
+### 4.1 Parallel fetch with a per-URL timeout
 
 ```flang
-// Read lines from a reader, count non-blank ones; producer closes when done.
+import std.task
+import std.net.http            // proposed: get(url) GetOp; await: Result(Response, HttpError)
 
-pub fn count_non_blank_lines(
-    reader: &Reader,
-    alloc:  &Allocator,
-) i64 {
-    let lines = chan(OwnedString, alloc, capacity = 64)
-    defer lines.deinit()
+pub type FetchError = enum { Http(HttpError), Timeout }
 
-    spawn(&alloc, &reader, &lines, fn(r: &Reader, out: &Channel(OwnedString)) {
+fn count_words(url: String) Result(i64, FetchError) {
+    const got = with_timeout(5_000) { http.get(url).await() }
+    const response = got match {
+        Some(Ok(r)) => r,
+        Some(Err(e)) => return Err(Http(e)),
+        None => return Err(Timeout),
+    }
+    defer response.deinit()
+    return Ok(word_count(response.body()))       // an ordinary function; no annotation
+}
+
+pub fn total_words(urls: String[]) i64 {
+    return concurrent { s =>
+        let tasks = list(urls.len)
+        for url in urls { tasks.push(s.spawn { count_words(url) }) }   // captures url by ref
+        let total: i64 = 0
         loop {
-            r.read_line() match {
-                Ok(Some(line)) => {
-                    out.send(line).await().unwrap()
-                    // line ownership transfers into the channel; copy-in frees sender copy
-                },
-                Ok(None) => break,          // EOF
-                Err(_)   => break,
-            }
+            const t = tasks.pop() match { Some(t) => t, None => break }
+            total += t.await().unwrap_or(0)
         }
-        out.close()
-    })
-
-    let count: i64 = 0
-    loop {
-        lines.recv().await() match {
-            Some(line) => {
-                defer line.deinit()
-                if line.as_view().trim().len > 0 { count += 1 }
-            },
-            None => break,                  // producer closed
-        }
+        tasks.deinit()
+        total
     }
-    return count
 }
 ```
 
-**What this exercises:**
-- Unknown-count stream: producer `close()`s, consumer drains until `None`.
-- Ownership transfer of `OwnedString` through the channel.
-- Independent consumer coroutine is implicit — we're consuming in the parent, producer is spawned.
+What it shows: no annotation on any function; captures in `spawn` bodies; awaiting consumes each
+task; the timeout is a child scope; cancellation from `with_timeout` reaches `http.get` as a
+value. `tasks` holds `Task`s in an ordinary `List`, which D3 may restrict (RFC-099 bans
+stack-only types as generic arguments outside `#stack` bindings).
 
-### 4.3 HTTP handler with context
+### 4.2 Streaming producer and consumer
 
 ```flang
-pub type RequestCtx = struct {
-    id:     u64,
-    logger: &Logger,
+pub fn count_non_blank_lines(reader: &Reader) i64 {
+    let lines = channel(64)
+    defer lines.deinit()
+    return concurrent { s =>
+        const producer = s.spawn {          // D2: with a result-less builder, no binding
+            loop {
+                reader.read_line() match {
+                    Ok(Some(line)) => {
+                        if lines.send(line).await().is_err() { break }
+                    },
+                    else => break,
+                }
+            }
+            lines.close()
+        }
+        let count: i64 = 0
+        loop {
+            lines.recv().await() match {
+                Ok(line) => {
+                    if line.view().trim().len > 0 { count += 1 }
+                    line.deinit()
+                },
+                Err(_) => break,
+            }
+        }
+        producer.await()
+        count
+    }
 }
-
-pub fn handle_request(req: &Request, resp: &ResponseWriter, alloc: &Allocator) {
-    let rc = RequestCtx { id = next_request_id(), logger = default_logger() }
-
-    // Augment the current context with the request context,
-    // then spawn the handler so children inherit it.
-    let ctx = current_context().with(&rc)
-
-    spawn_in(ctx, &alloc, req, resp, fn(r: &Request, w: &ResponseWriter) {
-        // Anywhere in the handler tree (including nested spawns):
-        let rc = current_context().get(RequestCtx).unwrap()
-        rc.logger.info($"[{rc.id}] {r.method} {r.path}")
-
-        let body = fetch_upstream(r.url_param("u")).await()
-        w.write(body).await().unwrap()
-    }).await()
-}
-
-// spawn_in: context-override form of spawn
-fn spawn_in(ctx: Context, alloc: &Allocator, args..., f) Future(T)
 ```
 
-**What this exercises:**
-- `Context.with(v)` to inject a value.
-- Nested `spawn` inheriting the augmented context without explicit threading.
-- The same primitive that carries the allocator carries request-scoped state (tracing ID, logger).
+What it shows: an element type inferred from the first `send`; ownership of each `OwnedString`
+moving through the channel; drain-until-closed. With only `spawn` (D2), the producer's
+`Task(void)` must be bound and awaited, or W2006 fires.
+
+### 4.3 Request handler with context
+
+```flang
+pub context request_id: u64 = 0
+
+pub fn serve(listener: &Listener) {
+    concurrent { s =>
+        loop {
+            const conn = listener.accept().await() match {
+                Ok(c) => c,
+                Err(_) => break,
+            }
+            s.spawn {                         // D2: a result-less builder would fit here
+                context(request_id = next_request_id()) {
+                    handle(conn)              // reads context.request_id and context.logger
+                }
+            }
+        }
+    }
+}
+```
+
+What it shows: request-scoped state is a `context` rebind, not a context value; every nested
+scope inherits it. `conn` is captured by reference by a task that outlives the loop iteration
+binding it, which is exactly the hazard D3 and D7 must settle: as written, the next `accept`
+rebinds `conn` while the previous task may still read it. A sound form moves `conn` into the
+task, which needs owning closures or an argument-passing `spawn`.
 
 ---
 
 ## 5. Implementation
 
-Three layers: **runtime (C)**, **stdlib (FLang)**, **compiler (minimal / none)**.
+Three layers: **runtime (C)**, **stdlib (FLang)**, **compiler (small)**.
 
-### 5.1 Runtime — C (`stdlib/std/runtime/async.c`, `async.h`, platform-specific)
+### 5.1 Runtime: C (`stdlib/std/runtime/`)
 
-New directory: `stdlib/std/runtime/`. Companion `.c` files follow the existing BuildCache convention (architecture.md §"Build Cache"). Platform-specific files gated via `#if(platform.os == ...)` on the FLang side and `#ifdef` on the C side.
+Companion `.c` files follow the existing build-cache convention (`docs/architecture.md`
+§Build Cache); platform files are gated with `#if(platform.os == ...)` on the FLang side and
+`#ifdef` on the C side.
 
-**Components:**
+1. **Context switching.** `ucontext` first (POSIX); fcontext-style assembly for x86_64 and arm64
+   later; Fibers on Windows.
+2. **Stacks.** A virtual reservation per coroutine with a guard page at its base; the OS commits
+   pages as they are touched. Overflow is SIGSEGV on the guard, reported with a diagnostic.
+3. **Scheduler.** A `Worker` per OS thread; a fixed 256-slot Chase–Lev deque, overflow to a global
+   queue; random-sibling stealing; parking on `pthread_cond_t` / `WaitForSingleObject`.
+4. **Netpoller.** io_uring (Linux ≥ 5.6) with an epoll fallback chosen by a startup probe; kqueue
+   on macOS and BSD; IOCP on Windows. The abstraction is completion-oriented; readiness backends
+   emulate completion on the worker side.
+5. **Timer wheel.** Hierarchical, 1 ms tick, per worker, merged on idle.
+6. **Atomics.** `stdlib/std/atomic.c` for job state and task completion.
+7. **Jobs.** A job record per scope: parent pointer, cancelled flag, child count, waiter list.
 
-1. **Coroutine context switching.** Start with `ucontext.h` (POSIX, portable). Plan: replace with fcontext-style assembly (x86_64, arm64) for speed in a follow-up. Windows: Fibers API.
-2. **Stack allocation.** Reserve a virtual range per coroutine with a guard page at its base, and let the OS commit pages only as they are touched (§7 q8). Stack overflow = SIGSEGV on guard, fail-fast with a diagnostic. Stacks never grow or move (§9).
-3. **Scheduler.** `Worker` struct per OS thread. Local run queue = fixed-size Chase–Lev deque (256 slots); overflow pushes to shared global queue. Idle workers steal from a random sibling's tail; failed steal rounds park on `pthread_cond_t` / `WaitForSingleObject`.
-4. **Netpoller.** `io_uring` (Linux ≥5.6, primary; falls back to `epoll` on older kernels), `kqueue` (macOS, BSD), `IOCP` (Windows). Detection is runtime: probe `io_uring_setup` at startup and select epoll if unavailable or if a feature flag forces it. The netpoller abstraction is **completion-oriented** (matching io_uring and IOCP); readiness-based backends (kqueue, epoll fallback) emulate completion on top — read/write happen on the worker side after the readiness event, with the result delivered to the registered Future. Dedicated poller per platform's native idiom (Linux runs inline on an idle worker; Windows IOCP gets a pool). Events translate to waker invocations on registered Futures. Future work: linked SQE chains for fused submit-and-await on io_uring.
-5. **Timer wheel.** Hierarchical (tick = 1 ms). Per-worker local wheel; global merge on idle. Used by `sleep` and `.timeout`.
-6. **Atomic primitives.** Reuse existing `stdlib/std/atomic.c`. Future state uses `atomic_fetch_add` on the internal ref count and `atomic_compare_exchange` on the readiness flag.
-
-**C ABI surface** (called from FLang via `#foreign`):
+C surface (sketch; names not final):
 
 ```c
-// Coroutine lifecycle
 void*  flang_coro_spawn(void (*entry)(void*), void* arg, size_t stack_size);
-void   flang_coro_yield(void);                     // cooperative yield
-void   flang_coro_park(FlangFutureState* wait_on); // suspend until future ready
-void   flang_coro_resume(FlangCoro* c);            // scheduler-internal
+void   flang_coro_yield(void);
+void   flang_coro_park(void);                    /* suspend until woken */
+void   flang_coro_wake(FlangCoro* c);
 
-// Future state (allocated via the stdlib allocator the Future is bound to)
-FlangFutureState* flang_future_new(size_t result_size, size_t result_align);
-void              flang_future_complete(FlangFutureState* s, const void* result);
-void              flang_future_cancel(FlangFutureState* s);
-bool              flang_future_is_ready(FlangFutureState* s);
-void              flang_future_await(FlangFutureState* s, void* out_result);
+FlangJob* flang_job_new(FlangJob* parent);
+void      flang_job_cancel(FlangJob* j);         /* descendants too */
+bool      flang_job_is_cancelled(const FlangJob* j);
+void      flang_job_join(FlangJob* j);           /* wait for every child */
 
-// Netpoller
-void flang_net_register(int fd, int events, FlangFutureState* waker);
-// ...etc
+void flang_net_submit(/* op */, FlangCoro* waiter);
+void flang_timer_after(int64_t ms, FlangCoro* waiter);
 
-// Timer
-void flang_timer_after(int64_t ms, FlangFutureState* waker);
-
-// Scheduler init (called implicitly before main())
-void flang_runtime_init(int worker_count);  // 0 = autodetect
-void flang_runtime_shutdown(int exit_code);
+bool flang_runtime_on_worker(void);              /* inside a runtime coroutine? */
+void flang_runtime_ensure_started(void);         /* once-only, thread-safe (D11) */
 ```
 
-**Entry wrapping for `main`.** The compiler already generates a C `main`. Update generation to:
+**Entry.** Unchanged. The C backend's `main` (`lib/flang_codegen/src/c_backend.f`) keeps passing
+the root context's address to the constant initializers and calling FLang `main` (spec §4.4).
+`concurrent` starts the runtime on first use (§3.10), and test blocks reach it the same way.
 
-```c
-int main(int argc, char** argv) {
-    flang_runtime_init(0);
-    FlangFutureState* root = flang_future_new(sizeof(int32_t), alignof(int32_t));
-    flang_coro_spawn(flang_main_entry, root, /*stack=*/ DEFAULT_STACK);
-    int32_t code = 0;
-    flang_future_await(root, &code);
-    flang_runtime_shutdown(code);
-    return code;
-}
-```
+### 5.2 Stdlib: FLang
 
-The runtime is always live. `main` runs as coroutine 0 on worker 0.
+New modules: `std.task` (`Scope`, `Task`, `Job`, `concurrent`, `spawn`, `await`, `cancel`,
+`check_cancelled`, `yield_now`, `with_timeout`, `sleep`), `std.channel` (`Channel` and its
+operations). Names are proposals.
 
-### 5.2 Stdlib — FLang (`stdlib/std/thread/`, `stdlib/std/chan/`, `stdlib/std/context/`)
+Updated: `std.io` and `std.net` gain operations that suspend through the netpoller. Whether the
+blocking variants stay is open (§8 q2).
 
-**New modules** (colocated `.f` and `.c` where needed):
+`Task(T)` and `Channel(T)` are generic types under the usual monomorphization. `Task(T)` does not
+implement `op_deref`: it would hide `.await()`.
 
-- `stdlib/std/thread/spawn.f` — `spawn`, `Future(T)`, `Future.await`, `.cancel`, `.detach`, `.deinit`, `.map`, `.then`, `.or_else`, `.timeout`, `race`, `all`, `any`.
-- `stdlib/std/chan/channel.f` — `Channel(T)`, `chan`, `send`, `recv`, `close`, `try_send`, `try_recv`, `deinit`.
-- `stdlib/std/context/context.f` — `Context`, `with`, `get`, `current_context`, `current_coroutine_allocator`.
-- `stdlib/std/time/sleep.f` — `sleep(ms) Future(void)`.
+### 5.3 Compiler
 
-**Updated modules:**
+Nothing is required for v1:
 
-- `stdlib/std/allocator.f` — `or_global` becomes context-aware (lines ~106; see §3.5 snippet). Zero behavior change outside a coroutine.
-- `stdlib/std/io/**` — I/O primitives get async-aware variants that return `Future(T)`. File reads, socket reads, etc. route through the netpoller. Existing blocking variants remain available for sync-only paths (e.g. CLI startup code) — or are reimplemented as `async_variant.await()` on the root coroutine, since `main` is always in a coroutine. [OPEN — §7 q6.]
-- `stdlib/std/net/http.f` — `http.get(url) Future(Result(Response, HttpError))`.
+- **Entry point unchanged**: the runtime starts lazily (§3.10).
+- **Nothing for suspension.** No AST nodes, no keywords (`await` is a method name), no
+  state-machine transform.
+- **Depending on decisions:** a `concurrent { }` block construct (D1); `#stack` from RFC-099 or a
+  runtime check (D3); a "no captures" rule or owning closures (D7).
+- **Optional later:** `#no_suspend`, an assertion that an annotated function cannot reach a
+  suspension point. It is opt-in and never required of callers, so it is not colouring.
 
-**Generic specialization interaction.** `Future(T)`, `Channel(T)` are generic types — they follow the existing eager-monomorphization model (architecture.md §"Type System"). No new compiler support needed beyond what `Rc(T)` already exercises.
+The original draft's `src/FLang.Codegen.C/` and `src/FLang.Frontend/` paths named the retired C#
+compiler.
 
-**`op_deref` opportunity.** `Future(T)` could implement `op_deref` returning `&T` after the future is resolved, but this would hide `.await()` and violates the explicit-suspension principle. **Do not implement `op_deref` on `Future(T)`.** Keep `.await()` mandatory.
+### 5.4 Build
 
-### 5.3 Compiler changes
-
-**Minimal to none.** Stackful coroutines require no compile-time transform — the runtime owns stack switching. Concretely:
-
-- **No new AST nodes.** `spawn`, `.await()` are ordinary function and method calls. `race`, `all`, `.timeout`, etc. are ordinary calls.
-- **No new keywords.** `await` is not a keyword; it's a UFCS method.
-- **No state-machine transform.** No CPS conversion, no local-variable promotion to a closure environment, no async `.poll` trait generation.
-- **Main-function codegen update** (`src/FLang.Codegen.C/`): wrap emitted C `main` to call `flang_runtime_init` / `flang_runtime_shutdown` and run the user's `main` as coroutine 0 (§5.1).
-- **Optional future work:** a `#no_suspend` directive (`src/FLang.Frontend/`) that errors if the compiler can see a call path from the annotated function to any `.await()` or known yielding primitive. Useful for asserting that a held non-reentrant resource (mutex, arena) isn't abandoned mid-coroutine. **Out of scope for this RFC.**
-
-### 5.4 Build integration
-
-- Runtime `.c` files join the existing BuildCache machinery (`stdlib/std/runtime/*.c`, `architecture.md §"Build Cache"`). Platform-specific files selected at configure time based on target triple.
-- Link flags: `-lpthread` on POSIX, whatever Windows IOCP needs.
-- `flags_hash` invalidation already covers target triple changes.
+- Runtime `.c` files join the build cache; platform files are selected by target.
+- `-lpthread` on POSIX; what IOCP needs on Windows.
+- `flags_hash` already covers target changes.
 
 ---
 
-## 6. Phases / Ordering
+## 6. Phases
 
-1. **Phase 0 — Self-host first.** Per the decision in the design discussion, do not implement this RFC until the C# compiler is retired. This RFC is a design lock; implementation is gated on self-host readiness.
-2. **Phase 1 — Runtime skeleton (C).** `ucontext` + simple round-robin scheduler on a single worker. No I/O integration, no timers. Enough to spawn, yield, await, complete. Unit tests in C.
-3. **Phase 2 — FLang bindings.** `Future(T)` with `await` / `cancel` / `detach`. `spawn` with deep-copy args. Tests in `tests/harness/async/`.
-4. **Phase 3 — Context + allocator slot.** `Context` type, `current_context`, `current_coroutine_allocator`. Update `or_global` (§3.5). Verify existing stdlib continues to pass without modification.
-5. **Phase 4 — Channels.** `Channel(T)`, `send`/`recv`/`close`. Rendezvous + buffered.
-6. **Phase 5 — Combinators.** `race`, `all`, `any`, `.map`, `.then`, `.or_else`, `.timeout`. (`.timeout` depends on Phase 6.)
-7. **Phase 6 — Work-stealing + timers.** Multi-worker scheduler, hierarchical timing wheel, `sleep`.
-8. **Phase 7 — Netpoller.** epoll / kqueue / IOCP. Async `std.io.file` reads, async `std.net` sockets.
-9. **Phase 8 — HTTP client.** `std.net.http.get` atop async sockets. Enables Example 4.1 end-to-end.
-10. **Phase 9 — Docs.** Add §10 "Concurrency" to `docs/spec.md` referencing this RFC. Register new error codes in `docs/error-codes.md` (cancellation, channel-closed, timeout). Update `docs/architecture.md` with runtime overview.
+The original Phase 0 (wait for self-host) is met. Each phase lands with harness tests under
+`tests/harness/async/` and its colocated `test {}` blocks.
 
-Each phase has a green test gate; no advance until `dotnet test.cs async*` passes.
-
----
-
-## 7. Open Questions (for review)
-
-These are intentionally undecided. Reviewing them is the primary purpose of the "review before implementation" step.
-
-1. **Unawaited Future disposition.** `Future(T).deinit()` without prior `await` / `cancel` / `detach`: (a) implicit detach (Go-ish), (b) implicit cancel (Rust-ish), (c) panic (discipline-enforcing, matches manual `deinit`). **Proposal: (b) cancel on `deinit`** — matches FLang's explicit-resource grain and catches forgotten Futures.
-2. **`.await()` on a cancelled Future.** (a) Return `Result(T, Cancelled)` automatically (requires `Future(T)` to actually be `Future(Result(T, Cancelled))` under the hood, or a separate `CancellableFuture(T)`). (b) Panic. (c) Return zero-initialized `T` and set a thread-local flag. **Proposal: (a)** — every `.await()` returns `Result(T, Cancelled)`, user unwraps when they know cancellation can't happen.
-3. **Cancellation model: cooperative flag vs forced unwind.** Proposal: **cooperative flag, checked at every suspension point**. Matches Go/Kotlin. Forced unwind requires stack scanning + `defer` replay machinery that the runtime doesn't have.
-4. **`defer` during cancel.** When a coroutine is cancelled at a suspension point, its stack still has pending `defer`s. They must run in normal order during unwind. Confirm the existing FIR `defer` lowering is compatible with a runtime-driven unwind signal. Likely yes (defers run on scope exit regardless of path) but needs validation in Phase 2.
-5. **Channel double-close.** (a) Panic (Go). (b) `close` returns `Result(void, AlreadyClosed)`. **Proposal: (a) panic** — it's a bug, surface it loudly.
-6. **Sync I/O after async lands.** Does `std.io` retain synchronous-blocking variants, or does every I/O call return a Future and blocking is implemented as `.await()` on the main coroutine? **Proposal: all I/O returns Future; there is no "sync" variant; blocking at top-level is `.await()` on `main`.** Simpler surface; relies on `main`-as-root-coroutine.
-7. **`SyncAllocator` wrapper.** Needed for the common case of a shared allocator across sibling coroutines (§3.8 rule 4). Out of scope for this RFC but a required sibling feature before the design is practically usable. Track as follow-up ticket.
-8. **Stack size policy.** A C stack cannot be moved once it exists: raw pointers point into it, and unlike Go's runtime we do not know where every pointer is. So "start small and grow" is not available. The cheap option is a large virtual reservation per coroutine (proposal: 1 MiB) of which only the touched pages are committed, so an idle coroutine costs a page or two of real memory. Open: the default reservation, whether `spawn` can override it, and the Windows equivalent (reserve with `VirtualAlloc(MEM_RESERVE)`, commit through a guard page). Guard-page SIGSEGV → diagnostic with an "increase stack size" hint.
-9. **Number of workers.** Default = CPU count. Env var `FLANG_WORKERS`. Low-priority decision, safe default.
+1. **Runtime skeleton.** One worker, `ucontext`, spawn / yield / park / wake. C unit tests.
+2. **Scopes, tasks, jobs.** `concurrent`, `spawn`, `await`, `cancel`, `check_cancelled`, the `job`
+   context field, lazy runtime start. Requires D1-D5, D10 and D11.
+3. **Channels.** Rendezvous and buffered, `close`.
+4. **Work-stealing and timers.** Multiple workers, the timing wheel, `sleep`, `with_timeout`.
+   Requires D6.
+5. **Netpoller.** Async file and socket operations in `std.io` / `std.net`. Requires D8.
+6. **HTTP.** `std.net.http` client and server (the Linear project's goal).
+7. **Docs.** A concurrency section in `docs/spec.md`, error codes in `docs/error-codes.md`, the
+   runtime in `docs/architecture.md`.
 
 ---
 
-## 8. Risks / Pitfalls
+## 7. Open decisions
 
-- **`ucontext` is deprecated on some platforms.** Linux `glibc` still supports it but it's slow. Accept for v1; plan assembly replacement.
-- **Stack overflow in coroutines is silent without guard pages.** Ensure guard page configuration is tested per platform — a stack overflow that corrupts adjacent coroutines is an obscure class of bug.
-- **Deep-copy of args.** Cost depends on arg size. For large structs, this is a real overhead. Document the pattern: pass `&T` when you mean aliasing (and accept §3.6 liability), pass `T` when you mean a copy.
-- **Allocator thread-safety confusion.** §3.8 rule 4 is a sharp edge. The documentation must be explicit; a common shape will be "spawn with a SyncAllocator-wrapped arena." Mitigated by §7 q7.
-- **`defer` + cancel interaction.** Untested surface (§7 q4).
-- **Channel copy-in cost.** Large-payload channels pay a `memcpy` per message. Acceptable for v1; zero-copy transfer is a future optimization (transfer-with-allocator, per §3.4).
-- **`Future(T)` is heap-allocated (the `FutureState`).** Every `spawn` and every `race`/`all` etc. allocates. Acceptable; matches Tokio's `Arc<Task>` cost.
-- **Debugging experience.** Stackful coroutines don't show cleanly in gdb backtraces without coroutine-aware pretty-printers. Accept as known limitation; revisit if self-host tooling needs it.
-- **`errno` and thread-locals across `.await()`.** Work-stealing lets a coroutine park on one worker thread and resume on another. C code that reads `errno`, or any other thread-local, after a suspension reads the new thread's value. Mitigation: the context switch saves and restores `errno` with the coroutine. Other foreign thread-locals cannot be relied on across an `.await()`; document it, and pin a coroutine to its worker for code that needs them (future).
-- **Interaction with `#foreign` C code.** Foreign C that blocks on syscalls will block the underlying worker, starving other coroutines on that worker. Mitigation: mark known-blocking foreign calls with `#foreign_blocking` (future) and have the scheduler promote the worker to a dedicated OS thread for the duration. **Out of scope for this RFC.**
+None of these is decided. Each gives the options and this draft's recommendation.
 
----
+| # | Decision | Options | Recommendation |
+|---|---|---|---|
+| D1 | Scope form | (a) stdlib function `concurrent { s => }`, E1054 applies; (b) block construct `concurrent { }` with `return`/`break`/`?` acting on the enclosing function; (c) (a) now plus non-local return later | (a) for v1; it needs no compiler change |
+| D2 | Builder count and names | (a) one `spawn` returning `Task(T)`, `Task(void)` awaited or released; (b) `spawn` plus a result-less `go`/`launch` the scope joins; (c) other names | (b): fire-and-join work is common and a `Task(void)` to await is noise |
+| D3 | A task escaping its scope | (a) RFC-099 `#stack` on `Task`/`Scope`; (b) a runtime generation check that panics; (c) document only | (b) for v1, (a) when RFC-099 lands; note RFC-099 also bans `List(Task)` outside `#stack` bindings |
+| D4 | `.await()` result and cancellation | (a) `T`, cancellation as values from leaf primitives; (b) `Result(T, Cancelled)` from every await | (a) |
+| D5 | Fail-fast vs supervision | (a) `concurrent` supervises, `try_concurrent` fails fast; (b) `concurrent` fails fast (Kotlin), restricted to `Result` bodies | (a) |
+| D6 | Allocators in parallel children | §3.8 (a), (b), (c) | (a), with (b) for `temp_allocator` |
+| D7 | Detached work | (a) none in v1; (b) `detach(arg: move A, body: fn(move A))` with a no-capture rule; (c) wait for owning closures | (a) |
+| D8 | Dispatchers and blocking | `blocking { }` offload, `#foreign_blocking`, a context field naming the executor, or nothing in v1 | `blocking { }` in Phase 5; executor choice later |
+| D9 | Composition surface | an `Awaitable` contract; `race`/`any`/`select` signatures; `for v in ch`; `with_timeout` returning `T?` or `Result(T, Timeout)` | decide with Phase 2/3 |
+| D10 | Panics in tasks | process exit always; under `flang test`, fail the test from the coroutine stack without `longjmp` across stacks | needs design before Phase 2 |
+| D11 | Runtime start and edges | awaiting off the runtime (block the thread, panic, or implicit scope); runtime lifetime (process vs outermost scope); worker-count configuration before first start (§3.10) | block the thread; live for the process |
 
-## 9. Out of Scope
+## 8. Other open questions
 
-- **Async iterators / streams.** `for x in stream` with suspension. Can be built atop `Channel(T)`. Separate RFC.
-- **Structured concurrency (nursery / scope).** Kotlin/Trio-style scoped coroutines that must complete before their scope exits. Useful; separate RFC.
-- **Select over multiple channels.** Go-style `select { case ... }`. Implementable atop `any` over `recv` futures. Separate RFC if it becomes idiomatic.
-- **`SyncAllocator` variants.** Atomic arena, sync-wrapper vtable. Required sibling feature (§7 q7), separate ticket.
-- **Blocking-C-call isolation (`#foreign_blocking`).** Listed in risks; separate work.
-- **Cancellation error-hierarchy design.** If user code wants typed cancellation reasons (timeout vs user-requested), that's beyond the `Cancelled` binary signal proposed here.
-- **Growable stacks.** Not planned: a C stack cannot move (§7 q8). Lazily committed reservations give most of the benefit.
-- **Compile-time `#no_suspend` diagnostic.** Optional future hardening.
+1. **Channel double close**: panic (Go) or `Result`. Panic recommended.
+2. **Sync I/O**: keep blocking variants in `std.io`, or make every I/O operation an awaitable that
+   blocks the thread when awaited off the runtime (D11).
+3. **Stack size.** A C stack cannot move once raw pointers point into it, so "start small and
+   grow" is unavailable. Proposal: a 1 MiB reservation, touched pages committed. Open: the
+   default, a per-`spawn` override, the Windows path (`VirtualAlloc(MEM_RESERVE)` plus a guard
+   page).
+4. **Workers**: default CPU count, `FLANG_WORKERS` overrides.
+5. **Stdlib globals.** `std/test.c` and `std/profile.c` describe themselves as single-threaded
+   "like the FLang runtime"; every mutable global in the stdlib needs an audit before M:N.
+
+## 9. Risks
+
+- **`ucontext` is slow and deprecated on some platforms.** Accept for v1; replace with assembly.
+- **Stack overflow without a working guard page corrupts a neighbour.** Test the guard per
+  platform.
+- **Shared allocators** (D6) are a sharp edge until a `SyncAllocator` exists.
+- **Captures across iterations** (§4.3): a task capturing a loop binding by reference sees it
+  rebound. The scope keeps the frame alive, not the value.
+- **Uncooperative children** delay their awaiters and their scope (D4).
+- **Channel copy-in** costs a `memcpy` per message; zero-copy is later.
+- **Debugging.** Coroutine stacks do not show in gdb backtraces without coroutine-aware
+  printers.
+- **`errno` and thread-locals.** A coroutine can resume on another worker; the switch saves and
+  restores `errno`, and other C thread-locals are unreliable across a suspension.
+- **Blocking foreign calls** starve their worker until D8 is settled.
+
+## 10. Out of scope
+
+- Async iterators and streams beyond `Channel`.
+- `select` as syntax (a helper is D9).
+- `SyncAllocator` (a separate ticket; D6 depends on it).
+- Typed cancellation reasons beyond `Cancelled`.
+- Growable stacks (§8 q3).
+- `#no_suspend`.
+
+## Sources
+
+Kotlin behaviour cited in §2 and §3, from kotlinlang.org:
+
+- Coroutines basics: <https://kotlinlang.org/docs/coroutines-basics.html>
+- Exception handling and supervision: <https://kotlinlang.org/docs/exception-handling.html>
+- Context and dispatchers: <https://kotlinlang.org/docs/coroutine-context-and-dispatchers.html>
+- Channels: <https://kotlinlang.org/docs/channels.html>
+- API: [`runBlocking`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/run-blocking.html),
+  [`CoroutineScope`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-scope/),
+  [`Job`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-job/),
+  [`Deferred`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-deferred/),
+  [`withTimeout`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/with-timeout.html),
+  [`ensureActive`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/ensure-active.html),
+  [`NonCancellable`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-non-cancellable/),
+  [`CoroutineDispatcher`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-dispatcher/)
+
+The cancellation-and-timeouts guide page could not be retrieved while this revision was written;
+its claims here rest on the API pages above.
