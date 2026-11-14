@@ -26,7 +26,7 @@ Triage, Backlog, Todo, In Progress, In Review, Done, Canceled. Duplicate marks a
 ## Projects
 
 A project is a finite outcome with an end, named for what FLang can do once it is done:
-"FLang serves HTTP (RFC-005)". Ongoing work (bugs, stdlib growth, tooling polish) has no project;
+"FLang <capability> (RFC-NNN)". Ongoing work (bugs, stdlib growth, tooling polish) has no project;
 it lives in issues with area labels. All FLang projects belong to the FLang initiative.
 
 Order inside a project comes from milestones; hard ordering comes from "blocked by" relations.
