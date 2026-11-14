@@ -5,8 +5,8 @@
 //   1. `translate(&IrModule, &StringBuilder, &BuildOptions?)` - emit C source from FIR.
 //      Mechanical 1:1 walk; the mapping table lives in `docs/fir.md`.
 //   2. `discover_compiler(...)` - locate a working C toolchain.
-//      Windows: MSVC via vswhere; POSIX: $CC / clang / cc / gcc;
-//      macOS: also xcrun clang.
+//      Windows: MSVC via vswhere; macOS: $CC / xcrun clang / clang / cc / gcc;
+//      Linux: $CC / gcc / clang / cc.
 //   3. `compile(&IrModule, &BuildOptions)` - top-level entry point.
 //      Translates, writes the .c file to disk, invokes the discovered
 //      compiler, returns a `BuildResult`.
@@ -1772,7 +1772,8 @@ pub fn discover_compiler() Result(CompilerInfo, BuildError) {
         return Err(BuildError.NoCompilerFound)
     }
 
-    // POSIX: $CC first, then macOS-only xcrun clang, then clang/cc/gcc.
+    // POSIX: $CC first. macOS prefers Clang (xcrun, clang, cc, gcc); Linux prefers GCC (gcc, clang,
+    // cc).
     const cc_opt = env("CC")
     cc_opt match {
         Some(cc) => {
@@ -1786,15 +1787,25 @@ pub fn discover_compiler() Result(CompilerInfo, BuildError) {
         if can_spawn("xcrun") {
             return Ok(make_simple_info(CompilerKind.XcrunClang, "xcrun"))
         }
+        if can_spawn("clang") {
+            return Ok(make_simple_info(CompilerKind.Clang, "clang"))
+        }
+        if can_spawn("cc") {
+            return Ok(make_simple_info(CompilerKind.Clang, "cc"))
+        }
+        if can_spawn("gcc") {
+            return Ok(make_simple_info(CompilerKind.Gcc, "gcc"))
+        }
+        return Err(BuildError.NoCompilerFound)
+    }
+    if can_spawn("gcc") {
+        return Ok(make_simple_info(CompilerKind.Gcc, "gcc"))
     }
     if can_spawn("clang") {
         return Ok(make_simple_info(CompilerKind.Clang, "clang"))
     }
     if can_spawn("cc") {
-        return Ok(make_simple_info(CompilerKind.Clang, "cc"))
-    }
-    if can_spawn("gcc") {
-        return Ok(make_simple_info(CompilerKind.Gcc, "gcc"))
+        return Ok(make_simple_info(CompilerKind.Gcc, "cc"))
     }
     return Err(BuildError.NoCompilerFound)
 }

@@ -525,7 +525,8 @@ Compiler discovery (`discover_compiler`):
   the spawned `cl.exe` so it works outside a developer prompt. Falls
   back to `cl.exe` / `clang` / `gcc` on `PATH`.
 - **macOS** — `$CC` → `xcrun --find clang` → `clang` / `cc` / `gcc`.
-- **Linux** — `$CC` → `clang` → `cc` → `gcc`.
+- **Linux** — `$CC` → `gcc` → `clang` → `cc`. GCC is the reference
+  toolchain; CI pins `CC=gcc-14`.
 
 A candidate counts as present only when `<name> --version` exits 0: on
 POSIX a missing binary still spawns, and its child exits 127.

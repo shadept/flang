@@ -15,7 +15,7 @@ jobs:
   # else, or a base that cannot be diffed (first push, force push), builds.
   # Skipped jobs report success, so they do not block a merge.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     outputs:
       code: ${{ steps.filter.outputs.code }}
     steps:
@@ -53,7 +53,7 @@ jobs:
         include:
           - os: windows-latest
             rid: win-x64
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             rid: linux-x64
           - os: macos-latest
             rid: darwin-arm64
@@ -70,6 +70,13 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
+
+      - name: Pin GCC 14
+        if: matrix.rid == 'linux-x64'
+        shell: bash
+        run: |
+          gcc-14 --version
+          echo "CC=gcc-14" >> "$GITHUB_ENV"
 
       - name: Setup MSVC
         if: matrix.rid == 'win-x64'
@@ -104,7 +111,7 @@ jobs:
         include:
           - os: windows-latest
             rid: win-x64
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             rid: linux-x64
           - os: macos-latest
             rid: darwin-arm64
@@ -122,6 +129,13 @@ jobs:
         uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
+
+      - name: Pin GCC 14
+        if: matrix.rid == 'linux-x64'
+        shell: bash
+        run: |
+          gcc-14 --version
+          echo "CC=gcc-14" >> "$GITHUB_ENV"
 
       - name: Setup MSVC
         if: matrix.rid == 'win-x64'
