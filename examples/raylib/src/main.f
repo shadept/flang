@@ -1,15 +1,6 @@
-// Raylib demo - demonstrates FLang's C FFI binding generation.
-//
-// Build (macOS with Homebrew):
-//   brew install raylib
-//   flang -I $(brew --prefix raylib)/include/raylib.h \
-//         -L $(brew --prefix raylib)/lib/libraylib.a \
-//         --link "-framework CoreVideo" \
-//         --link "-framework IOKit" \
-//         --link "-framework Cocoa" \
-//         --link "-framework GLUT" \
-//         --link "-framework OpenGL" \
-//         main.f
+// Raylib demo: `flang build` generates `vendor/raylib.f` from the header `flang.toml` names.
+
+import std.option
 
 import vendor.raylib
 
@@ -45,13 +36,13 @@ fn draw(s: &State, bg: Color, ball_color: Color, rect_color: Color, text_color: 
     ClearBackground(bg)
     DrawRectangleRec(rect, rect_color)
     DrawCircle(s.ball_x as i32, s.ball_y as i32, 20.0, ball_color)
-    DrawText("FLang + Raylib FFI Demo".ptr, 10, 10, 20, text_color)
-    DrawText("Move the ball with arrow keys!".ptr, 10, 420, 20, text_color)
+    DrawText(Some("FLang + Raylib FFI Demo".ptr), 10, 10, 20, text_color)
+    DrawText(Some("Move the ball with arrow keys!".ptr), 10, 420, 20, text_color)
     EndDrawing()
 }
 
 pub fn main() i32 {
-    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "FLang + Raylib".ptr)
+    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, Some("FLang + Raylib".ptr))
     SetTargetFPS(60)
 
     let state = State { ball_x = 400.0, ball_y = 225.0 }

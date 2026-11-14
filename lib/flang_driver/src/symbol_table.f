@@ -301,6 +301,11 @@ pub fn agg_abi_safe(it: &TypeInterner, ty: Ty, reg: &NominalRegistry) bool {
     if !fields_abi_safe(it, &sd.fields, reg) {
         return false
     }
+    // A union's layout rule (every member at 0, size rounded to the strictest alignment) is C's
+    // own.
+    if sd.repr == StructRepr.CUnion {
+        return sd.fields.len > 0
+    }
     return c_layout_agrees(it, ty, sd, reg)
 }
 
@@ -360,7 +365,7 @@ fn align_to(off: usize, align: usize) usize {
 fn member_spellable(it: &TypeInterner, ty: Ty, reg: &NominalRegistry) bool {
     return it.node(ty) match {
         NArray(a) => member_spellable(it, a.elem, reg)
-        NNominal(_) => agg_abi_safe(it, ty, reg)
+        NNominal(_) => ty_is_niche_option(it, ty, reg) or agg_abi_safe(it, ty, reg)
         NPrim(_) => true
         NRef(_) => true
         NFunc(f) => f.conv == FnConv.ConvC

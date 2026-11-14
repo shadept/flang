@@ -298,6 +298,8 @@ pub type Checker = struct {
     // Set while a parameter's own type resolves, where a contract stands for a fresh bounded type
     // parameter (RFC-035); `sig_sugar` collects those parameters' bounds.
     sugar_ok: bool
+    // Nesting of `resolve_type_expr`: the outermost call checks the whole resolved type once.
+    type_depth: u32
     sig_sugar: List(BoundAtom)
     // The parameter whose type is resolving, for those bounds' diagnostics.
     sugar_param: String
@@ -756,6 +758,7 @@ pub fn checker() Checker {
         sig_open = false,
         sig_params_open = false,
         sugar_ok = false,
+        type_depth = 0,
         sig_sugar = list(0),
         sugar_param = "",
         sig_implied = list(0),
@@ -1067,9 +1070,56 @@ pub fn resolve_type_expr(self: &Checker, te: &TypeExpr) Ty {
         _ => false
     }
     self.sugar_ok = sugar and passes
+    self.type_depth = self.type_depth + 1
     const out = resolve_type_node(self, te)
+    self.type_depth = self.type_depth - 1
     self.sugar_ok = sugar
+    if self.type_depth == 0 and opaque_by_value(self, out, false) {
+        push_diag_e(
+            self,
+            type_expr_span(te),
+            E_OPAQUE_BY_VALUE,
+            from_view(
+                "an opaque C type has no storage FLang can see; it exists only behind a reference (`&T`, `&T?`)",
+            ),
+        )
+        return TY_ERROR
+    }
     return out
+}
+
+// Whether an opaque `#foreign struct {}` appears in `ty` other than as a reference's target.
+fn opaque_by_value(self: &Checker, ty: Ty, under_ref: bool) bool {
+    const it = &self.engine.interner
+    return it.node(ty) match {
+        NRef(inner) => opaque_by_value(self, inner, true)
+        NArray(a) => opaque_by_value(self, a.elem, false)
+        NNominal(nn) => {
+            if !under_ref and is_opaque(self, nn.id) {
+                return true
+            }
+            kids_opaque(self, nn.args)
+        }
+        NFunc(f) => opaque_by_value(self, f.ret, false) or kids_opaque(self, f.params)
+        NTuple(span) => kids_opaque(self, span)
+        _ => false
+    }
+}
+
+fn kids_opaque(self: &Checker, span: ChildSpan) bool {
+    for i in 0..span.len {
+        if opaque_by_value(self, self.engine.interner.child_at(span, i), false) {
+            return true
+        }
+    }
+    return false
+}
+
+fn is_opaque(self: &Checker, id: NominalId) bool {
+    return self.nominals.get(id).* match {
+        NomStruct(sd) => sd.repr == StructRepr.COpaque
+        _ => false
+    }
 }
 
 fn resolve_type_node(self: &Checker, te: &TypeExpr) Ty {
@@ -1203,7 +1253,7 @@ fn anon_struct_ty(self: &Checker, fields: move List(Field), span: SourceSpan) Ty
             decl_span = span,
             deprecation = null,
             is_simd = false,
-            is_foreign = false,
+            repr = StructRepr.Flang,
         }),
         $"__anon_{self.nominals.next_id}",
     )
@@ -1974,9 +2024,30 @@ fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedStr
         // reordered by descending alignment like any other - exactly the layout the marker exists
         // to opt out of.
         is_simd = is_simd_directive(td.directives),
-        is_foreign = is_foreign_directive(td.directives),
+        repr = struct_repr_of(td),
     }
     return register_collected(self, NominalDef.NomStruct(move sd), fqn)
+}
+
+// Read off the declaration, not the def: the def's fields stay empty until the body resolves, so an
+// opaque type cannot be told from a placeholder by its field list.
+fn struct_repr_of(td: &TypeDecl) StructRepr {
+    const foreign = is_foreign_directive(td.directives)
+    return td.body.* match {
+        AnonStruct(st) => {
+            if st.is_union {
+                return StructRepr.CUnion
+            }
+            if !foreign {
+                return StructRepr.Flang
+            }
+            if st.fields.len == 0 {
+                return StructRepr.COpaque
+            }
+            StructRepr.C
+        }
+        _ => StructRepr.Flang
+    }
 }
 
 fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedString) NominalId {
@@ -2039,6 +2110,9 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
     lower_type_params(self, id, anon.generics)
 
     let fields: List(Field) = list(anon.fields.len)
+    const outer_depth = self.type_depth
+    self.type_depth = 0
+    defer self.type_depth = outer_depth
     for &f in anon.fields {
         let ty = resolve_type_expr(self, f.type_expr)
         // A field name twice would make every later lookup ambiguous and silently pick the first -
@@ -2060,7 +2134,9 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
         })
     }
     self.env.pop_scope()
-    if is_foreign_directive(td.directives) {
+    if struct_repr_of(td) == StructRepr.CUnion {
+        check_union(self, td, &fields)
+    } else if is_foreign_directive(td.directives) {
         check_foreign_fields(self, &fields)
     }
     let assoc_params: List(VarId) = list(0)
@@ -2083,7 +2159,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
                 decl_span = sd.decl_span,
                 deprecation = sd.deprecation,
                 is_simd = sd.is_simd,
-                is_foreign = sd.is_foreign,
+                repr = sd.repr,
             }
             self.nominals.replace_body(id, NominalDef.NomStruct(move updated))
         }
@@ -2107,6 +2183,59 @@ fn check_foreign_fields(self: &Checker, fields: &List(Field)) {
                 $"field `{f.name}` of a `#foreign struct` is a FLang function value; a C callback is `#foreign fn(...)`",
             )
         }
+    }
+}
+
+// E2161: a union carries no tag, so nothing could say which member a release or a copy constructor
+// runs on. Its members are plain C data, and the layout itself is the C one.
+fn check_union(self: &Checker, td: &TypeDecl, fields: &List(Field)) {
+    if !is_foreign_directive(td.directives) {
+        push_diag_e(
+            self,
+            td.span,
+            E_UNION_MEMBER,
+            $"union `{td.name}` has no tag, so it exists only in C layout; write `#foreign union`",
+        )
+    }
+    if fields.len == 0 {
+        push_diag_e(self, td.span, E_UNION_MEMBER, $"union `{td.name}` has no members")
+    }
+    check_foreign_fields(self, fields)
+    for &f in fields {
+        if f.owned {
+            push_diag_e(
+                self,
+                f.decl_span,
+                E_UNION_MEMBER,
+                $"union member `{f.name}` is `owned`, but a union has no tag to say which member to release",
+            )
+        } else if !is_c_data(self, f.ty) {
+            push_diag_e(
+                self,
+                f.decl_span,
+                E_UNION_MEMBER,
+                $"union member `{f.name}` is not plain C data; a member is a primitive, reference, array, `#foreign` struct or union, or `#foreign fn`",
+            )
+        }
+    }
+}
+
+// A value C can hold without FLang's help: no hidden layout, no ownership.
+fn is_c_data(self: &Checker, ty: Ty) bool {
+    return ty_node(self, self.engine.resolve(ty)) match {
+        NPrim(_) => true
+        NRef(_) => true
+        NArray(a) => is_c_data(self, a.elem)
+        NFunc(f) => f.conv == FnConv.ConvC
+        NNominal(nn) => self.nominals.get(nn.id).* match {
+            NomStruct(sd) => sd.repr == StructRepr.C or sd.repr == StructRepr.CUnion
+            NomEnum(ed) => ed.fqn == FQN_OPTION and nn.args.len == 1
+                and ty_node(self, self.engine.interner.child_at(nn.args, 0)) match {
+                NRef(_) => true
+                _ => false
+            }
+        }
+        _ => false
     }
 }
 
@@ -6956,6 +7085,25 @@ fn check_or_pattern(self: &Checker, o: &OrPattern, expected: Ty) {
 fn check_struct_pattern(self: &Checker, s: &StructPattern, expected: Ty) {
     const declared = resolve_type_expr(self, s.type_expr)
     unify_expected(self, declared, expected, E_TYPE_MISMATCH, s.span)
+    const is_union = ty_node(self, self.engine.resolve(declared)) match {
+        NNominal(nn) => self.nominals.get(nn.id).* match {
+            NomStruct(sd) => sd.repr == StructRepr.CUnion
+            _ => false
+        }
+        _ => false
+    }
+    if is_union {
+        push_diag_e(
+            self,
+            s.span,
+            E_UNION_PATTERN,
+            from_view(
+                "a union has no tag, so a pattern cannot tell its members apart; read a member as a field",
+            ),
+        )
+        bind_union_pattern_vars(self, s)
+        return
+    }
     for &f in s.fields {
         let fty = struct_field_lookup(self, expected, f.name)
         if fty.is_none() {
@@ -6971,6 +7119,17 @@ fn check_struct_pattern(self: &Checker, s: &StructPattern, expected: Ty) {
         f.binding match {
             Some(p) => check_pattern(self, p, t, true)
             None => bind_pattern_var(self, f.name, t, f.span)
+        }
+    }
+}
+
+// Bind the names a refused union pattern introduces, so the arm body does not cascade into
+// unknown-identifier errors.
+fn bind_union_pattern_vars(self: &Checker, s: &StructPattern) {
+    for &f in s.fields {
+        f.binding match {
+            Some(p) => check_pattern(self, p, self.engine.fresh_var(), true)
+            None => bind_pattern_var(self, f.name, self.engine.fresh_var(), f.span)
         }
     }
 }
@@ -7770,7 +7929,24 @@ fn check_deref(self: &Checker, d: &DereferenceExpr) Ty {
         }
     }
     return ty_node(self, t) match {
-        NRef(inner) => inner
+        NRef(inner) => {
+            const opaque = ty_node(self, self.engine.resolve(inner)) match {
+                NNominal(nn) => is_opaque(self, nn.id)
+                _ => false
+            }
+            if opaque {
+                push_diag_e(
+                    self,
+                    d.span,
+                    E_OPAQUE_BY_VALUE,
+                    from_view(
+                        "cannot dereference a reference to an opaque C type: there is no value behind it FLang can see",
+                    ),
+                )
+                return TY_ERROR
+            }
+            inner
+        }
         NNominal(_) => user_deref(self, t, d.span)
         _ => self.engine.fresh_var()
     }
@@ -8492,6 +8668,15 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
             )
             return TY_ERROR
         }
+        if is_opaque(self, tn.unwrap()) {
+            push_diag_e(
+                self,
+                id.span,
+                E_OPAQUE_BY_VALUE,
+                $"`{id.name}` is an opaque C type: it has no size or layout FLang can see",
+            )
+            return TY_ERROR
+        }
         return reified_type_of(self, nominal_with_fresh_args(self, tn.unwrap()))
     }
 
@@ -8693,7 +8878,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
         decl_span = lam.span,
         deprecation = null,
         is_simd = false,
-        is_foreign = false,
+        repr = StructRepr.Flang,
     }
     // Registered by stable key: a re-demand's body pass reclaims the id the previous demand's
     // identically-ordered lambda held (see `begin_demand`).
@@ -12187,6 +12372,22 @@ fn report_missing_fields(self: &Checker, ty: Ty, present: &List(String), span: S
         NomStruct(st) => &st
         _ => return
     }
+    sd.repr match {
+        COpaque => {
+            push_diag_e(
+                self,
+                span,
+                E_OPAQUE_BY_VALUE,
+                $"`{sd.fqn}` is an opaque C type with no storage FLang can see; it exists only behind a reference",
+            )
+            return
+        }
+        CUnion => {
+            report_union_members(self, sd, present, span)
+            return
+        }
+        _ => {}
+    }
     for i in 0..sd.fields.len {
         let found = false
         for j in 0..present.len {
@@ -12203,6 +12404,26 @@ fn report_missing_fields(self: &Checker, ty: Ty, present: &List(String), span: S
             )
         }
     }
+}
+
+// A union literal writes one member and zeroes the rest of the storage, as C's designated
+// initializer does. Two members would overlap; none leaves nothing written.
+fn report_union_members(self: &Checker, sd: &StructDef, present: &List(String), span: SourceSpan) {
+    let written: usize = 0
+    for n in present.as_slice() {
+        if field_named(&sd.fields, n) {
+            written = written + 1
+        }
+    }
+    if written == 1 {
+        return
+    }
+    push_diag_e(
+        self,
+        span,
+        E_UNION_LITERAL,
+        $"a literal of union `{sd.fqn}` sets exactly one member; this one sets {written}",
+    )
 }
 
 // The struct's display name when `ty` is a nominal struct instantiated with fewer (or more) type
@@ -12780,7 +13001,7 @@ fn zonk_closures(self: &Checker) {
                     decl_span = sd.decl_span,
                     deprecation = sd.deprecation,
                     is_simd = sd.is_simd,
-                    is_foreign = sd.is_foreign,
+                    repr = sd.repr,
                 }
                 self.nominals.put(key, NominalDef.NomStruct(move updated))
             }
@@ -17099,7 +17320,7 @@ fn replay_closure(self: &Checker, f: &ClosureFact) {
         decl_span = f.decl_span,
         deprecation = null,
         is_simd = false,
-        is_foreign = false,
+        repr = StructRepr.Flang,
     }
     const nid = register_collected(self, NominalDef.NomStruct(move sd), from_view(f.fqn.view()))
     self.closures.set(nid, copy_sig(&f.sig))
@@ -17450,7 +17671,7 @@ fn assemble_context(self: &Checker) List(OwnedString) {
             decl_span = sd.decl_span,
             deprecation = sd.deprecation,
             is_simd = false,
-            is_foreign = false,
+            repr = StructRepr.Flang,
         })
         NomEnum(_) => null
     }
@@ -17521,7 +17742,7 @@ fn render_def_fingerprint(def: &NominalDef, sb: &StringBuilder) {
             sb.append("s|")
             sb.append(s.is_pub)
             sb.append(s.is_simd)
-            sb.append(s.is_foreign)
+            sb.append(s.repr as i32)
             sb.append("|")
             sb.append(s.type_params.len as u64)
             s.deprecation match {

@@ -55,22 +55,22 @@ The dep's `[project].name` IS its import namespace; library files live directly 
 
 ### Self-hosted library layout
 
-The self-hosted compiler is six libraries plus the `compiler` exe. Edges run one way; `flang_driver` is the only one that sees both halves of the pipeline. `flang_fmt` (the formatter) sits outside the pipeline chain: it depends only on `flang_parser` + `flang_core` and is consumed by `compiler` for `flang fmt`:
+The self-hosted compiler is its pipeline libraries plus the `compiler` exe. Edges run one way; `flang_driver` is the only one that sees both halves of the pipeline. `flang_fmt` (the formatter) sits outside the pipeline chain: it depends only on `flang_parser` + `flang_core` and is consumed by `compiler` for `flang fmt`:
 
 ```
-        flang_core        flang_codegen
-         ^      ^              ^
-         |      |              |
-  flang_parser  |              |
-         ^      |              |
-         |      |              |
-    flang_typer |              |
-         ^   ^  |              |
-         |   |  |              |
-         | flang_analysis      |
-         |   ^                 |
-         |   |                 |
-        flang_driver ----------+
+        flang_core        flang_codegen   flang_bindgen
+         ^      ^              ^               ^
+         |      |              |               |
+  flang_parser  |              |               |
+         ^      |              |               |
+         |      |              |               |
+    flang_typer |              |               |
+         ^   ^  |              |               |
+         |   |  |              |               |
+         | flang_analysis      |               |
+         |   ^                 |               |
+         |   |                 |               |
+        flang_driver ----------+---------------+
              ^
           compiler
 ```
@@ -84,6 +84,9 @@ The self-hosted compiler is six libraries plus the `compiler` exe. Edges run one
 | `flang_driver` | `lower.f`, `symbol_table.f`, `layout.f`, `compile.f` | checked program to FIR, then drives codegen, `cc` and the link |
 | `flang_codegen` | FIR types, C backend | FIR to C |
 | `flang_fmt` | `fmt.f` | CST-trivia rewriting formatter behind `flang fmt` |
+| `flang_bindgen` | `lexer.f`, `parser.f`, `consteval.f`, `macros.f`, `emit.f` | preprocessed C to a `vendor/` binding module; no dependencies, no IO |
+
+`flang_bindgen` stands outside the chain too, depending on nothing: `flang_driver/bindings.f` runs the preprocessor through `flang_codegen` and hands the text over.
 
 `flang_driver` depends on `flang_analysis` rather than the reverse: lowering needs a checked program, and `compile.f` orchestrates both halves. Keeping `compile.f` on the lowering side is what stops the two libraries forming a cycle - the lowering `test {}` blocks build their fixtures through `analyze_source_set`.
 
@@ -619,16 +622,43 @@ Self-hosted compiler only (RFC-025). `flang build -p` instruments the target pro
 
 **Runtime side** (`stdlib/std/profile.c`): probes maintain a call tree — one node per distinct call path, `{func_id, first_child, next_sibling, parent, calls, total_ticks}` in a preallocated pool with move-to-front sibling lists — plus a shadow stack of `{node, t_enter}`. The hot path is two raw cycle-counter reads (`rdtsc` / `cntvct_el0`; OS clock fallback), a usually-one-compare child lookup, and a few stores; ticks-to-ns conversion, name lookup, per-function aggregation, and sorting all happen at dump. Self time is interval-accounted at runtime: every probe event closes an interval billed to the node that was executing. (Deriving self as "span minus child spans" at dump would mis-attribute under recursion collapse — a re-entry's subtree hangs under the outer node, so the frames temporally in between would absorb its whole cost.) Enter reads the clock after its lookup and exit reads it first, so probe bookkeeping bills to the caller, where a startup calibration (timed enter/exit pairs against the empty tree) subtracts it from self times at dump. **Recursion is collapsed at runtime**: re-entering a function whose span is already open reuses the open node (call counted, time covered by the outer span, deeper distinct calls attach under the same node) — without this a recursive checker mints one path per recursion level and any pool drowns; a side effect is that no node ever has a same-function ancestor, so inclusive sums are correct by construction. Pool and stack sizes are baked in at build time (`--profile-nodes`, default 1Mi / `--profile-depth`, default 8Ki), handed to the runtime by the generated entry point before the first probe; overrun never corrupts pairing and is reported in the dump header. The folded file is cut at a fixed 32 MB budget that keeps the heaviest paths — folded lines are order-independent, so the cut drops only the lightest tail, and the dump says how much; the kept lines are written in first-entry order, so a viewer's time-ordered layout shows the program's phases left to right (true aggregates live in the left-heavy view — folded data carries no timestamps). `std.profile` exposes `dump()` / `reset()` for phase-scoped profiling; both are no-ops in uninstrumented builds. Single-threaded, like the FLang runtime.
 
-## C FFI Binding Generation — NOT IMPLEMENTED
+## C FFI Binding Generation (RFC-044)
 
-Generating FLang bindings from a C header (`flang -I raylib.h`) was a reference-compiler feature built on CppAst; the self-hosted CLI has no `-I` and no header parser. Bindings are hand-written today: `examples/raylib` carries a checked-in `vendor/` module.
+`[build.<os>].headers` entries become `vendor/<stem>.f` before `analyze_project` runs, so
+`import vendor.<stem>` resolves through the working-directory import rule like any other module.
+Semantics and the type mapping: `docs/spec.md` §7.6.1.
 
-Writing bindings by hand, the conventions to follow are the ones the generator used, and the ones the C backend still expects:
+```
+main.f::build_project
+  expand ${VAR} in headers
+  flang_driver.bindings::generate_vendor          per header, absolute path
+    stamp fresh? -> skip (no discovery, no spawn)
+    flang_bindgen.macros::probe_source            #include + one marker line per #define name
+    flang_codegen.c_backend::preprocess           cl /E | cc -E, include path = header dir + parent
+    flang_bindgen.bindgen::generate_bindings
+      lexer.lex_c      tokens, line markers (GNU and MSVC), #pragma lines
+      parser.parse_c   CModel: records, enums, typedefs, functions, macro probes
+      emit.emit_bindings  library-dir declarations only -> FLang text, warnings, file list
+    write vendor/<stem>.f and vendor/<stem>.stamp (tmp + rename)
+```
 
-- C pointers map to `Option(&T)`. C enums map to `pub const: i32`. C structs map to `#foreign struct`.
-- Foreign header paths travel on `IrModule.foreign_includes` and are emitted as `#include` directives in the generated C.
+- **No new toolchain.** The build's own C compiler preprocesses; `flang_bindgen` parses the result in
+  FLang, so it has no dependency and does no IO. Compiler extensions (`__declspec`,
+  `__attribute__`, calling conventions) are skipped by name; a declaration the parser cannot read
+  is recorded with its file and line and skipped to the next `;`. System headers hold many such;
+  only errors in the library's own files surface, as warnings.
+- **Macros.** Preprocessing deletes `#define`s and MSVC has no `-dM`, so object-like names are read
+  off the library's header text and the probe file asks the preprocessor to expand each between
+  `__flang_probe "NAME"` and `__flang_end`. The compiler does the expansion (`SDL_UINT64_C(1)`
+  arrives as `0x1ui64`); `consteval.f` folds integer constant expressions with C's types.
+- **Faithful, not safe.** Every pointer is `&T?`. A struct whose C layout FLang cannot reproduce
+  (bit-fields, packing, alignment attributes) is written opaque; whatever reaches it by value is
+  skipped. Names FLang reserves gain `_`; lowercase type names are capitalized. C never sees
+  FLang's type names, so renaming is ABI-neutral.
+- **Stamp.** `flang-bindgen 1`, the header path, then `<fnv-1a> <path>` per library header the
+  preprocessor visited. Hashing on each build is the only cost of an unchanged header.
 
-## Source Generators
+## Source Generators## Source Generators
 
 `TemplateExpander` (referred to as "source generators") runs **once**, between nominal-type collection and resolution (RFC-021 §2). One global worklist holds every invocation in import-topological + source order; each expansion's text is parsed as a declaration chunk, its declarations are **appended to the origin `ModuleNode`** (`ModuleNode.Append`) and its nominals collected on the spot, so later invocations see them. There are no synthetic modules, no module-path aliasing and no rounds. An invocation whose `Type` argument is not collected yet is parked and retried only after another expansion made progress (stdlib import cycles rule out a pure ordering); with no progress left it fails E2003. Invocations found inside generated code re-enter the worklist with generation + 1; generation 8 is E2119.
 

@@ -1,0 +1,13 @@
+[project]
+name = "bindgen_fixture"
+version = "0.1.0"
+kind = "exe"
+
+[build.windows]
+headers = ["include/fx.h"]
+
+[build.linux]
+headers = ["include/fx.h"]
+
+[build.macos]
+headers = ["include/fx.h"]

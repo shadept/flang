@@ -37,12 +37,14 @@ tools/cst_explorer/out.json
 # Intermediate C from compilation, but not hand-written stdlib/example sidecars.
 examples/**/*.c
 tests/**/*.c
+!tests/bindgen/src/*.c
 
 # Test harness: source files only.
 tests/harness/**
 !tests/harness/**/
 !tests/harness/**/*.f
 tests/harness/**/*.generated.f
+!tests/harness/**/_*.c
 
 # Examples: source and project files only.
 examples/**
@@ -53,6 +55,7 @@ examples/**/*.generated.f
 !examples/**/*.toml
 !examples/**/*.md
 !examples/**/.gitignore
+examples/**/vendor/
 
 # Editor and agent state.
 .vscode/

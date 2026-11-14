@@ -3026,6 +3026,10 @@ Report the issue with sample code that reproduces the error.
 | **E2156** | Type Checking     | A trailing lambda on a call with no parameter it can fill |
 | **E2157** | Type Checking     | A `#foreign struct` field of a FLang function type |
 | **E2158** | Semantic Analysis | A non-copyable value where only a copy can go |
+| **E2159** | Type Checking     | An opaque `#foreign struct {}` used by value |
+| **E2160** | Type Checking     | A union literal that does not set exactly one member |
+| **E2161** | Type Checking     | A union that is not `#foreign`, is empty, or holds a member that is not plain C data |
+| **E2162** | Type Checking     | A pattern destructuring a union |
 
 ### E2115: Unsupported Pattern Form
 
@@ -4138,6 +4142,106 @@ let x = r?.handle                   // error[E2158]
 
 Build each element on its own (`[open("a"), open("b")]`), or read through a reference
 (`r?.handle.fd`).
+
+---
+
+### E2159: An Opaque Type Used by Value
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+An empty `#foreign struct {}` is an incomplete C type (RFC-044): C declares it and FLang never sees
+its storage. It is held only behind a reference. A by-value parameter, return, field, binding,
+array element or generic argument, a literal, a dereference, and `size_of` / `align_of` /
+`type_info` of it are refused.
+
+#### Example
+
+```flang
+type Window = #foreign struct {}
+
+fn show(w: Window) {}                   // error[E2159]
+```
+
+#### Solution
+
+`fn show(w: &Window)`, or `&Window?` where C may hand back null.
+
+---
+
+### E2160: A Union Literal Not Setting Exactly One Member
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A `#foreign union` literal writes one member and zeroes the rest of the storage, as C's designated
+initializer does. Two members would overlap; none writes nothing.
+
+#### Example
+
+```flang
+type Num = #foreign union { i: i32, f: f32 }
+
+const n = Num { i = 1, f = 2.0 }        // error[E2160]
+```
+
+#### Solution
+
+`Num { f = 2.0 }`.
+
+---
+
+### E2161: A Union Outside C Layout
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A union has no tag, so nothing says which member is live. It exists only in C layout: it is written
+`#foreign union`, has at least one member, and each member is plain C data - a primitive, a
+reference, an array of those, a `#foreign` struct or union, or a `#foreign fn`. An `owned` member
+is refused: a release would not know which member to run on.
+
+#### Example
+
+```flang
+type Slot = #foreign union {
+    i: i32
+    owned p: &u8                        // error[E2161]
+}
+```
+
+#### Solution
+
+Keep ownership outside the union, or use an `enum`, whose tag records the live variant.
+
+---
+
+### E2162: A Pattern on a Union
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A struct pattern on a union would match whatever the bytes hold: there is no tag to test.
+
+#### Example
+
+```flang
+n match {
+    Num { i } => i                      // error[E2162]
+}
+```
+
+#### Solution
+
+Read the member as a field (`n.i`), after testing whatever field the C API uses as its tag.
 
 ---
 

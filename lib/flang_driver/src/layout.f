@@ -59,15 +59,17 @@ pub type EnumLayout = struct {
 pub type Repr = enum {
     Auto
     C
+    CUnion
 }
 
 // A struct's representation. `#foreign` locks the layout to C ABI rules (spec section 6); every
 // other struct gets the size-minimising auto layout.
 pub fn repr_of(def: &StructDef) Repr {
-    if def.is_foreign {
-        return Repr.C
+    return def.repr match {
+        Flang => Repr.Auto
+        CUnion => Repr.CUnion
+        C | COpaque => Repr.C
     }
-    return Repr.Auto
 }
 
 // Memoisation
@@ -304,9 +306,21 @@ fn fields_layout(
         }
     }
 
+    let offsets: List(usize) = list(n)
+    if repr == Repr.CUnion {
+        let widest: usize = 0
+        for i in 0..n {
+            offsets.push(0)
+            if fls[i].size > widest {
+                widest = fls[i].size
+            }
+        }
+        fls.deinit()
+        return .{ size = align_up(widest, max_align), align = max_align, offsets = move offsets }
+    }
+
     let order = field_order(&fls, repr, max_align)
 
-    let offsets: List(usize) = list(n)
     for i in 0..n { offsets.push(0) }
     let cursor: usize = 0
     for di in order {
@@ -329,7 +343,7 @@ fn fields_layout(
 fn field_order(fls: &List(Layout), repr: Repr, max_align: usize) List(usize) {
     let n = fls.len
     let order: List(usize) = list(n)
-    let is_c = repr match { C => true, Auto => false }
+    let is_c = repr != Repr.Auto
     if is_c {
         for i in 0..n { order.push(i) }
         return order
@@ -775,7 +789,7 @@ test "auto layout reorders fields by alignment to minimise padding" {
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
-        is_foreign = false,
+        repr = StructRepr.Flang,
     }
     let no_args: List(Ty) = list(0)
     let sl = struct_layout(&it, &def, &no_args, &reg)
@@ -821,7 +835,7 @@ test "C repr keeps declaration order and C padding" {
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
-        is_foreign = true,
+        repr = StructRepr.C,
     }
     let no_args: List(Ty) = list(0)
     let sl = struct_layout(&it, &def, &no_args, &reg)
@@ -829,6 +843,44 @@ test "C repr keeps declaration order and C padding" {
     assert_eq(sl.offsets[1], 8 as usize, "i64 padded to offset 8")
     assert_eq(sl.offsets[2], 16 as usize, "i16 follows the i64")
     assert_eq(sl.size, 24 as usize, "#foreign keeps the C padding")
+}
+
+test "C union overlaps members and rounds the widest to the strictest alignment" {
+    let it = type_interner()
+    defer it.deinit()
+    let reg = nominal_registry()
+    defer reg.deinit()
+    let fields: List(Field) = list(2)
+    fields.push(Field {
+        name = "bytes",
+        ty = it.array_of(prim_of(PrimitiveKind.U8), 13),
+        decl_span = none_span(),
+        owned = false,
+    })
+    fields.push(Field {
+        name = "wide",
+        ty = prim_of(PrimitiveKind.I64),
+        decl_span = none_span(),
+        owned = false,
+    })
+    let def = StructDef {
+        fqn = "U",
+        module = "",
+        is_pub = true,
+        type_params = list(0),
+        assoc_params = list(0),
+        fields = move fields,
+        decl_span = none_span(),
+        deprecation = null,
+        is_simd = false,
+        repr = StructRepr.CUnion,
+    }
+    let no_args: List(Ty) = list(0)
+    let sl = struct_layout(&it, &def, &no_args, &reg)
+    assert_eq(sl.offsets[0], 0 as usize, "first member at offset 0")
+    assert_eq(sl.offsets[1], 0 as usize, "second member overlaps the first")
+    assert_eq(sl.align, 8 as usize, "strictest member alignment")
+    assert_eq(sl.size, 16 as usize, "13 bytes rounded up to the i64 alignment")
 }
 
 test "generic struct substitutes type parameters" {
@@ -862,7 +914,7 @@ test "generic struct substitutes type parameters" {
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
-        is_foreign = false,
+        repr = StructRepr.Flang,
     }
     let args: List(Ty) = list(2)
     args.push(prim_of(PrimitiveKind.I64))

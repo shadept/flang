@@ -12,11 +12,12 @@ type Point = struct {
 
 fn kind_to_int(k: TypeKind) i32 {
     return k match {
-        Primitive => 0,
-        Array => 1,
-        Struct => 2,
-        Enum => 3,
+        Primitive => 0
+        Array => 1
+        Struct => 2
+        Enum => 3
         Function => 4
+        Union => 5
     }
 }
 

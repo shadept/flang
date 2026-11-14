@@ -6738,7 +6738,13 @@ fn register_agg(m: &IrModule, ctx: &LowerCtx, ty: &Ty) AggType? {
     }
 
     const a = h.unwrap()
-    m.add_agg(AggDef { name = a.name, size = a.size, align = a.align, fields = move fields })
+    m.add_agg(AggDef {
+        name = a.name,
+        size = a.size,
+        align = a.align,
+        fields = move fields,
+        is_union = sd.repr == StructRepr.CUnion,
+    })
     return h
 }
 

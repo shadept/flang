@@ -45,6 +45,8 @@ pub type AggDef = struct {
     size: usize
     align: usize
     fields: List(AggField)
+    // A C `union`: every member at offset 0.
+    is_union: bool
 }
 
 pub fn deinit(self: move AggDef) {

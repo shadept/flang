@@ -4,7 +4,9 @@ version = "0.1.0"
 kind = "exe"
 
 [build.windows]
+headers = ["${SDL3_PATH}/include/SDL3/SDL.h"]
 libs = ["${SDL3_PATH}/lib/x64/SDL3.lib"]
 
 [build.linux]
+headers = ["/usr/include/SDL3/SDL.h"]
 libs = ["SDL3"]

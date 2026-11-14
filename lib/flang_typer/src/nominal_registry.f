@@ -35,6 +35,11 @@ pub type VariantDef = struct {
 // definition. A variant released on its own would free a list that walk still reaches.
 pub fn deinit(self: move VariantDef) {}
 
+// How a struct's storage is laid out. `Flang` is free to reorder; the rest follow the C ABI.
+// `CUnion` overlaps every field at offset 0; `COpaque` is an incomplete C type with no storage
+// FLang can see, usable only behind a reference.
+pub type StructRepr = enum { Flang, C, CUnion, COpaque }
+
 pub type StructDef = struct {
     fqn: String
     module: String
@@ -47,7 +52,7 @@ pub type StructDef = struct {
     decl_span: SourceSpan
     deprecation: String?
     is_simd: bool
-    is_foreign: bool
+    repr: StructRepr
 }
 
 pub type EnumDef = struct {
@@ -198,7 +203,7 @@ fn with_fqn(def: move NominalDef, new_fqn: String) NominalDef {
             decl_span = s.decl_span,
             deprecation = s.deprecation,
             is_simd = s.is_simd,
-            is_foreign = s.is_foreign,
+            repr = s.repr,
         })
         NomEnum(e) => NominalDef.NomEnum(EnumDef {
             fqn = new_fqn,
@@ -262,7 +267,7 @@ fn clone_def(def: &NominalDef) NominalDef {
             decl_span = s.decl_span,
             deprecation = s.deprecation,
             is_simd = s.is_simd,
-            is_foreign = s.is_foreign,
+            repr = s.repr,
         })
         NomEnum(e) => NominalDef.NomEnum(EnumDef {
             fqn = e.fqn,
@@ -649,6 +654,6 @@ fn probe_struct() StructDef {
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
-        is_foreign = false,
+        repr = StructRepr.Flang,
     }
 }

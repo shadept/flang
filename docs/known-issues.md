@@ -14,6 +14,52 @@ When you discover a bug or limitation:
 
 ---
 
+### C Bindings From Headers: What Is Not Bound (RFC-044)
+
+**Status:** Open (limitations by design for v1)
+**Affected:** `lib/flang_bindgen`, `lib/flang_driver/src/bindings.f`
+
+`flang build` writes `vendor/<stem>.f` for each `[build.<os>].headers` entry. Left out, each named
+in a `warning: FFI:` line where it is a library declaration:
+
+- Variadic functions and `va_list` parameters: FLang has no variadic `#foreign` spelling.
+- Structs with bit-fields, under `#pragma pack` below 8, or with an alignment attribute: their C
+  layout is not one FLang reproduces, so they are emitted opaque (`#foreign struct {}`) and usable
+  behind a pointer only; functions taking them by value are skipped.
+- `long double`, `_Complex`, `__int128`; global variables; function-like macros; macros expanding to
+  anything but an integer constant expression, a single float literal, or string literals (raylib's
+  `CLITERAL(Color){...}` colors, `DEG2RAD`).
+- A function-pointer parameter is a non-null `#foreign fn(...)`, so C's "pass NULL for no callback"
+  has no spelling.
+- A C type named lowercase is capitalized (`rAudioBuffer` -> `RAudioBuffer`), since FLang types are.
+  C never sees the name.
+
+**Staleness.** The stamp hashes the library's own headers. Switching C compilers or system SDKs, or
+upgrading flang across a bindgen change, does not regenerate: delete `vendor/`.
+
+**Editor.** The LSP does not run generation, so `import vendor.<stem>` is unresolved in the editor
+until a `flang build`, `check` or `test` has written the module.
+
+---
+
+### Lowering Refuses Match Arms the Checker Accepts, and `flang test` Drops Their Tests
+
+**Status:** Open
+**Affected:** `lib/flang_driver/src/lower.f`, `compiler/src/main.f` (`flang test`)
+
+Two arm shapes type-check but lowering refuses the whole function ("body refused (unsupported
+construct)" / "unsupported match pattern"):
+
+- Comma-separated alternatives: `Bool, Char => ...` or `"==", "!=" => ...`. `|` works.
+- An or-pattern over payload variants: `TVoid | TFunc(_) | TRecord(_) => ...`.
+
+The refusal cascades to every caller as "calls undefined". Under `flang test`, a test block reaching
+a refused function is dropped and the run reports fewer tests, all passing, instead of failing the
+build. Either the checker should reject these shapes or lowering should accept them; and a refused
+body should fail `flang test` outright.
+
+---
+
 ### W1003/W1004 Miss Uses in an Inactive `#if` Branch and By-Name Lowering Hooks - RESOLVED
 
 **Was:** an inactive `#if` branch is never checked, so a function or import used only there (the
@@ -1863,7 +1909,7 @@ Verified by construction: a `#foreign struct` in a project named `my-proj` now e
 
 **Verified by running, not by reading.** A companion-C round trip (`rect_scale(Rect{1.5,2.5,3,4}, 2.0)` → `3 5 6 8`) confirms a 4×`f32` struct survives both directions; the same harness proves `struct { i32, f64 }` now refuses at compile time instead of returning a denormal (`3.45846e-323` — the tag's bits read as a double) as it did before the layout gate. `examples/csv` output is byte-identical to the reference-built binary. Regression test: `tests/harness/directives/foreign_aggregate_byvalue.f`.
 
-**Test coverage gap.** The float path has no harness test: it needs a hand-written companion `.c`, and `tests/harness/**` is gitignored except `*.f` — a committed `.c` there is indistinguishable from the generated `<test>.c`. It is covered by `examples/raylib` and by the scratch round trip above.
+**Test coverage gap (closed by RFC-044).** A harness helper module's companion C is now committed (`tests/harness/**/_*.c` is unignored; a generated `<test>.c` never starts with `_`). `directives/foreign_union.f` round-trips a float-only union through `_foreign_shim.c`, and `tests/bindgen` round-trips structs and unions through a generated binding. A `#foreign struct` member of type `&T?` is now spellable too (`member_spellable` accepts the pointer niche), so raylib's `Image` and `Mesh` cross by value.
 
 **Known rough edge, pre-existing:** FIR has no unsigned types, so a `u8` foreign parameter is declared `int8_t`. Same size and ABI, but a literal above 127 trips clang's `-Wconstant-conversion` under `-Werror`. Applies to every foreign scalar, not just aggregates.
 
@@ -1881,7 +1927,7 @@ Two details the reference already handled:
 - **`${VAR}` expansion.** `libs = ["${RAYLIB_PATH}/lib/libraylib.a"]` is expanded against the environment, and an undefined variable is an error naming every missing variable — not an empty string silently dropped from the link line. Expansion reads the environment, so it lives at the CLI edge (`main.f`) rather than inside the driver, which keeps `build_program` honest.
 - **ldflags are split on whitespace.** `"-framework CoreVideo"` is one manifest string but must reach clang as two argv words; joined, clang rejects it with `unknown argument`. A path containing a space cannot be spelled this way — take a nested array in the manifest if one ever needs to be.
 
-`headers` and `cflags` remain unconsumed: `headers` drives FFI binding generation from a C header, which the self-hosted compiler has no parser for. `examples/raylib` works because the reference generated `vendor/raylib.f` and the self-hosted compiler reuses it.
+`headers` drives binding generation since RFC-044 (`vendor/<stem>.f`, written before analysis). `cflags` remains unconsumed.
 
 ---
 

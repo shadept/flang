@@ -4,8 +4,7 @@
 
 import std.io.print
 
-// Foreign struct - layout locked to C ABI, uses inline directive syntax. Without -I headers, the
-// struct is emitted in the generated C code.
+// Foreign struct - layout locked to C ABI, uses inline directive syntax.
 pub type Point = #foreign struct {
     x: i32
     y: i32

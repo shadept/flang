@@ -121,7 +121,7 @@ _Avoid_: alloc strategy, custom allocator (the pattern itself is the term)
 ### Foreign function interface
 
 **#foreign**:
-The directive that marks a function as an external C symbol (no body, name not mangled) or locks a struct's layout to C ABI (no typedef emitted; provided by `#include`).
+The directive that marks a function as an external C symbol (no body, name not mangled), locks a struct's layout to C ABI, makes an empty `#foreign struct {}` an opaque C type usable only behind a reference, or declares a C union (`#foreign union`).
 _Avoid_: extern, c-import
 
 **#intrinsic**:
@@ -129,8 +129,7 @@ The directive marking a function the compiler recognises directly. Declared in `
 _Avoid_: builtin, magic
 
 **Binding generation**:
-The pipeline `flang -I <header>` runs: `ICHeaderParser` → intermediate model (`CFunction`, `CStruct`, `CEnumConstant`) → `FLangBindingGenerator` → `vendor/<name>.f`. C pointers map to `Option(&T)`; C enums to `pub const: i32`; C structs to `#foreign struct`.
-_Avoid_: bindgen (use the full term)
+What `flang build` does for each `[build.<os>].headers` entry (RFC-044): a probe file is preprocessed by the build's C compiler, `lib/flang_bindgen` reads the output into a C model (`CRecord`, `CFunc`, `CEnum`, `CTypedef`, `CMacro`) and writes `vendor/<stem>.f`, the raw binding layer. C pointers map to `&T?`; C enums to an `i32` alias plus `pub const`s; structs and unions to `#foreign struct` / `#foreign union`; incomplete structs to an opaque `#foreign struct {}`. `flang_bindgen` is the library's name; in prose, use the full term.
 
 ### Build infrastructure
 

@@ -1093,6 +1093,8 @@ pub type AnonStructType = struct {
     span: SourceSpan
     generics: GenericParam[]
     fields: StructField[]
+    // `union { ... }`: every field overlaps at offset 0.
+    is_union: bool
 }
 
 // One field declaration inside a struct type. FLang struct fields have no default initializer -

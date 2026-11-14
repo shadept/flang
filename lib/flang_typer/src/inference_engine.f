@@ -1416,7 +1416,7 @@ fn cp_struct(params: move List(VarId), fields: move List(Field)) StructDef {
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
-        is_foreign = false,
+        repr = StructRepr.Flang,
     }
 }
 

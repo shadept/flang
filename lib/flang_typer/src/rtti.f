@@ -36,14 +36,14 @@ fn short_name(fqn: String) String {
     }
 }
 
-// `TypeKind`'s declaration index for `t` (Primitive, Array, Struct, Enum, Function - the declared
-// values coincide with the indices).
+// `TypeKind`'s declaration index for `t` (Primitive, Array, Struct, Enum, Function, Union - the
+// declared values coincide with the indices).
 pub fn rtti_kind(it: &TypeInterner, reg: &NominalRegistry, t: Ty) i32 {
     return it.node(t) match {
         NArray(_) => KIND_ARRAY
         NFunc(_) => KIND_FUNCTION
         NNominal(nn) => reg.get(nn.id).* match {
-            NomStruct(_) => KIND_STRUCT
+            NomStruct(sd) => if sd.repr == StructRepr.CUnion { KIND_UNION } else { KIND_STRUCT }
             NomEnum(_) => KIND_ENUM
         }
         _ => KIND_PRIMITIVE

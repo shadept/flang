@@ -10,3 +10,4 @@ flang_parser = { path = "../flang_parser" }
 flang_typer = { path = "../flang_typer" }
 flang_codegen = { path = "../flang_codegen" }
 flang_analysis = { path = "../flang_analysis" }
+flang_bindgen = { path = "../flang_bindgen" }

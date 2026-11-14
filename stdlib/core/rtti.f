@@ -10,6 +10,7 @@ pub type TypeKind = enum {
     Struct = 2
     Enum = 3
     Function = 4
+    Union = 5
 }
 
 // Generic alias for TypeInfo.

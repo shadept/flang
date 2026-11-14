@@ -143,6 +143,7 @@ pub const KIND_ARRAY: i32 = 1
 pub const KIND_STRUCT: i32 = 2
 pub const KIND_ENUM: i32 = 3
 pub const KIND_FUNCTION: i32 = 4
+pub const KIND_UNION: i32 = 5
 
 pub type CtError = struct {
     code: String
@@ -600,6 +601,9 @@ fn ct_member(env: &CtEnv, recv: &CtValue, member: String, span: SourceSpan) Resu
             if member == "Function" {
                 return Ok(CtValue.Kind(KIND_FUNCTION))
             }
+            if member == "Union" {
+                return Ok(CtValue.Kind(KIND_UNION))
+            }
             ct_err("E2116", $"unknown compile-time member `{member}`", span)
         }
         TypeInfo(t) => ct_type_member(env, &t, member, span)
@@ -737,9 +741,9 @@ fn ct_type_member(
 
 pub fn type_info_of_decl(env: &CtEnv, td: &TypeDecl) CtTypeInfo {
     return td.body match {
-        AnonStruct(_) => CtTypeInfo {
+        AnonStruct(st) => CtTypeInfo {
             name = td.name,
-            kind = KIND_STRUCT,
+            kind = if st.is_union { KIND_UNION } else { KIND_STRUCT },
             source = CtTypeSource.FromDecl(td),
             copyable = null,
         }
@@ -1094,6 +1098,9 @@ fn kind_name(k: i32) String {
     }
     if k == KIND_FUNCTION {
         return "Function"
+    }
+    if k == KIND_UNION {
+        return "Union"
     }
     return "?"
 }

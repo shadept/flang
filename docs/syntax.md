@@ -172,6 +172,8 @@ type Filtered = struct(I: Iterator, F: fn(I.Item) bool) {    // bounded paramete
     f: F
 }
 type Color = #foreign struct { r: u8, g: u8, b: u8, a: u8 }  // C FFI struct
+type Window = #foreign struct {}                             // opaque C type, behind `&` only
+type Num = #foreign union { i: i32, f: f32 }                 // C union; `union` is contextual
 type Vec128 = #simd struct { _data: [u8; 16] }               // SIMD-aligned
 
 let p = Point { x = 10, y = 20 }                // construction (= not :)

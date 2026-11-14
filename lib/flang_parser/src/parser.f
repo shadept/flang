@@ -829,11 +829,24 @@ fn parse_type_decl_with_directives(self: &Parser, leading: move List(CstNodeId))
         // Plain alias `type T = OtherType` - parse a type expression. `type K = A + B` names a
         // combined contract.
         _ => {
-            const t = self.parse_bound_type()
-            self.push_node_into(&b, t)
+            if self.at_union_builder() {
+                b.kind = NodeKind.StructDecl
+                self.eat_into(&b)
+                self.parse_struct_body_into(&b)
+            } else {
+                const t = self.parse_bound_type()
+                self.push_node_into(&b, t)
+            }
         }
     }
     return self.finish(b)
+}
+
+// `union {` on a type declaration's right-hand side. `union` is contextual, not a keyword: it stays
+// available as an ordinary name everywhere else.
+fn at_union_builder(self: &Parser) bool {
+    return self.current_kind() == TokenKind.Identifier and self.current().text == "union"
+        and self.peek_kind(1) == TokenKind.OpenBrace
 }
 
 // The identifier a `#name` directive node carries, or the empty string.

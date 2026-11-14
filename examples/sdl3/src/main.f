@@ -1,6 +1,7 @@
 import std.io.print
+import std.option
 
-import sdl3.sdl
+import vendor.SDL
 
 const WIDTH: i32 = 800
 const HEIGHT: i32 = 450
@@ -13,45 +14,45 @@ type State = struct {
 }
 
 fn update(s: &State, dt: f32) {
-    if s.keys[SDL_SCANCODE_RIGHT] {
+    if s.keys[SDL_SCANCODE_RIGHT as usize] {
         s.x = s.x + SPEED * dt
     }
-    if s.keys[SDL_SCANCODE_LEFT] {
+    if s.keys[SDL_SCANCODE_LEFT as usize] {
         s.x = s.x - SPEED * dt
     }
-    if s.keys[SDL_SCANCODE_DOWN] {
+    if s.keys[SDL_SCANCODE_DOWN as usize] {
         s.y = s.y + SPEED * dt
     }
-    if s.keys[SDL_SCANCODE_UP] {
+    if s.keys[SDL_SCANCODE_UP as usize] {
         s.y = s.y - SPEED * dt
     }
 }
 
-fn draw(r: &u8, s: &State) {
-    SDL_SetRenderDrawColor(r, 245, 245, 245, 255)
-    SDL_RenderClear(r)
-    SDL_SetRenderDrawColor(r, 230, 41, 55, 255)
+fn draw(r: &SDL_Renderer, s: &State) {
+    SDL_SetRenderDrawColor(Some(r), 245, 245, 245, 255)
+    SDL_RenderClear(Some(r))
+    SDL_SetRenderDrawColor(Some(r), 230, 41, 55, 255)
     let box = SDL_FRect { x = s.x, y = s.y, w = 40.0, h = 40.0 }
-    SDL_RenderFillRect(r, &box)
-    SDL_SetRenderDrawColor(r, 100, 100, 100, 255)
-    SDL_RenderDebugText(r, 10.0, 10.0, "FLang + SDL3: arrows move, Esc quits".ptr)
-    SDL_RenderPresent(r)
+    SDL_RenderFillRect(Some(r), Some(&box))
+    SDL_SetRenderDrawColor(Some(r), 100, 100, 100, 255)
+    SDL_RenderDebugText(Some(r), 10.0, 10.0, Some("FLang + SDL3: arrows move, Esc quits".ptr))
+    SDL_RenderPresent(Some(r))
 }
 
 // True once the window is closed or Escape is held.
 fn should_quit(s: &State) bool {
     let ev: SDL_Event
-    while SDL_PollEvent(&ev) {
-        if ev.kind == SDL_EVENT_QUIT {
+    while SDL_PollEvent(Some(&ev)) {
+        if ev.type_ == SDL_EVENT_QUIT as u32 {
             return true
         }
     }
-    return s.keys[SDL_SCANCODE_ESCAPE]
+    return s.keys[SDL_SCANCODE_ESCAPE as usize]
 }
 
-fn run(r: &u8) {
+fn run(r: &SDL_Renderer) {
     let numkeys: i32 = 0
-    let keys = SDL_GetKeyboardState(&numkeys)
+    const keys = SDL_GetKeyboardState(Some(&numkeys)).unwrap()
     let s = State { x = 380.0, y = 200.0, keys = slice_from_raw_parts(keys, numkeys as usize) }
 
     let last = SDL_GetTicks()
@@ -70,25 +71,25 @@ pub fn main() i32 {
     }
     defer SDL_Quit()
 
-    const window = SDL_CreateWindow("FLang + SDL3".ptr, WIDTH, HEIGHT, 0) match {
+    const window = SDL_CreateWindow(Some("FLang + SDL3".ptr), WIDTH, HEIGHT, 0) match {
         Some(w) => w
         None => {
             println("SDL_CreateWindow failed")
             return 1
         }
     }
-    defer SDL_DestroyWindow(window)
+    defer SDL_DestroyWindow(Some(window))
 
-    const renderer = SDL_CreateRenderer(window, null) match {
+    const renderer = SDL_CreateRenderer(Some(window), null) match {
         Some(r) => r
         None => {
             println("SDL_CreateRenderer failed")
             return 1
         }
     }
-    defer SDL_DestroyRenderer(renderer)
+    defer SDL_DestroyRenderer(Some(renderer))
 
-    SDL_SetRenderVSync(renderer, 1)
+    SDL_SetRenderVSync(Some(renderer), 1)
     run(renderer)
     return 0
 }

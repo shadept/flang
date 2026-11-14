@@ -1,6 +1,7 @@
 # SDL3 Demo
 
-Calls [SDL 3.4](https://libsdl.org/) through hand-written `#foreign` bindings (`src/sdl.f`).
+Calls [SDL 3.4](https://libsdl.org/) (tested with 3.4.20) through bindings `flang build` generates
+from `SDL.h` into `vendor/SDL.f`.
 A red square moves with the arrow keys; Escape or closing the window quits.
 
 ## Windows

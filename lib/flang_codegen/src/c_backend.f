@@ -320,7 +320,10 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     const cc_start = monotonic_ns()
     let cc_out = string_builder(0)
     defer cc_out.deinit()
-    let spawn_r = run_compiler(&info, &argv, &cc_out)
+    let cc_err = string_builder(0)
+    defer cc_err.deinit()
+    let spawn_r = run_compiler(&info, &argv, &cc_out, &cc_err)
+    cc_out.append(&cc_err)
     if spawn_r.is_err() {
         if !keep_c {
             remove_file_quiet(c_path_owned.view())
@@ -568,7 +571,7 @@ fn is_entry_point(f: &Function) bool {
 // the wrong registers. `_Alignas` on the first member carries the FLang layout's alignment to the
 // struct itself.
 fn emit_agg_type(a: &AggDef, sb: &StringBuilder) {
-    sb.append("typedef struct ")
+    sb.append(if a.is_union { "typedef union " } else { "typedef struct " })
     sb.append(a.name)
     sb.append(" {")
     for i in 0..a.fields.len {
@@ -2370,10 +2373,50 @@ test "a float constant is emitted as an exact C99 hex-float literal" {
 // translation unit and deprecation on a clean build, and the caller only wants the noise when the
 // exit code says something went wrong. Matches the reference compiler (Compiler.cs), which captures
 // both streams and reports them inside the failure diagnostic.
+/// Run the C preprocessor over `path`, searching `include_dirs` for its `#include`s.
+///
+/// Returns the preprocessed text, line markers included, or the compiler's diagnostics when it
+/// exits with an error.
+pub fn preprocess(
+    info: &CompilerInfo,
+    path: String,
+    include_dirs: String[],
+) Result(OwnedString, OwnedString) {
+    let argv: List(OwnedString) = list(include_dirs.len + 4)
+    defer argv.deinit()
+    if info.is_xcrun() {
+        argv.push(from_view("clang"))
+    }
+    if info.is_msvc() {
+        argv.push(from_view("/nologo"))
+        argv.push(from_view("/E"))
+    } else {
+        argv.push(from_view("-E"))
+    }
+    for dir in include_dirs {
+        argv.push(if info.is_msvc() { $"/I{dir}" } else { $"-I{dir}" })
+    }
+    argv.push(from_view(path))
+    let out = string_builder(1 << 20)
+    let err = string_builder(256)
+    defer err.deinit()
+    const r = run_compiler(info, &argv, &out, &err)
+    if r.is_err() {
+        out.deinit()
+        return Err($"could not run `{info.path.view()}`")
+    }
+    if r.unwrap() != 0 {
+        out.deinit()
+        return Err(err.to_string())
+    }
+    return Ok(out.to_string())
+}
+
 fn run_compiler(
     info: &CompilerInfo,
     argv: &List(OwnedString),
     out: &StringBuilder,
+    err: &StringBuilder,
 ) Result(i32, BuildError) {
     let cmd = command(info.path.view())
     defer cmd.deinit()
@@ -2405,7 +2448,7 @@ fn run_compiler(
     let se = child.stderr()
     if se.is_some() {
         let s = se.unwrap()
-        out.append(read_all(s.reader()))
+        err.append(read_all(s.reader()))
         s.close()
     }
     const w = child.wait()

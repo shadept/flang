@@ -77,5 +77,6 @@ Superseded is a field, not a status: `implemented` + `superseded-by` shipped and
 | [041](041-native-calling-convention.md) | Native calling convention | compiler | draft | 2026-10-18 |  |
 | [042](042-loop-labels.md) | Loop labels | language | implemented | 2026-11-10 | 2026-11-13 |
 | [043](043-memory.md) | Heap memory as an owned resource | language | implemented | 2026-10-25 | 2026-10-26 |
+| [044](044-c-bindings-from-headers.md) | C bindings from headers, `#foreign union`, opaque types | compiler | implemented | 2026-11-13 | 2026-11-14 |
 | [098](098-context-across-libraries.md) | Context across separately compiled libraries | compiler | draft | 2026-10-25 |  |
 | [099](099-stack-only-types-and-bindings.md) | `#stack` types and stack-only bindings | language | draft | 2026-08-27 |  |

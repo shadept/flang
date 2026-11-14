@@ -43,6 +43,14 @@ pub const E_NO_OP_TRY: String = "E2092"
 pub const E_CLOSURE_TO_FN: String = "E2111"
 pub const E_FOREIGN_PAIR_FIELD: String = "E2157"
 
+// RFC-044: an opaque `#foreign struct {}` used by value; a union literal setting other than one
+// member; a union that is not `#foreign`, is empty, or holds a member that is not plain C data; a
+// union destructured by a pattern.
+pub const E_OPAQUE_BY_VALUE: String = "E2159"
+pub const E_UNION_LITERAL: String = "E2160"
+pub const E_UNION_MEMBER: String = "E2161"
+pub const E_UNION_PATTERN: String = "E2162"
+
 // Duplicate declarations the reference rejects at their declaration site: a struct field name twice
 // (E2076), an enum tag value twice (E2048), a `let`/`const`/global re-declared in the same scope
 // (E2005, shared with the duplicate-type code).

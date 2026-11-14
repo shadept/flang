@@ -519,6 +519,7 @@ fn project_struct_decl(self: &Projector, cst: CstNode) TypeDecl {
         span = self.span_from(cst),
         generics = frozen(generics),
         fields = frozen(fields),
+        is_union = !has_token(cst, TokenKind.Struct),
     })
     return TypeDecl {
         span = self.span_from(cst),
@@ -3333,6 +3334,7 @@ fn project_anon_struct_type(self: &Projector, cst: CstNode) TypeExpr {
         span = self.span_from(cst),
         generics = frozen(generics),
         fields = frozen(fields),
+        is_union = false,
     })
 }
 

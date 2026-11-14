@@ -32,6 +32,7 @@ import flang_analysis.project
 import flang_analysis.resolver
 import flang_codegen.backend
 import flang_core.diagnostic
+import flang_driver.bindings
 import flang_driver.compile
 import flang_fmt.fmt
 import flang_lsp.server
@@ -590,18 +591,6 @@ fn build_project(opts: &BuildOpts) i32 {
         return 1
     }
 
-    let ctx = resolve_ctx(&proj, opts.stdlib_path.view())
-    defer ctx.deinit()
-    ctx.set_comptime(opts.target)
-    // Lazy body demand is the default (RFC-022 §6): only the project's import closure is
-    // body-checked. `--eager` restores the total demand.
-    ctx.set_lazy(!opts.eager)
-    ctx.set_warn_unused(opts.warn_unused)
-    ctx.set_check_tests(opts.testing)
-
-    let unit = analyze_project(&ctx, &sources)
-    defer unit.deinit()
-
     // `[build.<os>]` native inputs. `${VAR}` expansion reads the environment, so it happens here at
     // the CLI edge rather than inside the driver; an undefined variable is an error, not an empty
     // string silently dropped from the link line.
@@ -612,6 +601,8 @@ fn build_project(opts: &BuildOpts) i32 {
     defer libs.deinit()
     let ldflags = expand_all(&plat.ldflags, &missing)
     defer ldflags.deinit()
+    let headers = expand_all(&plat.headers, &missing)
+    defer headers.deinit()
     if missing.len > 0 {
         let names = string_builder(64)
         defer names.deinit()
@@ -628,6 +619,23 @@ fn build_project(opts: &BuildOpts) i32 {
         return 1
     }
 
+    // Bindings first: `import vendor.<header>` resolves against what this writes.
+    if headers.len > 0 and !write_vendor_bindings(&headers) {
+        return 1
+    }
+
+    let ctx = resolve_ctx(&proj, opts.stdlib_path.view())
+    defer ctx.deinit()
+    ctx.set_comptime(opts.target)
+    // Lazy body demand is the default (RFC-022 §6): only the project's import closure is
+    // body-checked. `--eager` restores the total demand.
+    ctx.set_lazy(!opts.eager)
+    ctx.set_warn_unused(opts.warn_unused)
+    ctx.set_check_tests(opts.testing)
+
+    let unit = analyze_project(&ctx, &sources)
+    defer unit.deinit()
+
     // The runner gets its own artifact name so a `flang test` never overwrites the program, and so
     // the two keep separate build caches.
     const suffix = if opts.testing { "-test" } else { "" }
@@ -635,6 +643,24 @@ fn build_project(opts: &BuildOpts) i32 {
     defer out.deinit()
     const lib_root = proj.kind match { Lib => true, _ => false }
     return finish_build(&unit, proj.name.view(), out.view(), opts, &libs, &ldflags, lib_root)
+}
+
+// Generate `vendor/` modules for the manifest's headers, printing what was skipped. False when a
+// header could not be read.
+fn write_vendor_bindings(headers: &List(OwnedString)) bool {
+    const report = generate_vendor(headers, "vendor")
+    defer report.deinit()
+    for &w in report.warnings {
+        const m = $"warning: {w.view()}"
+        defer m.deinit()
+        println(m.view())
+    }
+    for &e in report.errors {
+        const m = $"error: {e.view()}"
+        defer m.deinit()
+        println(m.view())
+    }
+    return report.errors.len == 0
 }
 
 // Single-file mode: the file is the sole entry of a project-less build, so its imports resolve

@@ -447,7 +447,7 @@ fn foreign_nominal(result: &TypeCheckResult, decl: NodeId) bool {
             continue
         }
         const hit = def.unwrap().* match {
-            NomStruct(sd) => sd.is_foreign and node_id_of(sd.decl_span) == decl
+            NomStruct(sd) => sd.repr != StructRepr.Flang and node_id_of(sd.decl_span) == decl
             NomEnum(_) => false
         }
         if hit {

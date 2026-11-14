@@ -323,7 +323,7 @@ let a = align_of(Point)
 
 > `Type(T)` is the generic (phantom-`T`) view of the raw `TypeInfo`, à la Java `Class<T>` / `Class`; `Type(T)` -> `TypeInfo` is implicit phantom erasure. Descriptors are interned, so `&TypeInfo` pointer identity is type identity. See [ADR-0001](adr/0001-type-t-is-the-generic-view-of-typeinfo.md).
 
-`TypeInfo` (`core.rtti`) carries `name`, `size`, `align`, `kind: TypeKind`, `copyable` (the derived bit of RFC-028: false when the type or anything it holds by value declares an `owned` field), `fields: FieldInfo[]` (structs), `variants: VariantInfo[]` (enums), `params: ParamInfo[]` and `return_type` (function types). `type_info(T) &TypeInfo` is the descriptor of a type (`type_info(Point)`, `type_info(T)` in a generic body) and `type_of(v) &TypeInfo` the descriptor of a value's type. Both return the table entry, so `type_of(x) == type_info(u32)` is type identity; `type_info` is folded to the entry's address at the call site, as `size_of` is to a constant. It is also the introspection surface of source generators (§7.8): the same struct, the same members, so compile-time generation and runtime reflection never diverge. `TypeInfo` grows only for a demonstrated need — no convenience flags (`is_struct` is `kind == TypeKind.Struct`).
+`TypeInfo` (`core.rtti`) carries `name`, `size`, `align`, `kind: TypeKind`, `copyable` (the derived bit of RFC-028: false when the type or anything it holds by value declares an `owned` field), `fields: FieldInfo[]` (structs and unions; a union's members all at offset 0), `variants: VariantInfo[]` (enums), `params: ParamInfo[]` and `return_type` (function types). `type_info(T) &TypeInfo` is the descriptor of a type (`type_info(Point)`, `type_info(T)` in a generic body) and `type_of(v) &TypeInfo` the descriptor of a value's type. Both return the table entry, so `type_of(x) == type_info(u32)` is type identity; `type_info` is folded to the entry's address at the call site, as `size_of` is to a constant. It is also the introspection surface of source generators (§7.8): the same struct, the same members, so compile-time generation and runtime reflection never diverge. `TypeInfo` grows only for a demonstrated need — no convenience flags (`is_struct` is `kind == TypeKind.Struct`).
 
 **Project metadata**: `core.rtti` also exposes `ProjectInfo { name: String, version: String }` and `project_info() ProjectInfo`. The compiler substitutes each call with the metadata of the project that *lexically owns* the call site — sourced from that project's `flang.toml`. A library calling `project_info()` inside its own module sees its own name and version; the same call inside a consumer returns the consumer's. Call sites in stdlib modules fall back to `("stdlib", "")`. See `docs/architecture.md` for implementation details.
 
@@ -1034,7 +1034,7 @@ Prefixed with `#`, precede declarations:
 
 | Directive            | Purpose                                                         |
 | -------------------- | --------------------------------------------------------------- |
-| `#foreign`           | C calling convention: an imported or C-callable function (not mangled), a C function type, or a C-layout-locked struct |
+| `#foreign`           | C calling convention: an imported or C-callable function (not mangled), a C function type, a C-layout-locked struct, an opaque C type, or a C union |
 | `#deprecated("msg")` | Deprecation warning on usage                                    |
 | `#inline`            | Inlining hint                                                   |
 | `#intrinsic`         | Compiler-recognized stdlib intrinsic                            |
@@ -1085,22 +1085,92 @@ pub type Color = #foreign struct {
 }
 ```
 
+#### Opaque types: `#foreign struct {}`
+
+An empty `#foreign struct` is an incomplete C type, C's `struct X;`: C defines it and FLang never
+sees its storage. C has no empty structs, so the form means nothing else. Such a type is held only
+behind a reference (`&T`, `&T?`, and through one inside other types: `List(&T)`, `#foreign fn(&T)`).
+A by-value parameter, return, field, binding, array element or generic argument, a literal, a
+dereference, and `size_of` / `align_of` / `type_info` of it are E2159. Distinct opaque types do not
+unify, so one C handle is never passed where another is expected; `p as &u8` and back remain.
+
+```
+pub type SDL_Window = #foreign struct {}
+#foreign pub fn SDL_CreateWindow(title: &u8?, w: i32, h: i32, flags: u64) &SDL_Window?
+```
+
+#### `#foreign union`
+
+`#foreign union { ... }` is a C union. `union` is contextual: it is a builder only on a type
+declaration's right-hand side, followed by `{`, and an ordinary name everywhere else.
+
+- **Layout.** Every member sits at offset 0. Alignment is the strictest member's; size is the widest
+  member rounded up to it. Passed by value to or from a `#foreign fn`, it is emitted as a C `union`,
+  so the platform ABI classifies it as C does.
+- **Members** are plain C data: primitives, references (`&T`, `&T?`), arrays of those, `#foreign`
+  structs and unions, `#foreign fn` types. A union that is not `#foreign`, has no members, or has an
+  `owned` or other member is E2161: without a tag nothing says which member a release would run on.
+- **Access** reads and writes members as fields. Reading a member other than the last written
+  reinterprets its bytes, as in C.
+- **A literal** sets exactly one member (E2160): `SDL_Event { key = k }`. The rest of the storage is
+  zeroed. `.{ ... }` follows the same rule.
+- **Patterns** do not destructure a union (E2162); there is no tag to test.
+- `type_info(U).kind` is `TypeKind.Union`.
+
+```
+pub type SDL_Event = #foreign union {
+    type_: u32
+    key: SDL_KeyboardEvent
+    padding: [u8; 128]
+}
+```
+
 **Text across the boundary.** `String` is a plain struct, so it does not cross `#foreign`. `core.foreign` declares `FString`, a `#foreign struct { ptr: &u8, len: usize }`, with `s.to_fstr()` from a `String` and `c.view()` back. It is not NUL-terminated: the C side reads the length from `len` and makes its own terminated copy where an API needs one, refusing a text that holds a NUL rather than cutting it there. `std.process` hands every argument, environment pair and working directory to its shim this way.
 
 Note: `#foreign` and `#simd` must appear inline after `=` in type declarations (not as detached directives above the declaration). A field holding a callback is a `#foreign fn`; a `fn(...)` field is E2157.
 
 ### 7.6.1 C FFI Binding Generation
 
-The compiler can automatically generate FLang FFI bindings from C headers:
+A project names the C headers it binds in its manifest, per platform (RFC-044):
 
+```toml
+[build.windows]
+headers = ["${SDL3_PATH}/include/SDL3/SDL.h"]
+libs = ["${SDL3_PATH}/lib/x64/SDL3.lib"]
 ```
-flang -I raylib.h -L libraylib.a main.f
-```
 
-- `-I <header>` — parses the C header and generates `vendor/<name>.f` with `#foreign fn`, `#foreign struct`, and `pub const` declarations
-- `-L <lib>` — passes the library to the C linker
+Before module discovery, `flang build` (and `check`, `test`) writes `vendor/<stem>.f` for each
+header, and `import vendor.SDL` reads it. `${VAR}` expands as in `libs`. The header is preprocessed
+by the C compiler the build uses, with its own directory and that directory's parent on the include
+path; only declarations from files inside the header's directory are bound. A stamp beside the
+module (`vendor/<stem>.stamp`) hashes the library headers it came from: while they are unchanged,
+nothing is regenerated. `vendor/` is generated output, never edited or committed.
 
-**Type mapping:** C pointers map to `Option(&T)` (nullable). C enums map to `pub const: i32` values. C structs map to `#foreign struct` declarations. See `vendor/<name>.f` for the generated output.
+The module is the raw layer: a faithful transcription, with no ownership, nullability or
+pointer/length semantics a header does not state. A safe API is written by hand on top of it.
+
+| C | FLang |
+| --- | --- |
+| `char`, `signed char`, `unsigned char` | `u8`, `i8`, `u8` |
+| `short`, `int`, `long long` and unsigned forms | `i16`, `i32`, `i64`, `u16`, `u32`, `u64` |
+| `long`, `unsigned long` | the host's width: `i32`/`u32` on Windows, `i64`/`u64` elsewhere |
+| `float`, `double`, `_Bool` | `f32`, `f64`, `bool` |
+| `intN_t`, `uintN_t`, `size_t`, `ptrdiff_t`, `intptr_t`, `uintptr_t` | `iN`, `uN`, `usize`, `isize`, `isize`, `usize` |
+| `T*`, `void*` | `&T?`, `&u8?`: every pointer may be null, parameters and returns alike |
+| function pointer | `#foreign fn(...) R` |
+| `T x[N]` member | `[T; N]` |
+| `struct` / `union` | `#foreign struct` / `#foreign union` (§10) |
+| incomplete `struct S` | `#foreign struct {}`, an opaque type (§10) |
+| `enum E { ... }` | `pub type E = i32` (`u32` when a value exceeds `i32`) and a `pub const` per enumerator |
+| `typedef T Name` | `pub type Name = T`, a transparent alias |
+| object-like `#define` folding to an integer constant | `pub const`, typed as C types it (`0x20u` is `u32`) |
+| object-like `#define` of string literals | `pub const NAME = "..."`; C takes `Some(NAME.ptr)` |
+| object-like `#define` of one float literal | `pub const NAME: f32` (`f` suffix) or `f64` |
+
+A C name FLang reserves gains a trailing `_` (`type_`); a C type named lowercase is capitalized.
+What has no FLang spelling is left out and named in a `warning: FFI:` line: variadic functions,
+`va_list`, `long double`, and other macros. A struct with bit-fields, packing or an alignment
+attribute is emitted opaque. docs/known-issues.md lists the gaps.
 
 ### 7.7 Compile-Time Conditional `#if`
 
