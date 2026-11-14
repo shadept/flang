@@ -1,7 +1,7 @@
 ---
-status: implemented
 type: language
 created: 2026-08-30
+linear: SH-45
 implemented: 2026-08-31
 superseded-by: RFC-033
 relates: [RFC-026, RFC-020, RFC-016]

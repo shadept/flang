@@ -1,7 +1,7 @@
 ---
-status: draft
 type: language
 created: 2026-04-21
+linear: SH-14
 relates: [RFC-042]
 ---
 

@@ -1,7 +1,7 @@
 ---
-status: draft
 type: language
 created: 2026-08-27
+linear: SH-69
 requires: [RFC-014]
 relates: [RFC-005, RFC-012]
 ---

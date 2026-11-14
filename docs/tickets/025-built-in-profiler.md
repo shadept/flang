@@ -1,14 +1,13 @@
 ---
-status: in-progress
 type: tooling
 created: 2026-08-27
+linear: P-SH-7
+accepted: 2026-08-27
 requires: [RFC-015]
 relates: [RFC-023]
 ---
 
 # RFC-025: Built-in profiler
-
-In progress - phase 1 landed 2026-08-27 (see §Phases for its deviations). Next: phase 2, allocation churn counters.
 
 ## Summary
 

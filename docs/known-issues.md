@@ -1,16 +1,19 @@
 # Known Issues & Technical Debt
 
-This document tracks known bugs, limitations, and technical debt in the FLang compiler.
+This document records limitations by design and the bug backlog from before FLang moved to Linear.
 
 ---
 
 ## How to Add Items
 
-When you discover a bug or limitation:
-
-1. Add it to the appropriate section
-2. Include: Status, Affected components, Problem description, Solution, Related tests
-3. Update when fixed (remove or move to bottom)
+- **New bug:** open a Linear issue in team `SH` with labels `flang`, `Bug` and the area (see
+  `docs/agents/issue-tracker.md`). Do not add it here.
+- **Limitation by design** (what a first cut leaves out, what bindgen cannot bind): add it here.
+  Include: Status, Affected components, Problem description, Solution, Related tests.
+- **An existing open entry you start working on:** move it to a Linear `Bug` issue first, then
+  delete the entry here. Entries move one at a time, as they are touched; there is no bulk
+  migration.
+- **Fixed:** delete the entry. Git history keeps it.
 
 ---
 

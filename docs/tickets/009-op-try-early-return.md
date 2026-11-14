@@ -1,7 +1,7 @@
 ---
-status: implemented
 type: language
 created: 2026-05-03
+linear: SH-33
 implemented: 2026-05-03
 requires: [RFC-007]
 ---

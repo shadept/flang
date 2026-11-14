@@ -1,7 +1,7 @@
 ---
-status: draft
 type: compiler
 created: 2026-10-18
+linear: SH-17
 relates: [RFC-037, RFC-038]
 ---
 

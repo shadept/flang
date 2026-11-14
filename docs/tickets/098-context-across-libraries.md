@@ -1,7 +1,7 @@
 ---
-status: draft
 type: compiler
 created: 2026-10-25
+linear: SH-18
 relates: [RFC-038, RFC-041]
 ---
 
