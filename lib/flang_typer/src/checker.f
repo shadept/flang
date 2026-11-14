@@ -1529,6 +1529,41 @@ fn in_core_module(self: &Checker) bool {
     return m == "core" or m.starts_with("core.")
 }
 
+// Whether the module being checked is part of the standard library, core included.
+fn in_stdlib_module(self: &Checker) bool {
+    if in_core_module(self) {
+        return true
+    }
+    if self.current_module.is_none() {
+        return false
+    }
+    const m = self.current_module.unwrap()
+    return m == "std" or m.starts_with("std.")
+}
+
+// The current context's address is the coroutine runtime's to hold (RFC-005 D12); everywhere else
+// the context stays no value (E2149).
+fn gate_context_address(self: &Checker, id: u32, span: SourceSpan) {
+    const f = self.functions.find_by_id(id)
+    if f.is_none() {
+        return
+    }
+    const s = f.unwrap()
+    const is_intrinsic = s.name == "context_address" and s.module match {
+        Some(m) => m == "std.runtime.coro"
+        None => false
+    }
+    if !is_intrinsic or in_stdlib_module(self) {
+        return
+    }
+    push_diag_e(
+        self,
+        span,
+        E_CONTEXT_PLACE,
+        from_view("the current context is not a value - its address is the standard library's"),
+    )
+}
+
 fn move_bit_of(self: &Checker, i: usize, declared: bool, ty: Ty, span: SourceSpan) usize {
     if !declared {
         return 0usize
@@ -8661,6 +8696,7 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
         if candidates.len == 1 {
             let c = candidates[0]
             self.results.record_target(self.node_of(id.span), ResolvedTarget.RtFunction(c.id))
+            gate_context_address(self, c.id, id.span)
             return self.engine.specialize(&c.signature)
         }
         // Multiple overloads as a value: mint a var the context pins, and park the site -
@@ -10537,6 +10573,7 @@ fn commit_pick(
                 self.results.record_receiver_adapt(self.node_of(span), p.adapt.unwrap())
             }
             warn_deprecated_call(self, p.id, name, span)
+            gate_context_address(self, p.id, span)
             check_consuming_receiver(self, &p, name, recv, span)
             note_pending(self, span, false, &p)
             // The AST's argument order is the call's argument order except when names select
@@ -13100,6 +13137,7 @@ fn resolve_fn_name_values(self: &Checker) {
                         self.node_of(pn.span),
                         ResolvedTarget.RtFunction(w.id),
                     )
+                    gate_context_address(self, w.id, pn.span)
                     note_pending(self, pn.span, false, &w)
                     const o = self.engine.unify(f.ret, w.ret)
                     report_unify(self, &o, E_TYPE_MISMATCH, pn.span)

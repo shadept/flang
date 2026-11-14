@@ -570,7 +570,7 @@ fn handle(req: &Request) {
 
 - `context.<name>` reads a field. The name resolves among the fields visible from the module: its own, private or not, and the `pub` fields of the modules it sees (§6). None is E2150; two visible fields of one name are ambiguous (E2152).
 - `context` is not a value (E2149): only `context.<name>` reads it, and only a field of function type is called on it (`context.f(...)`; a method taking the context is E2149). Nothing holds a context past the scope that bound it, so no reference in a field outlives its frame through the context.
-- The current context has no address (`&context`, `&context.f`: E2149) and is never assigned into (`context.f = v`: E2149). A by-value field passed to a `&T` receiver (`context.deadline.check()`) lends a copy. A struct literal of `Context` is E2153.
+- The current context has no address (`&context`, `&context.f`: E2149) and is never assigned into (`context.f = v`: E2149). The one exception is the standard library's coroutine runtime: `std.runtime.coro.context_address()`, called directly from a `std` or `core` module, yields the current link's address so a task body runs under its scope's context (RFC-005 D12); from any other module it is E2149. A by-value field passed to a `&T` receiver (`context.deadline.check()`) lends a copy. A struct literal of `Context` is E2153.
 
 **Rebinding.** `context(args) { body }` runs `body` under a new context: a link to the current one with the named fields replaced. It is a block construct like `for` and `match`, not a call: `return`, `?`, `break`, `continue` and `defer` in the body act as in any block, and the construct is an expression whose value is the body's.
 

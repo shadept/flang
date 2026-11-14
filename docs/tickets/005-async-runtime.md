@@ -22,15 +22,15 @@ coroutine library is the comparison baseline for scopes, jobs, cancellation and 
 | Waiting syntax | `.await()`, an ordinary method on an awaitable value | Constraint |
 | Scheduler | M:N work-stealing over worker threads | Proposed |
 | Structure | `concurrent` waits for every child it started; tasks are bound to their scope | Proposed |
-| Builders | `spawn` returning `Task(T)`; a result-less form is open | **D2** |
-| `.await()` result | `T`; cancellation reaches code as values from the primitives that suspend | **D4** |
+| Builders | `spawn` returning `Task(T)`; `launch`, result-less, joined by the scope | Decided (D2) |
+| `.await()` result | `T`; cancellation reaches code as values from the primitives that suspend | Decided (D4) |
 | Cancellation | Cooperative; a job tree in a `context` field; checked at suspension points | Proposed |
-| Failure | Errors are values; fail-fast vs supervision is open | **D5** |
+| Failure | Errors are values; `concurrent` supervises; fail-fast deferred | Decided (D5); fail-fast open |
 | Transport | `Channel(T)` with `send`/`recv` awaitables, `close` | Proposed |
 | Context | RFC-038 `context` fields; a structured child keeps its parent's link | Settled by RFC-038 |
 | Allocators | `context.allocator`; what a parallel child inherits is open | **D6** |
 | Detached work | Not in v1 by recommendation | **D7** |
-| Runtime start | `main` is plain; the first `concurrent` scope starts the runtime if none is running | Proposed; details **D11** |
+| Runtime start | `main` is plain; the first `concurrent` scope starts the runtime if none is running; awaiting outside a scope panics | Decided (D11); lifetime open |
 
 **Nothing here exists yet.** No `std.task`, `Task`, `Scope`, `Channel` or runtime is in the
 tree. The signatures below are proposals. §1 says which of them the current checker would
@@ -487,9 +487,7 @@ joined when the outermost `concurrent` returns, so `main` returning has nothing 
 Open (**D11**):
 
 - **Awaiting off the runtime.** `sleep(10).await()` or `ch.recv().await()` in plain `main`, with
-  no scope open. Options: block the OS thread (the operation runs synchronously); panic; or wrap
-  it in an implicit one-shot `concurrent`. Recommendation: block the thread, so a function using
-  awaitables works whether or not its caller opened a scope (Motivation 2).
+  no scope open, panics (decided, D11).
 - **Runtime lifetime.** Once started, the runtime lives for the process (idle workers park), or
   it shuts down when the last outermost scope joins and restarts on the next. Recommendation:
   live for the process; starting worker threads per call is expensive.
@@ -774,23 +772,32 @@ The original Phase 0 (wait for self-host) is met. Each phase lands with harness 
 
 ---
 
-## 7. Open decisions
+## 7. Decisions
 
-None of these is decided. Each gives the options and this draft's recommendation.
+### Decided (2026-11-14, by the owner)
+
+| # | Decision |
+|---|---|
+| D1 | `concurrent` is a stdlib function taking a lambda: `concurrent { s => ... }`. `return`/`break` inside the body stay E1054; bind the result instead. |
+| D2 | Two builders: `s.spawn { }` returns `Task(T)`; `s.launch { }` returns nothing and the scope joins it. |
+| D3 | A runtime generation check: each task slot carries a generation, and awaiting a task whose scope has ended panics. RFC-099 `#stack` replaces it when that lands. |
+| D4 | `Task(T).await()` returns `T`. Cancellation is cooperative and never abandons a coroutine: leaf suspending operations return it as a value, code propagates it with `?`, and every `defer` runs on the way out. |
+| D5 | `concurrent` supervises: no child cancels its siblings. Fail-fast is deferred, not designed. Scope options are named parameters with defaults, before the trailing lambda (`concurrent(start = Lazy) { s => }`). |
+| D5a | Laziness: a `start` option (`Eager` default, `Lazy`) on `concurrent` sets the default for `spawn`, which takes the same option to override it. `launch` has no handle to start it by, so it is always eager and takes no option. A lazy task runs once awaited or `.start()`ed; one still unstarted when its scope ends is dropped without running (an unawaited `Task` still warns, W2006). |
+| D10 | A panic in a task ends the process, except under `flang test`, where each coroutine catches its own panic, the scope joins, and the panic is re-raised on the stack of the test that opened the scope, failing that test. |
+| D11 | Awaiting with no `concurrent` scope open (plain `main`) panics. |
+| D12 | A task body runs under its scope's context link (RFC-038 §Semantics 4) through one stdlib-only intrinsic that yields the current context's address as a raw pointer; the C runtime calls the body with it. E2149 is unchanged for user code. |
+
+### Open
 
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
-| D1 | Scope form | (a) stdlib function `concurrent { s => }`, E1054 applies; (b) block construct `concurrent { }` with `return`/`break`/`?` acting on the enclosing function; (c) (a) now plus non-local return later | (a) for v1; it needs no compiler change |
-| D2 | Builder count and names | (a) one `spawn` returning `Task(T)`, `Task(void)` awaited or released; (b) `spawn` plus a result-less `go`/`launch` the scope joins; (c) other names | (b): fire-and-join work is common and a `Task(void)` to await is noise |
-| D3 | A task escaping its scope | (a) RFC-099 `#stack` on `Task`/`Scope`; (b) a runtime generation check that panics; (c) document only | (b) for v1, (a) when RFC-099 lands; note RFC-099 also bans `List(Task)` outside `#stack` bindings |
-| D4 | `.await()` result and cancellation | (a) `T`, cancellation as values from leaf primitives; (b) `Result(T, Cancelled)` from every await | (a) |
-| D5 | Fail-fast vs supervision | (a) `concurrent` supervises, `try_concurrent` fails fast; (b) `concurrent` fails fast (Kotlin), restricted to `Result` bodies | (a) |
+| D5b | Fail-fast scopes | a child returning `Err` from a `Result` body cancels the scope; or an explicit `s.fail()`; or both | revisit when a use needs it |
 | D6 | Allocators in parallel children | §3.8 (a), (b), (c) | (a), with (b) for `temp_allocator` |
 | D7 | Detached work | (a) none in v1; (b) `detach(arg: move A, body: fn(move A))` with a no-capture rule; (c) wait for owning closures | (a) |
 | D8 | Dispatchers and blocking | `blocking { }` offload, `#foreign_blocking`, a context field naming the executor, or nothing in v1 | `blocking { }` in Phase 5; executor choice later |
 | D9 | Composition surface | an `Awaitable` contract; `race`/`any`/`select` signatures; `for v in ch`; `with_timeout` returning `T?` or `Result(T, Timeout)` | decide with Phase 2/3 |
-| D10 | Panics in tasks | process exit always; under `flang test`, fail the test from the coroutine stack without `longjmp` across stacks | needs design before Phase 2 |
-| D11 | Runtime start and edges | awaiting off the runtime (block the thread, panic, or implicit scope); runtime lifetime (process vs outermost scope); worker-count configuration before first start (§3.10) | block the thread; live for the process |
+| D11b | Runtime lifetime and workers | runtime lifetime (process vs outermost scope); worker-count configuration before first start (§3.10) | live for the process; decide with Phase 4 |
 
 ## 8. Other open questions
 

@@ -3077,6 +3077,9 @@ fn lower_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &CallExpr) Ope
     if folded.is_some() {
         return folded.unwrap()
     }
+    if starts_with(sym, "std__runtime__coro__context_0address") {
+        return ctx.cur_ctx
+    }
 
     let args: List(Operand) = list(call.args.len + 2)
     // A UFCS call `recv.f(a)` resolved to a free function takes the receiver as its first argument;

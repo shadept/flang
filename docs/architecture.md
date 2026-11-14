@@ -524,7 +524,7 @@ Language rules are spec §4.4; this is how the pipeline carries them.
 - **Stacks.** 1 MiB by default, reserved at spawn and committed by the OS as touched, with a guard page at the low end: `CreateFiberEx` on Windows, `mmap` plus a `PROT_NONE` page on POSIX. A finished coroutine's stack is released by `run`, its record by `deinit`. Overflow faults on the guard page with no diagnostic yet.
 - **Park and wake.** A wake on a coroutine that is not parked is kept, so its next `park` returns at once; a wake on a finished one is ignored.
 - **`errno`** is saved and restored around every suspension, so it belongs to the coroutine.
-- **Entries** are `#foreign fn(&u8)`: a coroutine body runs under the root context. Carrying a scope's context link into a task is `std.task`'s job (RFC-005 §3.10).
+- **Entries** are `#foreign fn(&u8)`: a coroutine body runs under the root context. `context_address()` (`#intrinsic`) is how the runtime carries a scope's link into a task instead: `lower_call` answers a direct call with `cur_ctx`, and `gate_context_address` in the checker refuses it outside `std`/`core` modules with E2149, on a direct call and on the name taken as a function value. The placeholder body panics, so an indirect call cannot yield a stale link.
 - **Testing.** `std.runtime.coro`'s `test {}` blocks and `tests/harness/async/`. A `#foreign fn` body keeps its bare C name in every program that imports its module, so a test callback in a stdlib module carries a module prefix.
 
 ## Optimization Passes

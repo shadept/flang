@@ -8,6 +8,7 @@
 //
 // Internal: the runtime beneath the task API, not an API for programs.
 
+import std.allocator
 import std.option
 import std.test
 
@@ -60,6 +61,14 @@ pub fn is_done(self: &Coro) bool {
 // Free a finished coroutine. Aborts when it has not finished.
 pub fn deinit(self: &Coro) {
     __flang_coro_free(self)
+}
+
+// The address of the context the caller runs under, so the runtime can run a task body under its
+// scope's context. Only the standard library may call it, and the compiler answers only a direct
+// call; reached any other way it panics.
+#intrinsic
+pub fn context_address() &u8 {
+    panic("context_address answers only a direct call")
 }
 
 type Trace = struct {
@@ -179,4 +188,15 @@ test "a coroutine stack holds deep recursion" {
     run()
     assert_eq(out, 50, "depth")
     c.deinit()
+}
+
+test "context_address names the link the caller runs under" {
+    const outer = context_address() as usize
+    const again = context_address() as usize
+    let inner = outer
+    context(temp_allocator = context.allocator) {
+        inner = context_address() as usize
+    }
+    assert_true(outer == again, "one link while nothing rebinds")
+    assert_true(outer != inner, "a rebind runs under a new link")
 }
