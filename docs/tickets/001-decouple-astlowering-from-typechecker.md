@@ -2,7 +2,6 @@
 type: compiler
 created: 2026-03-25
 linear: SH-58
-dropped: true
 ---
 
 # RFC-001: Decouple HmAstLowering from HmTypeChecker

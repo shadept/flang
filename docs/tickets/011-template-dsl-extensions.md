@@ -2,7 +2,6 @@
 type: compiler
 created: 2026-05-03
 linear: SH-61
-dropped: true
 superseded-by: RFC-021
 ---
 

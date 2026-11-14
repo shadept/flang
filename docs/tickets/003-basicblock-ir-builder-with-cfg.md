@@ -2,7 +2,6 @@
 type: compiler
 created: 2026-03-26
 linear: SH-60
-dropped: true
 ---
 
 # RFC-003: Promote BasicBlock to IR Builder with CFG Construction

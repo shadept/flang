@@ -2,7 +2,6 @@
 type: compiler
 created: 2026-05-15
 linear: SH-38
-implemented: 2026-08-29
 ---
 
 # RFC-017: `flang_typer` — type system as a library

@@ -2,7 +2,6 @@
 type: language
 created: 2026-05-03
 linear: SH-36
-implemented: 2026-05-03
 ---
 
 # RFC-013 — `pub import` and non-transitive import enforcement

@@ -2,7 +2,6 @@
 type: language
 created: 2026-05-03
 linear: SH-32
-implemented: 2026-05-03
 ---
 
 # RFC-008: Single Declaration Form for Structs and Enums

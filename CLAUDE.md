@@ -23,7 +23,7 @@ You own and maintain these docs. They are the source of truth for the project. W
 - `docs/error-codes.md` — error code registry (add entries when creating new error codes)
 - `docs/known-issues.md` — limitations by design, plus the older bug backlog. New bugs go to Linear, not here; an old entry moves to Linear when you start on it (rules at the top of the file)
 - `docs/self-host.md` — self-host feature coverage matrix and milestone roadmap (update in the same commit as any lowering-coverage change)
-- `docs/tickets/` — RFCs: the design text, kept in git. YAML frontmatter (`type`, `created`, `linear`, optional `accepted`/`implemented`/`dropped`/`requires`/`supersedes`/`superseded-by`/`relates`), free-form body; index and the steps for moving an RFC in `docs/tickets/README.md`. Live state (what's open, which phase is next) is in Linear, not in the file. Implement only RFCs with `accepted:` set; one without `accepted`, `implemented` or `dropped` is a draft and needs the owner's approval first.
+- `docs/tickets/` — RFCs: the design text, kept in git. YAML frontmatter (`type`, `created`, `linear`, optional `requires`/`supersedes`/`superseded-by`/`relates`), free-form body; index and the steps for moving an RFC in `docs/tickets/README.md`. All state (draft, accepted, implemented, dropped, which phase is next) is in Linear, never in the file. Implement only RFCs whose decide issue is Done or whose `linear:` names a project; an open decide issue is a draft and needs the owner's approval first.
 
 ## Work tracking
 

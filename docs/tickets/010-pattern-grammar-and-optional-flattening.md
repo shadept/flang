@@ -2,7 +2,6 @@
 type: language
 created: 2026-05-03
 linear: SH-34
-implemented: 2026-05-04
 requires: [RFC-006, RFC-007]
 ---
 

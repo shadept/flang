@@ -2,7 +2,6 @@
 type: compiler
 created: 2026-03-25
 linear: SH-59
-dropped: true
 requires: [RFC-001]
 ---
 

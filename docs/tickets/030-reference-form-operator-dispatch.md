@@ -2,7 +2,6 @@
 type: language
 created: 2026-09-01
 linear: SH-64
-dropped: true
 superseded-by: RFC-033
 relates: [RFC-028, RFC-026, RFC-020]
 ---

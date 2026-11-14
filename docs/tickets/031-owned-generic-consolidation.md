@@ -2,7 +2,6 @@
 type: stdlib
 created: 2026-09-01
 linear: SH-46
-implemented: 2026-09-16
 requires: [RFC-033]
 relates: [RFC-028, RFC-019, RFC-016]
 ---

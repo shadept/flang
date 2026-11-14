@@ -2,7 +2,6 @@
 type: compiler
 created: 2026-08-20
 linear: SH-62
-dropped: true
 ---
 
 # 018 — `fn(T)` → `fn(&T)` promotion, and `&T` callback parameters in the stdlib

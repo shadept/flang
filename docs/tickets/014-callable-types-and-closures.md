@@ -2,7 +2,6 @@
 type: language
 created: 2026-05-05
 linear: SH-37
-implemented: 2026-08-20
 ---
 
 # RFC-014: `op_call` and closure literals

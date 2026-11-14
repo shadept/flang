@@ -2,7 +2,6 @@
 type: language
 created: 2026-04-19
 linear: SH-29
-implemented: 2026-04-19
 ---
 
 # RFC-004: String Interpolation

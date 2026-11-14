@@ -56,5 +56,6 @@ RFC, read the RFC file too: the RFC is the design, the issue is the work.
 ## RFCs
 
 See `docs/tickets/README.md`. In short: each RFC file has `linear: SH-NN` (or `P-SH-N` for a
-project). Only the owner approves an RFC. Implement only RFCs with `accepted:` set, and only
-issues that are `agent-ready` or assigned to you.
+project), and its state is that item's state; the file records none. Only the owner approves an
+RFC, by closing its decide issue. Implement only accepted RFCs, and only issues that are
+`agent-ready` or assigned to you.

@@ -2,7 +2,6 @@
 type: language
 created: 2026-05-03
 linear: SH-31
-implemented: 2026-05-03
 ---
 
 # RFC-007: Option as Enum, `null` as `Option.None`

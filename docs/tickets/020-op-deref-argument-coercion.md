@@ -2,7 +2,6 @@
 type: language
 created: 2026-08-20
 linear: SH-39
-implemented: 2026-09-16
 ---
 
 # 020 — `op_deref` argument coercion (deref chains at call sites)

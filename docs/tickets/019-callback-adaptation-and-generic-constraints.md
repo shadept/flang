@@ -2,7 +2,6 @@
 type: language
 created: 2026-08-20
 linear: SH-63
-dropped: true
 superseded-by: [RFC-035, RFC-036]
 ---
 

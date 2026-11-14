@@ -2,7 +2,6 @@
 type: language
 created: 2026-10-18
 linear: SH-54
-implemented: 2026-10-18
 relates: [RFC-007, RFC-009]
 ---
 

@@ -2,7 +2,6 @@
 type: tooling
 created: 2026-08-27
 linear: P-SH-7
-accepted: 2026-08-27
 requires: [RFC-015]
 relates: [RFC-023]
 ---

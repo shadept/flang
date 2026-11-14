@@ -2,7 +2,6 @@
 type: compiler
 created: 2026-08-25
 linear: SH-41
-implemented: 2026-08-27
 relates: [ADR-0006]
 ---
 

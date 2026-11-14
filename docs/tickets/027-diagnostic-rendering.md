@@ -2,7 +2,6 @@
 type: tooling
 created: 2026-08-30
 linear: SH-44
-implemented: 2026-08-30
 relates: [RFC-023]
 ---
 

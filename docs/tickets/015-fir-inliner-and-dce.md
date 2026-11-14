@@ -2,7 +2,6 @@
 type: compiler
 created: 2026-05-05
 linear: P-SH-5
-accepted: 2026-05-15
 ---
 
 # RFC-015: FIR optimization pipeline (inliner + DCE + cleanup passes)

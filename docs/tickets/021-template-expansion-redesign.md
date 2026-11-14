@@ -2,7 +2,6 @@
 type: compiler
 created: 2026-08-23
 linear: SH-40
-implemented: 2026-08-24
 supersedes: [RFC-011]
 relates: [ADR-0006]
 ---

@@ -2,8 +2,6 @@
 type: compiler
 created: 2026-11-13
 linear: SH-57
-accepted: 2026-11-14
-implemented: 2026-11-14
 relates: [RFC-037, RFC-043]
 ---
 

@@ -1,40 +1,48 @@
 # Tickets
 
 Design proposals for the language, compiler, stdlib and tooling. The text of every RFC lives
-here, in git. Its live state (who acts next, which phase is underway) lives in Linear, team
-Shade (`SH`): see `docs/agents/issue-tracker.md`. Nothing in this folder changes when work
-moves, except the one-time dates below.
+here, in git. Its state lives only in Linear, team Shade (`SH`): see
+`docs/agents/issue-tracker.md`. Nothing in this folder records state, so nothing here changes
+when work moves.
 
 Each file opens with a YAML block; the body is free-form.
 
-Fields: `type`, `created`, `linear`, then only where they apply: `accepted`, `implemented`,
-`dropped`, `requires`, `supersedes`, `superseded-by`, `relates`.
+Fields: `type`, `created`, `linear`, then only where they apply: `requires`, `supersedes`,
+`superseded-by`, `relates`.
 
 - `type`: language, compiler, stdlib, tooling.
 - `linear`: the Linear issue (`SH-NN`) or project (`P-SH-N`) that tracks the RFC.
-- `accepted`, `implemented`: dates, each written once. `dropped: true` is written once too.
-- No `accepted`, `implemented` or `dropped`: still a draft. Implement nothing from a draft.
 
-Superseded is a field, not a state: `implemented` + `superseded-by` shipped and was later
-replaced; `dropped` + `superseded-by` was replaced before it shipped.
+## State
+
+Read it from what `linear:` names:
+
+- **Draft:** an open "Decide RFC-NNN" issue. Implement nothing from a draft.
+- **Accepted:** the decide issue is Done, or `linear:` names a project.
+- **Implemented:** the implementing issue or project is Done.
+- **Dropped:** the issue or project is Canceled.
+
+`superseded-by` on an implemented RFC means it shipped and was later replaced; on a dropped one,
+it was replaced before it shipped.
 
 ## Moving an RFC
 
 - **New:** add the file and a row below, and create a Linear issue "Decide RFC-NNN: <title>"
   in `SH` with labels `flang`, `RFC` and the area. Put its id in `linear:`.
-- **Approve:** the owner sets `accepted:` and closes the decide issue. An agent does not approve
-  its own RFC. Single-phase: one issue. Several phases: a project named for the outcome
-  ("FLang <can now do X> (RFC-NNN)") with one issue per phase; `linear:` then names the project.
+- **Approve:** the owner closes the decide issue as Done. An agent does not approve its own RFC.
+  Single-phase: one implementation issue; `linear:` then names it. Several phases: a project
+  named for the outcome ("FLang <can now do X> (RFC-NNN)") with one issue per phase;
+  `linear:` then names the project.
 - **Phases land:** progress lives in Linear (issue states, project description). Do not add
   progress lines to the RFC.
-- **Last phase lands:** set `implemented:` to the landing commit's date. Where the shipped design
-  differs from the text, a "Deviations" note at the top; otherwise the body is frozen and
+- **Last phase lands:** the issue or project closes as Done. Where the shipped design differs
+  from the text, a "Deviations" note at the top; otherwise the body is frozen and
   `docs/spec.md` governs. A replacing RFC sets `supersedes`, each replaced RFC `superseded-by`.
   The docs CLAUDE.md lists change in the same commit.
 - **After shipping:** bugs go to Linear as `Bug` issues; limitations by design go to
   `docs/known-issues.md`. Neither reopens the RFC.
-- **Drop:** set `dropped: true` with `superseded-by` or a one-line reason at the top, and cancel
-  the Linear issue or project.
+- **Drop:** cancel the Linear issue or project, and add `superseded-by` or a one-line reason at
+  the top of the file.
 - **Commits** landing RFC work carry `(RFC-NNN)`, so `git log --grep=RFC-NNN` is its history.
   Put the Linear id in the branch name or PR title (`sh-12-...`, `SH-12: ...`) so Linear links
   the work.
@@ -45,7 +53,7 @@ replaced; `dropped` + `superseded-by` was replaced before it shipped.
 | [002](002-consolidate-typechecker-state.md) | Consolidate HmTypeChecker State into Typed Registries | compiler | SH-59 |
 | [003](003-basicblock-ir-builder-with-cfg.md) | Promote BasicBlock to IR Builder with CFG Construction | compiler | SH-60 |
 | [004](004-string-interpolation.md) | String Interpolation | language | SH-29 |
-| [005](005-async-runtime.md) | Async / Coroutines | language | SH-14 |
+| [005](005-async-runtime.md) | Async / Coroutines | language | P-SH-8 |
 | [006](006-syntax-cleanup-quick-wins.md) | Syntax Cleanup — Quick Wins | language | SH-30 |
 | [007](007-option-as-enum.md) | Option as Enum, `null` as `Option.None` | language | SH-31 |
 | [008](008-single-declaration-form.md) | Single Declaration Form for Structs and Enums | language | SH-32 |

@@ -2,7 +2,6 @@
 type: language
 created: 2026-05-03
 linear: SH-30
-implemented: 2026-05-03
 ---
 
 # RFC-006: Syntax Cleanup — Quick Wins

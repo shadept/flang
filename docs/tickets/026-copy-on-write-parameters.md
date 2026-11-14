@@ -2,7 +2,6 @@
 type: compiler
 created: 2026-08-29
 linear: SH-43
-implemented: 2026-08-30
 ---
 
 # RFC-026: Copy-on-write parameters - elide the shadow when nothing writes or escapes
