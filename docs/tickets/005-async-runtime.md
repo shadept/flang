@@ -21,7 +21,7 @@ coroutine library is the comparison baseline for scopes, jobs, cancellation and 
 | Function colouring | **None.** No `async fn`, no `suspend`, no suspend function types, no rule on who may call what | Constraint |
 | Waiting syntax | `.await()`, an ordinary method on an awaitable value | Constraint |
 | Scheduler | M:N work-stealing over worker threads | Proposed |
-| Structure | `scope` waits for every child it started; tasks are bound to their scope | Proposed |
+| Structure | `concurrent` waits for every child it started; tasks are bound to their scope | Proposed |
 | Builders | `spawn` returning `Task(T)`; a result-less form is open | **D2** |
 | `.await()` result | `T`; cancellation reaches code as values from the primitives that suspend | **D4** |
 | Cancellation | Cooperative; a job tree in a `context` field; checked at suspension points | Proposed |
@@ -30,7 +30,7 @@ coroutine library is the comparison baseline for scopes, jobs, cancellation and 
 | Context | RFC-038 `context` fields; a structured child keeps its parent's link | Settled by RFC-038 |
 | Allocators | `context.allocator`; what a parallel child inherits is open | **D6** |
 | Detached work | Not in v1 by recommendation | **D7** |
-| Top level | `main` is the root coroutine; the runtime is always live | Proposed |
+| Runtime start | `main` is plain; the first `concurrent` scope starts the runtime if none is running | Proposed; details **D11** |
 
 **Nothing here exists yet.** No `std.task`, `Task`, `Scope`, `Channel` or runtime is in the
 tree. The signatures below are proposals. §1 says which of them the current checker would
@@ -99,7 +99,10 @@ there is marked unverified.
 - **Structure.** Builders are extensions on `CoroutineScope`. "A parent coroutine waits for its
   children to complete before it finishes. If the parent coroutine fails or gets canceled, all its
   child coroutines are recursively canceled too." `coroutineScope { }` waits for the block and
-  every coroutine launched in it.
+  every coroutine launched in it. `runBlocking { }` runs a block "in a new coroutine …
+  blocking the current thread until its completion"; it bridges plain code (`main`, tests,
+  callbacks) to suspending code, and "calling `runBlocking` from a suspend function is
+  redundant" and risks thread starvation.
 - **Jobs.** `launch` returns a `Job`; `async` returns a `Deferred`, "a Job with a result".
   `await()` returns the value "or throws the exception if the deferred was cancelled".
 - **Failure.** An exception other than `CancellationException` in a child "cancels its parent
@@ -123,7 +126,7 @@ there is marked unverified.
 | Kotlin | FLang | |
 |---|---|---|
 | `suspend`, suspend function types | Nothing. Any function may reach a suspension point | **Refused** (constraint) |
-| `coroutineScope { }` | `scope { s => ... }` (§3.3) | Adapted; form open (**D1**) |
+| `coroutineScope { }` and `runBlocking { }` | `concurrent { s => ... }`, one function for both (§3.3, §3.10) | Adapted; form open (**D1**) |
 | `async` / `Deferred.await()` | `s.spawn { ... }` / `Task(T).await()` | Adapted |
 | `launch` / `Job` | Open (**D2**) | |
 | Job tree | A `context` field rebound per scope (§3.4) | Adapted |
@@ -214,8 +217,9 @@ pub type Task = struct(T) {
     owned __slot: &TaskSlot(T)      // non-copyable: dropping one unawaited is W2006
 }
 
-// coroutineScope { }: run `body`, then wait for every task it started.
-pub fn scope(body: fn(&Scope) $R) R
+// coroutineScope { } (runBlocking { } off the runtime, §3.10): run `body`, then wait
+// for every task it started.
+pub fn concurrent(body: fn(&Scope) $R) R
 
 // async { }: start `body` as a child of `self`.
 pub fn spawn(self: &Scope, body: fn() $T) Task(T)
@@ -228,12 +232,15 @@ pub fn cancel(self: &Scope)
 ```
 
 ```flang
-const total = scope { s =>
+const total = concurrent { s =>
     const a = s.spawn { count_words(url_a) }   // captures url_a by reference
     const b = s.spawn { count_words(url_b) }
     a.await() + b.await()
 }
 ```
+
+**Name.** `concurrent` (alternative: `concurrent_scope`). The type stays `Scope`. The same name
+serves either form D1 chooses, a function taking a lambda or a block construct.
 
 **Why a scope makes the closures sound.** Captures are by reference (RFC-033, spec §7.3) and a
 `fn` value borrows the closure it was made from (RFC-037). A scope returns only after every
@@ -248,7 +255,7 @@ tasks never awaited; the scope then waits for them and releases their results wi
 **Expressibility.** The declarations above are current syntax. Three properties are not
 enforceable with what exists:
 
-- **`return` inside a lambda is E1054.** A `scope { }` body cannot return from the enclosing
+- **`return` inside a lambda is E1054.** A `concurrent { }` body cannot return from the enclosing
   function or `break` an outer loop; bind the result instead. Kotlin's `coroutineScope` allows
   this because it is inline. The alternatives are a block construct (`concurrent { }`, as
   RFC-099 and `docs/notes/concurrency-patterns.md` sketch) or Kotlin-style non-local return,
@@ -282,7 +289,7 @@ pub fn check_cancelled() Result((), Cancelled)     // ensureActive, for `?`
 pub fn yield_now() Result((), Cancelled)           // yield(): check, then let others run
 ```
 
-**The job tree is the context.** `scope` creates a job whose parent is `context.job` and runs
+**The job tree is the context.** `concurrent` creates a job whose parent is `context.job` and runs
 its body, and every child, under `context(job = &child_job) { ... }`. RFC-038 §Semantics 4
 already says a structured child keeps the parent's link; the link now names the job that
 cancels it. Cancelling a job cancels its descendants; it never cancels its parent.
@@ -295,7 +302,7 @@ example applies unchanged).
 **`defer` and cleanup.** A deferred body runs under the context where it was written (spec §4.4
 semantics 3), which is the cancelled one, so a suspending cleanup gets `Cancelled` back at once.
 Cleanup that must wait rebinds: `context(job = &non_cancellable) { conn.close().await() }`. As
-with Kotlin's `NonCancellable`, this belongs around cleanup code only; a `scope` started inside
+with Kotlin's `NonCancellable`, this belongs around cleanup code only; a `concurrent` scope started inside
 it is a tree of its own.
 
 **Tokens.** The original draft's `CancelToken` (one flag shared by many futures and awaiters)
@@ -311,16 +318,16 @@ how a panicking task fails its test is open (**D10**).
 FLang has no exceptions, so Kotlin's rule "a failing child cancels its parent" has no carrier:
 the runtime cannot tell failure in an arbitrary `T`. Failure is a value the body returns.
 
-**Recommendation (D5):** `scope` behaves as Kotlin's `supervisorScope`: no child cancels its
+**Recommendation (D5):** `concurrent` behaves as Kotlin's `supervisorScope`: no child cancels its
 siblings, and each result is the awaiter's to inspect. Fail-fast is opt-in through a variant
 for `Result` bodies, which cancels the scope on the first `Err` (sketch, current syntax):
 
 ```flang
-pub fn try_scope(body: fn(&TryScope($E)) Result($R, E)) Result(R, E)
+pub fn try_concurrent(body: fn(&TryScope($E)) Result($R, E)) Result(R, E)
 pub fn spawn(self: &TryScope($E), body: fn() Result($T, E)) Task(Result(T, E))
 ```
 
-This reverses Kotlin's default. Choosing Kotlin's default instead means `scope` itself is
+This reverses Kotlin's default. Choosing Kotlin's default instead means `concurrent` itself is
 restricted to `Result` bodies. Either way there is no `CoroutineExceptionHandler`.
 
 ### 3.6 Channels
@@ -379,7 +386,7 @@ request-scoped value is a field rebound around the work:
 pub context request_id: u64 = 0
 
 context(request_id = next_id(), logger = &req.log) {
-    scope { s => handle(s, req) }       // every child reads context.request_id
+    concurrent { s => handle(s, req) }       // every child reads context.request_id
 }
 ```
 
@@ -391,8 +398,8 @@ system does not see (spec §3.6). Options (**D6**):
 
 - (a) Children inherit as is; document the race; a `SyncAllocator` wrapper is a required
   sibling feature before servers use arenas.
-- (b) `scope` rebinds `temp_allocator` per task to a task-local arena it frees at task end.
-- (c) A field (or allocator vtable flag) marks an allocator thread-safe, and `scope` panics on a
+- (b) `concurrent` rebinds `temp_allocator` per task to a task-local arena it frees at task end.
+- (c) A field (or allocator vtable flag) marks an allocator thread-safe, and `concurrent` panics on a
   child starting under one that is not.
 
 Recommendation: (a) with (b) for `temp_allocator`, since a per-request temp arena is the field's
@@ -422,19 +429,74 @@ copy. Two shapes would work:
   rebinds the fields it needs from `arg`.
 - **Owning closures**, which RFC-037 lists as out of scope.
 
-Recommendation (**D7**): no detached work in v1. A server's accept loop is a long-lived `scope`
-in `main`; per-connection work is a child of it.
+Recommendation (**D7**): no detached work in v1. A server's accept loop is a long-lived
+`concurrent` scope; per-connection work is a child of it (§3.10).
 
-### 3.10 `main` as the root coroutine
+### 3.10 Starting the runtime
 
-`main` runs as coroutine 0 under the root context, whose `job` is `non_cancellable`. `.await()`
-works in `main` without ceremony; the runtime is live for the life of the process. Constant
-initializers run before the runtime starts and must not suspend. `main` returning ends the
-process after its own scopes have joined; with no detached work (D7) there is nothing to drain.
+`main` is an ordinary function; it is not a coroutine and the runtime is not running when it
+starts. Concurrency always begins by opening a `concurrent` scope, and the runtime is a stdlib
+feature that the first such scope starts:
 
-A `#foreign fn` body called by C runs under the root context (spec §4.4). Called on a runtime
-worker inside a coroutine, it may suspend; called on a thread the runtime does not own, a
-suspension panics. That is a runtime precondition, not a type rule.
+- **Off the runtime** (a thread that is not a runtime worker running a coroutine: `main`'s thread,
+  a test, a C callback), `concurrent` starts the runtime if none is running, runs `body` as a
+  coroutine on it, and blocks the calling OS thread until the scope has joined. This is Kotlin's
+  `runBlocking`.
+- **On the runtime** (inside a coroutine), `concurrent` creates a child scope and suspends the
+  current coroutine until it joins; the worker thread stays free. This is Kotlin's
+  `coroutineScope`.
+
+Kotlin keeps these as two functions because colouring decides which one a call site may use, and
+documents `runBlocking` from a suspend function as a thread-starvation hazard. Without colouring,
+the caller cannot know which side it is on, so one function checks at run time. Calling
+`concurrent` in a coroutine never blocks a worker.
+
+Illustrative (`std.net.http` and its `Server` are not designed yet):
+
+```flang
+// A library: run() is not awaitable and looks synchronous to its caller.
+pub fn run(self: &Server) {
+    concurrent { s =>                 // starts the runtime if none is running
+        loop {
+            const conn = self.listener.accept().await() match {
+                Ok(c) => c,
+                Err(_) => break,
+            }
+            s.spawn { self.handle(conn) }   // §4.3 has the capture hazard here
+        }
+    }                                 // blocks main's thread until the accept loop ends
+}
+
+// An application: no runtime setup, no async main.
+pub fn main() {
+    const server = http.server(8080)
+    server.run()
+}
+```
+
+Every library on the stdlib runtime does the same, so an HTTP server, a client and an
+application share one runtime with nothing to configure. A library called from inside a
+coroutine nests its scope in the caller's job tree, so cancelling the caller's scope reaches the
+library's tasks.
+
+The outermost scope's job has `non_cancellable` as its parent, the default of `context.job`.
+The body runs on a worker under the caller's context link; the caller's frames stay alive because
+the caller is blocked, so the reads are safe (§3.1). With no detached work (D7), every task has
+joined when the outermost `concurrent` returns, so `main` returning has nothing to drain.
+
+Open (**D11**):
+
+- **Awaiting off the runtime.** `sleep(10).await()` or `ch.recv().await()` in plain `main`, with
+  no scope open. Options: block the OS thread (the operation runs synchronously); panic; or wrap
+  it in an implicit one-shot `concurrent`. Recommendation: block the thread, so a function using
+  awaitables works whether or not its caller opened a scope (Motivation 2).
+- **Runtime lifetime.** Once started, the runtime lives for the process (idle workers park), or
+  it shuts down when the last outermost scope joins and restarts on the next. Recommendation:
+  live for the process; starting worker threads per call is expensive.
+- **Several OS threads** opening outermost scopes at once share one runtime. Start-up must be
+  once-only and thread-safe; each caller blocks on its own scope.
+- **Configuration.** How a program picks the worker count before the first scope starts, given
+  `FLANG_WORKERS` and no runtime-init call in `main`.
 
 ### 3.11 Dispatchers and blocking calls
 
@@ -525,7 +587,7 @@ fn count_words(url: String) Result(i64, FetchError) {
 }
 
 pub fn total_words(urls: String[]) i64 {
-    return scope { s =>
+    return concurrent { s =>
         let tasks = list(urls.len)
         for url in urls { tasks.push(s.spawn { count_words(url) }) }   // captures url by ref
         let total: i64 = 0
@@ -550,7 +612,7 @@ stack-only types as generic arguments outside `#stack` bindings).
 pub fn count_non_blank_lines(reader: &Reader) i64 {
     let lines = channel(64)
     defer lines.deinit()
-    return scope { s =>
+    return concurrent { s =>
         const producer = s.spawn {          // D2: with a result-less builder, no binding
             loop {
                 reader.read_line() match {
@@ -588,7 +650,7 @@ moving through the channel; drain-until-closed. With only `spawn` (D2), the prod
 pub context request_id: u64 = 0
 
 pub fn serve(listener: &Listener) {
-    scope { s =>
+    concurrent { s =>
         loop {
             const conn = listener.accept().await() match {
                 Ok(c) => c,
@@ -651,18 +713,17 @@ void      flang_job_join(FlangJob* j);           /* wait for every child */
 void flang_net_submit(/* op */, FlangCoro* waiter);
 void flang_timer_after(int64_t ms, FlangCoro* waiter);
 
-void flang_runtime_init(int worker_count);       /* 0 = autodetect */
-void flang_runtime_shutdown(int exit_code);
+bool flang_runtime_on_worker(void);              /* inside a runtime coroutine? */
+void flang_runtime_ensure_started(void);         /* once-only, thread-safe (D11) */
 ```
 
-**Entry.** The C backend's `main` (`lib/flang_codegen/src/c_backend.f`) passes the root context's
-address to the constant initializers and calls FLang `main` (spec §4.4). It becomes: run the
-constant initializers, `flang_runtime_init`, run FLang `main` as coroutine 0 on worker 0 and
-wait for it, `flang_runtime_shutdown`. Test blocks run the same way under `flang test` (D10).
+**Entry.** Unchanged. The C backend's `main` (`lib/flang_codegen/src/c_backend.f`) keeps passing
+the root context's address to the constant initializers and calling FLang `main` (spec §4.4).
+`concurrent` starts the runtime on first use (§3.10), and test blocks reach it the same way.
 
 ### 5.2 Stdlib: FLang
 
-New modules: `std.task` (`Scope`, `Task`, `Job`, `scope`, `spawn`, `await`, `cancel`,
+New modules: `std.task` (`Scope`, `Task`, `Job`, `concurrent`, `spawn`, `await`, `cancel`,
 `check_cancelled`, `yield_now`, `with_timeout`, `sleep`), `std.channel` (`Channel` and its
 operations). Names are proposals.
 
@@ -674,9 +735,9 @@ implement `op_deref`: it would hide `.await()`.
 
 ### 5.3 Compiler
 
-Not "none", as the original draft said:
+Nothing is required for v1:
 
-- **Entry point** (`c_backend.f`): run `main` on the runtime (§5.1).
+- **Entry point unchanged**: the runtime starts lazily (§3.10).
 - **Nothing for suspension.** No AST nodes, no keywords (`await` is a method name), no
   state-machine transform.
 - **Depending on decisions:** a `concurrent { }` block construct (D1); `#stack` from RFC-099 or a
@@ -701,8 +762,8 @@ The original Phase 0 (wait for self-host) is met. Each phase lands with harness 
 `tests/harness/async/` and its colocated `test {}` blocks.
 
 1. **Runtime skeleton.** One worker, `ucontext`, spawn / yield / park / wake. C unit tests.
-2. **Scopes, tasks, jobs.** `scope`, `spawn`, `await`, `cancel`, `check_cancelled`, the `job`
-   context field, the new entry point. Requires D1-D5 and D10.
+2. **Scopes, tasks, jobs.** `concurrent`, `spawn`, `await`, `cancel`, `check_cancelled`, the `job`
+   context field, lazy runtime start. Requires D1-D5, D10 and D11.
 3. **Channels.** Rendezvous and buffered, `close`.
 4. **Work-stealing and timers.** Multiple workers, the timing wheel, `sleep`, `with_timeout`.
    Requires D6.
@@ -719,22 +780,23 @@ None of these is decided. Each gives the options and this draft's recommendation
 
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
-| D1 | Scope form | (a) stdlib function `scope { s => }`, E1054 applies; (b) block construct `concurrent { }` with `return`/`break`/`?` acting on the enclosing function; (c) (a) now plus non-local return later | (a) for v1; it needs no compiler change |
+| D1 | Scope form | (a) stdlib function `concurrent { s => }`, E1054 applies; (b) block construct `concurrent { }` with `return`/`break`/`?` acting on the enclosing function; (c) (a) now plus non-local return later | (a) for v1; it needs no compiler change |
 | D2 | Builder count and names | (a) one `spawn` returning `Task(T)`, `Task(void)` awaited or released; (b) `spawn` plus a result-less `go`/`launch` the scope joins; (c) other names | (b): fire-and-join work is common and a `Task(void)` to await is noise |
 | D3 | A task escaping its scope | (a) RFC-099 `#stack` on `Task`/`Scope`; (b) a runtime generation check that panics; (c) document only | (b) for v1, (a) when RFC-099 lands; note RFC-099 also bans `List(Task)` outside `#stack` bindings |
 | D4 | `.await()` result and cancellation | (a) `T`, cancellation as values from leaf primitives; (b) `Result(T, Cancelled)` from every await | (a) |
-| D5 | Fail-fast vs supervision | (a) `scope` supervises, `try_scope` fails fast; (b) `scope` fails fast (Kotlin), restricted to `Result` bodies | (a) |
+| D5 | Fail-fast vs supervision | (a) `concurrent` supervises, `try_concurrent` fails fast; (b) `concurrent` fails fast (Kotlin), restricted to `Result` bodies | (a) |
 | D6 | Allocators in parallel children | §3.8 (a), (b), (c) | (a), with (b) for `temp_allocator` |
 | D7 | Detached work | (a) none in v1; (b) `detach(arg: move A, body: fn(move A))` with a no-capture rule; (c) wait for owning closures | (a) |
 | D8 | Dispatchers and blocking | `blocking { }` offload, `#foreign_blocking`, a context field naming the executor, or nothing in v1 | `blocking { }` in Phase 5; executor choice later |
 | D9 | Composition surface | an `Awaitable` contract; `race`/`any`/`select` signatures; `for v in ch`; `with_timeout` returning `T?` or `Result(T, Timeout)` | decide with Phase 2/3 |
 | D10 | Panics in tasks | process exit always; under `flang test`, fail the test from the coroutine stack without `longjmp` across stacks | needs design before Phase 2 |
+| D11 | Runtime start and edges | awaiting off the runtime (block the thread, panic, or implicit scope); runtime lifetime (process vs outermost scope); worker-count configuration before first start (§3.10) | block the thread; live for the process |
 
 ## 8. Other open questions
 
 1. **Channel double close**: panic (Go) or `Result`. Panic recommended.
-2. **Sync I/O**: keep blocking variants in `std.io`, or make every I/O operation an awaitable and
-   block by awaiting on `main`.
+2. **Sync I/O**: keep blocking variants in `std.io`, or make every I/O operation an awaitable that
+   blocks the thread when awaited off the runtime (D11).
 3. **Stack size.** A C stack cannot move once raw pointers point into it, so "start small and
    grow" is unavailable. Proposal: a 1 MiB reservation, touched pages committed. Open: the
    default, a per-`spawn` override, the Windows path (`VirtualAlloc(MEM_RESERVE)` plus a guard
@@ -776,7 +838,8 @@ Kotlin behaviour cited in §2 and §3, from kotlinlang.org:
 - Exception handling and supervision: <https://kotlinlang.org/docs/exception-handling.html>
 - Context and dispatchers: <https://kotlinlang.org/docs/coroutine-context-and-dispatchers.html>
 - Channels: <https://kotlinlang.org/docs/channels.html>
-- API: [`CoroutineScope`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-scope/),
+- API: [`runBlocking`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/run-blocking.html),
+  [`CoroutineScope`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-coroutine-scope/),
   [`Job`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-job/),
   [`Deferred`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-deferred/),
   [`withTimeout`](https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/with-timeout.html),
