@@ -527,6 +527,9 @@ Compiler discovery (`discover_compiler`):
 - **macOS** — `$CC` → `xcrun --find clang` → `clang` / `cc` / `gcc`.
 - **Linux** — `$CC` → `clang` → `cc` → `gcc`.
 
+A candidate counts as present only when `<name> --version` exits 0: on
+POSIX a missing binary still spawns, and its child exits 127.
+
 `lib/flang_codegen/src/c_backend.f` implements this.
 
 ## Optimization pipeline

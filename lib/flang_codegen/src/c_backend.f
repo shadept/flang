@@ -335,6 +335,7 @@ pub fn compile(m: &IrModule, options: &BuildOptions) Result(BuildResult, BuildEr
     const exit_code = spawn_r.unwrap()
     if exit_code != 0 {
         // The captured compiler output surfaces only on failure.
+        print_command(&info, &argv)
         println(cc_out.as_view())
         if !keep_c {
             remove_file_quiet(c_path_owned.view())
@@ -1811,7 +1812,7 @@ fn make_simple_info(kind: CompilerKind, name: String) CompilerInfo {
 }
 
 // Spawn `prog --version`, redirect stdio to Null, wait. exit==0 means the binary is on PATH and
-// runnable.
+// runnable. On POSIX a missing binary still spawns: the forked child fails its exec and exits 127.
 fn can_spawn(prog: String) bool {
     let cmd = command(prog)
     defer cmd.deinit()
@@ -1830,7 +1831,11 @@ fn can_spawn(prog: String) bool {
     if w.is_err() {
         return false
     }
-    return true
+    return w.unwrap() == 0
+}
+
+test "a program missing from PATH is not a usable compiler" {
+    assert_true(!can_spawn("flang-no-such-compiler"), "missing binary rejected")
 }
 
 // =============================================================================
@@ -2303,6 +2308,17 @@ fn build_compiler_argv(
         push_ldflag_words(&argv, options.ldflags[i])
     }
     return argv
+}
+
+fn print_command(info: &CompilerInfo, argv: &List(OwnedString)) {
+    let sb = string_builder(256)
+    defer sb.deinit()
+    sb.append(info.path.view())
+    for &a in argv {
+        sb.append(" ")
+        sb.append(a.view())
+    }
+    println(sb.as_view())
 }
 
 // One manifest `ldflags` entry, split into separate argv words. A flag that takes a value is

@@ -45,6 +45,18 @@ until a `flang build`, `check` or `test` has written the module.
 
 ---
 
+### `spawn` of a Missing Program Succeeds on POSIX
+
+**Status:** Open
+**Affected:** `stdlib/std/process.c`
+
+The POSIX `spawn` forks, then `execvp`s in the child; an exec failure exits the child with 127, and
+`spawn` returns `Ok`. A caller cannot tell "not found" from a program that exits 127. Windows returns
+`Err` from `CreateProcess`. C compiler discovery works around it by requiring `--version` to exit 0.
+Fix: report the exec errno to the parent over a close-on-exec pipe.
+
+---
+
 ### Lowering Refuses Match Arms the Checker Accepts, and `flang test` Drops Their Tests
 
 **Status:** Open

@@ -1041,14 +1041,13 @@ fn report_manifest_error(e: ManifestError) {
 }
 
 fn report_build_error(e: &BuildError, path: String) {
-    const label = e.* match {
-        NoCompilerFound => "no C compiler found"
-        CompilerFailed(_) => "the C compiler returned an error"
-        SpawnFailed => "could not spawn the C compiler"
-        IOError => "I/O error while writing build artifacts"
-        LowerFailed => "IR lowering rejected the module"
+    const m = e.* match {
+        NoCompilerFound => $"build failed: no C compiler found ({path})"
+        CompilerFailed(code) => $"build failed: the C compiler exited with code {code} ({path})"
+        SpawnFailed => $"build failed: could not spawn the C compiler ({path})"
+        IOError => $"build failed: I/O error while writing build artifacts ({path})"
+        LowerFailed => $"build failed: IR lowering rejected the module ({path})"
     }
-    const m = $"build failed: {label} ({path})"
     defer m.deinit()
     println(m.view())
 }
