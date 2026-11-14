@@ -420,39 +420,6 @@ offending form is one the renderer produces while wrapping, not one an author wr
 
 ---
 
-### A Negative Literal Is Accepted at an Unsigned Annotation
-
-**Status:** Open
-**Affected:** `lib/flang_typer/src/checker.f`
-
-E2029 rejects an integer literal too large for its target and misses one too small:
-
-```flang
-let a: u8 = 300     // error[E2029]: integer literal `300` is out of range for `u8`
-let b: u64 = -3     // accepted; reads back as 18446744073709551613
-let c: u32 = -1     // accepted
-```
-
-The range check sees the literal `3`, which fits `u64`, and the unary minus is applied after it,
-where nothing re-checks. The same omission covers every unsigned target.
-
-Nothing below the type checker can catch this. FIR has no unsigned types - `IrType` is
-`I8 I16 I32 I64 F32 F64 Ptr Agg` - so signedness is a typer-level reading of one bit pattern, applied
-per operation when C is emitted:
-
-```c
-int64_t v0 = (int64_t)(0u - ((uint64_t)3));       // let b: u64 = -3
-int64_t v2 = (int64_t)(0u - ((uint64_t)3));       // let s: i64 = -3, identical storage
-int64_t v5 = (int64_t)(((uint64_t)v4) / ((uint64_t)2));   // the cast rides the operator
-```
-
-Both annotations produce the same bytes; only the operators applied later differ. The fix is a range
-check over the negated value at the annotation, which is above FIR and needs nothing from it.
-
-**Related tests:** `tests/harness/errors/negative_literal_into_unsigned.f` (SKIP)
-
----
-
 ### Goto-Definition Falls Back to Any Same-Named Declaration
 
 **Status:** Open

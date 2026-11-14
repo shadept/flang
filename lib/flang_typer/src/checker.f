@@ -113,6 +113,9 @@ type PendingLit = struct {
     ty: Ty
     text: String
     is_float: bool
+    // The literal is the direct operand of a unary `-`, so the value it ends up holding is `-text`:
+    // an unsigned target has no room for it.
+    negated: bool
 }
 
 // An anonymous `.{ ... }` literal awaiting its nominal. The literal types as a fresh var the
@@ -5572,7 +5575,7 @@ fn validate_literals(self: &Checker, from: usize, to: usize) {
                         $"type mismatch: expected one of the numeric types, got `{prim_name(p)}` for literal `{pl.text}`",
                     )
                 } else if !pl.is_float {
-                    check_int_range(self, pl.text, p, pl.span)
+                    check_int_range(self, pl.text, p, pl.negated, pl.span)
                 }
             }
             // Anything that is not a primitive: a numeric literal cannot BE it. Unification rejects
@@ -5612,7 +5615,7 @@ fn literal_flagged(self: &Checker, pl: &PendingLit) bool {
     if pl.is_float {
         return false
     }
-    return int_out_of_range(pl.text, p)
+    return int_out_of_range(pl.text, p, pl.negated)
 }
 
 // What a numeric literal may settle on: any numeric primitive, plus `char` for an integer literal
@@ -5628,25 +5631,31 @@ fn literal_prim_ok(p: PrimitiveKind, is_float: bool) bool {
 // Reject an integer literal that does not fit its resolved type. The value is parsed as an unsigned
 // magnitude (the lexer never includes a sign - `-1` is a negation applied to `1`), so the bound
 // checked is the type's largest magnitude: `MAX` for unsigned, `MAX + 1` for signed so `-128i8` and
-// `128i8` are told apart by the negation, exactly as the reference does.
-fn check_int_range(self: &Checker, text: String, p: PrimitiveKind, span: SourceSpan) {
-    if int_out_of_range(text, p) {
+// `128i8` are told apart by the negation, exactly as the reference does. `negated` is the literal
+// being the operand of a unary `-`: an unsigned type holds no negative value, so any nonzero
+// magnitude is out of range there.
+fn check_int_range(self: &Checker, text: String, p: PrimitiveKind, negated: bool, span: SourceSpan) {
+    if int_out_of_range(text, p, negated) {
+        const sign = if negated { "-" } else { "" }
         push_diag_e(
             self,
             span,
             E_LITERAL_RANGE,
-            $"integer literal `{text}` is out of range for `{prim_name(p)}`",
+            $"integer literal `{sign}{text}` is out of range for `{prim_name(p)}`",
         )
     }
 }
 
-fn int_out_of_range(text: String, p: PrimitiveKind) bool {
+fn int_out_of_range(text: String, p: PrimitiveKind, negated: bool) bool {
     if !is_integer(p) {
         return false
     }
     let v = parse_int_magnitude(text)
     if v.is_none() {
         return false
+    }
+    if negated and !is_signed_integer(p) and v.unwrap() != 0 {
+        return true
     }
     return v.unwrap() > int_magnitude_limit(p)
 }
@@ -7649,6 +7658,10 @@ fn is_place_expr(e: &Expr) bool {
 // width/float decisions read.
 fn check_unary(self: &Checker, u: &UnaryExpr) Ty {
     let inner = check_expr(self, u.operand)
+    u.op match {
+        Neg => mark_negated_literal(self, u)
+        _ => {}
+    }
     return u.op match {
         Not => {
             unify_expected(self, inner, prim_of(PrimitiveKind.Bool), E_TYPE_MISMATCH, u.span)
@@ -7674,6 +7687,28 @@ fn check_unary(self: &Checker, u: &UnaryExpr) Ty {
             }
             inner
         }
+    }
+}
+
+// `-3` is a negation applied to the literal `3`, and the range check reads the literal alone, so
+// the sign has to be handed to it: an unsuffixed literal operand is the pending literal
+// `check_expr` just minted (the newest entry); a suffixed one is checked on the spot, where its
+// type is already known. A magnitude too large for the type was reported with the literal.
+fn mark_negated_literal(self: &Checker, u: &UnaryExpr) {
+    const il = u.operand.* match {
+        Lit(l) => l.value match {
+            Int(i) => i
+            _ => return
+        }
+        _ => return
+    }
+    if il.suffix.len == 0 {
+        self.pending_literals[self.pending_literals.len - 1].negated = true
+        return
+    }
+    const p = prim_from_name(il.suffix)
+    if p.is_some() and !int_out_of_range(il.text, p.unwrap(), false) {
+        check_int_range(self, il.text, p.unwrap(), true, u.span)
     }
 }
 
@@ -8525,13 +8560,19 @@ fn numeric_literal_ty(
             // A suffixed literal never becomes a pending literal, so its range check happens here
             // rather than in `validate_literals`.
             if !is_float {
-                check_int_range(self, text, p.unwrap(), span)
+                check_int_range(self, text, p.unwrap(), false, span)
             }
             return prim_of(p.unwrap())
         }
     }
     let v = self.engine.fresh_constrained_var(literal_prim_set(is_float))
-    self.pending_literals.push(PendingLit { span = span, ty = v, text = text, is_float = is_float })
+    self.pending_literals.push(PendingLit {
+        span = span,
+        ty = v,
+        text = text,
+        is_float = is_float,
+        negated = false,
+    })
     return v
 }
 
