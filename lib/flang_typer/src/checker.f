@@ -8893,6 +8893,11 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
             unify_expected(self, body_ty, ret, E_RETURN_MISMATCH, lam.span)
         }
     }
+    // A bound-typed slot (`$F where F: fn(i32) R`) meets the lambda only when the bound is checked,
+    // after the enclosing body, so the return pins `R` here.
+    if lam.return_type.is_none() and expected.is_some() and !expects_void {
+        unify_expected(self, ret, expected.unwrap().ret, E_TYPE_MISMATCH, lam.span)
+    }
     let _f = self.fn_stack.pop()
     self.env.pop_scope()
     let frame = self.lambda_frames.pop().unwrap()
