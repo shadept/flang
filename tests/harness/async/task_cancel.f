@@ -21,8 +21,8 @@ fn worker(log: &Log) i32 {
 }
 
 fn nested_watcher(log: &Log) i32 {
-    return concurrent { inner =>
-        inner
+    return concurrent {
+        scope
             .spawn {
                 loop {
                     yield_now() ?? break
@@ -44,10 +44,10 @@ fn cancel_after_rounds(s: &Scope) i32 {
 
 pub fn main() i32 {
     let log: Log = Log { cleaned = 0, rounds = 0, inner_saw = false }
-    const total: i32 = concurrent { s =>
-        const w: Task(i32) = s.spawn { worker(&log) }
-        const n: Task(i32) = s.spawn { nested_watcher(&log) }
-        const c: Task(i32) = s.spawn { cancel_after_rounds(s) }
+    const total: i32 = concurrent {
+        const w: Task(i32) = scope.spawn { worker(&log) }
+        const n: Task(i32) = scope.spawn { nested_watcher(&log) }
+        const c: Task(i32) = scope.spawn { cancel_after_rounds(scope) }
         w.await() + n.await() + c.await()
     }
     if total != 7 {

@@ -190,12 +190,12 @@ const task_pools = TaskPools {
 //
 // Panics if `body` returns while a task it started is still running, if a task of the scope
 // panicked, or if the scope can never finish.
-pub fn concurrent(body: fn(&Scope) $R) R {
+pub fn concurrent(#it(scope) body: fn(&Scope) $R) R {
     return concurrent(Start.Eager, body)
 }
 
 // Runs `body` like `concurrent(body)`, with `start` as the scope's default start mode.
-pub fn concurrent(start: Start, body: fn(&Scope) $R) R {
+pub fn concurrent(start: Start, #it(scope) body: fn(&Scope) $R) R {
     if current_coroutine().is_some() {
         return run_scope(start, body)
     }
@@ -438,7 +438,7 @@ type ArmArena = struct {
 //
 // Panics if `body` returns without calling `wait`, if it registers no arm, or if an arm that cannot
 // complete at once registers outside every scope.
-pub fn select(body: fn(&Selector($R))) R {
+pub fn select(#it(on) body: fn(&Selector($R))) R {
     let result: R
     let state = Select {
         arms = null,
@@ -694,10 +694,10 @@ pub fn race(tasks: move List(Task($T))) T {
 // Runs `first` and `second` as tasks of a new scope and returns the result of the one that finishes
 // first. The other is cancelled; its result is released once it returns.
 pub fn race(first: fn() $T, second: fn() T) T {
-    return concurrent { s =>
+    return concurrent {
         let tasks = list(2)
-        tasks.push(s.spawn(Start.Eager, first))
-        tasks.push(s.spawn(Start.Eager, second))
+        tasks.push(scope.spawn(Start.Eager, first))
+        tasks.push(scope.spawn(Start.Eager, second))
         race(tasks)
     }
 }
@@ -1088,19 +1088,19 @@ fn __task_test_mark(flag: &bool) i32 {
 fn __task_test_noop() {}
 
 fn __task_test_launch_many(n: usize) usize {
-    return concurrent { s =>
+    return concurrent {
         for _i in 0..n {
-            s.launch { __task_test_noop() }
+            scope.launch { __task_test_noop() }
         }
-        s.join()
+        scope.join()
         n
     }
 }
 
 test "spawned tasks hand their results back through await" {
-    const sum = concurrent { s =>
-        const a = s.spawn { __task_test_add(1, 2) }
-        const b = s.spawn { __task_test_add(3, 4) }
+    const sum = concurrent {
+        const a = scope.spawn { __task_test_add(1, 2) }
+        const b = scope.spawn { __task_test_add(3, 4) }
         a.await() + b.await()
     }
     assert_eq(sum, 10, "sum")
@@ -1108,12 +1108,12 @@ test "spawned tasks hand their results back through await" {
 
 test "a cancelled scope's task stops at its next check" {
     let rounds = 0
-    const seen = concurrent { s =>
-        const spinner = s.spawn { __task_test_spin(&rounds) }
+    const seen = concurrent {
+        const spinner = scope.spawn { __task_test_spin(&rounds) }
         for _i in 0usize..3usize {
             let _y = yield_now()
         }
-        s.cancel()
+        scope.cancel()
         spinner.await()
     }
     assert_true(seen >= 1, "the spinner ran before the cancel")
@@ -1122,8 +1122,8 @@ test "a cancelled scope's task stops at its next check" {
 
 test "a lazy task never awaited does not run" {
     let ran = false
-    const before = concurrent(Start.Lazy) { s =>
-        const t = s.spawn { __task_test_mark(&ran) }
+    const before = concurrent(Start.Lazy) {
+        const t = scope.spawn { __task_test_mark(&ran) }
         leak(t)
         ran
     }
@@ -1162,10 +1162,10 @@ fn __task_test_ok_after(rounds: i32, v: i32) Result(i32, i32) {
 }
 
 test "select over tasks wins on the first to finish" {
-    const got = concurrent { s =>
-        const slow = s.spawn { __task_test_after(5, 1) }
-        const fast = s.spawn { __task_test_after(1, 2) }
-        const which = select { on =>
+    const got = concurrent {
+        const slow = scope.spawn { __task_test_after(5, 1) }
+        const fast = scope.spawn { __task_test_after(1, 2) }
+        const which = select {
             on(&slow) { 10 }
             on(&fast) { 20 }
             on.wait()
@@ -1177,9 +1177,9 @@ test "select over tasks wins on the first to finish" {
 
 test "cancelling a task leaves its siblings running" {
     let rounds = 0
-    const got = concurrent { s =>
-        const spinner = s.spawn { __task_test_spin(&rounds) }
-        const other = s.spawn { __task_test_after(3, 7) }
+    const got = concurrent {
+        const spinner = scope.spawn { __task_test_spin(&rounds) }
+        const other = scope.spawn { __task_test_after(3, 7) }
         let _y = yield_now()
         spinner.cancel()
         let _seen = spinner.await()
@@ -1190,38 +1190,38 @@ test "cancelling a task leaves its siblings running" {
 
 test "race returns the first result and cancels the rest" {
     let rounds = 0
-    const got = concurrent { s =>
+    const got = concurrent {
         let tasks = list(2)
-        tasks.push(s.spawn { __task_test_spin(&rounds) })
-        tasks.push(s.spawn { __task_test_after(2, 42) })
+        tasks.push(scope.spawn { __task_test_spin(&rounds) })
+        tasks.push(scope.spawn { __task_test_after(2, 42) })
         race(tasks)
     }
     assert_eq(got, 42, "the finite task won; the spinner stopped")
 }
 
 test "race over two functions" {
-    const got = concurrent { s =>
+    const got = concurrent {
         race({ __task_test_after(4, 1) }, { __task_test_after(1, 2) })
     }
     assert_eq(got, 2, "the faster one")
 }
 
 test "any skips failures and returns the first success" {
-    const got = concurrent { s =>
+    const got = concurrent {
         let tasks = list(3)
-        tasks.push(s.spawn { __task_test_fail_after(1, 1) })
-        tasks.push(s.spawn { __task_test_ok_after(3, 5) })
-        tasks.push(s.spawn { __task_test_ok_after(6, 9) })
+        tasks.push(scope.spawn { __task_test_fail_after(1, 1) })
+        tasks.push(scope.spawn { __task_test_ok_after(3, 5) })
+        tasks.push(scope.spawn { __task_test_ok_after(6, 9) })
         any(tasks)
     }
     assert_true(got.is_ok() and got.unwrap() == 5, "the first Ok")
 }
 
 test "any returns the last error when every task fails" {
-    const got = concurrent { s =>
+    const got = concurrent {
         let tasks = list(2)
-        tasks.push(s.spawn { __task_test_fail_after(1, 1) })
-        tasks.push(s.spawn { __task_test_fail_after(3, 2) })
+        tasks.push(scope.spawn { __task_test_fail_after(1, 1) })
+        tasks.push(scope.spawn { __task_test_fail_after(3, 2) })
         any(tasks)
     }
     assert_true(got.is_err() and got.unwrap_err() == 2, "the last to fail")

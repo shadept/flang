@@ -17,9 +17,9 @@ fn twenty() i32 {
 }
 
 pub fn main() i32 {
-    const sum: i32 = concurrent { s =>
-        const a: Task(i32) = s.spawn { add(1, 2) }
-        const b: Task(i32) = s.spawn { add(3, 4) }
+    const sum: i32 = concurrent {
+        const a: Task(i32) = scope.spawn { add(1, 2) }
+        const b: Task(i32) = scope.spawn { add(3, 4) }
         a.await() + b.await()
     }
     if sum != 10 {
@@ -28,8 +28,8 @@ pub fn main() i32 {
 
     let seen: i32 = 0
     context(tag = 7) {
-        seen = concurrent { s =>
-            s
+        seen = concurrent {
+            scope
                 .spawn { context.tag }
                 .await()
         }
@@ -38,10 +38,8 @@ pub fn main() i32 {
         return 2
     }
 
-    const nested: i32 = concurrent { s =>
-        const outer: Task(
-            i32,
-        ) = s.spawn { concurrent { inner => inner.spawn { twenty() }.await() + 1 } }
+    const nested: i32 = concurrent {
+        const outer: Task(i32) = scope.spawn { concurrent { scope.spawn { twenty() }.await() + 1 } }
         outer.await()
     }
     if nested != 21 {
@@ -49,10 +47,10 @@ pub fn main() i32 {
     }
 
     let hits: i32 = 0
-    const joined: i32 = concurrent { s =>
-        s.launch { hits = hits + 1 }
-        s.launch { hits = hits + 10 }
-        s.join()
+    const joined: i32 = concurrent {
+        scope.launch { hits = hits + 1 }
+        scope.launch { hits = hits + 10 }
+        scope.join()
         hits
     }
     if joined != 11 {
@@ -60,8 +58,8 @@ pub fn main() i32 {
     }
 
     let ran: i32 = 0
-    const lazy: i32 = concurrent(Start.Lazy) { s =>
-        const t: Task(i32) = s.spawn {
+    const lazy: i32 = concurrent(Start.Lazy) {
+        const t: Task(i32) = scope.spawn {
             ran = ran + 1
             5
         }

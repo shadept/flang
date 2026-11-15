@@ -27,9 +27,9 @@ fn consume(ch: &Channel(i32)) i32 {
 
 pub fn main() i32 {
     let ch: Channel(i32) = channel()
-    const total: i32 = concurrent { s =>
-        const p: Task(i32) = s.spawn { produce(&ch) }
-        const c: Task(i32) = s.spawn { consume(&ch) }
+    const total: i32 = concurrent {
+        const p: Task(i32) = scope.spawn { produce(&ch) }
+        const c: Task(i32) = scope.spawn { consume(&ch) }
         p.await() + c.await()
     }
     ch.deinit()

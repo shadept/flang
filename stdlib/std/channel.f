@@ -678,9 +678,9 @@ fn __channel_test_total_len(ch: &Channel(OwnedString)) usize {
 
 test "owned values move through a channel without leaking" {
     let ch: Channel(OwnedString) = channel()
-    const total = concurrent { s =>
-        const tx = s.spawn { __channel_test_send_words(&ch) }
-        const rx = s.spawn { __channel_test_total_len(&ch) }
+    const total = concurrent {
+        const tx = scope.spawn { __channel_test_send_words(&ch) }
+        const rx = scope.spawn { __channel_test_total_len(&ch) }
         let _sent = tx.await()
         rx.await()
     }
@@ -690,7 +690,7 @@ test "owned values move through a channel without leaking" {
 
 test "releasing a channel releases the values still in it" {
     let ch: Channel(OwnedString) = channel(2)
-    const sent = concurrent { s =>
+    const sent = concurrent {
         let sent = true
         ch.send(from_view("left")).await() ?? { sent = false }
         ch.send(from_view("over")).await() ?? { sent = false }
@@ -728,7 +728,7 @@ fn __channel_test_got(r: Result(i32, RecvError)) i32 {
 }
 
 fn __channel_test_select_two(a: &Channel(i32), b: &Channel(i32)) i32 {
-    return select { on =>
+    return select {
         on(a.recv()) { __channel_test_got(it) }
         on(b.recv()) { 100 + __channel_test_got(it) }
         on.wait()
@@ -739,7 +739,7 @@ test "select takes the first arm that can complete at once" {
     let a: Channel(i32) = channel(1)
     let b: Channel(i32) = channel(1)
     let _sent = b.try_send(7)
-    const got = concurrent { s => __channel_test_select_two(&a, &b) }
+    const got = concurrent { __channel_test_select_two(&a, &b) }
     a.deinit()
     b.deinit()
     assert_eq(got, 107, "b had a value")
@@ -748,8 +748,8 @@ test "select takes the first arm that can complete at once" {
 test "select waits for the arm a sender completes and withdraws the others" {
     let a: Channel(i32) = channel()
     let b: Channel(i32) = channel()
-    const got = concurrent { s =>
-        const tx = s.spawn { __channel_test_send_late(&b, 5) }
+    const got = concurrent {
+        const tx = scope.spawn { __channel_test_send_late(&b, 5) }
         const r = __channel_test_select_two(&a, &b)
         let _t = tx.await()
         r
@@ -762,9 +762,9 @@ test "select waits for the arm a sender completes and withdraws the others" {
 test "a select's send completes when a receiver arrives" {
     let out: Channel(i32) = channel()
     let idle: Channel(i32) = channel()
-    const got = concurrent { s =>
-        const rx = s.spawn { __channel_test_recv_one(&out) }
-        const which = select { on =>
+    const got = concurrent {
+        const rx = scope.spawn { __channel_test_recv_one(&out) }
+        const which = select {
             on(idle.recv()) { 0 }
             on(out.send(9)) { if it.is_ok() {
                 1
@@ -786,8 +786,8 @@ test "a losing send releases its value" {
     let seeded = true
     full.try_send(from_view("first")) ?? { seeded = false }
     let _v = ready.try_send(3)
-    const got = concurrent { s =>
-        select { on =>
+    const got = concurrent {
+        select {
             on(full.send(from_view("dropped"))) {
                 it.deinit() // without it: warning[W2006]: `it` is never released
                 0
@@ -806,7 +806,7 @@ test "a closed channel completes a select arm with Closed" {
     let a: Channel(i32) = channel()
     let b: Channel(i32) = channel()
     b.close()
-    const got = concurrent { s => __channel_test_select_two(&a, &b) }
+    const got = concurrent { __channel_test_select_two(&a, &b) }
     a.deinit()
     b.deinit()
     assert_eq(got, 98, "b is closed")
@@ -815,10 +815,10 @@ test "a closed channel completes a select arm with Closed" {
 test "cancelling the scope ends a waiting select with Cancelled" {
     let a: Channel(i32) = channel()
     let b: Channel(i32) = channel()
-    const got = concurrent { s =>
-        const t = s.spawn { __channel_test_select_two(&a, &b) }
+    const got = concurrent {
+        const t = scope.spawn { __channel_test_select_two(&a, &b) }
         let _y = yield_now()
-        s.cancel()
+        scope.cancel()
         t.await()
     }
     a.deinit()
@@ -827,7 +827,7 @@ test "cancelling the scope ends a waiting select with Cancelled" {
 }
 
 fn __channel_test_local_after_wait(ch: &Channel(i32)) i32 {
-    return select { on =>
+    return select {
         const local = 1234
         on(ch.recv()) { local + (it ?? 0) }
         on.wait()
@@ -836,8 +836,8 @@ fn __channel_test_local_after_wait(ch: &Channel(i32)) i32 {
 
 test "a handler that runs after a wait reads the body's locals" {
     let ch: Channel(i32) = channel()
-    const got = concurrent { s =>
-        const tx = s.spawn { __channel_test_send_late(&ch, 1) }
+    const got = concurrent {
+        const tx = scope.spawn { __channel_test_send_late(&ch, 1) }
         const r = __channel_test_local_after_wait(&ch)
         let _t = tx.await()
         r

@@ -31,8 +31,8 @@ fn fixture_task_panics() i32 {
 }
 
 test "a panic inside a task" {
-    const n = concurrent { s =>
-        s
+    const n = concurrent {
+        scope
             .spawn { fixture_task_panics() }
             .await()
     }

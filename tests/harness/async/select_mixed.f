@@ -23,7 +23,7 @@ fn wait_then(rounds: i32, v: i32) i32 {
 }
 
 fn next_event(data: &Channel(i32), out: &Channel(i32), worker: &Task(i32)) Event {
-    return select { on =>
+    return select {
         on(data.recv()) {
             it match {
                 Ok(v) => Event.Got(v)
@@ -48,8 +48,8 @@ fn code(e: Event) i32 {
 pub fn main() i32 {
     let data: Channel(i32) = channel(1)
     let out: Channel(i32) = channel()
-    const total: i32 = concurrent { s =>
-        const worker: Task(i32) = s.spawn { wait_then(3, 7) }
+    const total: i32 = concurrent {
+        const worker: Task(i32) = scope.spawn { wait_then(3, 7) }
         let _seed: Result((), TrySendError(i32)) = data.try_send(5)
         const first: i32 = code(next_event(&data, &out, &worker))
         const second: i32 = code(next_event(&data, &out, &worker))

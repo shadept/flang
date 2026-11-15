@@ -11,6 +11,6 @@ fn one() i32 {
 }
 
 pub fn main() i32 {
-    const t: Task(i32) = concurrent(Start.Lazy) { s => s.spawn { one() } }
+    const t: Task(i32) = concurrent(Start.Lazy) { scope.spawn { one() } }
     return t.await()
 }

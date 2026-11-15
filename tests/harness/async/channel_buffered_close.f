@@ -30,7 +30,7 @@ fn received(r: Result(i32, RecvError)) i32 {
 
 pub fn main() i32 {
     let ch: Channel(i32) = channel(2)
-    const code: i32 = concurrent { s =>
+    const code: i32 = concurrent {
         let failed: i32 = 0
         ch.send(7).await() ?? { failed = 1 }
         ch.send(8).await() ?? { failed = 2 }

@@ -9,6 +9,6 @@ import std.task
 fn noop() {}
 
 pub fn main() i32 {
-    concurrent { s => s.launch { noop() } }
+    concurrent { scope.launch { noop() } }
     return 0
 }

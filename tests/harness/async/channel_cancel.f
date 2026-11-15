@@ -30,12 +30,12 @@ fn send_forty(ch: &Channel(i32)) i32 {
 pub fn main() i32 {
     let empty: Channel(i32) = channel()
     let full: Channel(i32) = channel(1)
-    const r: i32 = concurrent { s =>
+    const r: i32 = concurrent {
         let _seed = full.send(1).await()
-        const rx: Task(i32) = s.spawn { receive(&empty) }
-        const tx: Task(i32) = s.spawn { send_forty(&full) }
+        const rx: Task(i32) = scope.spawn { receive(&empty) }
+        const tx: Task(i32) = scope.spawn { send_forty(&full) }
         let _y = yield_now()
-        s.cancel()
+        scope.cancel()
         rx.await() * 100 + tx.await()
     }
     empty.deinit()
