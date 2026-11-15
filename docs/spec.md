@@ -922,6 +922,17 @@ In an `if`, `while` or `for` header the `{` at the header's level opens the body
 
 **Arrow-less lambdas and `it`.** A lambda with no `=>` takes its arity from the callable expected where it is passed: a function type, or a type parameter the callee bounds by one. At arity one its parameter is named `it`; at arity zero it has none, and an outer `it` stays visible. An expected arity above one, or none at all, is E2154. `it` is not a keyword: it names the parameter only inside an arrow-less lambda, shadowing any outer `it`, and a nested arrow-less lambda's `it` shadows the enclosing one's. An arrow-less lambda appears only in argument or trailing position.
 
+**`#it(name)` on a parameter** (RFC-045). The function taking the lambda can name its parameter: an arrow-less lambda filling a parameter marked `#it(name)` names its one parameter `name` instead of `it`. `it` is then not bound in that lambda, so an outer `it` stays visible and a nested arrow-less lambda's `it` shadows nothing; `name` shadows an outer binding as `it` does. A lambda with `=>` names its own parameters and is unaffected. The marked parameter must be a callable taking one argument, a function type or a type parameter bounded by one (E2163); a parameter takes no other directive (E1058). The overload the call picks decides.
+
+```flang
+fn with_acc(#it(acc) body: fn(&Acc)) i32 { ... }
+
+with_acc {
+    acc.add(1)
+    each(3) { acc.add(it) }       // `it` is each's element, `acc` the outer parameter
+}
+```
+
 **`_` parameters.** `_` names a parameter the body never reads: `{ _, y => y }`, `{ _, _, _ => 0 }`, typed `{ _: i32, y: i32 => y }`. Any number of parameters may be `_`, and reading one is E2004. `_` drops only the name, not the obligation: a non-copyable argument bound to `_` is still owned by the lambda and unreleased (W2006), as with `{ it => 0 }` and `{ 0 }`. A lambda ignoring its single argument is written arrow-less, `{ 0 }`.
 
 A lambda with no captured names desugars to a synthesised module-level function. A lambda that references names from the enclosing scope is a **capturing closure** (RFC-014): the compiler synthesises an anonymous `__Closure_N` struct holding a reference to each captured binding and an `op_call(self: &__Closure_N, ...)` body that reads and writes each capture through `self`.
@@ -1077,6 +1088,7 @@ Prefixed with `#`, precede declarations:
 | `#inline`            | Inlining hint                                                   |
 | `#intrinsic`         | Compiler-recognized stdlib intrinsic                            |
 | `#simd`              | SIMD-aligned struct (16+ byte alignment)                        |
+| `#it(name)`          | On a parameter: names an arrow-less lambda's parameter (§7.3)   |
 
 Unknown directives produce warning W2003.
 

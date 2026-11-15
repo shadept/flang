@@ -212,6 +212,9 @@ pub type FunctionParam = struct {
     // `x: &move T` - a slot the function may take the value out of, on the obligation of leaving
     // one behind. Declared in `core` alone.
     is_slot: bool
+    // `#it(name) f: ...` - an arrow-less lambda filling this parameter names its parameter `name`
+    // instead of `it` (RFC-045).
+    it_name: String?
 }
 
 // `[pub] [directives] type Name = TypeExpr`

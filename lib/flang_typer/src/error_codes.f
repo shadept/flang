@@ -51,6 +51,9 @@ pub const E_UNION_LITERAL: String = "E2160"
 pub const E_UNION_MEMBER: String = "E2161"
 pub const E_UNION_PATTERN: String = "E2162"
 
+// `#it(name)` on a parameter that is not a callable taking one argument (RFC-045).
+pub const E_IT_NAME_SLOT: String = "E2163"
+
 // Duplicate declarations the reference rejects at their declaration site: a struct field name twice
 // (E2076), an enum tag value twice (E2048), a `let`/`const`/global re-declared in the same scope
 // (E2005, shared with the duplicate-type code).

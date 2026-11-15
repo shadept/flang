@@ -691,6 +691,11 @@ fn parse_function_params(self: &Parser, b: &NodeBuilder) {
 
 fn parse_function_param(self: &Parser) CstNodeId {
     let b = self.open(NodeKind.FunctionParam)
+    while self.current_kind() == TokenKind.Hash {
+        const d = self.parse_directive()
+        self.check_param_directive(d)
+        self.push_node_into(&b, d)
+    }
     // Variadic prefix `..`
     if self.current_kind() == TokenKind.DotDot {
         self.eat_into(&b)
@@ -714,6 +719,37 @@ fn parse_function_param(self: &Parser) CstNodeId {
         self.push_node_into(&b, def)
     }
     return self.finish(b)
+}
+
+// E1058 unless the directive is `#it(name)`, the one a parameter takes (RFC-045).
+fn check_param_directive(self: &Parser, id: CstNodeId) {
+    const node = self.tree.node_at(id)
+    let idents = 0usize
+    let others = 0usize
+    let parens = false
+    for i in 0..node.child_count() {
+        node.child(i) match {
+            TokenChild(tok) => tok.kind match {
+                Hash | CloseParenthesis => {}
+                OpenParenthesis => parens = true
+                Identifier => idents = idents + 1
+                _ => others = others + 1
+            }
+            NodeChild(_) => others = others + 1
+        }
+    }
+    const well_formed = parens and idents == 2 and others == 0
+    if well_formed and self.directive_name_of(id) == "it" {
+        return
+    }
+    self.record_error_at(
+        "E1058",
+        from_view(
+            "a parameter takes only `#it(name)`, naming the parameter of an arrow-less lambda that fills it",
+        ),
+        node.start as usize,
+        (node.end - node.start) as usize,
+    )
 }
 
 // True when the current token can begin a type expression. Used to decide whether a function

@@ -102,6 +102,8 @@ pub type LambdaInfo = struct {
     symbol: OwnedString
     // `ConvC` for a lambda filling a `#foreign fn` slot: its body is a C function.
     conv: FnConv
+    // The name `#it(name)` gives an arrow-less lambda's parameter in place of `it` (RFC-045).
+    it_name: String?
 }
 
 pub fn deinit(self: move LambdaInfo) {
@@ -547,6 +549,7 @@ pub fn copy_lambda(info: &LambdaInfo) LambdaInfo {
         closure_id = info.closure_id,
         symbol = from_view(info.symbol.view()),
         conv = info.conv,
+        it_name = info.it_name,
     }
 }
 

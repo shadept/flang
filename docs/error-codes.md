@@ -2925,6 +2925,7 @@ Report the issue with sample code that reproduces the error.
 | **E1055** | Parsing           | Unknown loop label                           |
 | **E1056** | Parsing           | Label hides an enclosing label               |
 | **E1057** | Parsing           | Label without a loop                         |
+| **E1058** | Parsing           | Parameter directive other than `#it(name)`   |
 
 ### E2XXX: Semantic Analysis
 
@@ -3031,6 +3032,7 @@ Report the issue with sample code that reproduces the error.
 | **E2160** | Type Checking     | A union literal that does not set exactly one member |
 | **E2161** | Type Checking     | A union that is not `#foreign`, is empty, or holds a member that is not plain C data |
 | **E2162** | Type Checking     | A pattern destructuring a union |
+| **E2163** | Type Checking     | `#it` on a parameter no arrow-less lambda fills |
 
 ### E2115: Unsupported Pattern Form
 
@@ -3305,6 +3307,29 @@ check: if n == 0 { n = 1 }   // error[E1057]
 scan:                        // error[E1057]: the loop is on the next line
 loop { break }
 ```
+
+---
+
+### E1058: Parameter Directive Other Than `#it(name)`
+
+**Category**: Parsing
+**Severity**: Error
+
+#### Description
+
+A function parameter takes one directive, `#it(name)`, with a single identifier: an arrow-less
+lambda filling the parameter names its parameter `name` instead of `it` (RFC-045).
+
+#### Example
+
+```flang
+fn apply(#inline f: fn(i32) i32) i32 { return f(1) }   // error[E1058]
+fn each(#it(_) f: fn(i32)) {}                          // error[E1058]
+```
+
+#### Solution
+
+Remove the directive, or write `#it(name)`.
 
 ---
 
@@ -4245,6 +4270,28 @@ n match {
 #### Solution
 
 Read the member as a field (`n.i`), after testing whatever field the C API uses as its tag.
+
+---
+
+### E2163: `#it` on a Parameter No Arrow-less Lambda Fills
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+`#it(name)` renames the one parameter of an arrow-less lambda (RFC-045), so the parameter it marks
+must be a callable taking one argument: a function type, or a type parameter bounded by one.
+
+#### Example
+
+```flang
+fn combine(#it(x) f: fn(i32, i32) i32) i32 { return f(1, 2) }   // error[E2163]
+```
+
+#### Solution
+
+Remove the directive; callers name the parameters themselves (`{ a, b => a + b }`).
 
 ---
 

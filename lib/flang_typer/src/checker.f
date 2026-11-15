@@ -277,6 +277,9 @@ pub type Checker = struct {
     overload_deferred: bool
     // Calls parked that way, re-resolved once inference has finished.
     pending_calls: List(PendingCall)
+    // Arrow-less lambda node -> the parameter name `#it(name)` on the slot it fills gives it
+    // (RFC-045). Set when the call commits, taken when the lambda is checked.
+    it_names: Dict(NodeId, String)
     // fn_id → `#deprecated` reason, for the deprecated functions only.
     fn_deprecations: Dict(u32, String)
 
@@ -752,6 +755,7 @@ pub fn checker() Checker {
         alias_stack = list(0),
         overload_deferred = false,
         pending_calls = list(0),
+        it_names = dict(),
         fn_deprecations = dict(),
         templates = dict(),
         fn_bounds = dict(),
@@ -1000,6 +1004,7 @@ pub fn deinit(self: move Checker) {
     self.fn_stack.deinit()
     self.alias_stack.deinit()
     self.pending_calls.deinit()
+    self.it_names.deinit()
     self.fn_deprecations.deinit()
     self.fn_bounds.deinit()
     self.nom_bounds.deinit()
@@ -2800,6 +2805,7 @@ fn register_function_sig(self: &Checker, fd: &FunctionDecl) {
     atoms.deinit()
     atoms = move implied
     const trailing = trailing_slot(self, fd, &params, &atoms)
+    check_it_names(self, fd, &params, &atoms)
     const conv = if is_foreign_directive(fd.directives) { FnConv.ConvC } else { FnConv.ConvFlang }
     let fn_ty = self.engine.mk_func(params, ret, moves, conv)
 
@@ -2913,25 +2919,51 @@ fn trailing_slot(
     return null
 }
 
+// E2163: `#it(name)` on a parameter an arrow-less lambda cannot fill with one parameter.
+fn check_it_names(self: &Checker, fd: &FunctionDecl, params: &List(Ty), atoms: &List(BoundAtom)) {
+    for i in 0..params.len {
+        const p = &fd.params[i]
+        if p.it_name.is_none() or callable_arity(self, params[i], atoms) == Some(1usize) {
+            continue
+        }
+        push_diag_e(
+            self,
+            p.span,
+            E_IT_NAME_SLOT,
+            $"`#it({p.it_name.unwrap()})` needs a parameter of a callable type taking one argument",
+        )
+    }
+}
+
 fn is_callable_param(self: &Checker, t: Ty, atoms: &List(BoundAtom)) bool {
+    return callable_arity(self, t, atoms).is_some()
+}
+
+// The parameter count of a parameter typed `t`: its function type's, or that of the callable bound
+// `atoms` place on it. Null when it is neither.
+fn callable_arity(self: &Checker, t: Ty, atoms: &List(BoundAtom)) usize? {
     const r = self.engine.resolve(t)
     ty_node(self, r) match {
-        NFunc(_) => return true
+        NFunc(f) => return Some(f.params.len)
         _ => {}
     }
     if !self.engine.is_var(r) {
-        return false
+        return null
     }
     for &a in atoms {
         const is_callable = a.kind match {
             Callable => true
             _ => false
         }
-        if is_callable and self.engine.resolve(a.subject) == r {
-            return true
+        if !is_callable or self.engine.resolve(a.subject) != r {
+            continue
+        }
+        ty_node(self, self.engine.resolve(a.shape)) match {
+            NFunc(f) => return Some(f.params.len)
+            _ => {}
         }
     }
-    return false
+    return null
 }
 
 fn any_trailing_slot(self: &Checker, candidates: &List(&FunctionScheme)) bool {
@@ -8861,6 +8893,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
     // re-check - pins.
     let params: List(Ty) = list(lam.params.len)
     let moves = 0usize
+    const it_name = if lam.arrowless { self.it_names.remove(self.node_of(lam.span)) } else { null }
     for &p in lam.params_at(arity) {
         let unannotated = p.type_expr match { Error(_) => true, _ => false }
         let ty = if !unannotated {
@@ -8877,7 +8910,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
         const p_node = self.node_of(p.span)
         self.results.record_type(p_node, ty)
         self.env.bind(
-            p.name,
+            it_name ?? p.name,
             Binding { scheme = mono(ty), decl = p_node, is_const = false, is_type_param = false },
         )
         params.push(ty)
@@ -8941,6 +8974,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
                 closure_id = null,
                 symbol = $"__flang_lambda_{lid}",
                 conv = conv,
+                it_name = it_name,
             },
         )
         return self.engine.mk_func(fn_params, ret, moves, conv)
@@ -9004,6 +9038,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
             closure_id = Some(nid),
             symbol = move sym,
             conv = FnConv.ConvFlang,
+            it_name = it_name,
         },
     )
     if conv == FnConv.ConvC {
@@ -10590,6 +10625,7 @@ fn commit_pick(
             warn_deprecated_call(self, p.id, name, span)
             gate_context_address(self, p.id, span)
             check_consuming_receiver(self, &p, name, recv, span)
+            note_it_names(self, p.id, pos_exprs, named, recv_extra)
             note_pending(self, span, false, &p)
             // The AST's argument order is the call's argument order except when names select
             // parameters or a variadic tail packs; those two record a complete list instead.
@@ -10621,6 +10657,74 @@ fn commit_pick(
             push_diag_e(self, span, E_NO_OVERLOAD, sb.to_string())
             self.engine.fresh_var()
         }
+    }
+}
+
+// Records, for each arrow-less lambda argument whose parameter in function `id` carries
+// `#it(name)`, the name its parameter takes (RFC-045).
+fn note_it_names(
+    self: &Checker,
+    id: u32,
+    pos_exprs: &List(&Expr),
+    named: &NamedArgs?,
+    recv_extra: usize,
+) {
+    const dp = self.fn_decl_params.get_ref(id)
+    if dp.is_none() {
+        return
+    }
+    const decl = &dp.unwrap().params
+    named match {
+        Some(na) => {
+            for j in 0..na.names.len {
+                for &p in decl.as_slice()[recv_extra..decl.len] {
+                    if p.name == na.names[j] {
+                        note_it_name(self, na.values[j], p)
+                    }
+                }
+            }
+        }
+        None => {}
+    }
+    let n_pos = pos_exprs.len
+    let slot: usize? = null
+    if ends_trailing(pos_exprs) {
+        slot = dp.unwrap().trailing_slot
+        n_pos = n_pos - 1
+        if slot.is_some() and slot.unwrap() < decl.len {
+            note_it_name(self, pos_exprs[n_pos], &decl[slot.unwrap()])
+        }
+    }
+    let next = 0usize
+    for pi in recv_extra..decl.len {
+        if next >= n_pos or decl[pi].is_variadic {
+            return
+        }
+        const is_slot = slot.is_some() and slot.unwrap() == pi
+        if is_slot or named_fills(named, decl[pi].name) {
+            continue
+        }
+        note_it_name(self, pos_exprs[next], &decl[pi])
+        next = next + 1
+    }
+}
+
+fn named_fills(named: &NamedArgs?, name: String) bool {
+    return named match {
+        Some(na) => na.names.as_slice().contains(name)
+        None => false
+    }
+}
+
+fn note_it_name(self: &Checker, arg: &Expr, p: &FunctionParam) {
+    if p.it_name.is_none() {
+        return
+    }
+    arg.* match {
+        Lambda(lam) => if lam.arrowless {
+            self.it_names.set(self.node_of(lam.span), p.it_name.unwrap())
+        }
+        _ => {}
     }
 }
 
@@ -13029,6 +13133,7 @@ fn zonk_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
         closure_id = info.closure_id,
         symbol = from_view(info.symbol.view()),
         conv = info.conv,
+        it_name = info.it_name,
     }
 }
 

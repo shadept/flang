@@ -1818,15 +1818,38 @@ fn lower_pending_lambdas(m: &IrModule, ctx: &LowerCtx) {
     }
 }
 
+// The lambda's parameters as its body binds them: `it` renamed by `#it(name)` (RFC-045), the copy
+// held in `renamed`.
+fn bound_params(pl: &PendingLambda, renamed: &List(FunctionParam)) FunctionParam[] {
+    const params = pl.lam.params_at(pl.info.params.len)
+    if pl.info.it_name.is_none() or params.len != 1 {
+        return params
+    }
+    const p = &params[0]
+    renamed.push(FunctionParam {
+        span = p.span,
+        name = pl.info.it_name.unwrap(),
+        type_expr = p.type_expr,
+        default_value = p.default_value,
+        is_variadic = p.is_variadic,
+        is_move = p.is_move,
+        is_slot = p.is_slot,
+        it_name = null,
+    })
+    return renamed.as_slice()
+}
+
 fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
     let empty_dirs: DeclAttribute[]
     let no_bounds: TypeBound[]
+    let renamed: List(FunctionParam) = list(0)
+    defer renamed.deinit()
     let decl = FunctionDecl {
         span = pl.lam.span,
         is_pub = false,
         directives = empty_dirs,
         name = pl.info.symbol.view(),
-        params = pl.lam.params_at(pl.info.params.len),
+        params = bound_params(pl, &renamed),
         return_type = pl.lam.return_type,
         bounds = no_bounds,
         body = Some(pl.lam.body),

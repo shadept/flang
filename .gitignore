@@ -4,6 +4,7 @@ lib/*/build/
 tools/*/build/
 stdlib/*/build/
 tests/runner/build/
+tests/bindgen/build/
 
 # Installed compilers and stage artifacts (dotnet run build.cs).
 dist/

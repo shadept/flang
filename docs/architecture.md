@@ -176,7 +176,11 @@ touching a disk. The two functions that did read the world, `cwd` and
   with one `it` parameter spanning its `{`; the checker types it after the
   call resolves (`DeferredLambda`), from the function type or `fn` bound of
   the slot it fills, and `LambdaExpr.params_at` drops `it` at arity zero for
-  every pass after it.
+  every pass after it. A parameter's `#it(name)` (RFC-045) lands in
+  `FunctionParam.it_name`; when the call commits, `note_it_names` maps each
+  arrow-less argument to its parameter and parks the name in
+  `Checker.it_names`, `check_lambda` binds the parameter under it, and
+  `LambdaInfo.it_name` carries it to lowering, which binds by name.
 - **Child collections are `T[]` slices into the module arena.** The projector
   builds each list in the arena and freezes it (`frozen`), so a node holds no
   owning container and every AST type is copyable: the module, its chunk

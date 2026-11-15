@@ -461,6 +461,7 @@ fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
     // `&move T` keeps its `move` inside the reference type, so it reads as a slot rather than as an
     // owning by-value parameter.
     let is_slot = false
+    let it_name: String? = null
     let saw_colon = false
     let saw_equals = false
     let type_seen = false
@@ -478,7 +479,9 @@ fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
                 }
             }
             NodeChild(child) => {
-                if saw_equals and default_value.is_none() {
+                if child.kind == NodeKind.Directive {
+                    it_name = directive_arg(child)
+                } else if saw_equals and default_value.is_none() {
                     install(&default_value, Some(self.project_expr(child)))
                 } else if !type_seen and is_type_kind(child.kind) {
                     if child.kind == NodeKind.ReferenceType and has_token(child, TokenKind.Move) {
@@ -498,7 +501,27 @@ fn project_function_param(self: &Projector, cst: CstNode) FunctionParam {
         is_variadic = is_variadic,
         is_move = is_move,
         is_slot = is_slot,
+        it_name = it_name,
     }
+}
+
+// The identifier inside a directive's parentheses: `on` of `#it(on)`. The parser has already
+// refused any other parameter directive.
+fn directive_arg(cst: CstNode) String? {
+    let after_open = false
+    for i in 0..cst.child_count() {
+        cst.child(i) match {
+            TokenChild(tok) => tok.kind match {
+                OpenParenthesis => after_open = true
+                Identifier => if after_open {
+                    return Some(tok.text)
+                }
+                _ => {}
+            }
+            NodeChild(_) => {}
+        }
+    }
+    return null
 }
 
 fn project_struct_decl(self: &Projector, cst: CstNode) TypeDecl {
@@ -2789,6 +2812,7 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
                         is_variadic = false,
                         is_move = pending_move,
                         is_slot = false,
+                        it_name = null,
                     })
                     pending_active = false
                     pending_move = false
@@ -2859,6 +2883,7 @@ fn project_brace_lambda(self: &Projector, cst: CstNode, trailing: bool) LambdaEx
                         is_variadic = false,
                         is_move = pending_move,
                         is_slot = false,
+                        it_name = null,
                     })
                     pending_active = false
                     pending_move = false
@@ -2900,6 +2925,7 @@ fn make_lambda_param(self: &Projector, name: String, span: SourceSpan) FunctionP
         is_variadic = false,
         is_move = false,
         is_slot = false,
+        it_name = null,
     }
 }
 

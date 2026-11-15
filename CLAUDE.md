@@ -7,6 +7,7 @@ Compiler engineer assistant for FLang — a compiled language targeting C99, com
 - **Build:** `dotnet run build.cs` (builds with `dist/<rid>/flang`, else the `boot/<rid>` seed; a clean clone cold-starts from the seed, see `boot/README.md`)
 - **Run tests:** `dotnet test.cs [filter]` (language-feature harness; compiles each test by subprocessing `dist/<rid>/flang`, or `$FLANG`)
 - **Run colocated `test {}` blocks:** `dotnet test-all.cs`, or `flang test [path] [--name <substr>]` from a project directory
+- **Stdlib copy:** the build deploys `stdlib/` to `dist/<rid>/stdlib`, which `flang` reads without `--stdlib-path` (`test-all`, ad-hoc builds; the harness passes the repo path). After a stdlib edit, run `dotnet run build.cs` before those
 - **CLI shape:** `flang <command> [options] [args]` - the command comes first and options are parsed against it (`flang build -r`, not `flang -r build`)
 - **Type-check only:** `flang check` (includes `test {}` bodies; `flang build --check` does not)
 - **Run compiler:** `dist/<rid>/flang.exe`
