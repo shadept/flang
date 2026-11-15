@@ -15,9 +15,7 @@ type Log = struct {
 fn worker(log: &Log) i32 {
     defer log.cleaned = log.cleaned + 1
     loop {
-        if yield_now().is_err() {
-            return 1
-        }
+        yield_now() ?? return 1
         log.rounds = log.rounds + 1
     }
 }
@@ -27,11 +25,9 @@ fn nested_watcher(log: &Log) i32 {
         inner
             .spawn {
                 loop {
-                    if yield_now().is_err() {
-                        break
-                    }
+                    yield_now() ?? break
                 }
-                log.inner_saw = is_cancelled()
+                log.inner_saw = context.job.is_cancelled()
                 2
             }
             .await()
@@ -66,7 +62,7 @@ pub fn main() i32 {
     if !log.inner_saw {
         return 4
     }
-    if is_cancelled() {
+    if context.job.is_cancelled() {
         return 5
     }
     return 0

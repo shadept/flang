@@ -357,7 +357,7 @@ pub fn deinit(self: move Channel($T))
   original "the sender's copy remains logically valid" convention with the checker's.
 - v1 copies the bytes into a slot from the channel's allocator; zero-copy transfer is later.
 - `close` lets receivers drain every element sent before it, then `Err(Closed)`; pending and
-  later senders get `Err(Closed(v))`. Double close: panic (Go) recommended; still open (§8 q1).
+  later senders get `Err(Closed(v))`. Closing a closed channel does nothing (decided, §8 q1).
 - `for v in ch` would suspend inside `next()` with no `.await()` written; whether channels
   implement the iterator protocol is part of **D9**.
 - The allocator parameter is last (CLAUDE.md rule); the original `chan(T, alloc, capacity)` put
@@ -788,6 +788,7 @@ The original Phase 0 (wait for self-host) is met. Each phase lands with harness 
 | D10 | A panic in a task ends the process, except under `flang test`, where each coroutine catches its own panic, the scope joins, and the panic is re-raised on the stack of the test that opened the scope, failing that test. |
 | D11 | Awaiting with no `concurrent` scope open (plain `main`) panics. |
 | D12 | A task body runs under its scope's context link (RFC-038 §Semantics 4) through one stdlib-only intrinsic that yields the current context's address as a raw pointer; the C runtime calls the body with it. E2149 is unchanged for user code. |
+| D9a | `select` (2026-11-15) is a scope whose parameter registers arms: `select { on => on(ch.recv()) { v => Event.Got(v) }; on(stop.recv()) { _ => Event.Stop } }`. Arms may mix operation kinds; only the first ready operation completes, a losing send's value is released, and `select` returns the winning arm's value. Arms are values, never `break` or `return` from the enclosing function, until those are shown safe across suspension. A match-like form may come later as sugar. Channel operations stay lazy so `select` can hold them unperformed; `try_send` and `try_recv` are the eager forms. |
 
 ### Open
 
@@ -797,12 +798,12 @@ The original Phase 0 (wait for self-host) is met. Each phase lands with harness 
 | D6 | Allocators in parallel children | §3.8 (a), (b), (c) | (a), with (b) for `temp_allocator` |
 | D7 | Detached work | (a) none in v1; (b) `detach(arg: move A, body: fn(move A))` with a no-capture rule; (c) wait for owning closures | (a) |
 | D8 | Dispatchers and blocking | `blocking { }` offload, `#foreign_blocking`, a context field naming the executor, or nothing in v1 | `blocking { }` in Phase 5; executor choice later |
-| D9 | Composition surface | an `Awaitable` contract; `race`/`any`/`select` signatures; `for v in ch`; `with_timeout` returning `T?` or `Result(T, Timeout)` | decide with Phase 2/3 |
+| D9 | Composition surface (rest) | an `Awaitable` contract; `for v in ch`; `with_timeout` returning `T?` or `Result(T, Timeout)` | `select` decided as D9a. `race` (first to finish wins, the rest are cancelled) and `any` (first success wins) are library helpers over `select` and a scope, not primitives, each in two forms: over functions it spawns itself, and over tasks the caller already spawned, such as a list built from data. The rest with Phase 4. |
 | D11b | Runtime lifetime and workers | runtime lifetime (process vs outermost scope); worker-count configuration before first start (§3.10) | live for the process; decide with Phase 4 |
 
 ## 8. Other open questions
 
-1. **Channel double close**: panic (Go) or `Result`. Panic recommended.
+1. **Channel double close**: decided 2026-11-15, a no-op. Iterating a channel with `for` is deferred.
 2. **Sync I/O**: keep blocking variants in `std.io`, or make every I/O operation an awaitable that
    blocks the thread when awaited off the runtime (D11).
 3. **Stack size.** A C stack cannot move once raw pointers point into it, so "start small and

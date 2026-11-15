@@ -8,9 +8,10 @@
 // task.
 //
 // Cancellation is cooperative. `cancel` cancels a scope's tasks and every scope nested in them,
-// never the scope's parent. A task observes cancellation only by asking, through `is_cancelled`,
-// `check_cancelled` or `yield_now`. Nothing interrupts a task, so it returns normally and its
-// deferred calls run.
+// never the scope's parent. A task observes cancellation only by asking its job, through
+// `context.job.is_cancelled()` or `context.job.check_cancelled()`, or by suspending, as `yield_now`
+// and channel operations do. Nothing interrupts a task, so it returns normally and its deferred
+// calls run.
 //
 // A task's function may refer to locals of the body that started it. Therefore:
 //
@@ -30,13 +31,17 @@ import std.test
 // A Job is a scope's cancellation state. A job counts as cancelled when it, or any job above it, is
 // cancelled.
 pub type Job = struct {
-    // The job of the enclosing scope, or null for an outermost scope.
+    // The job of the enclosing scope, or null for the background job.
     parent: &Job?
     cancelled: bool
 }
 
-// job is the job of the innermost scope the current code runs in, or null outside every scope.
-pub context job: &Job? = null
+// background is the job outside every scope. It is never cancelled.
+const background = Job { parent = null, cancelled = false }
+
+// job is the job of the innermost scope the current code runs in, or the background job outside
+// every scope.
+pub context job: &Job = &background
 
 // Start says when a spawned task begins running.
 pub type Start = enum {
@@ -46,8 +51,8 @@ pub type Start = enum {
     Lazy
 }
 
-// Cancelled is the error `check_cancelled` and `yield_now` return once the current scope has been
-// cancelled.
+// Cancelled is the error a job's `check_cancelled`, `yield_now` and channel operations return once
+// the current scope has been cancelled.
 pub type Cancelled = struct {}
 
 // A Scope is the handle a body of `concurrent` starts its tasks through. It is valid only while
@@ -118,6 +123,10 @@ type ScopeRecord = struct {
     tasks: u32
     // Holds the scope's task slots; reset when the scope closes.
     arena: ArenaAllocator
+    // The coroutine running the scope's body.
+    opener: &Coroutine?
+    // The next scope in the list of open scopes.
+    next_open: &ScopeRecord?
     next_free: &ScopeRecord?
 }
 
@@ -147,6 +156,8 @@ type TaskPools = struct {
     cap: u32
     free_task: u32
     free_scope: &ScopeRecord?
+    // Every open scope, so that a cancellation can reach the coroutines waiting in them.
+    open_scopes: &ScopeRecord?
     // The allocator the pools grow from, or null for the heap allocator.
     allocator: &Allocator?
 }
@@ -159,6 +170,7 @@ const task_pools = TaskPools {
     cap = 0,
     free_task = NO_TASK,
     free_scope = null,
+    open_scopes = null,
     allocator = null,
 }
 
@@ -287,15 +299,15 @@ pub fn join(self: &Scope) {
 }
 
 // Cancels the scope. Its tasks, and every scope nested in them, observe cancellation from then on;
-// the scope's parent is not affected.
+// a task waiting in a channel operation stops waiting. The scope's parent is not affected.
 pub fn cancel(self: &Scope) {
     self.__record.job.cancelled = true
+    wake_cancelled()
 }
 
-// Returns whether the current scope, or any scope enclosing it, has been cancelled. Returns false
-// outside every scope.
-pub fn is_cancelled() bool {
-    let j = context.job
+// Returns whether the job, or any job above it, has been cancelled.
+pub fn is_cancelled(self: &Job) bool {
+    let j: &Job? = Some(self)
     loop {
         const at = j match {
             Some(x) => x
@@ -308,9 +320,10 @@ pub fn is_cancelled() bool {
     }
 }
 
-// Returns `Err(Cancelled)` if the current scope has been cancelled, and `Ok(())` otherwise.
-pub fn check_cancelled() Result((), Cancelled) {
-    if is_cancelled() {
+// Returns `Err(Cancelled)` if the job, or any job above it, has been cancelled, and `Ok(())`
+// otherwise.
+pub fn check_cancelled(self: &Job) Result((), Cancelled) {
+    if self.is_cancelled() {
         return Err(Cancelled {})
     }
     return Ok(())
@@ -322,20 +335,19 @@ pub fn check_cancelled() Result((), Cancelled) {
 //
 // Panics if called outside every scope.
 pub fn yield_now() Result((), Cancelled) {
-    if is_cancelled() {
+    if context.job.is_cancelled() {
         return Err(Cancelled {})
     }
     if current_coroutine().is_none() {
         panic("yield_now: outside a concurrent scope")
     }
     reschedule()
-    return check_cancelled()
+    return context.job.check_cancelled()
 }
 
 fn run_scope(start: Start, body: fn(&Scope) $R) R {
     const record = acquire_scope(context.job)
-    const j: &Job? = Some(&record.job)
-    context(job = j) {
+    context(job = &record.job) {
         let s = Scope { __record = record, __ctx = context_address(), __start = start }
         const r = body(&s)
         close_scope(record) match {
@@ -477,6 +489,65 @@ fn await_task(i: u32, gen: u64) i32 {
 
 fn ignore_done(c: &Coroutine) {}
 
+// Wakes the coroutines of every open scope that is now cancelled: the one running its body and
+// those running its tasks. A coroutine woken without cause goes back to waiting.
+fn wake_cancelled() {
+    let at = task_pools.open_scopes
+    loop {
+        const s = at match {
+            Some(s) => s
+            None => break
+        }
+        if s.job.is_cancelled() {
+            s.opener match {
+                Some(c) => c.wake()
+                None => {}
+            }
+            let i = s.tasks
+            loop {
+                if i == NO_TASK {
+                    break
+                }
+                const r = task_record(i)
+                r.coroutine match {
+                    Some(c) => c.wake()
+                    None => {}
+                }
+                i = r.next
+            }
+        }
+        at = s.next_open
+    }
+}
+
+#allow(W2004)
+fn same_scope(a: &ScopeRecord, b: &ScopeRecord) bool {
+    return (a as usize) == (b as usize)
+}
+
+fn remove_open_scope(s: &ScopeRecord) {
+    const head = task_pools.open_scopes match {
+        Some(h) => h
+        None => return
+    }
+    if same_scope(head, s) {
+        task_pools.open_scopes = s.next_open
+        return
+    }
+    let at = head
+    loop {
+        const n = at.next_open match {
+            Some(n) => n
+            None => return
+        }
+        if same_scope(n, s) {
+            at.next_open = s.next_open
+            return
+        }
+        at = n
+    }
+}
+
 fn pools_allocator() &Allocator {
     return task_pools.allocator match {
         Some(a) => a
@@ -495,7 +566,7 @@ fn slot_for(s: &ScopeRecord, size: usize, align: usize) &u8 {
     return p
 }
 
-fn acquire_scope(parent: &Job?) &ScopeRecord {
+fn acquire_scope(parent: &Job) &ScopeRecord {
     const s = task_pools.free_scope match {
         Some(f) => {
             task_pools.free_scope = f.next_free
@@ -510,16 +581,21 @@ fn acquire_scope(parent: &Job?) &ScopeRecord {
                 panicked = false,
                 tasks = NO_TASK,
                 arena = arena_allocator(pools_allocator()),
+                opener = null,
+                next_open = null,
                 next_free = null,
             },
         )
     }
-    s.job.parent = parent
+    s.job.parent = Some(parent)
     s.job.cancelled = false
     s.live = 0
     s.joiner = null
     s.panicked = false
     s.tasks = NO_TASK
+    s.opener = current_coroutine()
+    s.next_open = task_pools.open_scopes
+    task_pools.open_scopes = Some(s)
     s.next_free = null
     return s
 }
@@ -542,6 +618,8 @@ fn close_scope(s: &ScopeRecord) i32 {
         i = next
     }
     reset(&s.arena)
+    remove_open_scope(s)
+    s.opener = null
     s.next_free = task_pools.free_scope
     task_pools.free_scope = Some(s)
     return if panicked { 3 } else { 0 }
@@ -553,9 +631,7 @@ fn __task_test_add(a: i32, b: i32) i32 {
 
 fn __task_test_spin(rounds: &i32) i32 {
     loop {
-        if yield_now().is_err() {
-            return rounds.*
-        }
+        yield_now() ?? return rounds.*
         rounds.* = rounds.* + 1
     }
 }
@@ -597,13 +673,14 @@ test "a cancelled scope's task stops at its next check" {
         spinner.await()
     }
     assert_true(seen >= 1, "the spinner ran before the cancel")
-    assert_true(!is_cancelled(), "the caller's scope is untouched")
+    assert_true(!context.job.is_cancelled(), "the caller's scope is untouched")
 }
 
 test "a lazy task never awaited does not run" {
     let ran = false
     const before = concurrent(Start.Lazy) { s =>
-        let _t = s.spawn { __task_test_mark(&ran) }
+        const t = s.spawn { __task_test_mark(&ran) }
+        leak(t)
         ran
     }
     assert_true(!before and !ran, "dropped unstarted")
