@@ -50,13 +50,63 @@ static int32_t proc_err_from_errno(int e) {
     }
 }
 
-/* Build a NULL-terminated char** from a packed uintptr_t array. Caller frees. */
-static char** materialize_argv(const uintptr_t* packed, size_t n) {
-    char** out = (char**)malloc((n + 1) * sizeof(char*));
-    if (!out) return NULL;
-    for (size_t i = 0; i < n; i++) out[i] = (char*)(uintptr_t)packed[i];
-    out[n] = NULL;
+/* `core.foreign.FString`: `len` bytes at `ptr`, not NUL-terminated. */
+typedef struct {
+    const char* ptr;
+    size_t len;
+} flang_fstring;
+
+static void free_texts(char** v) {
+    if (!v) return;
+    for (size_t i = 0; v[i]; i++) free(v[i]);
+    free(v);
+}
+
+/* A NUL-terminated copy of `s`, or NULL with *out_err set. A NUL inside the text has no C spelling,
+ * so it is an invalid argument, never a silent truncation. */
+static char* dup_text(flang_fstring s, int32_t* out_err) {
+    if (s.len > 0 && memchr(s.ptr, '\0', s.len)) { *out_err = PROC_INVALID_ARGUMENT; return NULL; }
+    char* out = (char*)malloc(s.len + 1);
+    if (!out) { *out_err = PROC_IO_ERROR; return NULL; }
+    if (s.len > 0) memcpy(out, s.ptr, s.len);
+    out[s.len] = '\0';
     return out;
+}
+
+/* A NULL-terminated char** of copies of `texts`, or NULL with *out_err set. Release with free_texts. */
+static char** materialize_texts(const flang_fstring* texts, size_t n, int32_t* out_err) {
+    char** out = (char**)calloc(n + 1, sizeof(char*));
+    if (!out) { *out_err = PROC_IO_ERROR; return NULL; }
+    for (size_t i = 0; i < n; i++) {
+        out[i] = dup_text(texts[i], out_err);
+        if (!out[i]) { free_texts(out); return NULL; }
+    }
+    return out;
+}
+
+/* Copies of everything spawn hands the OS, made before any process exists. 0 on success; on failure
+ * *out_err is set and nothing is left to free. */
+static int materialize_spawn(
+    const flang_fstring* argv, size_t argc,
+    const flang_fstring* envp, size_t envc,
+    flang_fstring cwd, int32_t has_cwd,
+    char*** argv_z, char*** envp_z, char** cwd_z,
+    int32_t* out_err
+) {
+    *argv_z = materialize_texts(argv, argc, out_err);
+    *envp_z = *argv_z ? materialize_texts(envp, envc, out_err) : NULL;
+    *cwd_z = NULL;
+    int ok = *argv_z && *envp_z;
+    if (ok && has_cwd) {
+        *cwd_z = dup_text(cwd, out_err);
+        ok = *cwd_z != NULL;
+    }
+    if (ok) return 0;
+    free_texts(*argv_z);
+    free_texts(*envp_z);
+    *argv_z = NULL;
+    *envp_z = NULL;
+    return -1;
 }
 
 #ifdef _WIN32
@@ -183,32 +233,31 @@ static int make_pipe_pair(HANDLE* read_h, HANDLE* write_h, int read_inheritable,
 }
 
 int __flang_proc_spawn(
-    const char* prog,
-    const uintptr_t* argv, size_t argc,
-    const uintptr_t* envp, size_t envc,
-    const char* cwd, int32_t has_cwd,
+    const flang_fstring* argv, size_t argc,
+    const flang_fstring* envp, size_t envc,
+    flang_fstring cwd, int32_t has_cwd,
     int32_t stdin_mode, int32_t stdout_mode, int32_t stderr_mode,
     uintptr_t* out_handle,
     int32_t* out_stdin_fd, int32_t* out_stdout_fd, int32_t* out_stderr_fd,
     int32_t* out_err
 ) {
-    (void)prog; /* argv[0] is the program; Windows pulls it from the command line */
     *out_handle = 0;
     *out_stdin_fd = -1; *out_stdout_fd = -1; *out_stderr_fd = -1;
     if (argc == 0) { *out_err = PROC_INVALID_ARGUMENT; return PROC_R_ERR; }
 
-    char** argv_z = materialize_argv(argv, argc);
-    char** envp_z = materialize_argv(envp, envc);
-    if (!argv_z || !envp_z) {
-        free(argv_z); free(envp_z);
-        *out_err = PROC_IO_ERROR; return PROC_R_ERR;
+    char** argv_z;
+    char** envp_z;
+    char* cwd_z;
+    if (materialize_spawn(argv, argc, envp, envc, cwd, has_cwd, &argv_z, &envp_z, &cwd_z, out_err) != 0) {
+        return PROC_R_ERR;
     }
 
+    /* argv[0] is the program; Windows pulls it from the command line. */
     char* cmdline = build_command_line(argv_z);
     size_t env_len = 0;
     char* env_block = build_env_block(envp_z, envc, &env_len);
     if (!cmdline || !env_block) {
-        free(argv_z); free(envp_z); free(cmdline); free(env_block);
+        free_texts(argv_z); free_texts(envp_z); free(cwd_z); free(cmdline); free(env_block);
         *out_err = PROC_IO_ERROR; return PROC_R_ERR;
     }
 
@@ -282,7 +331,7 @@ int __flang_proc_spawn(
         TRUE,
         0,
         env_block,
-        has_cwd ? cwd : NULL,
+        cwd_z,
         &si,
         &pi
     );
@@ -321,7 +370,7 @@ cleanup:
     if (null_in_h != INVALID_HANDLE_VALUE) CloseHandle(null_in_h);
     if (null_out_h != INVALID_HANDLE_VALUE) CloseHandle(null_out_h);
     if (null_err_h != INVALID_HANDLE_VALUE) CloseHandle(null_err_h);
-    free(argv_z); free(envp_z); free(cmdline); free(env_block);
+    free_texts(argv_z); free_texts(envp_z); free(cwd_z); free(cmdline); free(env_block);
     return rc;
 
 fail_pipe:
@@ -407,10 +456,9 @@ static int dup_to_fd(int src, int target) {
 }
 
 int __flang_proc_spawn(
-    const char* prog,
-    const uintptr_t* argv, size_t argc,
-    const uintptr_t* envp, size_t envc,
-    const char* cwd, int32_t has_cwd,
+    const flang_fstring* argv, size_t argc,
+    const flang_fstring* envp, size_t envc,
+    flang_fstring cwd, int32_t has_cwd,
     int32_t stdin_mode, int32_t stdout_mode, int32_t stderr_mode,
     uintptr_t* out_handle,
     int32_t* out_stdin_fd, int32_t* out_stdout_fd, int32_t* out_stderr_fd,
@@ -418,13 +466,13 @@ int __flang_proc_spawn(
 ) {
     *out_handle = 0;
     *out_stdin_fd = -1; *out_stdout_fd = -1; *out_stderr_fd = -1;
-    if (argc == 0 || !prog) { *out_err = PROC_INVALID_ARGUMENT; return PROC_R_ERR; }
+    if (argc == 0) { *out_err = PROC_INVALID_ARGUMENT; return PROC_R_ERR; }
 
-    char** argv_z = materialize_argv(argv, argc);
-    char** envp_z = materialize_argv(envp, envc);
-    if (!argv_z || !envp_z) {
-        free(argv_z); free(envp_z);
-        *out_err = PROC_IO_ERROR; return PROC_R_ERR;
+    char** argv_z;
+    char** envp_z;
+    char* cwd_z;
+    if (materialize_spawn(argv, argc, envp, envc, cwd, has_cwd, &argv_z, &envp_z, &cwd_z, out_err) != 0) {
+        return PROC_R_ERR;
     }
 
     int stdin_pipe[2] = {-1, -1};
@@ -443,7 +491,7 @@ int __flang_proc_spawn(
 
     if (pid == 0) {
         /* Child */
-        if (has_cwd && cwd && chdir(cwd) != 0) _exit(127);
+        if (cwd_z && chdir(cwd_z) != 0) _exit(127);
 
         int devnull = -1;
         if (stdin_mode == STDIO_NULL || stdout_mode == STDIO_NULL || stderr_mode == STDIO_NULL) {
@@ -485,10 +533,10 @@ int __flang_proc_spawn(
          * post-fork child and nothing else in this process will read environ
          * before the exec. */
 #if defined(__linux__) && defined(__GLIBC__)
-        execvpe(prog, argv_z, envp_z);
+        execvpe(argv_z[0], argv_z, envp_z);
 #else
         environ = envp_z;
-        execvp(prog, argv_z);
+        execvp(argv_z[0], argv_z);
 #endif
         _exit(127);
     }
@@ -507,7 +555,7 @@ int __flang_proc_spawn(
         *out_stderr_fd = stderr_pipe[0]; stderr_pipe[0] = -1;
     }
     *out_handle = (uintptr_t)pid;
-    free(argv_z); free(envp_z);
+    free_texts(argv_z); free_texts(envp_z); free(cwd_z);
     return PROC_R_OK;
 
 fail_pipe:
@@ -519,7 +567,7 @@ fail_close_all:
     if (stdout_pipe[1] >= 0) close(stdout_pipe[1]);
     if (stderr_pipe[0] >= 0) close(stderr_pipe[0]);
     if (stderr_pipe[1] >= 0) close(stderr_pipe[1]);
-    free(argv_z); free(envp_z);
+    free_texts(argv_z); free_texts(envp_z); free(cwd_z);
     return PROC_R_ERR;
 }
 
