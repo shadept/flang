@@ -1016,6 +1016,8 @@ fn lower_root_context(m: &IrModule, ctx: &LowerCtx, modules: Module[], fqns: Own
             }
         }
     }
+    // Fields are encoded module by module, not in layout order.
+    rel.sort_by { it.offset }
     return root_global(ctx, blob, rel, st.layout.align)
 }
 

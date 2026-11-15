@@ -407,9 +407,9 @@ pub type Function = struct {
 // value, so `init_bytes` holds eight placeholder zeros at `offset` and the backend writes the
 // symbol there instead. `value` is a `GlobalRef` or a `FuncRef`.
 //
-// `offset` must be 8-aligned within the global: the backend spells a relocated global as a C struct
-// of byte runs and pointers, and that layout only agrees with the byte offsets when every pointer
-// already sits where C would put it.
+// `offset` must be 8-aligned within the global, and a global's relocs ascend by offset: the backend
+// spells a relocated global as a C struct of byte runs and pointers, in order, and that layout only
+// agrees with the byte offsets when every pointer already sits where C would put it.
 pub type Reloc = struct {
     offset: u64
     value: Operand
