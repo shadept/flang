@@ -3,7 +3,7 @@ type: language
 created: 2026-08-27
 linear: SH-69
 requires: [RFC-014]
-relates: [RFC-005, RFC-012]
+relates: [RFC-005, RFC-012, RFC-045]
 ---
 
 # RFC-099: `#stack` types and stack-only bindings

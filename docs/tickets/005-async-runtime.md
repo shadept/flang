@@ -2,7 +2,7 @@
 type: language
 created: 2026-04-21
 linear: P-SH-8
-relates: [RFC-037, RFC-038, RFC-039, RFC-042, RFC-098, RFC-099]
+relates: [RFC-037, RFC-038, RFC-039, RFC-042, RFC-045, RFC-098, RFC-099]
 ---
 
 # RFC-005: Async / Coroutines
@@ -779,7 +779,7 @@ The original Phase 0 (wait for self-host) is met. Each phase lands with harness 
 | # | Decision |
 |---|---|
 | D1 | `concurrent` is a stdlib function taking a lambda: `concurrent { s => ... }`. `return`/`break` inside the body stay E1054; bind the result instead. |
-| D1a | Captures are by reference and the body is a frame of its own, so a task capturing a body local outlives it if the body returns first; §3.3's soundness argument missed this. Phase 2 checks at run time: a body that returns while a started task still runs panics before that task runs again, which is sound on one worker. Value captures or a block construct replace the check before Phase 4. |
+| D1a | Captures are by reference and the body is a frame of its own, so a task capturing a body local outlives it if the body returns first; §3.3's soundness argument missed this. Phase 2 checks at run time: a body that returns while a started task still runs panics before that task runs again, which is sound on one worker. Value captures or a block construct replace the check before Phase 4. RFC-045 (2026-11-15) chose owned closures: the body keeps its frame in its closure object and `concurrent` releases it after the join. |
 | D2 | Two builders: `s.spawn { }` returns `Task(T)`; `s.launch { }` returns nothing and the scope joins it. |
 | D3 | A runtime generation check: each task slot carries a generation, and awaiting a task whose scope has ended panics. RFC-099 `#stack` replaces it when that lands. |
 | D4 | `Task(T).await()` returns `T`. Cancellation is cooperative and never abandons a coroutine: leaf suspending operations return it as a value, code propagates it with `?`, and every `defer` runs on the way out. |
@@ -821,7 +821,7 @@ The original Phase 0 (wait for self-host) is met. Each phase lands with harness 
   platform.
 - **Shared allocators** (D6) are a sharp edge until a `SyncAllocator` exists.
 - **Captures across iterations** (§4.3): a task capturing a loop binding by reference sees it
-  rebound. The scope keeps the frame alive, not the value.
+  rebound. The scope keeps the frame alive, not the value. Capture modes are decided in SH-98.
 - **Uncooperative children** delay their awaiters and their scope (D4).
 - **Channel copy-in** costs a `memcpy` per message; zero-copy is later.
 - **Debugging.** Coroutine stacks do not show in gdb backtraces without coroutine-aware

@@ -92,6 +92,6 @@ it was replaced before it shipped.
 | [042](042-loop-labels.md) | Loop labels | language | SH-55 |
 | [043](043-memory.md) | Heap memory as an owned resource | language | SH-56 |
 | [044](044-c-bindings-from-headers.md) | C bindings from headers, `#foreign union`, opaque types | compiler | SH-57 |
-| [045](045-retained-lambdas-and-renamed-it.md) | Retained lambdas and a renamed `it` | language | SH-97 |
+| [045](045-owned-closures-and-renamed-it.md) | Owned closures and a renamed `it` | language | SH-97 |
 | [098](098-context-across-libraries.md) | Context across separately compiled libraries | compiler | SH-18 |
 | [099](099-stack-only-types-and-bindings.md) | `#stack` types and stack-only bindings | language | SH-69 |
