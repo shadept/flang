@@ -302,7 +302,7 @@ pub fn to_owned_slice(s: &UnmanagedList($T), allocator: &Allocator) T[] {
 
     const items = s.as_slice()
     // The caller holds the block as a raw slice from here and frees it with `free(items)`.
-    leak(replace(&s.mem, empty))
+    leak(replace(&s.mem, unallocated()))
     s.len = 0
     return items
 }
