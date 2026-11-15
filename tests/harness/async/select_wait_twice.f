@@ -14,7 +14,7 @@ pub fn main() i32 {
     const v: i32 = select { on =>
         on(ch.recv()) { it ?? 0 }
         on.wait()
-        on.wait()
+        on.wait() // panic: select: `wait` called twice
     }
     return v
 }

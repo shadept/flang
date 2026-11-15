@@ -1986,7 +1986,11 @@ fn at_lambda_brace(self: &Parser) bool {
     if self.peek_kind(1) == TokenKind.FatArrow {
         return true
     }
-    if self.peek_kind(1) != TokenKind.Identifier {
+    const named = self.peek_kind(1) match {
+        Identifier | Underscore => true
+        _ => false
+    }
+    if !named {
         return false
     }
     return self.peek_kind(2) match {
@@ -2142,8 +2146,8 @@ fn parse_lambda_expression(self: &Parser) CstNodeId {
 }
 
 // `{ params => body }` or the arrow-less `{ body }` (RFC-039). Parameters are `name` or `name:
-// [move] Type`, comma-separated. The body is a `BlockExpr` without an opening brace that takes the
-// lambda's closing `}`.
+// [move] Type`, comma-separated; `_` names one the body never reads. The body is a `BlockExpr`
+// without an opening brace that takes the lambda's closing `}`.
 fn parse_brace_lambda(self: &Parser) CstNodeId {
     let b = self.open(NodeKind.LambdaExpr)
     const has_arrow = self.at_lambda_brace()
@@ -2162,13 +2166,16 @@ fn parse_brace_lambda_params(self: &Parser, b: &NodeBuilder) {
             Eof | FatArrow | CloseBrace => break
             _ => {}
         }
-        if self.current_kind() == TokenKind.Identifier {
-            self.eat_into(b)
-        } else {
+        const named = self.current_kind() match {
+            Identifier | Underscore => true
+            _ => false
+        }
+        if !named {
             self.record_expected(TokenKind.Identifier, "E1002")
             self.eat_into(b)
             continue
         }
+        self.eat_into(b)
         if self.current_kind() == TokenKind.Colon {
             self.eat_into(b)
             if self.current_kind() == TokenKind.Move {

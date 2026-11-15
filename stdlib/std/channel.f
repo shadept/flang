@@ -789,7 +789,7 @@ test "a losing send releases its value" {
     const got = concurrent { s =>
         select { on =>
             on(full.send(from_view("dropped"))) {
-                it.deinit()
+                it.deinit() // without it: warning[W2006]: `it` is never released
                 0
             }
             on(ready.recv()) { __channel_test_got(it) }

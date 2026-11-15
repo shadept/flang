@@ -496,6 +496,7 @@ A variable, function, or value name was used but no value with that name exists 
 - The function hasn't been defined or imported
 - The name is out of scope
 - A UFCS method call uses a function name that doesn't exist
+- `_` is read as a value: a `_` lambda parameter has no name to read it by (`` `_` discards a value and cannot be read ``)
 
 #### Examples
 

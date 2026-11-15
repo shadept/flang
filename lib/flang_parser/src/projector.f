@@ -2823,7 +2823,7 @@ fn project_brace_lambda(self: &Projector, cst: CstNode, trailing: bool) LambdaEx
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => tok.kind match {
-                Identifier => {
+                Identifier | Underscore => {
                     if pending_active {
                         params.push(self.make_lambda_param(pending_name, pending_span))
                     }

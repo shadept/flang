@@ -13,6 +13,6 @@ pub fn main() i32 {
     let _seed: Result((), TrySendError(i32)) = ch.try_send(1)
     const v: i32 = select { on =>
         on(ch.recv()) { it ?? 0 }
-    }
+    } // panic: select: the body returned without calling `wait`
     return v
 }

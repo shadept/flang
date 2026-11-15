@@ -8757,6 +8757,16 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
         return reified_type_of(self, nominal_with_fresh_args(self, tn.unwrap()))
     }
 
+    // `_` in value position projects with no name.
+    if id.name.len == 0 {
+        push_diag_e(
+            self,
+            id.span,
+            E_UNKNOWN_IDENT,
+            from_view("`_` discards a value and cannot be read"),
+        )
+        return TY_ERROR
+    }
     push_diag_e(self, id.span, E_UNKNOWN_IDENT, $"unknown identifier `{id.name}`")
     return TY_ERROR
 }
@@ -15681,7 +15691,9 @@ fn own_unreleased(self: &Checker, p: &OwnPass, o: &OwnedRec, exit: OwnExit?) {
         None => sb.append("is still live at the end of its scope")
     }
     sb.append(" - move it on every path")
-    if own_has_deinit(self, o.ty, o.span) {
+    if o.name == "_" {
+        sb.append(", or name it to release it")
+    } else if own_has_deinit(self, o.ty, o.span) {
         sb.append($", or add `defer {o.name}.deinit()` after it is declared")
     }
     const at = exit match {
