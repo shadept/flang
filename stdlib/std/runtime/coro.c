@@ -1,15 +1,19 @@
-/* std.runtime.coro - stackful coroutines scheduled on the calling thread.
+/* std.runtime.coro - machines: the part of the coroutine runtime FLang cannot
+ * express.
  *
- * One worker: the run loop drives every runnable coroutine on the thread that
- * calls it and returns once none is runnable. Each coroutine owns a stack
- * reserved up front with a guard page at its low end; the OS commits pages as
- * they are touched, and the stack never grows or moves.
+ * A machine is a stack and the saved registers that resume it. Its stack is
+ * reserved when the machine is created, with a guard page at its low end, and
+ * committed by the operating system as it is touched; it never grows or moves.
+ * A machine runs one function at a time, under a context link given by the
+ * caller, inside a panic catch point on its own stack. Machines are reused,
+ * never freed.
  *
- * Windows: Fibers. POSIX: an mmap reservation and a hand-written switch for
- * x86_64 and arm64.
+ * Windows uses Fibers. POSIX uses an mmap reservation and the assembly switch
+ * below, for x86_64 and arm64. Only the calling thread runs machines.
  */
 
 #include <errno.h>
+#include <setjmp.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -25,67 +29,74 @@
 #include <unistd.h>
 #endif
 
-#define CORO_DEFAULT_STACK ((size_t)1 << 20)
-#define CORO_MIN_STACK ((size_t)64 << 10)
+#define MACHINE_DEFAULT_STACK ((size_t)1 << 20)
+#define MACHINE_MIN_STACK ((size_t)64 << 10)
 
-enum { CORO_RUNNABLE, CORO_RUNNING, CORO_PARKED, CORO_DONE };
+/* A FLang function: its own parameters, then the context, then env. */
+typedef void (*FlangEntry)(void* arg, const void* ctx, void* env);
 
-typedef struct FlangCoro FlangCoro;
+typedef struct {
+    FlangEntry code;
+    void* env;
+} FlangFunctionValue;
 
-struct FlangCoro {
-    void (*entry)(void*);
+typedef struct FlangMachine FlangMachine;
+
+struct FlangMachine {
+    FlangFunctionValue entry;
     void* arg;
-    int state;
-    /* A wake that found the coroutine not parked; its next park returns at once. */
-    int wake_pending;
-    FlangCoro* next;
+    const void* ctx;
+    /* 0 while a run is pending or in progress; 1 if it returned; 2 if it
+     * panicked. */
+    int32_t finished;
+    int32_t started;
+    FlangMachine* resumer;
+    jmp_buf* catch_point;
 #ifdef _WIN32
     void* fiber;
 #else
-    void* sp;         /* saved stack pointer while suspended */
-    void* stack;      /* mapping base, guard page included */
-    size_t stack_len; /* mapping length */
+    void* stack_pointer; /* while suspended */
+    void* stack;         /* mapping base, guard page included */
+    size_t stack_len;    /* mapping length */
 #endif
 };
 
-static struct {
-    FlangCoro* head;
-    FlangCoro* tail;
-    FlangCoro* current;
-#ifdef _WIN32
-    void* fiber;
-#else
-    void* sp;
-#endif
-} sched;
+static FlangMachine thread_machine;
+static FlangMachine* current_machine = &thread_machine;
 
-static void coro_fatal(const char* msg) {
+static void machine_fatal(const char* msg) {
     fprintf(stderr, "fatal: %s\n", msg);
     abort();
 }
 
-static void enqueue(FlangCoro* c) {
-    c->state = CORO_RUNNABLE;
-    c->next = NULL;
-    if (sched.tail) {
-        sched.tail->next = c;
-    } else {
-        sched.head = c;
-    }
-    sched.tail = c;
+static void platform_switch(FlangMachine* from, FlangMachine* to);
+
+/* __flang_machine_switch() suspends from, which must be the running machine,
+ * and resumes to. errno is preserved across the switch. */
+void __flang_machine_switch(FlangMachine* from, FlangMachine* to) {
+    int saved = errno;
+    to->resumer = from;
+    current_machine = to;
+    platform_switch(from, to);
+    current_machine = from;
+    errno = saved;
 }
 
-static FlangCoro* dequeue(void) {
-    FlangCoro* c = sched.head;
-    if (!c) {
-        return NULL;
+/* machine_body() runs each prepared function of m in turn, inside a catch
+ * point, and after each one switches back to the machine that switched in. */
+static void machine_body(FlangMachine* volatile m) {
+    for (;;) {
+        jmp_buf catch_point;
+        m->catch_point = &catch_point;
+        if (setjmp(catch_point) == 0) {
+            m->entry.code(m->arg, m->ctx, m->entry.env);
+            m->finished = 1;
+        } else {
+            m->finished = 2;
+        }
+        m->catch_point = NULL;
+        __flang_machine_switch(m, m->resumer);
     }
-    sched.head = c->next;
-    if (!sched.head) {
-        sched.tail = NULL;
-    }
-    c->next = NULL;
-    return c;
 }
 
 #ifdef _WIN32
@@ -97,62 +108,49 @@ static size_t page_size(void) {
 }
 
 static VOID CALLBACK fiber_main(LPVOID p) {
-    FlangCoro* c = (FlangCoro*)p;
-    c->entry(c->arg);
-    c->state = CORO_DONE;
-    /* The run loop deletes a finished fiber without resuming it. */
-    SwitchToFiber(sched.fiber);
+    machine_body((FlangMachine*)p);
 }
 
-/* CreateFiberEx reserves the stack with a guard page, as for a thread. */
-static void stack_init(FlangCoro* c, size_t size) {
-    c->fiber = CreateFiberEx(0, size, FIBER_FLAG_FLOAT_SWITCH, fiber_main, c);
-    if (!c->fiber) {
-        coro_fatal("cannot reserve a coroutine stack");
+/* CreateFiberEx reserves the stack with a guard region, as for a thread. */
+static void stack_init(FlangMachine* m, size_t size) {
+    m->fiber = CreateFiberEx(0, size, FIBER_FLAG_FLOAT_SWITCH, fiber_main, m);
+    if (!m->fiber) {
+        machine_fatal("cannot reserve a coroutine stack");
     }
 }
 
-static void stack_release(FlangCoro* c) {
-    DeleteFiber(c->fiber);
-    c->fiber = NULL;
+static void frame_start(FlangMachine* m) {
+    (void)m;
 }
 
-static void switch_in(FlangCoro* c) {
-    SwitchToFiber(c->fiber);
+static void platform_switch(FlangMachine* from, FlangMachine* to) {
+    (void)from;
+    SwitchToFiber(to->fiber);
 }
 
-static void switch_out(FlangCoro* c) {
-    (void)c;
-    SwitchToFiber(sched.fiber);
-}
-
-/* Returns whether the thread was converted, so the caller converts it back. */
-static int sched_enter(void) {
+/* thread_init() converts the calling thread to a fiber on first use; it
+ * stays one. */
+static void thread_init(void) {
+    if (thread_machine.fiber) {
+        return;
+    }
     if (IsThreadAFiber()) {
-        sched.fiber = GetCurrentFiber();
-        return 0;
+        thread_machine.fiber = GetCurrentFiber();
+        return;
     }
-    sched.fiber = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
-    if (!sched.fiber) {
-        coro_fatal("cannot start the coroutine scheduler");
+    thread_machine.fiber = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
+    if (!thread_machine.fiber) {
+        machine_fatal("cannot start the coroutine scheduler");
     }
-    return 1;
-}
-
-static void sched_leave(int converted) {
-    if (converted) {
-        ConvertFiberToThread();
-    }
-    sched.fiber = NULL;
 }
 
 #else /* POSIX */
 
-/* Saves the callee-saved registers on the current stack, stores the stack
- * pointer through the first argument, loads the second as the stack pointer,
- * restores the registers saved there and returns into that context. A new
- * coroutine's stack is laid out so that this return enters coro_main. */
-void flang_coro_switch(void** save_sp, void* load_sp);
+/* flang_coro_switch() saves the callee-saved registers on the current stack,
+ * stores the stack pointer in *save_stack_pointer, loads load_stack_pointer,
+ * restores the registers saved there and returns on that stack. On a new
+ * stack, frame_init() has laid out a frame whose return enters coro_main(). */
+void flang_coro_switch(void** save_stack_pointer, void* load_stack_pointer);
 
 #if defined(__APPLE__)
 #define CORO_SYM "_flang_coro_switch"
@@ -264,150 +262,91 @@ static size_t page_size(void) {
 }
 
 static void coro_main(void) {
-    FlangCoro* c = sched.current;
-    c->entry(c->arg);
-    c->state = CORO_DONE;
-    /* The run loop unmaps a finished stack without resuming it. */
-    flang_coro_switch(&c->sp, sched.sp);
-    abort();
+    machine_body(current_machine);
 }
 
-static void stack_init(FlangCoro* c, size_t size) {
+static void stack_init(FlangMachine* m, size_t size) {
     size_t page = page_size();
     size_t len = size + page;
     void* base = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (base == MAP_FAILED) {
-        coro_fatal("cannot reserve a coroutine stack");
+        machine_fatal("cannot reserve a coroutine stack");
     }
     if (mprotect(base, page, PROT_NONE) != 0) {
-        coro_fatal("cannot protect a coroutine stack's guard page");
+        machine_fatal("cannot protect a coroutine stack's guard page");
     }
-    c->stack = base;
-    c->stack_len = len;
-    c->sp = frame_init((char*)base + len, coro_main);
+    m->stack = base;
+    m->stack_len = len;
 }
 
-static void stack_release(FlangCoro* c) {
-    munmap(c->stack, c->stack_len);
-    c->stack = NULL;
+static void frame_start(FlangMachine* m) {
+    m->stack_pointer = frame_init((char*)m->stack + m->stack_len, coro_main);
 }
 
-static void switch_in(FlangCoro* c) {
-    flang_coro_switch(&sched.sp, c->sp);
+static void platform_switch(FlangMachine* from, FlangMachine* to) {
+    flang_coro_switch(&from->stack_pointer, to->stack_pointer);
 }
 
-static void switch_out(FlangCoro* c) {
-    flang_coro_switch(&c->sp, sched.sp);
-}
-
-static int sched_enter(void) {
-    return 0;
-}
-
-static void sched_leave(int converted) {
-    (void)converted;
+static void thread_init(void) {
 }
 
 #endif
 
 static size_t stack_size_for(size_t requested) {
-    size_t s = requested == 0 ? CORO_DEFAULT_STACK : requested;
-    if (s < CORO_MIN_STACK) {
-        s = CORO_MIN_STACK;
+    size_t s = requested == 0 ? MACHINE_DEFAULT_STACK : requested;
+    if (s < MACHINE_MIN_STACK) {
+        s = MACHINE_MIN_STACK;
     }
     size_t page = page_size();
     return (s + page - 1) / page * page;
 }
 
-static FlangCoro* require_current(const char* op) {
-    if (!sched.current) {
-        fprintf(stderr, "fatal: coroutine %s outside a coroutine\n", op);
-        abort();
+/* __flang_machine_thread() returns the machine of the calling thread itself,
+ * the one coroutines switch back to. */
+FlangMachine* __flang_machine_thread(void) {
+    thread_init();
+    return &thread_machine;
+}
+
+/* __flang_machine_new() returns a new machine with a stack of stack_size
+ * bytes, or the default size if stack_size is 0. The machine is never freed;
+ * the caller keeps it for reuse. On failure the process aborts. */
+FlangMachine* __flang_machine_new(size_t stack_size) {
+    FlangMachine* m = (FlangMachine*)calloc(1, sizeof *m);
+    if (!m) {
+        machine_fatal("out of memory creating a coroutine");
     }
-    return sched.current;
+    stack_init(m, stack_size_for(stack_size));
+    return m;
 }
 
-/* errno belongs to the coroutine, not the thread it happens to run on. */
-static void suspend(FlangCoro* c) {
-    int saved = errno;
-    switch_out(c);
-    errno = saved;
-}
-
-/* A zero stack size picks the default. The coroutine first runs inside the run loop. */
-FlangCoro* __flang_coro_spawn(void (*entry)(void*), void* arg, size_t stack_size) {
-    FlangCoro* c = (FlangCoro*)calloc(1, sizeof *c);
-    if (!c) {
-        coro_fatal("out of memory spawning a coroutine");
-    }
-    c->entry = entry;
-    c->arg = arg;
-    stack_init(c, stack_size_for(stack_size));
-    enqueue(c);
-    return c;
-}
-
-void __flang_coro_run(void) {
-    if (sched.current) {
-        coro_fatal("coroutine run loop entered from inside a coroutine");
-    }
-    int converted = sched_enter();
-    for (;;) {
-        FlangCoro* c = dequeue();
-        if (!c) {
-            break;
-        }
-        c->state = CORO_RUNNING;
-        sched.current = c;
-        switch_in(c);
-        sched.current = NULL;
-        if (c->state == CORO_DONE) {
-            stack_release(c);
-        }
-    }
-    sched_leave(converted);
-}
-
-void __flang_coro_yield(void) {
-    FlangCoro* c = require_current("yield");
-    enqueue(c);
-    suspend(c);
-}
-
-void __flang_coro_park(void) {
-    FlangCoro* c = require_current("park");
-    if (c->wake_pending) {
-        c->wake_pending = 0;
-        return;
-    }
-    c->state = CORO_PARKED;
-    suspend(c);
-}
-
-void __flang_coro_wake(FlangCoro* c) {
-    switch (c->state) {
-    case CORO_PARKED:
-        enqueue(c);
-        break;
-    case CORO_DONE:
-        break;
-    default:
-        c->wake_pending = 1;
-        break;
+/* __flang_machine_prepare() sets the next function m runs: entry, called
+ * with arg under the context link ctx, once a switch enters m. m must be new
+ * or finished, and ctx must remain valid until the run finishes. */
+void __flang_machine_prepare(FlangMachine* m, const FlangFunctionValue* entry, void* arg,
+                             const void* ctx) {
+    m->entry = *entry;
+    m->arg = arg;
+    m->ctx = ctx;
+    m->finished = 0;
+    if (!m->started) {
+        frame_start(m);
+        m->started = 1;
     }
 }
 
-FlangCoro* __flang_coro_current(void) {
-    return sched.current;
+/* __flang_machine_finished() returns 0 while m's run is pending or in
+ * progress, 1 once it returned, and 2 once it panicked. */
+int32_t __flang_machine_finished(const FlangMachine* m) {
+    return m->finished;
 }
 
-int32_t __flang_coro_is_done(const FlangCoro* c) {
-    return c->state == CORO_DONE;
-}
-
-void __flang_coro_free(FlangCoro* c) {
-    if (c->state != CORO_DONE) {
-        coro_fatal("coroutine freed before it finished");
+/* __flang_task_catch_panic() jumps to the catch point of the running
+ * machine's current run, which then finishes as panicked; it does not return.
+ * On the thread's own machine it returns. The test runner's panic recovery
+ * calls it first. */
+void __flang_task_catch_panic(void) {
+    if (current_machine->catch_point) {
+        longjmp(*current_machine->catch_point, 1);
     }
-    free(c);
 }

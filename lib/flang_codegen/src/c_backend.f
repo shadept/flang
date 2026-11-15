@@ -440,6 +440,10 @@ fn emit_preamble(sb: &StringBuilder) {
 // Only panics take this route, which is what leaves a deliberate `exit` a real process exit even
 // under a runner.
 //
+// A panic inside a task first jumps to that task's own catch point: a jump cannot cross from a
+// coroutine's stack to the runner's (RFC-005 D10). The task's scope raises the panic again on its
+// own stack.
+//
 // Emitted unconditionally: a test build that filtered every block away still compiles a stdlib
 // whose `panic` names this symbol, and a definition that were only sometimes present would fail
 // that link for no reason visible in the source.
@@ -447,7 +451,9 @@ fn emit_test_abort(sb: &StringBuilder) {
     sb.append("/* flang runtime: panic recovery for the test runner */\n")
     sb.append("static jmp_buf __flang_test_jmp;\n")
     sb.append("static volatile int __flang_test_active = 0;\n")
+    sb.append("extern void __flang_task_catch_panic(void);\n")
     sb.append("void __flang_test_abort(void) {\n")
+    sb.append("    __flang_task_catch_panic();\n")
     sb.append("    if (__flang_test_active) { longjmp(__flang_test_jmp, 1); }\n")
     sb.append("    exit(1);\n")
     sb.append("}\n")

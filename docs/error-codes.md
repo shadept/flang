@@ -3909,8 +3909,8 @@ The current context is read only through its fields. It is not a value: a copy w
 reference field past the rebind that owns what they point at. It is never mutated in place and
 has no address. So `let c = context`, `&context`, the address of a field, an assignment into one,
 and a method call that takes the context (`context.m()` where `m` is not a field of function
-type) are refused. So is `std.runtime.coro.context_address()` outside the standard library: only
-the coroutine runtime holds the context's address (RFC-005 D12).
+type) are refused, and so is a call to `std.runtime.coro.context_address()` from outside the
+standard library: only the coroutine runtime may take the context's address (RFC-005 D12).
 
 #### Example
 

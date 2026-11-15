@@ -37,6 +37,7 @@ All FLang work is tracked in Linear, team Shade (`SH`), label `flang`. Linear is
 
 ## Rules
 
+- **FLang first; C only for the one capability.** Code is FLang. Drop to C only for a capability FLang cannot express or deliberately refuses (assembly, `setjmp`, calling under a raw context link), and move only that capability: the structure around it stays FLang. A companion `.c` holds the minimum.
 - **The compiler is built on the stdlib.** Where general-purpose functionality is needed (parsing a format, a data structure, an OS facility), it lives in `stdlib/` and the compiler and `lib/*` use it. A private copy in `lib/*` or `compiler/` is a candidate to move into the stdlib.
 - **Seed rule.** Compiler (`compiler/`), `lib/*`, and `stdlib/` sources may only use language features the committed seed in `boot/` supports. New feature order: implement, harness-test, promote (`dotnet run promote.cs`), then use. Never edit `boot/` by hand; promote is the only writer, and each promote is its own commit tagged `seed/<YYYYMMDD>` — one tag per date, moved when a second promote lands the same day. See `docs/architecture.md` §Bootstrap Seed.
 

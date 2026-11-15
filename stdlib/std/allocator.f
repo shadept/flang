@@ -189,6 +189,13 @@ const global_allocator = Allocator {
     vtable = &global_allocator_vtable,
 }
 
+// Returns the heap allocator, backed by malloc and free, whatever the current context says. It is
+// the allocator the root context starts with. Code that should honour a rebound context allocator,
+// or a decorator around it, uses the context's allocator instead.
+pub fn heap_allocator() &Allocator {
+    return &global_allocator
+}
+
 // =============================================================================
 // CountingAllocator - a decorator that measures what passes through it
 // =============================================================================

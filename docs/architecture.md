@@ -517,15 +517,32 @@ Language rules are spec §4.4; this is how the pipeline carries them.
 
 ## Coroutine Runtime (RFC-005)
 
-`std.runtime.coro` (`stdlib/std/runtime/coro.c`, bound by `coro.f`) is the stackful runtime under the future `std.task`. It is internal: programs reach concurrency through `std.task`, not through it. No compiler support is involved; every build compiles `coro.c` like any other companion `.c`.
+The runtime has three layers. `stdlib/std/runtime/coro.c` implements machines, the only part FLang cannot express. `std.runtime.coro` schedules coroutines on machines. `std.task` implements tasks and scopes on coroutines. Programs use `std.task` only. Every build compiles `coro.c`, like any other companion `.c`.
 
-- **One worker.** `run` drives every runnable coroutine on the calling thread from a FIFO run queue and returns once none is runnable. The scheduler is plain static state, single-threaded by design until work-stealing lands.
-- **Switching.** Windows uses Fibers (the thread converts itself for the duration of `run`). POSIX uses `flang_coro_switch`, top-level assembly in `coro.c` for x86_64 (System V) and arm64 (AAPCS64): it pushes the callee-saved registers on the current stack, swaps stack pointers and pops the other side's, all in user mode. x86_64 also carries MXCSR and the x87 control word; arm64 leaves x18 alone for Apple. A new coroutine's stack is pre-built so the first switch returns into `coro_main`, with a null return address or frame pointer ending backtraces there. Any other architecture is a compile error. `ucontext` was not used: it is removed from POSIX, deprecated on macOS, absent from musl, and costs a signal-mask syscall per switch. Shadow-stack enforcement (x86 CET) would reject the cross-stack return; it is off by default on Linux.
-- **Stacks.** 1 MiB by default, reserved at spawn and committed by the OS as touched, with a guard page at the low end: `CreateFiberEx` on Windows, `mmap` plus a `PROT_NONE` page on POSIX. A finished coroutine's stack is released by `run`, its record by `deinit`. Overflow faults on the guard page with no diagnostic yet.
-- **Park and wake.** A wake on a coroutine that is not parked is kept, so its next `park` returns at once; a wake on a finished one is ignored.
-- **`errno`** is saved and restored around every suspension, so it belongs to the coroutine.
-- **Entries** are `#foreign fn(&u8)`: a coroutine body runs under the root context. `context_address()` (`#intrinsic`) is how the runtime carries a scope's link into a task instead: `lower_call` answers a direct call with `cur_ctx`, and `gate_context_address` in the checker refuses it outside `std`/`core` modules with E2149, on a direct call and on the name taken as a function value. The placeholder body panics, so an indirect call cannot yield a stale link.
-- **Testing.** `std.runtime.coro`'s `test {}` blocks and `tests/harness/async/`. A `#foreign fn` body keeps its bare C name in every program that imports its module, so a test callback in a stdlib module carries a module prefix.
+**Machines** (`coro.c`). A machine is a stack and the saved registers that resume it.
+
+- `__flang_machine_new` reserves a stack: 1 MiB by default, with a guard page at its low end, committed by the operating system as it is touched. On Windows the stack is a fiber's (`CreateFiberEx`); on POSIX it is an `mmap` with a `PROT_NONE` page. Overflow faults on the guard page; there is no diagnostic yet.
+- `__flang_machine_prepare` sets the function a machine runs next: a FLang `fn(&u8)` value, its argument and a context link. The machine calls it with the FLang calling convention, inside a `setjmp` catch point on its own stack.
+- `__flang_machine_switch` suspends one machine and resumes another, recording the first as the second's resumer and preserving `errno`. When a function returns or panics, its machine records the outcome (`__flang_machine_finished`) and switches back to its resumer. A finished machine loops into its next function once prepared again, so machines, and their stacks, are reused and never freed.
+- Switching uses Fibers on Windows; the calling thread converts itself to a fiber on first use and stays one. On POSIX it uses `flang_coro_switch`, top-level assembly for x86_64 (System V) and arm64 (AAPCS64). It pushes the callee-saved registers on the current stack, swaps stack pointers and pops the other side's, entirely in user mode. x86_64 also saves MXCSR and the x87 control word; arm64 leaves x18 alone, as Apple reserves it. `frame_init` lays out a new stack so that the first switch returns into `coro_main`, behind a null return address or frame pointer that ends backtraces. Other architectures do not compile.
+- C never calls a FLang function by name, because the seed does not emit `#foreign fn` bodies; every function reaches C as a value.
+
+**Scheduler** (`std.runtime.coro`). The scheduler's state is one module-level `const` struct whose fields are assigned: the run queue, the running coroutine and a free list of finished coroutines. `run_coroutines` resumes runnable coroutines in queue order until none is left. When a coroutine's machine finishes, `run_coroutines` marks the coroutine done and calls its `on_done` hook. A `wake` that finds its coroutine not parked is kept, so the next `park` returns at once. Finished coroutines return to the free list with their machines.
+
+**Context links.** `spawn` runs its function under the caller's context link; `__spawn_in`, for the standard library only, under a given one. The link's address comes from `context_address()`, an `#intrinsic`: `lower_call` replaces a direct call with `cur_ctx`, and `gate_context_address` in the checker reports E2149 when a module outside `std` and `core` names it, called or as a function value. Its body panics, so an indirect call cannot produce an address. The link is borrowed, not copied; it belongs to the frame of the scope that took it, and that scope outlives every task running under it.
+
+**Tasks and scopes** (`std.task`).
+
+- Runtime memory comes from the pools' own allocators, never from the context's: the scheduler's for coroutines, `TaskPools`'s for the task table, scope records and their arenas. Both default to `heap_allocator()`. A context allocator could be an arena freed after one scope, while the pools live for the process. Task records live in one table. A record is named by index and generation: freeing a record increments its generation, so a `Task` kept past its scope no longer matches.
+- A task's function is a non-capturing lambda inside the generic `spawn`, so each result type gets its own and the layers below never know `T`. The task's slot, holding its body and result, comes from its scope's arena.
+- A scope record holds its job (a parent pointer and a cancelled flag), its count of running tasks, its task list and its arena. Scope records, with their arenas, are pooled.
+- `concurrent` opens a scope under `context(job = ...)` and takes `context_address()` inside that rebind, so the scope's tasks run under its link and job. Outside any scope, `concurrent` runs its body as a first coroutine and drives `run_coroutines` on the calling thread.
+
+**Panics in tasks.** The generated `__flang_test_abort` first calls `__flang_task_catch_panic`, which jumps to the running machine's catch point. The machine finishes as panicked, the task's `on_done` records it, and `await` and the scope's close each raise a panic of their own, until one is raised on the test runner's stack. Outside a test binary a panic exits the process before any of this. Because the generated code names `__flang_task_catch_panic`, renaming it requires a compiler that already emits the new name.
+
+**Design notes.** `ucontext` is not used: POSIX removed it, macOS deprecates it, musl lacks it, and `swapcontext` costs a signal-mask system call per switch. x86 shadow stacks (CET) would reject the switch's cross-stack return; they are off by default on Linux.
+
+**Tests.** `std.runtime.coro`'s and `std.task`'s `test {}` blocks, `tests/harness/async/`, and the task-panic block in `tests/runner`.
 
 ## Optimization Passes
 

@@ -1529,7 +1529,7 @@ fn in_core_module(self: &Checker) bool {
     return m == "core" or m.starts_with("core.")
 }
 
-// Whether the module being checked is part of the standard library, core included.
+// Returns whether the module being checked belongs to the standard library, core included.
 fn in_stdlib_module(self: &Checker) bool {
     if in_core_module(self) {
         return true
@@ -1541,8 +1541,8 @@ fn in_stdlib_module(self: &Checker) bool {
     return m == "std" or m.starts_with("std.")
 }
 
-// The current context's address is the coroutine runtime's to hold (RFC-005 D12); everywhere else
-// the context stays no value (E2149).
+// Reports E2149 when a module outside the standard library names the context-address intrinsic,
+// which only the coroutine runtime may use (RFC-005 D12).
 fn gate_context_address(self: &Checker, id: u32, span: SourceSpan) {
     const f = self.functions.find_by_id(id)
     if f.is_none() {

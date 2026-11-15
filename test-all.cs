@@ -100,9 +100,10 @@ foreach (var (proj, extra) in projects)
     // per-test lines and summaries differently, and this fixture has to hold
     // for whichever one $FLANG names.
     if (p.ExitCode == 0) problems.Add("expected a non-zero exit code");
-    if (!stdout.Contains("1 failed")) problems.Add("expected the summary to report one failure");
+    if (!stdout.Contains("2 failed")) problems.Add("expected the summary to report two failures");
     if (!stdout.Contains("FIXTURE-EXPECTED-FAILURE")) problems.Add("expected the panic message to reach stdout");
-    if (!stdout.Contains("3/3")) problems.Add("expected the run to continue past the failure to the third block");
+    if (!stdout.Contains("FIXTURE-TASK-PANIC")) problems.Add("expected the task's panic message to reach stdout");
+    if (!stdout.Contains("4/4")) problems.Add("expected the run to continue past both failures to the fourth block");
     if (stdout.Contains("FIXTURE-MAIN-RAN")) problems.Add("the project's own main ran; the runner is the entry point");
     foreach (var problem in problems) Console.Error.WriteLine($"    {problem}");
     if (problems.Count > 0 && stderr.Length > 0) Console.Error.WriteLine(stderr);

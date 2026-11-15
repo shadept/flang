@@ -570,7 +570,7 @@ fn handle(req: &Request) {
 
 - `context.<name>` reads a field. The name resolves among the fields visible from the module: its own, private or not, and the `pub` fields of the modules it sees (§6). None is E2150; two visible fields of one name are ambiguous (E2152).
 - `context` is not a value (E2149): only `context.<name>` reads it, and only a field of function type is called on it (`context.f(...)`; a method taking the context is E2149). Nothing holds a context past the scope that bound it, so no reference in a field outlives its frame through the context.
-- The current context has no address (`&context`, `&context.f`: E2149) and is never assigned into (`context.f = v`: E2149). The one exception is the standard library's coroutine runtime: `std.runtime.coro.context_address()`, called directly from a `std` or `core` module, yields the current link's address so a task body runs under its scope's context (RFC-005 D12); from any other module it is E2149. A by-value field passed to a `&T` receiver (`context.deadline.check()`) lends a copy. A struct literal of `Context` is E2153.
+- The current context has no address (`&context`, `&context.f`: E2149) and is never assigned into (`context.f = v`: E2149). Exception: `std.runtime.coro.context_address()`, called directly from a `std` or `core` module, returns the address of the current link, so that the coroutine runtime can run a task under its scope's context (RFC-005 D12). Called from any other module, it is E2149. A by-value field passed to a `&T` receiver (`context.deadline.check()`) lends a copy. A struct literal of `Context` is E2153.
 
 **Rebinding.** `context(args) { body }` runs `body` under a new context: a link to the current one with the named fields replaced. It is a block construct like `for` and `match`, not a call: `return`, `?`, `break`, `continue` and `defer` in the body act as in any block, and the construct is an expression whose value is the body's.
 
@@ -590,12 +590,36 @@ fn handle(req: &Request) {
 
 ### 4.5 Coroutine Stacks
 
-A coroutine (RFC-005) runs on a stack of its own: 1 MiB, reserved when the coroutine is created and committed by the OS page by page as it is touched. It never grows past that and never moves; overflowing it faults on a guard page and ends the process. A coroutine costs the pages it touches, so code that may run in one keeps its stack shallow:
+Each coroutine (RFC-005) runs on its own stack of 1 MiB. The stack is reserved when the coroutine is created and committed by the operating system as it is touched; it does not grow and does not move. A coroutine that overflows its stack faults on a guard page, and the process ends.
 
-- **Stack-backed allocators are discouraged.** A fixed-buffer allocator over a local array holds the whole buffer on the coroutine's stack for the life of the frame. Use `context.temp_allocator`, or an arena over the heap.
-- **Deep recursion is discouraged.** Every frame is paid on the fixed stack. Bound the depth or iterate.
+Code that may run in a coroutine should keep its stack use small:
 
-Provisional: the stack size and these rules are to be reviewed with the runtime's performance work.
+- Avoid stack-backed allocators. A fixed-buffer allocator over a local array keeps the whole buffer on the coroutine's stack while the frame lives; use `context.temp_allocator` or an arena over the heap instead.
+- Avoid deep recursion. Bound the depth, or iterate.
+
+Local fixed-size arrays remain appropriate for small buffers used within one function.
+
+The stack size and these recommendations are provisional.
+
+### 4.6 Structured Concurrency
+
+The `std.task` module (RFC-005) runs concurrent work as tasks inside scopes. Functions are not coloured: any function may open a scope or wait for a task, and no signature records that it does.
+
+```
+const total = concurrent { s =>
+    const a = s.spawn { count(url_a) }       // Task(i64)
+    const b = s.spawn { count(url_b) }
+    a.await() + b.await()
+}
+```
+
+1. **Scopes.** `concurrent(body)` creates a scope, calls `body` with a `&Scope` to it, and returns `body`'s result once every task the scope started has finished. Called outside any scope, it starts the runtime and blocks the calling thread until then. Called inside a task, it creates a nested scope and blocks only that task. `concurrent(start, body)` also sets the scope's default start mode.
+2. **Tasks.** `s.spawn(body)` starts `body` as a task of `s` and returns a `Task(T)`, where `T` is the result type of `body`. `t.await()` consumes `t`, blocks until the task has finished, and returns its result. A `Task` that is never awaited is W2006. A task starts in the scope's default mode, or in the mode passed to `s.spawn(start, body)`: `Start.Eager` makes it runnable at once; `Start.Lazy` makes it runnable when it is first awaited or `start`ed, and a lazy task not started before its scope ends never runs. `s.launch(body)` starts a task that has no result, always eagerly. `s.join()` blocks until every task `s` started has finished.
+3. **Lifetimes.** A task's closure borrows what it captures (§7.3). The body of a scope must not return while a task it started is still running, and a `Task` must not be used after its scope has ended. Both are checked at run time and panic. The first check is sound only on the current single-worker runtime.
+4. **Context.** A task runs under the context link of the scope that started it (§4.4). That link's `job` field is the scope's job.
+5. **Cancellation.** `s.cancel()` cancels `s`. Its tasks, and every scope nested in them, observe the cancellation; the parent of `s` does not. Cancellation is cooperative: a task observes it through `is_cancelled()`, `check_cancelled()` (which returns `Err(Cancelled)`) and `yield_now()`. Nothing interrupts a task, so a cancelled task returns normally and its deferred calls run.
+6. **Failure.** A failing task does not cancel the other tasks of its scope; its result, error or not, goes to its awaiter. A panic inside a task ends the process. Under `flang test` it fails the test that opened the outermost scope instead.
+7. **Misuse.** Awaiting or starting a task after its scope has ended panics, as does awaiting, joining or yielding outside every scope.
 
 ---
 

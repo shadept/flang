@@ -5,10 +5,12 @@
 //   - a passing block reports `ok`
 //   - a failed assertion panics, the runner reports FAILED and does not die with it
 //   - the block AFTER a failure still runs, so recovery lands back in the loop
+//   - a panic inside a task fails its test the same way, from the task's own stack
 //   - a project whose `main` exists does not run it - the runner is the entry point
 //   - the process exits non-zero when anything failed
 
 import std.io.print
+import std.task
 import std.test
 
 fn main() i32 {
@@ -22,6 +24,19 @@ test "a passing block" {
 
 test "a failing block" {
     assert_eq(1i32 + 1i32, 3i32, "FIXTURE-EXPECTED-FAILURE")
+}
+
+fn fixture_task_panics() i32 {
+    panic("FIXTURE-TASK-PANIC")
+}
+
+test "a panic inside a task" {
+    const n = concurrent { s =>
+        s
+            .spawn { fixture_task_panics() }
+            .await()
+    }
+    assert_eq(n, 0i32, "unreachable")
 }
 
 test "a block after the failure" {
