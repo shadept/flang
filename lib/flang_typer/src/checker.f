@@ -11219,10 +11219,17 @@ fn indirect_call(self: &Checker, callee_ty: Ty, arg_tys: &List(Ty), span: Source
 // call node exactly like a UFCS method call, and the receiver chain (empty when no peeling was
 // needed) is recorded there too - its presence is what tells lowering the CALLEE is the receiver.
 fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSpan) Ty? {
-    let is_nominal = ty_node(self, recv) match { NNominal(_) => true, _ => false }
+    // A reference to a nominal calls like the nominal: `&Self` overloads match as written, `Self`
+    // ones through the referent.
+    const referent = ty_node(self, recv) match {
+        NRef(inner) => self.engine.resolve(inner)
+        _ => recv
+    }
+    let is_nominal = ty_node(self, referent) match { NNominal(_) => true, _ => false }
     if !is_nominal {
         return null
     }
+    const adapted = if referent == recv { self.engine.mk_ref(recv) } else { referent }
     let vis = fn_visibility(self)
     defer vis.deinit()
     let cands = self.functions.lookup("op_call", &vis) match {
@@ -11246,7 +11253,7 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
         recv,
         arg_tys,
         span,
-        Some(self.engine.mk_ref(recv)),
+        Some(adapted),
         null,
         Some(&ctx),
     )
