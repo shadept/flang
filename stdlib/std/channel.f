@@ -10,7 +10,8 @@
 //
 // A send or receive is an operation that `.await()` completes, waiting as described above. While it
 // waits, cancelling the task's scope ends the wait with a cancellation error, and a send gives its
-// value back. `try_send` and `try_recv` never wait: they complete at once or fail.
+// value back. `try_send` and `try_recv` never wait: they complete at once or fail. Inside `select`,
+// an operation is an arm: `on(ch.recv()) { ... it ... }`.
 
 import std.allocator
 import std.collections.deque
@@ -102,6 +103,8 @@ type SendWaiter = struct(T) {
     owned value: &T
     status: WaitStatus
     next: &SendWaiter(T)?
+    // The select arm the sender waits in, or null for a plain send.
+    arm: &Arm?
 }
 
 // RecvWaiter is a receiver waiting for a value. It lives on the receiver's stack while the receiver
@@ -112,6 +115,8 @@ type RecvWaiter = struct(T) {
     owned slot: &T
     status: WaitStatus
     next: &RecvWaiter(T)?
+    // The select arm the receiver waits in, or null for a plain receive.
+    arm: &Arm?
 }
 
 // ChannelState is a channel's buffer and its queues of waiting senders and receivers. At most one
@@ -242,6 +247,7 @@ pub fn await(self: move SendOp($T)) Result((), SendError(T)) {
         value = &value,
         status = WaitStatus.Waiting,
         next = null,
+        arm = null,
     }
     add_sender(ch.__state, &w)
     loop {
@@ -296,6 +302,7 @@ pub fn await(self: move RecvOp($T)) Result(T, RecvError) {
         slot = &received,
         status = WaitStatus.Waiting,
         next = null,
+        arm = null,
     }
     add_receiver(ch.__state, &w)
     loop {
@@ -362,6 +369,171 @@ pub fn deinit(self: move Channel($T)) {
     leak(self)
 }
 
+// Registers a select arm that receives from the channel. Its handler takes what `.await()` on the
+// operation would return. The arm completes at once if a value is ready, the channel is closed, or
+// the current scope is cancelled.
+pub fn op_call(self: &Selector($R), op: move RecvOp($T), handler: move $F)
+where F: fn(move Result(T, RecvError)) R {
+    if self.__won() {
+        release(handler)
+        return
+    }
+    const ch = op.__channel
+    const ready: Result(T, RecvError)? = if context.job.is_cancelled() {
+        Some(Err(RecvError.Cancelled))
+    } else {
+        ch.try_recv() match {
+            Ok(v) => Some(Ok(move v))
+            Err(e) => e match {
+                Closed => Some(Err(RecvError.Closed))
+                Empty => null
+            }
+        }
+    }
+    ready match {
+        Some(r) => {
+            self.__decide(handler(r))
+            return
+        }
+        None => {}
+    }
+    const ops = ArmOps {
+        done = { p: &u8 => false },
+        cancels = true,
+        withdraw = { p: &u8 => (p as &RecvArm(T, F, R)).withdraw() },
+        finish = { p: &u8, cancelled: bool => (p as &RecvArm(T, F, R)).finish(cancelled) },
+    }
+    const arm = self.__wait(size_of(RecvArm(T, F, R)), align_of(RecvArm(T, F, R)), ops)
+    const a = arm.__record as &RecvArm(T, F, R)
+    a.channel = ch
+    a.handler = move handler
+    a.out = self.__result
+    a.waiter = RecvWaiter(T) {
+        coroutine = current_coroutine().unwrap(),
+        slot = &a.received,
+        status = WaitStatus.Waiting,
+        next = null,
+        arm = Some(arm),
+    }
+    add_receiver(ch.__state, &a.waiter)
+}
+
+// Registers a select arm that sends the operation's value. Its handler takes what `.await()` on the
+// operation would return. The arm completes at once if a receiver is waiting, there is room, the
+// channel is closed, or the current scope is cancelled. If another arm wins, the value is released.
+pub fn op_call(self: &Selector($R), op: move SendOp($T), handler: move $F)
+where F: fn(move Result((), SendError(T))) R {
+    if self.__won() {
+        release(op.__value)
+        release(handler)
+        return
+    }
+    const ch = op.__channel
+    let unsent: T? = null
+    const ready: Result((), SendError(T))? = if context.job.is_cancelled() {
+        Some(Err(SendError.Cancelled(move op.__value)))
+    } else {
+        ch.try_send(op.__value) match {
+            Ok(_) => Some(Ok(()))
+            Err(e) => e match {
+                Full(v) => {
+                    unsent = Some(move v)
+                    null
+                }
+                Closed(v) => Some(Err(SendError.Closed(move v)))
+            }
+        }
+    }
+    let value = unsent ?? {
+        const r = ready.unwrap()
+        self.__decide(handler(r))
+        return
+    }
+    const ops = ArmOps {
+        done = { p: &u8 => false },
+        cancels = true,
+        withdraw = { p: &u8 => (p as &SendArm(T, F, R)).withdraw() },
+        finish = { p: &u8, cancelled: bool => (p as &SendArm(T, F, R)).finish(cancelled) },
+    }
+    const arm = self.__wait(size_of(SendArm(T, F, R)), align_of(SendArm(T, F, R)), ops)
+    const a = arm.__record as &SendArm(T, F, R)
+    a.value = move value
+    a.channel = ch
+    a.handler = move handler
+    a.out = self.__result
+    a.waiter = SendWaiter(T) {
+        coroutine = current_coroutine().unwrap(),
+        value = &a.value,
+        status = WaitStatus.Waiting,
+        next = null,
+        arm = Some(arm),
+    }
+    add_sender(ch.__state, &a.waiter)
+}
+
+// RecvArm is a select's arm waiting to receive.
+type RecvArm = struct(T, F, R) {
+    waiter: RecvWaiter(T)
+    received: T
+    channel: &Channel(T)
+    handler: F
+    out: &R
+}
+
+// SendArm is a select's arm waiting to send.
+type SendArm = struct(T, F, R) {
+    waiter: SendWaiter(T)
+    // The value being sent, until a receiver moves it out.
+    value: T
+    channel: &Channel(T)
+    handler: F
+    out: &R
+}
+
+fn withdraw(self: &RecvArm($T, $F, $R)) {
+    remove_receiver(self.channel.__state, &self.waiter)
+}
+
+fn finish(self: &RecvArm($T, $F, $R), cancelled: bool) where F: fn(move Result(T, RecvError)) R {
+    remove_receiver(self.channel.__state, &self.waiter)
+    const outcome = self.outcome(cancelled)
+    self.out.* = self.handler(outcome)
+}
+
+fn outcome(self: &RecvArm($T, $F, $R), cancelled: bool) Result(T, RecvError) {
+    if cancelled {
+        return Err(RecvError.Cancelled)
+    }
+    return self.waiter.status match {
+        Done => Ok(move self.waiter.slot.*)
+        Closed => Err(RecvError.Closed)
+        Waiting => panic("select: a receive won without completing")
+    }
+}
+
+fn withdraw(self: &SendArm($T, $F, $R)) {
+    remove_sender(self.channel.__state, &self.waiter)
+    release(self.waiter.value.*)
+}
+
+fn finish(self: &SendArm($T, $F, $R), cancelled: bool)
+where F: fn(move Result((), SendError(T))) R {
+    remove_sender(self.channel.__state, &self.waiter)
+    const outcome = self.outcome(cancelled)
+    self.out.* = self.handler(outcome)
+}
+
+fn outcome(self: &SendArm($T, $F, $R), cancelled: bool) Result((), SendError(T)) {
+    if cancelled {
+        return Err(SendError.Cancelled(move self.waiter.value.*))
+    }
+    return self.waiter.status match {
+        Done => Ok(())
+        Closed => Err(SendError.Closed(move self.waiter.value.*))
+        Waiting => panic("select: a send won without completing")
+    }
+}
+
 fn add_sender(s: &ChannelState($T), w: &SendWaiter(T)) {
     s.senders match {
         None => s.senders = Some(w)
@@ -378,14 +550,26 @@ fn add_sender(s: &ChannelState($T), w: &SendWaiter(T)) {
     }
 }
 
+// Dequeues the first sender that can still complete. A sender waiting in a select another arm of
+// which has won is dropped from the queue; one that can complete wins its select.
 fn take_sender(s: &ChannelState($T)) &SendWaiter(T)? {
-    const w = s.senders match {
-        Some(w) => w
-        None => return null
+    loop {
+        const w = s.senders ?? return null
+        s.senders = w.next
+        w.next = null
+        if can_win(w.arm) {
+            return Some(w)
+        }
     }
-    s.senders = w.next
-    w.next = null
-    return Some(w)
+}
+
+// Returns whether a waiter in `arm`, or in no select, can complete, making `arm` its select's
+// winner if so.
+fn can_win(arm: &Arm?) bool {
+    return arm match {
+        Some(a) => a.__win()
+        None => true
+    }
 }
 
 fn remove_sender(s: &ChannelState($T), w: &SendWaiter(T)) {
@@ -428,14 +612,16 @@ fn add_receiver(s: &ChannelState($T), w: &RecvWaiter(T)) {
     }
 }
 
+// Dequeues the first receiver that can still complete, as `take_sender` does senders.
 fn take_receiver(s: &ChannelState($T)) &RecvWaiter(T)? {
-    const r = s.receivers match {
-        Some(r) => r
-        None => return null
+    loop {
+        const r = s.receivers ?? return null
+        s.receivers = r.next
+        r.next = null
+        if can_win(r.arm) {
+            return Some(r)
+        }
     }
-    s.receivers = r.next
-    r.next = null
-    return Some(r)
 }
 
 fn remove_receiver(s: &ChannelState($T), w: &RecvWaiter(T)) {
@@ -520,4 +706,142 @@ test "a refused try_send gives its value back to be released" {
     ch.try_send(from_view("kept")) ?? { refused = true }
     ch.deinit()
     assert_true(refused, "no receiver and no room")
+}
+
+fn __channel_test_send_late(ch: &Channel(i32), v: i32) i32 {
+    let _y = yield_now()
+    return if ch.send(v).await().is_ok() { 0 } else { 1 }
+}
+
+fn __channel_test_recv_one(ch: &Channel(i32)) i32 {
+    return ch.recv().await() ?? -1
+}
+
+fn __channel_test_got(r: Result(i32, RecvError)) i32 {
+    return r match {
+        Ok(v) => v
+        Err(e) => e match {
+            Closed => -2
+            Cancelled => -3
+        }
+    }
+}
+
+fn __channel_test_select_two(a: &Channel(i32), b: &Channel(i32)) i32 {
+    return select { on =>
+        on(a.recv()) { __channel_test_got(it) }
+        on(b.recv()) { 100 + __channel_test_got(it) }
+        on.wait()
+    }
+}
+
+test "select takes the first arm that can complete at once" {
+    let a: Channel(i32) = channel(1)
+    let b: Channel(i32) = channel(1)
+    let _sent = b.try_send(7)
+    const got = concurrent { s => __channel_test_select_two(&a, &b) }
+    a.deinit()
+    b.deinit()
+    assert_eq(got, 107, "b had a value")
+}
+
+test "select waits for the arm a sender completes and withdraws the others" {
+    let a: Channel(i32) = channel()
+    let b: Channel(i32) = channel()
+    const got = concurrent { s =>
+        const tx = s.spawn { __channel_test_send_late(&b, 5) }
+        const r = __channel_test_select_two(&a, &b)
+        let _t = tx.await()
+        r
+    }
+    a.deinit()
+    b.deinit()
+    assert_eq(got, 105, "b's sender")
+}
+
+test "a select's send completes when a receiver arrives" {
+    let out: Channel(i32) = channel()
+    let idle: Channel(i32) = channel()
+    const got = concurrent { s =>
+        const rx = s.spawn { __channel_test_recv_one(&out) }
+        const which = select { on =>
+            on(idle.recv()) { 0 }
+            on(out.send(9)) { if it.is_ok() {
+                1
+            } else {
+                2
+            } }
+            on.wait()
+        }
+        which * 100 + rx.await()
+    }
+    out.deinit()
+    idle.deinit()
+    assert_eq(got, 109, "the send arm won and the receiver got 9")
+}
+
+test "a losing send releases its value" {
+    let full: Channel(OwnedString) = channel(1)
+    let ready: Channel(i32) = channel(1)
+    let seeded = true
+    full.try_send(from_view("first")) ?? { seeded = false }
+    let _v = ready.try_send(3)
+    const got = concurrent { s =>
+        select { on =>
+            on(full.send(from_view("dropped"))) {
+                it.deinit()
+                0
+            }
+            on(ready.recv()) { __channel_test_got(it) }
+            on.wait()
+        }
+    }
+    full.deinit()
+    ready.deinit()
+    assert_true(seeded, "the buffer took the first value")
+    assert_eq(got, 3, "the receive won")
+}
+
+test "a closed channel completes a select arm with Closed" {
+    let a: Channel(i32) = channel()
+    let b: Channel(i32) = channel()
+    b.close()
+    const got = concurrent { s => __channel_test_select_two(&a, &b) }
+    a.deinit()
+    b.deinit()
+    assert_eq(got, 98, "b is closed")
+}
+
+test "cancelling the scope ends a waiting select with Cancelled" {
+    let a: Channel(i32) = channel()
+    let b: Channel(i32) = channel()
+    const got = concurrent { s =>
+        const t = s.spawn { __channel_test_select_two(&a, &b) }
+        let _y = yield_now()
+        s.cancel()
+        t.await()
+    }
+    a.deinit()
+    b.deinit()
+    assert_eq(got, -3, "the first arm reports the cancellation")
+}
+
+fn __channel_test_local_after_wait(ch: &Channel(i32)) i32 {
+    return select { on =>
+        const local = 1234
+        on(ch.recv()) { local + (it ?? 0) }
+        on.wait()
+    }
+}
+
+test "a handler that runs after a wait reads the body's locals" {
+    let ch: Channel(i32) = channel()
+    const got = concurrent { s =>
+        const tx = s.spawn { __channel_test_send_late(&ch, 1) }
+        const r = __channel_test_local_after_wait(&ch)
+        let _t = tx.await()
+        r
+    }
+    ch.deinit()
+    assert_eq(got, 1235, "local + the received value")
 }

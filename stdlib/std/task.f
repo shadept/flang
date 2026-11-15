@@ -7,11 +7,15 @@
 // and blocks the calling thread; called inside a task, it opens a nested scope and blocks only that
 // task.
 //
+// `select` waits for the first of several operations: tasks finishing and channel operations.
+// `race` returns the result of the first of several tasks to finish, and `any` the first success;
+// both cancel the rest.
+//
 // Cancellation is cooperative. `cancel` cancels a scope's tasks and every scope nested in them,
-// never the scope's parent. A task observes cancellation only by asking its job, through
-// `context.job.is_cancelled()` or `context.job.check_cancelled()`, or by suspending, as `yield_now`
-// and channel operations do. Nothing interrupts a task, so it returns normally and its deferred
-// calls run.
+// never the scope's parent; on a task, it cancels that task alone. A task observes cancellation
+// only by asking its job, through `context.job.is_cancelled()` or `context.job.check_cancelled()`,
+// or by suspending, as `yield_now` and channel operations do. Nothing interrupts a task, so it
+// returns normally and its deferred calls run.
 //
 // A task's function may refer to locals of the body that started it. Therefore:
 //
@@ -23,6 +27,7 @@
 // outermost scope instead.
 
 import std.allocator
+import std.collections.list
 import std.option
 import std.result
 import std.runtime.coro
@@ -101,6 +106,8 @@ type TaskRecord = struct {
     coroutine: &Coroutine?
     // The coroutine blocked in `await` on this task, if any.
     awaiter: &Coroutine?
+    // The job the task runs under: its own for a spawned task, its scope's for a launched one.
+    job: &Job
     // Calls the task's function and stores its result in the slot.
     entry: fn(&u8)
     slot: &u8
@@ -130,8 +137,9 @@ type ScopeRecord = struct {
     next_free: &ScopeRecord?
 }
 
-// TaskSlot holds a spawned task's function and, once it has run, its result.
+// TaskSlot holds a spawned task's job and function and, once it has run, its result.
 type TaskSlot = struct(T) {
+    job: Job
     body: fn() T
     result: T
 }
@@ -158,6 +166,7 @@ type TaskPools = struct {
     free_scope: &ScopeRecord?
     // Every open scope, so that a cancellation can reach the coroutines waiting in them.
     open_scopes: &ScopeRecord?
+    free_arenas: &ArmArena?
     // The allocator the pools grow from, or null for the heap allocator.
     allocator: &Allocator?
 }
@@ -171,6 +180,7 @@ const task_pools = TaskPools {
     free_task = NO_TASK,
     free_scope = null,
     open_scopes = null,
+    free_arenas = null,
     allocator = null,
 }
 
@@ -221,15 +231,18 @@ pub fn spawn(self: &Scope, body: fn() $T) Task(T) {
 pub fn spawn(self: &Scope, start: Start, body: fn() $T) Task(T) {
     const entry: fn(&u8) = { p: &u8 =>
         const slot = p as &TaskSlot(T)
-        slot.result = slot.body()
+        context(job = &slot.job) {
+            slot.result = slot.body()
+        }
     }
-    const slot = slot_for(
-        self.__record,
+    const slot = arena_slot(
+        &self.__record.arena,
         size_of(TaskSlot(T)),
         align_of(TaskSlot(T)),
     ) as &TaskSlot(T)
+    slot.job = Job { parent = Some(&self.__record.job), cancelled = false }
     slot.body = body
-    const i = add_task(self, entry, slot as &u8)
+    const i = add_task(self, &slot.job, entry, slot as &u8)
     const gen = task_record(i).gen
     start match {
         Eager => start_task(i)
@@ -242,9 +255,13 @@ pub fn spawn(self: &Scope, start: Start, body: fn() $T) Task(T) {
 // the scope's default start mode; `join` waits for it.
 pub fn launch(self: &Scope, body: fn()) {
     const entry: fn(&u8) = { p: &u8 => (p as &LaunchSlot).body() }
-    const slot = slot_for(self.__record, size_of(LaunchSlot), align_of(LaunchSlot)) as &LaunchSlot
+    const slot = arena_slot(
+        &self.__record.arena,
+        size_of(LaunchSlot),
+        align_of(LaunchSlot),
+    ) as &LaunchSlot
     slot.body = body
-    start_task(add_task(self, entry, slot as &u8))
+    start_task(add_task(self, &self.__record.job, entry, slot as &u8))
 }
 
 // Starts a lazy task. Does nothing if the task has already started.
@@ -305,6 +322,19 @@ pub fn cancel(self: &Scope) {
     wake_cancelled()
 }
 
+// Cancels the task. It, and every scope nested in it, observe cancellation from then on; the rest
+// of its scope is not affected. Does nothing if the task has finished.
+//
+// Panics if the task's scope has ended.
+pub fn cancel(self: &Task($T)) {
+    const r = task_record(self.__index)
+    if r.gen != self.__gen {
+        panic("cancel: the task's scope has ended")
+    }
+    r.job.cancelled = true
+    wake_cancelled()
+}
+
 // Returns whether the job, or any job above it, has been cancelled.
 pub fn is_cancelled(self: &Job) bool {
     let j: &Job? = Some(self)
@@ -343,6 +373,416 @@ pub fn yield_now() Result((), Cancelled) {
     }
     reschedule()
     return context.job.check_cancelled()
+}
+
+// A Selector is the handle a body of `select` registers its arms through. It is valid only while
+// that body runs.
+pub type Selector = struct(R) {
+    __select: &Select
+    // Where the winning arm's handler stores the select's value.
+    __result: &R
+}
+
+// ArmOps is what a select does with one kind of arm. Each operation takes the arm's record.
+pub type ArmOps = struct {
+    // Whether the operation has completed on its own, as a task finishing does.
+    done: fn(&u8) bool
+    // Whether the operation reports the scope's cancellation, so that the arm can win by it.
+    cancels: bool
+    // The arm lost: leaves every queue it waits in and releases what it holds.
+    withdraw: fn(&u8)
+    // The arm won: leaves every queue it waits in and runs its handler. The flag says whether it
+    // won by the scope's cancellation.
+    finish: fn(&u8, bool)
+}
+
+// An Arm is an operation a select waits on. A counterpart that completes the operation calls
+// `__win` first, and completes it only if that returns true.
+pub type Arm = struct {
+    __record: &u8
+    __ops: ArmOps
+    __select: &Select
+    __next: &Arm?
+}
+
+// Select is a select in progress.
+type Select = struct {
+    // The arms that wait, in registration order.
+    arms: &Arm?
+    last: &Arm?
+    won: &Arm?
+    // Whether an arm completed while the body ran, its handler already run.
+    decided: bool
+    // Whether the body has called `wait`.
+    waited: bool
+    // Whether the winner won by the scope's cancellation.
+    cancelled: bool
+    arena: &ArmArena
+}
+
+// ArmArena holds a select's arm records. Arenas are reused across selects.
+type ArmArena = struct {
+    arena: ArenaAllocator
+    next: &ArmArena?
+}
+
+// Runs `body`, which registers arms with `on(op) { ... }` and ends with `on.wait()`, and returns
+// the value the handler of the one arm whose operation completes first returns. Arms are tried in
+// order as they register: the first whose operation can complete at once wins, its handler runs,
+// and later arms are dropped unperformed. If none can, `wait` blocks the calling task until one
+// completes, then runs that arm's handler. Every other operation is withdrawn without taking
+// effect; a send that loses releases its value.
+//
+// Once the current scope is cancelled, the first channel arm completes with a cancellation error. A
+// select whose arms are all tasks keeps waiting, as `await` does.
+//
+// Panics if `body` returns without calling `wait`, if it registers no arm, or if an arm that cannot
+// complete at once registers outside every scope.
+pub fn select(body: fn(&Selector($R))) R {
+    let result: R
+    let state = Select {
+        arms = null,
+        last = null,
+        won = null,
+        decided = false,
+        waited = false,
+        cancelled = false,
+        arena = acquire_arm_arena(),
+    }
+    let sel = Selector(R) { __select = &state, __result = &result }
+    body(&sel)
+    if !state.waited {
+        state.won = null
+        state.withdraw_losers()
+        release_arm_arena(state.arena)
+        panic("select: the body returned without calling `wait`")
+    }
+    release_arm_arena(state.arena)
+    return move result
+}
+
+// Blocks the calling task until an arm of the select has won, unless one already has, then
+// withdraws the other arms and runs the winner's handler. The body of `select` ends with it: a
+// handler may refer to the body's locals, which live only until the body returns.
+//
+// Panics if no arm was registered, or if `wait` was already called, from the body or a handler.
+pub fn wait(self: &Selector($R)) {
+    if self.__select.waited {
+        panic("select: `wait` called twice")
+    }
+    self.__select.finish()
+}
+
+// Registers a select arm that wins once the task has finished. A lazy task is started. The handler
+// takes no argument; `await` the task for its result.
+//
+// Panics if the task's scope has ended.
+pub fn op_call(self: &Selector($R), task: &Task($T), handler: move $F) where F: fn() R {
+    if self.__won() {
+        release(handler)
+        return
+    }
+    const r = task_record(task.__index)
+    if r.gen != task.__gen {
+        panic("select: the task's scope has ended")
+    }
+    if r.status == TaskStatus.Lazy {
+        start_task(task.__index)
+    }
+    if r.status == TaskStatus.Done {
+        self.__decide(handler())
+        return
+    }
+    const ops = ArmOps {
+        done = { p: &u8 => (p as &TaskArm(F, R)).done() },
+        cancels = false,
+        withdraw = { p: &u8 => (p as &TaskArm(F, R)).withdraw() },
+        finish = { p: &u8, cancelled: bool => (p as &TaskArm(F, R)).finish() },
+    }
+    const a = self.__wait(
+        size_of(TaskArm(F, R)),
+        align_of(TaskArm(F, R)),
+        ops,
+    ).__record as &TaskArm(F, R)
+    a.index = task.__index
+    a.handler = move handler
+    a.out = self.__result
+    r.awaiter = current_coroutine()
+}
+
+// Returns whether an arm of the select has already won.
+//
+// Panics after `wait`: every arm registers before it.
+pub fn __won(self: &Selector($R)) bool {
+    if self.__select.waited {
+        panic("select: an arm registered after `wait`")
+    }
+    return self.__select.won.is_some() or self.__select.decided
+}
+
+// Makes `value` the select's value, for an arm that completed while the body runs.
+pub fn __decide(self: &Selector($R), value: move R) {
+    self.__select.decided = true
+    self.__result.* = move value
+}
+
+// Adds an arm that waits, with a record of `size` bytes at `align` and the operations `ops`, and
+// returns it. The record is valid until the select returns.
+//
+// Panics outside every scope.
+pub fn __wait(self: &Selector($R), size: usize, align: usize, ops: ArmOps) &Arm {
+    if current_coroutine().is_none() {
+        panic("select: outside a concurrent scope")
+    }
+    const s = self.__select
+    let a = allocator(&s.arena.arena)
+    const arm = box(
+        &a,
+        Arm {
+            __record = arena_slot(&s.arena.arena, size, align),
+            __ops = ops,
+            __select = s,
+            __next = null,
+        },
+    )
+    s.last match {
+        Some(l) => l.__next = Some(arm)
+        None => s.arms = Some(arm)
+    }
+    s.last = Some(arm)
+    return arm
+}
+
+// Makes the arm the select's winner. Returns false if another arm has already won.
+pub fn __win(self: &Arm) bool {
+    const s = self.__select
+    if s.won.is_some() or s.decided {
+        return false
+    }
+    s.won = Some(self)
+    return true
+}
+
+// TaskArm is a select's arm waiting for a task to finish.
+type TaskArm = struct(F, R) {
+    index: u32
+    handler: F
+    out: &R
+}
+
+fn done(self: &TaskArm($F, $R)) bool {
+    return task_record(self.index).status == TaskStatus.Done
+}
+
+fn withdraw(self: &TaskArm($F, $R)) {
+    task_record(self.index).awaiter = null
+}
+
+fn finish(self: &TaskArm($F, $R)) where F: fn() R {
+    task_record(self.index).awaiter = null
+    self.out.* = self.handler()
+}
+
+// Waits for a winner unless the body decided the select, then withdraws every other arm and
+// finishes the winner.
+fn finish(self: &Select) {
+    self.waited = true
+    if !self.decided {
+        self.await_winner()
+    }
+    self.withdraw_losers()
+    self.won match {
+        Some(w) => w.finish()
+        None => {}
+    }
+}
+
+fn withdraw_losers(self: &Select) {
+    let at = self.arms
+    loop {
+        const a = at ?? break
+        if !self.won_by(a) {
+            a.withdraw()
+        }
+        at = a.__next
+    }
+}
+
+// Blocks until an arm wins: one a counterpart completes, one whose operation completes on its own,
+// or, once the current scope is cancelled, the first that reports cancellation.
+fn await_winner(self: &Select) {
+    if self.arms.is_none() {
+        panic("select: no arms")
+    }
+    loop {
+        if self.won.is_some() or (self.win_first { it.done() }) {
+            return
+        }
+        if context.job.is_cancelled() and (self.win_first { it.__ops.cancels }) {
+            self.cancelled = true
+            return
+        }
+        park()
+    }
+}
+
+// Makes the first arm, in registration order, for which `pred` holds the winner, and returns
+// whether there was one.
+fn win_first(self: &Select, pred: fn(&Arm) bool) bool {
+    let at = self.arms
+    loop {
+        const a = at ?? return false
+        if pred(a) {
+            self.won = Some(a)
+            return true
+        }
+        at = a.__next
+    }
+}
+
+#allow(W2004)
+fn won_by(self: &Select, a: &Arm) bool {
+    return self.won match {
+        Some(w) => (w as usize) == (a as usize)
+        None => false
+    }
+}
+
+fn done(self: &Arm) bool {
+    return self.__ops.done(self.__record)
+}
+
+fn withdraw(self: &Arm) {
+    self.__ops.withdraw(self.__record)
+}
+
+fn finish(self: &Arm) {
+    self.__ops.finish(self.__record, self.__select.cancelled)
+}
+
+fn acquire_arm_arena() &ArmArena {
+    return task_pools.free_arenas match {
+        Some(a) => {
+            task_pools.free_arenas = a.next
+            a
+        }
+        None => box(
+            pools_allocator(),
+            ArmArena { arena = arena_allocator(pools_allocator()), next = null },
+        )
+    }
+}
+
+fn release_arm_arena(a: &ArmArena) {
+    reset(&a.arena)
+    a.next = task_pools.free_arenas
+    task_pools.free_arenas = Some(a)
+}
+
+// Returns the result of the first of `tasks` to finish, then cancels the others and waits for them,
+// releasing their results. Lazy tasks are started.
+//
+// Panics if `tasks` is empty, if called outside every scope, if a task's scope has ended, or if the
+// winning task panicked.
+pub fn race(tasks: move List(Task($T))) T {
+    const i = first_done(&tasks)
+    const winner = tasks.remove_at(i).unwrap()
+    cancel_rest(tasks)
+    return winner.await()
+}
+
+// Runs `first` and `second` as tasks of a new scope and returns the result of the one that finishes
+// first. The other is cancelled; its result is released once it returns.
+pub fn race(first: fn() $T, second: fn() T) T {
+    return concurrent { s =>
+        let tasks = list(2)
+        tasks.push(s.spawn(Start.Eager, first))
+        tasks.push(s.spawn(Start.Eager, second))
+        race(tasks)
+    }
+}
+
+// Returns the first `Ok` result of `tasks`, in the order they finish, then cancels the others and
+// waits for them, releasing their results. If every task fails, returns the error of the last to
+// finish and releases the others. Lazy tasks are started.
+//
+// Panics if `tasks` is empty, if called outside every scope, if a task's scope has ended, or if an
+// awaited task panicked.
+pub fn any(tasks: move List(Task(Result($T, $E)))) Result(T, E) {
+    loop {
+        const i = first_done(&tasks)
+        const r = tasks.remove_at(i).unwrap().await()
+        if tasks.len == 0 {
+            free_tasks(tasks)
+            return r
+        }
+        r match {
+            Ok(v) => {
+                cancel_rest(tasks)
+                return Ok(move v)
+            }
+            Err(e) => release(e)
+        }
+    }
+}
+
+// Returns the position of the first of `tasks` found finished, starting the lazy ones and blocking
+// the calling task until one finishes.
+fn first_done(tasks: &List(Task($T))) usize {
+    if tasks.len == 0 {
+        panic("race: no tasks")
+    }
+    const me = current_coroutine() ?? panic("race: outside a concurrent scope")
+    for &t in tasks {
+        const r = task_record(t.__index)
+        if r.gen != t.__gen {
+            panic("race: a task's scope has ended")
+        }
+        if r.status == TaskStatus.Lazy {
+            start_task(t.__index)
+        }
+    }
+    loop {
+        const i = done_index(tasks)
+        if i.is_some() {
+            for &t in tasks {
+                task_record(t.__index).awaiter = null
+            }
+            return i.unwrap()
+        }
+        for &t in tasks {
+            task_record(t.__index).awaiter = Some(me)
+        }
+        park()
+    }
+}
+
+fn done_index(tasks: &List(Task($T))) usize? {
+    let i = 0usize
+    for &t in tasks {
+        if task_record(t.__index).status == TaskStatus.Done {
+            return Some(i)
+        }
+        i = i + 1
+    }
+    return null
+}
+
+// Cancels every task, then waits for each and releases its result.
+fn cancel_rest(tasks: move List(Task($T))) {
+    for &t in tasks {
+        t.cancel()
+    }
+    for t in tasks.drain() {
+        release(t.await())
+    }
+    free_tasks(tasks)
+}
+
+// Frees an emptied list of tasks. `Task` declares no `deinit`, so the list's own cannot be called.
+fn free_tasks(tasks: move List(Task($T))) {
+    let _empty = tasks.to_owned_slice()
+    leak(tasks)
 }
 
 fn run_scope(start: Start, body: fn(&Scope) $R) R {
@@ -411,10 +851,11 @@ fn release_task(i: u32) {
     task_pools.free_task = i
 }
 
-fn add_task(scope: &Scope, entry: fn(&u8), slot: &u8) u32 {
+fn add_task(scope: &Scope, job: &Job, entry: fn(&u8), slot: &u8) u32 {
     const i = acquire_task()
     const r = task_record(i)
     r.status = TaskStatus.Lazy
+    r.job = job
     r.panicked = false
     r.scope = Some(scope.__record)
     r.coroutine = null
@@ -489,8 +930,9 @@ fn await_task(i: u32, gen: u64) i32 {
 
 fn ignore_done(c: &Coroutine) {}
 
-// Wakes the coroutines of every open scope that is now cancelled: the one running its body and
-// those running its tasks. A coroutine woken without cause goes back to waiting.
+// Wakes every coroutine of an open scope whose job is now cancelled: the one running the scope's
+// body if the scope's job is, and each task whose own job is. A coroutine woken without cause goes
+// back to waiting.
 fn wake_cancelled() {
     let at = task_pools.open_scopes
     loop {
@@ -503,18 +945,20 @@ fn wake_cancelled() {
                 Some(c) => c.wake()
                 None => {}
             }
-            let i = s.tasks
-            loop {
-                if i == NO_TASK {
-                    break
-                }
-                const r = task_record(i)
+        }
+        let i = s.tasks
+        loop {
+            if i == NO_TASK {
+                break
+            }
+            const r = task_record(i)
+            if r.job.is_cancelled() {
                 r.coroutine match {
                     Some(c) => c.wake()
                     None => {}
                 }
-                i = r.next
             }
+            i = r.next
         }
         at = s.next_open
     }
@@ -555,8 +999,8 @@ fn pools_allocator() &Allocator {
     }
 }
 
-fn slot_for(s: &ScopeRecord, size: usize, align: usize) &u8 {
-    let a = allocator(&s.arena)
+fn arena_slot(arena: &ArenaAllocator, size: usize, align: usize) &u8 {
+    let a = allocator(arena)
     const m = alloc(&a, size, align) match {
         Some(m) => move m
         None => panic("out of memory for a task")
@@ -694,4 +1138,91 @@ test "a repeated scope allocates nothing once the pools are warm" {
     let _again = __task_test_launch_many(100)
     task_pools.allocator = null
     assert_eq(counter.allocs + counter.reallocs, 0, "no allocation through the pools")
+}
+
+fn __task_test_after(rounds: i32, v: i32) i32 {
+    for _i in 0..rounds {
+        let _y = yield_now()
+    }
+    return v
+}
+
+fn __task_test_fail_after(rounds: i32, v: i32) Result(i32, i32) {
+    for _i in 0..rounds {
+        let _y = yield_now()
+    }
+    return Err(v)
+}
+
+fn __task_test_ok_after(rounds: i32, v: i32) Result(i32, i32) {
+    for _i in 0..rounds {
+        let _y = yield_now()
+    }
+    return Ok(v)
+}
+
+test "select over tasks wins on the first to finish" {
+    const got = concurrent { s =>
+        const slow = s.spawn { __task_test_after(5, 1) }
+        const fast = s.spawn { __task_test_after(1, 2) }
+        const which = select { on =>
+            on(&slow) { 10 }
+            on(&fast) { 20 }
+            on.wait()
+        }
+        which + slow.await() + fast.await()
+    }
+    assert_eq(got, 23, "fast won; both still awaitable")
+}
+
+test "cancelling a task leaves its siblings running" {
+    let rounds = 0
+    const got = concurrent { s =>
+        const spinner = s.spawn { __task_test_spin(&rounds) }
+        const other = s.spawn { __task_test_after(3, 7) }
+        let _y = yield_now()
+        spinner.cancel()
+        let _seen = spinner.await()
+        other.await()
+    }
+    assert_eq(got, 7, "the sibling finished")
+}
+
+test "race returns the first result and cancels the rest" {
+    let rounds = 0
+    const got = concurrent { s =>
+        let tasks = list(2)
+        tasks.push(s.spawn { __task_test_spin(&rounds) })
+        tasks.push(s.spawn { __task_test_after(2, 42) })
+        race(tasks)
+    }
+    assert_eq(got, 42, "the finite task won; the spinner stopped")
+}
+
+test "race over two functions" {
+    const got = concurrent { s =>
+        race({ __task_test_after(4, 1) }, { __task_test_after(1, 2) })
+    }
+    assert_eq(got, 2, "the faster one")
+}
+
+test "any skips failures and returns the first success" {
+    const got = concurrent { s =>
+        let tasks = list(3)
+        tasks.push(s.spawn { __task_test_fail_after(1, 1) })
+        tasks.push(s.spawn { __task_test_ok_after(3, 5) })
+        tasks.push(s.spawn { __task_test_ok_after(6, 9) })
+        any(tasks)
+    }
+    assert_true(got.is_ok() and got.unwrap() == 5, "the first Ok")
+}
+
+test "any returns the last error when every task fails" {
+    const got = concurrent { s =>
+        let tasks = list(2)
+        tasks.push(s.spawn { __task_test_fail_after(1, 1) })
+        tasks.push(s.spawn { __task_test_fail_after(3, 2) })
+        any(tasks)
+    }
+    assert_true(got.is_err() and got.unwrap_err() == 2, "the last to fail")
 }
