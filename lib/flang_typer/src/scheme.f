@@ -10,6 +10,7 @@
 // quantified id has been replaced by an engine-fresh `Var`.
 
 import std.allocator
+import std.collections.list
 import std.collections.set
 
 import flang_typer.interner
@@ -49,6 +50,12 @@ pub fn is_monomorphic(self: &Scheme) bool {
     return self.quantified.len() == 0
 }
 
+// Every `TyVar` node `body` names, in first-occurrence order, each once in `out`. Pass a zonked
+// `body`.
+pub fn var_nodes(it: &TypeInterner, body: Ty, out: &List(Ty)) {
+    walk_vars(it, body, VarSink.Ordered(out))
+}
+
 // Walk `body`'s node graph collecting the ids of every free `TyVar` whose `level` is strictly
 // greater than `cursor`. Variables at-or-shallower than the cursor were bound in an enclosing scope
 // and must not be quantified. A ground subtree cites no vars - skipped.
@@ -56,36 +63,55 @@ pub fn is_monomorphic(self: &Scheme) bool {
 // Resolution is the caller's job: pass an already-zonked `body` so chains of bound vars don't show
 // up as free here.
 pub fn free_vars(it: &TypeInterner, body: Ty, cursor: Level, out: &Set(VarId)) {
+    walk_vars(it, body, VarSink.Deeper(cursor, out))
+}
+
+// Where `walk_vars` puts the variables it meets.
+type VarSink = enum {
+    // The ids of those deeper than the level.
+    Deeper(Level, &Set(VarId))
+    // The nodes, in first-occurrence order, each once.
+    Ordered(&List(Ty))
+}
+
+fn walk_vars(it: &TypeInterner, body: Ty, sink: VarSink) {
     if it.is_ground(body) {
         return
     }
     it.node(body) match {
-        NVar(v) => {
-            if v.level > cursor {
-                out.add(v.id)
+        NVar(v) => sink match {
+            Deeper(cursor, out) => {
+                if v.level > cursor {
+                    out.add(v.id)
+                }
+            }
+            Ordered(out) => {
+                if !out.contains(body) {
+                    out.push(body)
+                }
             }
         }
-        NRef(inner) => free_vars(it, inner, cursor, out)
-        NArray(arr) => free_vars(it, arr.elem, cursor, out)
+        NRef(inner) => walk_vars(it, inner, sink)
+        NArray(arr) => walk_vars(it, arr.elem, sink)
         NFunc(f) => {
             for p in it.child_ids(f.params) {
-                free_vars(it, p, cursor, out)
+                walk_vars(it, p, sink)
             }
-            free_vars(it, f.ret, cursor, out)
+            walk_vars(it, f.ret, sink)
         }
         NTuple(span) => {
             for e in it.child_ids(span) {
-                free_vars(it, e, cursor, out)
+                walk_vars(it, e, sink)
             }
         }
         NRecord(rec) => {
             for t in it.child_ids(rec.tys) {
-                free_vars(it, t, cursor, out)
+                walk_vars(it, t, sink)
             }
         }
         NNominal(nn) => {
             for a in it.child_ids(nn.args) {
-                free_vars(it, a, cursor, out)
+                walk_vars(it, a, sink)
             }
         }
         _ => {}

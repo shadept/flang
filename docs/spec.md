@@ -57,6 +57,8 @@ FLang is a statically-typed compiled language designed for explicit control, str
 
 **Anonymous type expressions**: `struct { ... }` and `enum { ... }` are valid anywhere a type appears — parameters, return types, variable annotations, function fields, and the right-hand side of a `type` alias. Anonymous struct *values* (`.{ ... }`) require a target type from context — context-less `.{}` errors with a hint to add a type annotation.
 
+An anonymous struct is a layout: it may name the type parameters in scope, and is generic over them. In `type Pair = struct(T) { inner: struct { a: T, b: T } }`, `Pair(i32).inner` and `Pair(bool).inner` are records of `i32` and `bool` fields.
+
 **Structural typing**: FLang is nominally typed for named structs and enums. However, tuples and anonymous structs are structurally typed — compatibility is determined by field names and types, not by declaration identity. A function accepting `{ _0: i32, _1: i32 }` will accept a tuple `(i32, i32)`. This is the foundation for planned broader structural typing: anonymous structs will serve as the entry point for TypeScript-style structural compatibility, where any value with matching fields satisfies an anonymous struct type constraint.
 
 ### 2.3 Generics
@@ -166,12 +168,31 @@ Any block may declare types with the module-level form, directives included: a f
 
 - A block-scoped type is visible throughout its block, above and below its declaration, and in every block nested in it, never outside it. Two declarations of one name in the same block are **E2005**.
 - A name resolves from the innermost block outward, then at module level. An inner declaration shadows an outer one, and a module-level type of the same name. A block-scoped enum's bare variants resolve exactly where the enum does.
-- `pub` is not valid in a block.
+- `pub` is not valid in a block (**E2164**).
 - A block-scoped type may be generic, and may name its function's `$T` parameters. Each instantiation of the function has its own copy: the type takes those parameters ahead of its own, filled from the bindings in scope wherever it is named.
 - Each declaration is its own nominal type: two blocks declaring `Event` declare two types. Diagnostics and `type_info(T).name` show the declared name.
 - Nothing outside the block can spell the type, so no return type, module-level field or UFCS function names it; a value still leaves through a generic parameter.
 
-Planned (RFC-046 phase 2): types declared in struct and enum bodies, reached through the owner as `Tree(i32).Node`.
+### 2.3.3 Nested types
+
+```
+pub type Tree = struct(T) {
+    pub type Node = struct { value: T, children: List(Node) }
+    root: Node?
+}
+
+fn first(t: &Tree($T)) Tree(T).Node? { return t.root }
+const n = Tree(i32).Node { value = 1, children = list(0) }
+```
+
+A struct or enum body, named or anonymous, may declare types beside its fields or variants, with the same form and directives as anywhere else (RFC-046).
+
+- Inside the body (its fields, variants and the other nested types) a nested type is named bare, above and below its declaration, and shadows outer names. Two of one name in one body are **E2005**.
+- A nested type may name its owner's type parameters, and those of every enclosing type and function. It takes them as leading parameters: `Tree(i32).Node` and `Tree(u8).Node` are distinct types. It may also be generic itself: `Outer(u8).Pair(bool)`.
+- Outside the body it is reached through its owner, in type position and in expressions: `Tree(i32).Node`, `Shape.Size { w = 1, h = 2 }`, `Shape.Kind.Wide(4)`, `size_of(Shape.Size)`. A variant reached through an instantiated owner (`Box(i32).Kind.A`) infers the owner's arguments. Module-level functions name it only through the path; inside the owner's body there is no code.
+- A nested type without `pub` is visible only in its module. `pub` is valid on a type nested in a `pub` type; in a private type, a block, or an anonymous body it is **E2164**.
+- `type Name = T` in a body is an alias, as at module level: `Box(i32).Item` expands with the owner's parameters bound to its arguments.
+- Diagnostics and `type_info(T).name` show the path: `Tree.Node`.
 
 ### 2.4 Structs
 

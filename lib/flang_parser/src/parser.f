@@ -907,7 +907,11 @@ fn parse_struct_body_into(self: &Parser, b: &NodeBuilder) {
         return
     }
     while !self.at_eof() and self.current_kind() != TokenKind.CloseBrace {
-        const field = self.parse_struct_field()
+        const field = if self.at_nested_type() {
+            self.parse_local_type_with_directives()
+        } else {
+            self.parse_struct_field()
+        }
         self.push_node_into(b, field)
         if self.current_kind() == TokenKind.Comma {
             self.eat_into(b)
@@ -984,7 +988,11 @@ fn parse_enum_body_into(self: &Parser, b: &NodeBuilder) {
         return
     }
     while !self.at_eof() and self.current_kind() != TokenKind.CloseBrace {
-        const variant = self.parse_enum_variant()
+        const variant = if self.at_nested_type() {
+            self.parse_local_type_with_directives()
+        } else {
+            self.parse_enum_variant()
+        }
         self.push_node_into(b, variant)
         if self.current_kind() == TokenKind.Comma {
             self.eat_into(b)
@@ -1138,7 +1146,12 @@ fn parse_statement(self: &Parser) CstNodeId {
         }
         // Local type decl (RFC-046) - wrap in TypeAliasDecl (kind may be rewritten by
         // parse_type_decl_with_directives).
-        Type => self.parse_type_decl_with_directives(list(0, self.allocator))
+        // `pub type` parses here so the checker can refuse the `pub` by name.
+        Type | Pub => if self.at_nested_type() {
+            self.parse_type_decl_with_directives(list(0, self.allocator))
+        } else {
+            self.parse_expression_stmt()
+        }
         Return => self.parse_return_stmt()
         Break => self.parse_jump_stmt(NodeKind.BreakStmt)
         Continue => self.parse_jump_stmt(NodeKind.ContinueStmt)
@@ -1178,7 +1191,17 @@ fn parse_local_type_with_directives(self: &Parser) CstNodeId {
     return self.parse_type_decl_with_directives(leading)
 }
 
-// Whether a run of directives (`#name`, `#name(...)`) leads to `type`.
+// Whether a type declaration starts here: `type`, `pub type`, or either after directives (RFC-046).
+fn at_nested_type(self: &Parser) bool {
+    return self.current_kind() match {
+        Type => true
+        Pub => self.peek_kind(1) == TokenKind.Type
+        Hash => self.at_directives_then_type()
+        _ => false
+    }
+}
+
+// Whether a run of directives (`#name`, `#name(...)`) leads to `type` or `pub type`.
 fn at_directives_then_type(self: &Parser) bool {
     let k = 0usize
     while self.peek_kind(k) == TokenKind.Hash {
@@ -1203,6 +1226,9 @@ fn at_directives_then_type(self: &Parser) bool {
                 break
             }
         }
+    }
+    if self.peek_kind(k) == TokenKind.Pub {
+        k = k + 1
     }
     return self.peek_kind(k) == TokenKind.Type
 }
@@ -1872,7 +1898,15 @@ fn parse_member_or_call_or_deref(self: &Parser, recv: CstNodeId) CstNodeId {
                 const lam = self.parse_brace_lambda()
                 self.push_node_into(&b, lam)
             }
-            self.finish(b)
+            const head = self.finish(b)
+            // `Shape.Size { ... }`: constructing a type nested in another (RFC-046).
+            if starts_uppercase(name) and self.current_kind() == TokenKind.OpenBrace
+                and !self.stop_at_brace {
+                let c = self.open_around(NodeKind.StructConstructionExpr, head)
+                self.parse_struct_construction_body(&c)
+                return self.finish(c)
+            }
+            head
         }
         // Stray `.` - record error and return a member-access shell.
         _ => {
@@ -2478,6 +2512,9 @@ fn parse_named_type(self: &Parser) CstNodeId {
         let p = self.open_around(NodeKind.ProjectionType, cur)
         self.eat_into(&p)
         self.eat_into(&p)
+        if self.current_kind() == TokenKind.OpenParenthesis {
+            self.parse_type_args_into(&p)
+        }
         cur = self.finish(p)
     }
     return cur

@@ -43,12 +43,17 @@ pub type Module = struct {
 
 pub const NO_SCOPE: u32 = 0xFFFF_FFFF as u32
 
-// A `type` declared in a block. It is visible in block `scope` and the blocks nested in it.
+// A `type` declared in a block or a struct or enum body. It is visible in `scope` and the scopes
+// nested in it.
 pub type LocalType = struct {
     decl: &TypeDecl
     scope: u32
-    // The `$T` names the enclosing function introduces, which the declaration may name.
+    // The type parameters of every enclosing scope, outermost first: the enclosing function's `$T`
+    // names, then each enclosing type's parameters. The declaration takes them as leading
+    // parameters.
     fn_generics: String[]
+    // The name diagnostics show, by segment: `Node`, or `Tree`, `Node` for a type nested in `Tree`.
+    path: String[]
 }
 
 // A loop label occurrence and the declaration it resolves to (RFC-042). A declaration refers to
@@ -1048,6 +1053,8 @@ pub type ProjectionType = struct {
     span: SourceSpan
     base: &TypeExpr
     name: String
+    // `Tree(i32).Pair(bool)`: the arguments of a generic type nested in the base (RFC-046).
+    generic_args: TypeExpr[]
 }
 
 // `$T` - introduces a generic parameter at first appearance in a function parameter type.
@@ -1114,6 +1121,8 @@ pub type AnonStructType = struct {
     fields: StructField[]
     // `union { ... }`: every field overlaps at offset 0.
     is_union: bool
+    // The types the body declares (RFC-046).
+    types: TypeDecl[]
 }
 
 // One field declaration inside a struct type. FLang struct fields have no default initializer -
@@ -1132,6 +1141,8 @@ pub type AnonEnumType = struct {
     span: SourceSpan
     generics: GenericParam[]
     variants: EnumVariant[]
+    // The types the body declares (RFC-046).
+    types: TypeDecl[]
 }
 
 // One variant inside an enum type. `payloads` is empty for nullary variants (`Red`); non-empty for
@@ -1261,6 +1272,10 @@ pub fn collect_generic_names(te: &TypeExpr, out: &List(String)) {
             }
         }
         Combined(c) => collect_generic_list(c.parts, out)
+        Projection(p) => {
+            collect_generic_names(p.base, out)
+            collect_generic_list(p.generic_args, out)
+        }
         Contract(c) => {
             for &r in c.requirements {
                 collect_generic_list(r.signature.params, out)
@@ -1294,7 +1309,7 @@ pub fn mentions_generic(te: &TypeExpr) bool {
         AnonEnum(_) => false
         Contract(c) => contract_mentions_generic(&c)
         Combined(c) => any_generic(c.parts)
-        Projection(_) => false
+        Projection(p) => mentions_generic(p.base) or any_generic(p.generic_args)
         Error(_) => false
     }
 }
@@ -1304,7 +1319,7 @@ pub fn mentions_name(te: &TypeExpr, name: String) bool {
     return te.* match {
         Named(n) => n.name == name or any_names(n.generic_args, name)
             or assoc_names(n.assoc_args, name)
-        Projection(p) => mentions_name(p.base, name)
+        Projection(p) => mentions_name(p.base, name) or any_names(p.generic_args, name)
         Reference(r) => mentions_name(r.inner, name)
         Optional(o) => mentions_name(o.inner, name)
         Array(a) => mentions_name(a.element, name)

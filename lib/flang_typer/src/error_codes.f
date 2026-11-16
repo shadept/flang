@@ -54,6 +54,10 @@ pub const E_UNION_PATTERN: String = "E2162"
 // `#it(name)` on a parameter that is not a callable taking one argument (RFC-045).
 pub const E_IT_NAME_SLOT: String = "E2163"
 
+// `pub` on a type declared in a function, a block, or the body of a type that is not `pub`
+// (RFC-046).
+pub const E_PUB_NESTED_TYPE: String = "E2164"
+
 // Duplicate declarations the reference rejects at their declaration site: a struct field name twice
 // (E2076), an enum tag value twice (E2048), a `let`/`const`/global re-declared in the same scope
 // (E2005, shared with the duplicate-type code).

@@ -408,14 +408,16 @@ pub type Checker = struct {
     // Monotonic id behind lambda/closure symbols. Advances per *check*, so a template body's lambda
     // mints a fresh symbol per instantiation.
     next_lambda: u32
-    // RFC-046 block-scoped types. A declaration's span -> its index in its module's `local_types`,
-    // which names it in the registry (`local_fqn`). Absent for a same-scope duplicate.
-    local_types: Dict(NodeId, u32)
+    // RFC-046 scoped types. A declaration's span -> how its scope names it. Absent for a same-scope
+    // duplicate.
+    local_types: Dict(NodeId, LocalName)
     // A block-scoped nominal -> the enclosing function's `$T` names: its leading type parameters,
     // which every use fills from the bindings in scope.
     local_generics: Dict(NominalId, String[])
     // The block scopes open around the current check, innermost last: the types each declares.
     local_scopes: List(List(LocalName))
+    // A struct or enum -> the types its body declares, which `Owner(args).Name` reaches.
+    nested: Dict(NominalId, List(LocalName))
 
     // FQN -> the id a definition held before it was taken out of the registry for this demand: the
     // declared names of modules being collected again, and every closure environment (rebuilt by
@@ -816,6 +818,7 @@ pub fn checker() Checker {
         local_types = dict(),
         local_generics = dict(),
         local_scopes = list(0),
+        nested = dict(),
         recycled = dict(),
         saw_new_name = false,
         nominal_diags = dict(),
@@ -883,6 +886,7 @@ pub fn begin_demand(self: &Checker) {
     let ttype_keys = replace(&self.template_type_keys, list(0))
     let locals = replace(&self.local_types, dict())
     let local_generics = replace(&self.local_generics, dict())
+    let nested = replace(&self.nested, dict())
     const ct = self.comptime
 
     let next = checker()
@@ -913,6 +917,7 @@ pub fn begin_demand(self: &Checker) {
     install(&next.template_type_keys, ttype_keys)
     install(&next.local_types, locals)
     install(&next.local_generics, local_generics)
+    install(&next.nested, nested)
     next.comptime = ct
     // Replaces the checker and releases what it still owns: the tables carried above already left,
     // so what goes is this demand's own.
@@ -999,10 +1004,14 @@ fn register_collected(self: &Checker, def: move NominalDef, fqn_owned: move Owne
 // registry's own FQN buffer, and whether it came from a module retirement (a declared or generated
 // name) as opposed to a closure environment. Only the former count as removed declarations when
 // they go unclaimed.
-// A type a block scope declares: its name, and its module-local index (`local_fqn`).
+// A type a scope declares: its name, and what names it in the registry (`local_fqn`).
 type LocalName = struct {
     name: String
     index: u32
+    path: String[]
+    // The enclosing scopes' type parameters it takes ahead of its own.
+    implicit: String[]
+    is_pub: bool
 }
 
 type RetiredName = struct {
@@ -1064,6 +1073,7 @@ pub fn deinit(self: move Checker) {
         frame.deinit()
     }
     self.local_scopes.deinit()
+    self.nested.deinit()
     self.recycled.deinit()
     self.nominal_diags.deinit()
     self.nominal_diag_keys.deinit()
@@ -1168,10 +1178,10 @@ fn resolve_type_node(self: &Checker, te: &TypeExpr) Ty {
         Tuple(t) => resolve_tuple(self, &t)
         Function(f) => resolve_function(self, &f)
         GenericBind(g) => resolve_generic_bind(self, &g)
-        AnonStruct(a) => resolve_anon_struct_type(self, &a)
+        AnonStruct(a) => resolve_anon_struct_type(self, &a, te)
         Contract(c) => contract_param(self, te, "contract", c.span)
         Combined(c) => contract_param(self, te, "contract", c.span)
-        Projection(p) => resolve_projection(self, &p)
+        Projection(p) => resolve_projection(self, &p, te)
         _ => TY_ERROR
     }
 }
@@ -1242,10 +1252,12 @@ fn names_contract(self: &Checker, name: String) bool {
 // `struct { x: i32, y: i32 }` in type position - a structural record. Generic anonymous structs are
 // not a thing the corpus uses; a parameterised one falls back to `Error` rather than silently
 // dropping the parameters.
-fn resolve_anon_struct_type(self: &Checker, a: &AnonStructType) Ty {
+fn resolve_anon_struct_type(self: &Checker, a: &AnonStructType, te: &TypeExpr) Ty {
     if a.generics.len > 0 {
         return TY_ERROR
     }
+    const opened = open_body_types(self, te)
+    defer close_scopes(self, opened)
     let fields: List(Field) = list(a.fields.len)
     for i in 0..a.fields.len {
         fields.push(Field {
@@ -1264,26 +1276,39 @@ fn resolve_anon_struct_type(self: &Checker, a: &AnonStructType) Ty {
 //
 // The key is the record `Ty` the interner canonicalises for those fields, which counts field types
 // as well as names, so `struct { v: i32 }` and `struct { v: String }` stay distinct.
+//
+// A field naming a type variable (`inner: struct { a: T }` in `Pair(T)`) makes the record generic
+// over it: the variables its fields name are its type parameters, applied to themselves here, so an
+// instance of the enclosing type substitutes into the record as into any generic struct.
 fn anon_struct_ty(self: &Checker, fields: move List(Field), span: SourceSpan) Ty {
     const key = self.engine.interner.record_of(&fields)
+    let vars: List(Ty) = list(0)
+    for &f in fields {
+        var_nodes(&self.engine.interner, self.engine.zonk(f.ty), &vars)
+    }
 
-    let no_args: List(Ty) = list(0)
     let found = self.anon_structs.get(key)
     if found.is_some() {
         const id = found.unwrap()
         fields.deinit()
-        return mk_nominal(self, id, no_args)
+        return mk_nominal(self, id, vars)
     }
 
     // The registry FQN is a bare counter: no rendering of a record shape survives C identifier
     // mangling. Interning happens through `anon_structs`.
-    let empty_tps: List(VarId) = list(0)
+    let tps: List(VarId) = list(vars.len)
+    for v in vars {
+        ty_node(self, v) match {
+            NVar(tv) => tps.push(tv.id)
+            _ => {}
+        }
+    }
     let nid = self.nominals.register(
         NominalDef.NomStruct(StructDef {
             fqn = "",
             module = "",
             is_pub = true,
-            type_params = move empty_tps,
+            type_params = move tps,
             assoc_params = list(0),
             fields = move fields,
             decl_span = span,
@@ -1294,7 +1319,7 @@ fn anon_struct_ty(self: &Checker, fields: move List(Field), span: SourceSpan) Ty
         $"__anon_{self.nominals.next_id}",
     )
     self.anon_structs.set(key, nid)
-    return mk_nominal(self, nid, no_args)
+    return mk_nominal(self, nid, vars)
 }
 
 // `te` is the `Named` node `n` came from.
@@ -1337,9 +1362,10 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
         }
     }
 
-    const local = local_type_index(self, n.name)
+    const local = local_named(self, n.name)
     if local.is_some() {
-        const t = resolve_local_named(self, n, te, local.unwrap())
+        const ln = local.unwrap()
+        const t = resolve_local_named(self, n, te, &ln)
         if t.is_some() {
             return t.unwrap()
         }
@@ -1368,7 +1394,7 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
     // and cycle detection are follow-ups.
     let alias_body = self.aliases.lookup_ref(n.name, &vis)
     if alias_body.is_some() {
-        return expand_alias(self, n, te, alias_body.unwrap())
+        return expand_alias(self, n.name, n.span, te, alias_body.unwrap())
     }
 
     // A type declared in a module this one does not import stays unknown; name the module.
@@ -1400,32 +1426,32 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
     return TY_ERROR
 }
 
-// Expand alias `n` to `body`, resolved where it is used.
-fn expand_alias(self: &Checker, n: &NamedType, te: &TypeExpr, body: &TypeExpr) Ty {
+// Expand alias `name` to `body`, resolved where it is used.
+fn expand_alias(self: &Checker, name: String, span: SourceSpan, te: &TypeExpr, body: &TypeExpr) Ty {
     // `type A = B` / `type B = A`: expanding either one reaches itself, so the expansion never
     // terminates (E2036). The names currently being expanded are the cycle witness.
-    if contains_view(&self.alias_stack, n.name) {
+    if contains_view(&self.alias_stack, name) {
         push_diag_e(
             self,
-            n.span,
+            span,
             E_CYCLIC_ALIAS,
-            $"type alias `{n.name}` is cyclic - it expands to itself",
+            $"type alias `{name}` is cyclic - it expands to itself",
         )
         return TY_ERROR
     }
     if is_contract_body(body) {
-        return contract_param(self, te, n.name, n.span)
+        return contract_param(self, te, name, span)
     }
-    self.alias_stack.push(n.name)
+    self.alias_stack.push(name)
     const out = resolve_type_expr(self, body)
     let _p = self.alias_stack.pop()
     return out
 }
 
-// `n` naming block-scoped type `k` (RFC-046): a nominal takes its implicit arguments ahead of the
+// `n` naming scoped type `ln` (RFC-046): a nominal takes its implicit arguments ahead of the
 // spelled ones; an alias expands. Null when the declaration did not register.
-fn resolve_local_named(self: &Checker, n: &NamedType, te: &TypeExpr, k: u32) Ty? {
-    let fqn = local_fqn(self.current_module.unwrap_or(""), n.name, k)
+fn resolve_local_named(self: &Checker, n: &NamedType, te: &TypeExpr, ln: &LocalName) Ty? {
+    let fqn = local_fqn(self.current_module.unwrap_or(""), ln.path, ln.index)
     defer fqn.deinit()
     const id = self.nominals.lookup_fqn(fqn.view())
     if id.is_some() {
@@ -1440,7 +1466,97 @@ fn resolve_local_named(self: &Checker, n: &NamedType, te: &TypeExpr, k: u32) Ty?
     let vis = current_visibility(self)
     defer vis.deinit()
     const body = self.aliases.lookup_ref(fqn.view(), &vis) ?? return null
-    return Some(expand_alias(self, n, te, body))
+    return Some(expand_alias(self, n.name, n.span, te, body))
+}
+
+// `Owner(args).Name` naming a type declared in `Owner`'s body (RFC-046): the owner's arguments
+// lead, then the spelled ones. Null when the base names no struct or enum declaring `p.name`.
+fn resolve_nested(self: &Checker, p: &ProjectionType, te: &TypeExpr) Ty? {
+    const base = self.engine.resolve(resolve_type_expr(self, p.base))
+    if base == TY_ERROR {
+        return Some(TY_ERROR)
+    }
+    const owner = ty_node(self, base) match {
+        NNominal(nn) => nn
+        _ => return null
+    }
+    const found = nested_lookup(self, owner.id, p.name)
+    if found.is_none() {
+        push_diag_e(
+            self,
+            p.span,
+            E_UNKNOWN_TYPE,
+            $"`{owner_display(self, owner.id)}` declares no type `{p.name}`",
+        )
+        return Some(TY_ERROR)
+    }
+    const ln = found.unwrap()
+    if !nested_visible(self, owner.id, &ln, p.span) {
+        return Some(TY_ERROR)
+    }
+    let fqn = local_fqn(nominal_module(self, owner.id), ln.path, ln.index)
+    defer fqn.deinit()
+    let args = owner_args(self, owner.args, p.generic_args.len)
+    const id = self.nominals.lookup_fqn(fqn.view())
+    if id.is_some() {
+        record_nominal_ref(self, p.span, id.unwrap())
+        for &arg in p.generic_args {
+            args.push(resolve_type_expr(self, arg))
+        }
+        apply_nominal_bounds(self, id.unwrap(), &args, p.name, p.span)
+        return Some(mk_nominal(self, id.unwrap(), args))
+    }
+    let vis = current_visibility(self)
+    defer vis.deinit()
+    const body = self.aliases.lookup_ref(fqn.view(), &vis) ?? return null
+    // The alias names the owner's parameters: bind them to the owner's arguments.
+    self.env.push_scope()
+    for i in 0..ln.implicit.len {
+        if i < args.len {
+            bind_type_name(self, ln.implicit[i], args[i], p.span)
+        }
+    }
+    const out = expand_alias(self, p.name, p.span, te, body)
+    self.env.pop_scope()
+    args.deinit()
+    return Some(out)
+}
+
+// The type `owner`'s body declares as `name`.
+fn nested_lookup(self: &Checker, owner: NominalId, name: String) LocalName? {
+    const names = self.nested.get_ref(owner) ?? return null
+    for &ln in names {
+        if ln.name == name {
+            return Some(ln.*)
+        }
+    }
+    return null
+}
+
+// Whether nested type `ln` of `owner` may be named here: it is `pub`, or this is its module. E2003
+// when not.
+fn nested_visible(self: &Checker, owner: NominalId, ln: &LocalName, span: SourceSpan) bool {
+    if ln.is_pub or self.current_module.unwrap_or("") == nominal_module(self, owner) {
+        return true
+    }
+    push_diag_e(
+        self,
+        span,
+        E_UNKNOWN_TYPE,
+        $"`{owner_display(self, owner)}.{ln.name}` is not `pub`",
+    )
+    return false
+}
+
+// An owner's arguments, the leading arguments of a type nested in it, with room for `more`.
+fn owner_args(self: &Checker, args: ChildSpan, more: usize) List(Ty) {
+    let out: List(Ty) = list(args.len + more)
+    out.push_all(self.engine.interner.child_ids(args))
+    return out
+}
+
+fn owner_display(self: &Checker, id: NominalId) String {
+    return declared_name(nominal_fqn(self.nominals.get(id)))
 }
 
 // W2001: naming a `#deprecated` struct or enum. Fires at every use site, including inside the
@@ -1999,13 +2115,35 @@ pub fn resolve_nominal_bodies(self: &Checker, module: &Module, module_path: Stri
     resolve_local_bodies(self, module, module_path)
 }
 
-// A block-scoped declaration registers as `{module}.{Name}#{k}`, `k` its index in the module's
-// `local_types`. No bare name matches that last segment, so only `local_scopes` reaches it.
-fn local_fqn(module_path: String, name: String, k: u32) OwnedString {
-    return $"{module_path}.{name}#{k}"
+// A scoped declaration registers as `{module}.#{path}#{k}`, `k` its index in the module's
+// `local_types`. No bare name matches it: only `local_scopes` and its owner reach it.
+fn local_fqn(module_path: String, path: String[], k: u32) OwnedString {
+    let sb = string_builder(module_path.len + 16)
+    defer sb.deinit()
+    sb.append(module_path)
+    sb.append(".#")
+    for i in 0..path.len {
+        if i > 0 {
+            sb.append(".")
+        }
+        sb.append(path[i])
+    }
+    sb.append("#")
+    sb.append(k)
+    return sb.to_string()
 }
 
-// Whether local type `k` repeats a name declared earlier in the same block scope.
+fn local_name(lt: &LocalType, k: usize) LocalName {
+    return LocalName {
+        name = lt.decl.name,
+        index = k as u32,
+        path = lt.path,
+        implicit = lt.fn_generics,
+        is_pub = lt.decl.is_pub,
+    }
+}
+
+// Whether local type `k` repeats a name declared earlier in the same scope.
 fn redeclared_in_scope(module: &Module, k: usize) bool {
     const lt = &module.local_types[k]
     for j in 0..k {
@@ -2017,7 +2155,7 @@ fn redeclared_in_scope(module: &Module, k: usize) bool {
     return false
 }
 
-// Register the module's block-scoped type names (RFC-046), beside its module-level ones.
+// Register the module's scoped type names (RFC-046), beside its module-level ones.
 fn collect_local_names(self: &Checker, module: &Module, module_path: String) {
     for k in 0..module.local_types.len {
         const lt = &module.local_types[k]
@@ -2029,15 +2167,89 @@ fn collect_local_names(self: &Checker, module: &Module, module_path: String) {
             const _gone = self.local_types.remove(node)
             continue
         }
-        self.local_types.set(node, k as u32)
-        const id = collect_type_decl(self, td, local_fqn(module_path, td.name, k as u32))
+        self.local_types.set(node, local_name(lt, k))
+        const id = collect_type_decl(self, td, local_fqn(module_path, lt.path, k as u32))
         if id.is_some() {
             self.local_generics.set(id.unwrap(), lt.fn_generics)
         }
     }
+    link_nested_types(self, module, module_path)
 }
 
-// Resolve the block-scoped bodies, each seeing the types of the scopes around its declaration.
+// Map each struct or enum to the types its body declares, and refuse a `pub` that no `pub` owner
+// allows.
+fn link_nested_types(self: &Checker, module: &Module, module_path: String) {
+    let allowed: Set(NodeId) = set()
+    defer allowed.deinit()
+    for &decl in module.decls {
+        decl.* match {
+            Type(td) => {
+                let fqn = $"{module_path}.{td.name}"
+                link_owner(self, &td, fqn.view(), td.is_pub, &allowed)
+                fqn.deinit()
+            }
+            _ => {}
+        }
+    }
+    // A body's types are recorded before their owner, so walking back meets each owner first.
+    let k = module.local_types.len
+    while k > 0 {
+        k = k - 1
+        if redeclared_in_scope(module, k) {
+            continue
+        }
+        const td = module.local_types[k].decl
+        const pub_allowed = allowed.contains(node_id_of(td.span))
+        if td.is_pub and !pub_allowed {
+            push_diag_e(
+                self,
+                td.span,
+                E_PUB_NESTED_TYPE,
+                from_view(
+                    "`pub` is valid only on a module-level type and on a type nested in a `pub` type",
+                ),
+            )
+        }
+        let fqn = local_fqn(module_path, module.local_types[k].path, k as u32)
+        link_owner(self, td, fqn.view(), td.is_pub and pub_allowed, &allowed)
+        fqn.deinit()
+    }
+}
+
+// Record the types `td`'s body declares under its nominal, registered as `fqn`. When `owner_pub`,
+// they may be `pub`.
+fn link_owner(self: &Checker, td: &TypeDecl, fqn: String, owner_pub: bool, allowed: &Set(NodeId)) {
+    const types = body_types(td.body) ?? return
+    if types.len == 0 {
+        return
+    }
+    const id = self.nominals.lookup_fqn(fqn) ?? return
+    let names: List(LocalName) = list(types.len)
+    for &nt in types {
+        const node = node_id_of(nt.span)
+        const ln = self.local_types.get(node) ?? continue
+        names.push(ln)
+        if owner_pub {
+            allowed.add(node)
+        }
+    }
+    self.nested.remove(id) match {
+        Some(old) => old.deinit()
+        None => {}
+    }
+    self.nested.set(id, names)
+}
+
+// The types a struct or enum body declares; null for any other type expression.
+fn body_types(body: &TypeExpr) TypeDecl[]? {
+    return body.* match {
+        AnonStruct(a) => Some(a.types)
+        AnonEnum(e) => Some(e.types)
+        _ => null
+    }
+}
+
+// Resolve the scoped bodies, each seeing the types of the scopes around its declaration.
 fn resolve_local_bodies(self: &Checker, module: &Module, module_path: String) {
     for k in 0..module.local_types.len {
         if redeclared_in_scope(module, k) {
@@ -2045,15 +2257,15 @@ fn resolve_local_bodies(self: &Checker, module: &Module, module_path: String) {
         }
         const lt = &module.local_types[k]
         const opened = open_scope_chain(self, module, lt.scope)
-        let fqn = local_fqn(module_path, lt.decl.name, k as u32)
+        let fqn = local_fqn(module_path, lt.path, k as u32)
         resolve_type_body(self, lt.decl, fqn.view(), lt.fn_generics)
         fqn.deinit()
         close_scopes(self, opened)
     }
 }
 
-// Open the frames of block scope `scope` and every scope around it, outermost first. Returns how
-// many opened.
+// Open the frames of scope `scope` and every scope around it, outermost first. Returns how many
+// opened.
 fn open_scope_chain(self: &Checker, module: &Module, scope: u32) usize {
     let chain: List(u32) = list(0)
     defer chain.deinit()
@@ -2069,7 +2281,7 @@ fn open_scope_chain(self: &Checker, module: &Module, scope: u32) usize {
         for k in 0..module.local_types.len {
             const lt = &module.local_types[k]
             if lt.scope == chain[i] and !redeclared_in_scope(module, k) {
-                frame.push(LocalName { name = lt.decl.name, index = k as u32 })
+                frame.push(local_name(lt, k))
             }
         }
         self.local_scopes.push(frame)
@@ -2082,15 +2294,32 @@ fn open_block_types(self: &Checker, blk: &BlockExpr) usize {
     let frame: List(LocalName) = list(0)
     for &stmt in blk.stmts {
         stmt.* match {
-            Type(td) => {
-                self.local_types.get(node_id_of(td.span)) match {
-                    Some(k) => frame.push(LocalName { name = td.name, index = k })
-                    None => {}
-                }
-            }
+            Type(td) => self.add_to_frame(&frame, td)
             _ => {}
         }
     }
+    return push_frame(self, frame)
+}
+
+// Open a frame for the types a struct or enum body declares, when it declares any. Returns how many
+// opened.
+fn open_body_types(self: &Checker, body: &TypeExpr) usize {
+    const types = body_types(body) ?? return 0
+    let frame: List(LocalName) = list(0)
+    for &td in types {
+        self.add_to_frame(&frame, td)
+    }
+    return push_frame(self, frame)
+}
+
+fn add_to_frame(self: &Checker, frame: &List(LocalName), td: &TypeDecl) {
+    self.local_types.get(node_id_of(td.span)) match {
+        Some(ln) => frame.push(ln)
+        None => {}
+    }
+}
+
+fn push_frame(self: &Checker, frame: move List(LocalName)) usize {
     if frame.len == 0 {
         frame.deinit()
         return 0
@@ -2106,26 +2335,27 @@ fn close_scopes(self: &Checker, n: usize) {
     }
 }
 
-// The module-local index of the block-scoped type `name` names here, innermost scope first.
-fn local_type_index(self: &Checker, name: String) u32? {
+// The scoped type `name` names here, innermost scope first.
+fn local_named(self: &Checker, name: String) LocalName? {
     let i = self.local_scopes.len
     while i > 0 {
         i = i - 1
         for &ln in self.local_scopes[i] {
             if ln.name == name {
-                return Some(ln.index)
+                return Some(ln.*)
             }
         }
     }
     return null
 }
 
-// The block-scoped nominal `name` names here, if any.
+// The scoped nominal `name` names here, if any.
 fn local_nominal(self: &Checker, name: String) NominalId? {
-    return local_nominal_at(self, name, local_type_index(self, name) ?? return null)
+    const ln = local_named(self, name) ?? return null
+    return scoped_nominal(self, self.current_module.unwrap_or(""), &ln)
 }
 
-// The nominal a bare type name resolves to: a block-scoped one first, then the registry's.
+// The nominal a bare type name resolves to: a scoped one first, then the registry's.
 fn find_nominal(self: &Checker, name: String, vis: &Visibility) NominalId? {
     const local = local_nominal(self, name)
     if local.is_some() {
@@ -2137,14 +2367,14 @@ fn find_nominal(self: &Checker, name: String, vis: &Visibility) NominalId? {
     }
 }
 
-// The enum declaring variant `name` with `arity` payloads: a block-scoped one first, innermost
-// scope first, then the registry's.
+// The enum declaring variant `name` with `arity` payloads: a scoped one first, innermost scope
+// first, then the registry's.
 fn find_variant(self: &Checker, name: String, arity: usize, vis: &Visibility) NominalId? {
     let i = self.local_scopes.len
     while i > 0 {
         i = i - 1
         for &ln in self.local_scopes[i] {
-            const id = local_nominal_at(self, ln.name, ln.index) ?? continue
+            const id = scoped_nominal(self, self.current_module.unwrap_or(""), ln) ?? continue
             if enum_has_variant(self, id, name, arity) {
                 return Some(id)
             }
@@ -2153,8 +2383,9 @@ fn find_variant(self: &Checker, name: String, arity: usize, vis: &Visibility) No
     return self.nominals.lookup_variant(name, arity, vis)
 }
 
-fn local_nominal_at(self: &Checker, name: String, k: u32) NominalId? {
-    let fqn = local_fqn(self.current_module.unwrap_or(""), name, k)
+// The nominal scoped type `ln` of `module` registers as; null for an alias.
+fn scoped_nominal(self: &Checker, module: String, ln: &LocalName) NominalId? {
+    let fqn = local_fqn(module, ln.path, ln.index)
     defer fqn.deinit()
     return self.nominals.lookup_fqn(fqn.view())
 }
@@ -2263,6 +2494,8 @@ fn resolve_one_body(self: &Checker, decl: &Decl, module_path: String) {
 // Resolve the body of the declaration registered as `fqn`. `implicit` names the type parameters it
 // takes ahead of its own: a block-scoped declaration's enclosing `$T` names.
 fn resolve_type_body(self: &Checker, td: &TypeDecl, fqn: String, implicit: String[]) {
+    const opened = open_body_types(self, td.body)
+    defer close_scopes(self, opened)
     let kind = nominal_kind_of(td.body)
     kind match {
         NkStruct => resolve_struct_body(self, td, fqn, implicit)
@@ -4066,9 +4299,15 @@ fn report_undeclared_projections(self: &Checker) {
 }
 
 // `X.Item`, `C.Iter.Item`: the associated type a bound declared, bound by its path.
-fn resolve_projection(self: &Checker, p: &ProjectionType) Ty {
+fn resolve_projection(self: &Checker, p: &ProjectionType, te: &TypeExpr) Ty {
     const root = projection_root(p.base)
     const base_path = projection_path(self, p.base)
+    if !names_type_param(self, root) {
+        const nested = resolve_nested(self, p, te)
+        if nested.is_some() {
+            return nested.unwrap()
+        }
+    }
     if root.is_none() or base_path.is_none() {
         push_diag_e(
             self,
@@ -4101,6 +4340,16 @@ fn resolve_projection(self: &Checker, p: &ProjectionType) Ty {
         $"no contract bounding `{base_path.unwrap()}` declares `{p.name}`",
     )
     return TY_ERROR
+}
+
+// Whether `root` is a type parameter or `Self`, whose projections read associated types.
+fn names_type_param(self: &Checker, root: String?) bool {
+    const name = root ?? return false
+    if name == SELF_NAME {
+        return true
+    }
+    const b = self.env.lookup(name) ?? return false
+    return b.is_type_param
 }
 
 // Go-to-definition edges for each segment of a projection: `I.Iter.Item` names the `type Item`
@@ -10338,6 +10587,7 @@ fn check_call_site(
         }
         let ti = call.callee.* match {
             Identifier(ide) => type_instantiation_call(self, &ide, &pos_tys)
+            MemberAccess(ma) => nested_type_value(self, ma.receiver, ma.member, &pos_tys, call.span)
             _ => null
         }
         if ti.is_some() {
@@ -12933,6 +13183,12 @@ fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
     if ev.is_some() {
         return ev.unwrap()
     }
+    let none: List(Ty) = list(0)
+    const nt = nested_type_value(self, ma.receiver, ma.member, &none, ma.span)
+    none.deinit()
+    if nt.is_some() {
+        return nt.unwrap()
+    }
 
     let recv = check_receiver(self, ma.receiver)
     if is_context_ty(self, recv) {
@@ -13195,23 +13451,89 @@ fn enum_variant_access(self: &Checker, ma: &MemberAccessExpr) Ty? {
     return out
 }
 
-// The nominal a bare-identifier receiver names, when it is not shadowed by a value binding. Locals
-// win: `x.foo` on a local `x` is field access or UFCS even if a type `x` is also in scope.
+// The nominal a type-path receiver names: a bare identifier not shadowed by a value binding, its
+// instantiation, or a type nested in one (`Shape.Kind`, RFC-046). Locals win: `x.foo` on a local
+// `x` is field access or UFCS even if a type `x` is also in scope.
 fn enum_receiver(self: &Checker, recv: &Expr) NominalId? {
-    let name = recv.* match {
-        Identifier(ide) => Some(ide.name)
+    return recv.* match {
+        Identifier(ide) => {
+            if self.env.lookup(ide.name).is_some() {
+                return null
+            }
+            let vis = current_visibility(self)
+            defer vis.deinit()
+            find_nominal(self, ide.name, &vis)
+        }
+        MemberAccess(ma) => {
+            if !starts_uppercase(ma.member) {
+                return null
+            }
+            const owner = enum_receiver(self, ma.receiver) ?? return null
+            const ln = nested_lookup(self, owner, ma.member) ?? return null
+            if !nested_visible(self, owner, &ln, ma.span) {
+                return null
+            }
+            scoped_nominal(self, nominal_module(self, owner), &ln)
+        }
+        // `Box(i32).Kind`: the instantiation's arguments are inferred where the variant is used.
+        Call(c) => if is_type_path(self, c.callee) { enum_receiver(self, c.callee) } else { null }
         _ => null
     }
-    if name.is_none() {
-        return null
-    }
-    if self.env.lookup(name.unwrap()).is_some() {
-        return null
-    }
+}
 
+// Whether `e` spells a type: a type name, an instantiation `Box(i32)`, or a type nested in one.
+fn is_type_path(self: &Checker, e: &Expr) bool {
+    return e.* match {
+        Identifier(ide) => !name_is_value_bound(self, ide.name) and local_or_found(self, ide.name)
+        MemberAccess(ma) => starts_uppercase(ma.member) and is_type_path(self, ma.receiver)
+        Call(c) => is_type_path(self, c.callee)
+        _ => false
+    }
+}
+
+fn local_or_found(self: &Checker, name: String) bool {
     let vis = current_visibility(self)
     defer vis.deinit()
-    return find_nominal(self, name.unwrap(), &vis)
+    return find_nominal(self, name, &vis).is_some()
+}
+
+// `Owner.Name` or `Owner(args).Name(args)` in value position naming a nested type (RFC-046): the
+// reified type, the owner's arguments leading. Null when `recv` is not a type path or declares no
+// such nominal.
+fn nested_type_value(
+    self: &Checker,
+    recv: &Expr,
+    name: String,
+    own: &List(Ty),
+    span: SourceSpan,
+) Ty? {
+    if !starts_uppercase(name) or !is_type_path(self, recv) {
+        return null
+    }
+    const owner_ty = self.engine.resolve(unreify_type(self, check_expr(self, recv)))
+    const owner = ty_node(self, owner_ty) match {
+        NNominal(nn) => nn
+        _ => return null
+    }
+    const ln = nested_lookup(self, owner.id, name) ?? return null
+    if !nested_visible(self, owner.id, &ln, span) {
+        return Some(TY_ERROR)
+    }
+    const id = scoped_nominal(self, nominal_module(self, owner.id), &ln) ?? return null
+    if own_arity(self, id) != own.len {
+        push_diag_e(
+            self,
+            span,
+            E_BARE_GENERIC,
+            $"generic type `{name}` needs its type arguments here",
+        )
+        return Some(TY_ERROR)
+    }
+    let args = owner_args(self, owner.args, own.len)
+    for t in own {
+        args.push(unreify_type(self, t))
+    }
+    return Some(reified_type_of(self, mk_nominal(self, id, args)))
 }
 
 fn construct_nullary(self: &Checker, id: NominalId, vname: String, span: SourceSpan) Ty? {
@@ -18386,25 +18708,37 @@ fn aliases_differ(self: &Checker, old: &Dict(StrId, OwnedString), retiring: &Set
     return current != old.len()
 }
 
+// `(a, b)` after a generic name; nothing when `args` is empty.
+fn render_alias_args(args: TypeExpr[], sb: &StringBuilder) bool {
+    if args.len == 0 {
+        return true
+    }
+    sb.append("(")
+    const ok = render_alias_list(args, ", ", sb)
+    sb.append(")")
+    return ok
+}
+
+fn render_alias_list(ts: TypeExpr[], sep: String, sb: &StringBuilder) bool {
+    let ok = true
+    for i in 0..ts.len {
+        if i > 0 {
+            sb.append(sep)
+        }
+        if !render_alias_body(&ts[i], sb) {
+            ok = false
+        }
+    }
+    return ok
+}
+
 // A canonical spelling of an alias body, for comparison across demands only. False for a shape it
 // cannot spell out - the caller treats that as a change.
 fn render_alias_body(t: &TypeExpr, sb: &StringBuilder) bool {
     return t.* match {
         Named(n) => {
             sb.append(n.name)
-            let ok = true
-            if n.generic_args.len > 0 {
-                sb.append("(")
-                for i in 0..n.generic_args.len {
-                    if i > 0 {
-                        sb.append(", ")
-                    }
-                    if !render_alias_body(&n.generic_args[i], sb) {
-                        ok = false
-                    }
-                }
-                sb.append(")")
-            }
+            let ok = render_alias_args(n.generic_args, sb)
             for &a in n.assoc_args {
                 sb.append(if a.pinned { "|=" } else { "|:" })
                 sb.append(a.name)
@@ -18415,23 +18749,13 @@ fn render_alias_body(t: &TypeExpr, sb: &StringBuilder) bool {
             }
             ok
         }
-        Combined(c) => {
-            let ok = true
-            for i in 0..c.parts.len {
-                if i > 0 {
-                    sb.append(" + ")
-                }
-                if !render_alias_body(&c.parts[i], sb) {
-                    ok = false
-                }
-            }
-            ok
-        }
+        Combined(c) => render_alias_list(c.parts, " + ", sb)
         Projection(p) => {
-            const ok = render_alias_body(p.base, sb)
+            const bok = render_alias_body(p.base, sb)
             sb.append(".")
             sb.append(p.name)
-            ok
+            const aok = render_alias_args(p.generic_args, sb)
+            bok and aok
         }
         GenericBind(g) => {
             sb.append("$")
@@ -18743,6 +19067,31 @@ test "an edited block-scoped type re-resolves" {
     let r = redemand_errors(
         "pub fn f() i32 {\n    type P = struct { v: i32 }\n    const p = P { v = 1 }\n    return p.v\n}\n",
         "pub fn f() i32 {\n    type P = struct { v: f64 }\n    const p = P { v = 1.0 }\n    return p.v\n}\n",
+        "import b\nfn main() i32 { return f() }\n",
+    )
+    assert_eq(r.first, 0 as usize, "the i32 field type-checks")
+    assert_true(r.second > 0, "the f64 field errors after the edit")
+}
+
+test "carried nested types survive a re-demand" {
+    // Module a's types declare nested types, one generic over its owner's `T`. Re-demanding with
+    // only b dirty carries a's registrations and its owner-to-nested map; a nested type lost or
+    // re-minted at another id surfaces as a spurious error.
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
+        "pub fn helper() i32 { return 2 }\n",
+        "type Tree = struct(T) {\n    type Node = struct { v: T, n: i32 }\n    root: Node\n}\ntype Shape = struct {\n    type Kind = enum { A(i32), B }\n    k: Kind\n}\nfn main() i32 {\n    const n: Tree(bool).Node = Tree(bool).Node { v = true, n = 1 }\n    const k = Shape.Kind.A(n.n)\n    return k match { A(x) => x, B => 0 }\n}\n",
+    )
+    assert_eq(r.first, 0 as usize, "the program type-checks cold")
+    assert_eq(r.second, 0 as usize, "and identically when a's slot replays")
+}
+
+test "an edited nested type re-resolves" {
+    // The re-parsed module declares the nested type again with an f64 field, which breaks the i32
+    // return; the stale i32 definition must not survive the re-collection.
+    let r = redemand_errors(
+        "pub type Tree = struct {\n    pub type Node = struct { v: i32 }\n    n: Node\n}\npub fn f() i32 {\n    const n = Tree.Node { v = 1 }\n    return n.v\n}\n",
+        "pub type Tree = struct {\n    pub type Node = struct { v: f64 }\n    n: Node\n}\npub fn f() i32 {\n    const n = Tree.Node { v = 1.0 }\n    return n.v\n}\n",
         "import b\nfn main() i32 { return f() }\n",
     )
     assert_eq(r.first, 0 as usize, "the i32 field type-checks")

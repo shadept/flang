@@ -49,8 +49,17 @@ type LocalSink = struct {
     parents: List(u32)
     // The block scopes being projected, innermost last.
     open: List(u32)
-    // The `$T` names of the function whose body is projecting.
+    // The type parameters in scope, outermost first: the function's `$T` names, then those of each
+    // struct or enum body projecting.
     generics: String[]
+    // The path of the named type whose body is projecting, by segment; empty outside one.
+    path: String[]
+}
+
+// The sink state a struct or enum body changes, restored when it ends.
+type BodySave = struct {
+    generics: String[]
+    path: String[]
 }
 
 // Project a parsed CST `Module` node into the typed AST `Module`. `allocator` is the backing
@@ -65,6 +74,7 @@ pub fn project_module(cst: CstNode, file_id: i32, diags: &List(Diagnostic)? = nu
         parents = list(0, &arena_a),
         open = list(0, &arena_a),
         generics = frozen(list(0, &arena_a)),
+        path = frozen(list(0, &arena_a)),
     }
     const p: Projector = .{
         alloc = &arena_a,
@@ -200,6 +210,14 @@ fn find_token(cst: CstNode, kind: TokenKind) Token? {
 
 fn has_token(cst: CstNode, kind: TokenKind) bool {
     return find_token(cst, kind).is_some()
+}
+
+// Child `i` when it is a node.
+fn child_node(cst: CstNode, i: usize) CstNode? {
+    return cst.child(i) match {
+        NodeChild(child) => Some(child)
+        TokenChild(_) => null
+    }
 }
 
 // Text of the first identifier (or identifier-shaped keyword) token, or `""` if there is none. Used
@@ -580,25 +598,11 @@ fn directive_arg(cst: CstNode) String? {
 }
 
 fn project_struct_decl(self: &Projector, cst: CstNode) TypeDecl {
-    let generics: List(GenericParam) = list(0, self.alloc)
-    self.collect_type_params(cst, &generics)
-    let fields: List(StructField) = list(cst.node_child_count(), self.alloc)
-    for i in 0..cst.child_count() {
-        cst.child(i) match {
-            NodeChild(child) => {
-                if child.kind == NodeKind.StructField {
-                    fields.push(self.project_struct_field(child))
-                }
-            }
-            TokenChild(_) => {}
-        }
-    }
-    const body: TypeExpr = TypeExpr.AnonStruct(AnonStructType {
-        span = self.span_from(cst),
-        generics = frozen(generics),
-        fields = frozen(fields),
-        is_union = !has_token(cst, TokenKind.Struct),
-    })
+    const body: TypeExpr = TypeExpr.AnonStruct(self.project_struct_body(
+        cst,
+        self.type_decl_name(cst),
+        !has_token(cst, TokenKind.Struct),
+    ))
     return TypeDecl {
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
@@ -609,24 +613,7 @@ fn project_struct_decl(self: &Projector, cst: CstNode) TypeDecl {
 }
 
 fn project_enum_decl(self: &Projector, cst: CstNode) TypeDecl {
-    let generics: List(GenericParam) = list(0, self.alloc)
-    self.collect_type_params(cst, &generics)
-    let variants: List(EnumVariant) = list(cst.node_child_count(), self.alloc)
-    for i in 0..cst.child_count() {
-        cst.child(i) match {
-            NodeChild(child) => {
-                if child.kind == NodeKind.EnumVariant {
-                    variants.push(self.project_enum_variant(child))
-                }
-            }
-            TokenChild(_) => {}
-        }
-    }
-    const body: TypeExpr = TypeExpr.AnonEnum(AnonEnumType {
-        span = self.span_from(cst),
-        generics = frozen(generics),
-        variants = frozen(variants),
-    })
+    const body: TypeExpr = TypeExpr.AnonEnum(self.project_enum_body(cst, self.type_decl_name(cst)))
     return TypeDecl {
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
@@ -1184,9 +1171,67 @@ fn project_stmt(self: &Projector, cst: CstNode) Stmt? {
 // A `type` in a block, recorded against the innermost open block scope.
 fn local_type(self: &Projector, td: move TypeDecl) Stmt {
     const decl = self.boxed(td)
-    const sink = self.locals ?? return Stmt.Type(decl)
-    sink.types.push(LocalType { decl = decl, scope = innermost(sink), fn_generics = sink.generics })
+    self.record_local(decl)
     return Stmt.Type(decl)
+}
+
+// Record `decl` against the innermost open scope.
+fn record_local(self: &Projector, decl: &TypeDecl) {
+    const sink = self.locals ?? return
+    sink.types.push(LocalType {
+        decl = decl,
+        scope = innermost(sink),
+        fn_generics = sink.generics,
+        path = self.path_with(sink.path, decl.name),
+    })
+}
+
+// `outer` with `name` appended.
+fn path_with(self: &Projector, outer: String[], name: String) String[] {
+    let out: List(String) = list(outer.len + 1, self.alloc)
+    out.push_all(outer)
+    out.push(name)
+    return frozen(out)
+}
+
+// Open the scope of a struct or enum body: the type `name` names (empty when anonymous), whose own
+// type parameters are `generics`.
+fn enter_type_body(self: &Projector, name: String, generics: &List(GenericParam)) BodySave? {
+    const sink = self.locals ?? return null
+    const saved = BodySave { generics = sink.generics, path = sink.path }
+    self.open_scope()
+    let names: List(String) = list(saved.generics.len + generics.len, self.alloc)
+    names.push_all(saved.generics)
+    for &g in generics {
+        names.push(g.name)
+    }
+    sink.generics = frozen(names)
+    sink.path = if name.len == 0 { frozen(list(
+        0,
+        self.alloc,
+    )) } else { self.path_with(saved.path, name) }
+    return Some(saved)
+}
+
+fn leave_type_body(self: &Projector, saved: BodySave?) {
+    const s = saved ?? return
+    const sink = self.locals ?? return
+    sink.generics = s.generics
+    sink.path = s.path
+    self.close_scope()
+}
+
+// A type declared in a struct or enum body (RFC-046), recorded against the body's scope.
+fn nested_type(self: &Projector, cst: CstNode) TypeDecl? {
+    const td = cst.kind match {
+        StructDecl => self.project_struct_decl(cst)
+        EnumDecl => self.project_enum_decl(cst)
+        TypeAliasDecl => self.project_type_alias(cst)
+        _ => return null
+    }
+    const decl = self.boxed(td)
+    self.record_local(decl)
+    return Some(decl.*)
 }
 
 // `if`/`match`/bare-block in statement position. flang has no statement form for these, so the CST
@@ -2438,6 +2483,11 @@ fn make_struct_field_init(
 // `Point { ... }` or `Point(T) { ... }`. Reconstruct the named type by reading the leading
 // identifier (plus optional `( ... )` generic-arg tokens before the `{`).
 fn struct_construction_type(self: &Projector, cst: CstNode) TypeExpr? {
+    // `Shape.Size { ... }` / `Box(i32).Cell { ... }`: the head is a path expression (RFC-046).
+    cst.child(0) match {
+        NodeChild(head) => return self.type_expr_from_expr_cst(head)
+        TokenChild(_) => {}
+    }
     let name: String = ""
     let name_span = self.span_from(cst)
     let generic_args: List(TypeExpr) = list(cst.node_child_count(), self.alloc)
@@ -2499,6 +2549,10 @@ fn struct_construction_type(self: &Projector, cst: CstNode) TypeExpr? {
 // Anything else - and any call argument that doesn't reinterpret - yields null, so the caller drops
 // it and the checker reports the under-instantiated type rather than a wrong one.
 fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
+    const path = self.projection_from_expr_cst(cst)
+    if path.is_some() {
+        return path
+    }
     if cst.kind == NodeKind.IdentifierExpr {
         let name: String = ""
         let span = self.span_from(cst)
@@ -2556,6 +2610,30 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
         }))
     }
     return null
+}
+
+// `Owner.Name` or `Owner.Name(args)` in expression form, as the projection it spells: a member
+// access, or a call whose callee is one. Null for any other shape.
+fn projection_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
+    const is_member = cst.kind == NodeKind.MemberAccessExpr
+    const is_call = cst.kind == NodeKind.CallExpr
+    if !is_member and !is_call {
+        return null
+    }
+    // The member form's receiver is its first child; an identifier call starts with a token.
+    const recv = child_node(cst, 0) ?? return null
+    const base = self.type_expr_from_expr_cst(recv) ?? return null
+    let args: List(TypeExpr) = list(0, self.alloc)
+    for i in 1..cst.child_count() {
+        const child = child_node(cst, i) ?? continue
+        args.push(self.type_expr_from_expr_cst(child) ?? return null)
+    }
+    return Some(TypeExpr.Projection(ProjectionType {
+        span = self.span_from(cst),
+        base = self.boxed(base),
+        name = first_ident_text(cst),
+        generic_args = frozen(args),
+    }))
 }
 
 // Block: walks statements; last statement-expr without a terminator becomes `trailing`. The parser
@@ -3207,10 +3285,18 @@ fn project_projection_type(self: &Projector, cst: CstNode) TypeExpr {
         } }
         None => {}
     }
+    let args: List(TypeExpr) = list(0, self.alloc)
+    for i in 1..cst.node_child_count() {
+        const child = nth_node(cst, i) ?? break
+        if is_type_kind(child.kind) {
+            args.push(self.project_type_expr(child))
+        }
+    }
     return TypeExpr.Projection(ProjectionType {
         span = self.span_from(cst),
         base = self.boxed(base),
         name = first_ident_text(cst),
+        generic_args = frozen(args),
     })
 }
 
@@ -3428,46 +3514,68 @@ fn project_function_signature(self: &Projector, cst: CstNode) FunctionType {
 // generics from `(...)` and a best-effort scan of `name : type` pairs inside the braces; type-side
 // cannot be recovered faithfully without re-parsing.
 fn project_anon_struct_type(self: &Projector, cst: CstNode) TypeExpr {
-    let generics: List(GenericParam) = list(0, self.alloc)
-    self.collect_type_params(cst, &generics)
-    let fields: List(StructField) = list(cst.node_child_count(), self.alloc)
-    for i in 0..cst.child_count() {
-        cst.child(i) match {
-            NodeChild(child) => {
-                if child.kind == NodeKind.StructField {
-                    fields.push(self.project_struct_field(child))
-                }
-            }
-            TokenChild(_) => {}
-        }
-    }
-    return TypeExpr.AnonStruct(AnonStructType {
-        span = self.span_from(cst),
-        generics = frozen(generics),
-        fields = frozen(fields),
-        is_union = false,
-    })
+    return TypeExpr.AnonStruct(self.project_struct_body(cst, "", false))
 }
 
 fn project_anon_enum_type(self: &Projector, cst: CstNode) TypeExpr {
+    return TypeExpr.AnonEnum(self.project_enum_body(cst, ""))
+}
+
+// A struct body: its parameters, fields and nested types, inside the type scope of `name` (empty
+// when anonymous).
+fn project_struct_body(self: &Projector, cst: CstNode, name: String, is_union: bool) AnonStructType {
+    let generics: List(GenericParam) = list(0, self.alloc)
+    self.collect_type_params(cst, &generics)
+    let fields: List(StructField) = list(cst.node_child_count(), self.alloc)
+    let types: List(TypeDecl) = list(0, self.alloc)
+    const saved = self.enter_type_body(name, &generics)
+    for i in 0..cst.child_count() {
+        const child = child_node(cst, i) ?? continue
+        if child.kind == NodeKind.StructField {
+            fields.push(self.project_struct_field(child))
+            continue
+        }
+        self.nested_type(child) match {
+            Some(td) => types.push(td)
+            None => {}
+        }
+    }
+    self.leave_type_body(saved)
+    return AnonStructType {
+        span = self.span_from(cst),
+        generics = frozen(generics),
+        fields = frozen(fields),
+        is_union = is_union,
+        types = frozen(types),
+    }
+}
+
+// An enum body: its parameters, variants and nested types, inside the type scope of `name` (empty
+// when anonymous).
+fn project_enum_body(self: &Projector, cst: CstNode, name: String) AnonEnumType {
     let generics: List(GenericParam) = list(0, self.alloc)
     self.collect_type_params(cst, &generics)
     let variants: List(EnumVariant) = list(cst.node_child_count(), self.alloc)
+    let types: List(TypeDecl) = list(0, self.alloc)
+    const saved = self.enter_type_body(name, &generics)
     for i in 0..cst.child_count() {
-        cst.child(i) match {
-            NodeChild(child) => {
-                if child.kind == NodeKind.EnumVariant {
-                    variants.push(self.project_enum_variant(child))
-                }
-            }
-            TokenChild(_) => {}
+        const child = child_node(cst, i) ?? continue
+        if child.kind == NodeKind.EnumVariant {
+            variants.push(self.project_enum_variant(child))
+            continue
+        }
+        self.nested_type(child) match {
+            Some(td) => types.push(td)
+            None => {}
         }
     }
-    return TypeExpr.AnonEnum(AnonEnumType {
+    self.leave_type_body(saved)
+    return AnonEnumType {
         span = self.span_from(cst),
         generics = frozen(generics),
         variants = frozen(variants),
-    })
+        types = frozen(types),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────

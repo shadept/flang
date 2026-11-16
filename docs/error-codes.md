@@ -582,8 +582,8 @@ pub fn main() i32 {
 A variable was declared twice in the same scope with the same name. Each variable name can only be declared once per
 scope.
 
-The same code reports two type declarations of one name in one module, or in one block (RFC-046). An inner block may
-shadow an outer declaration; only the same block is an error.
+The same code reports two type declarations of one name in one module, one block, or one struct or
+enum body (RFC-046). An inner scope may shadow an outer declaration; only the same scope is an error.
 
 #### Example
 
@@ -3037,6 +3037,7 @@ Report the issue with sample code that reproduces the error.
 | **E2161** | Type Checking     | A union that is not `#foreign`, is empty, or holds a member that is not plain C data |
 | **E2162** | Type Checking     | A pattern destructuring a union |
 | **E2163** | Type Checking     | `#it` on a parameter no arrow-less lambda fills |
+| **E2164** | Name Resolution   | `pub` on a type no `pub` owner allows           |
 
 ### E2115: Unsupported Pattern Form
 
@@ -4296,6 +4297,37 @@ fn combine(#it(x) f: fn(i32, i32) i32) i32 { return f(1, 2) }   // error[E2163]
 #### Solution
 
 Remove the directive; callers name the parameters themselves (`{ a, b => a + b }`).
+
+---
+
+### E2164: `pub` on a Type No `pub` Owner Allows
+
+**Category**: Name Resolution
+**Severity**: Error
+
+#### Description
+
+`pub` exports a type from its module (RFC-046). A module-level type may be `pub`, and so may a type
+nested in a `pub` struct or enum. A type declared in a function or block, in an anonymous body, or
+in a type that is not `pub` cannot be reached from another module, so `pub` there is refused.
+
+#### Example
+
+```flang
+type Private = struct {
+    pub type Inner = i32   // error[E2164]
+    i: Inner
+}
+
+pub fn main() i32 {
+    pub type InFn = i32    // error[E2164]
+    return 0
+}
+```
+
+#### Solution
+
+Drop the `pub`, or make the owner `pub`.
 
 ---
 

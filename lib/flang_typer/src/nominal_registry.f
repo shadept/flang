@@ -485,19 +485,20 @@ pub fn lookup_variant(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
 
-// Whether `fqn` names a block-scoped declaration, `{module}.{Name}#{k}` (RFC-046): reachable only
-// through the checker's scopes, never by a bare name.
+// Whether `fqn` names a scoped declaration, `{module}.#{path}#{k}` (RFC-046): a type declared in a
+// block or a struct or enum body, reachable only through the checker's scopes or its owner.
 pub fn is_scoped_fqn(fqn: String) bool {
     return fqn.find('#').is_some()
 }
 
-// The name an FQN's declaration spells: its last dot-separated segment, less a block-scoped
-// declaration's `#k`.
+// The name an FQN's declaration spells: its last segment, or a scoped declaration's path
+// (`Tree.Node`).
 pub fn declared_name(fqn: String) String {
-    const short = short_name_of(fqn)
-    return short.find('#') match {
-        Some(i) => short[0..i]
-        None => short
+    const scoped = fqn.find(".#") ?? return short_name_of(fqn)
+    const path = fqn[scoped + 2..fqn.len]
+    return path.rfind('#') match {
+        Some(i) => path[0..i]
+        None => path
     }
 }
 
@@ -509,11 +510,15 @@ pub fn short_name_of(fqn: String) String {
     }
 }
 
-// The owning module prefix of an FQN; empty when the name is unqualified.
+// The owning module prefix of an FQN; empty when the name is unqualified. A scoped declaration's
+// path may hold dots, so its module ends at `.#`.
 pub fn module_of(fqn: String) String {
-    return fqn.rfind('.') match {
+    return fqn.find(".#") match {
         Some(i) => fqn[0..i]
-        None => ""
+        None => fqn.rfind('.') match {
+            Some(i) => fqn[0..i]
+            None => ""
+        }
     }
 }
 
