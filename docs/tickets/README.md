@@ -93,5 +93,6 @@ it was replaced before it shipped.
 | [043](043-memory.md) | Heap memory as an owned resource | language | SH-56 |
 | [044](044-c-bindings-from-headers.md) | C bindings from headers, `#foreign union`, opaque types | compiler | SH-57 |
 | [045](045-owned-closures-and-renamed-it.md) | Owned closures and a renamed `it` | language | SH-97 |
+| [046](046-lexical-scopes-for-types.md) | Lexical scopes for type declarations | language | P-SH-9 |
 | [098](098-context-across-libraries.md) | Context across separately compiled libraries | compiler | SH-18 |
 | [099](099-stack-only-types-and-bindings.md) | `#stack` types and stack-only bindings | language | SH-69 |
