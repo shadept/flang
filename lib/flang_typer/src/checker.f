@@ -1371,18 +1371,18 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
         return expand_alias(self, n, te, alias_body.unwrap())
     }
 
-    // A registered type outside the import scope still resolves: the reference compiler resolves
-    // type names program-wide regardless of imports, and the stdlib depends on it. Import-strict
-    // type visibility is a future tightening (identifiers stay strict).
-    let hidden_info: NomHiddenInfo? = look match {
-        NomLookHidden(info) => Some(info)
-        _ => null
-    }
-    if hidden_info.is_some() {
-        let info = hidden_info.unwrap()
-        let args = resolve_generic_args(self, n)
-        apply_nominal_bounds(self, info.id, &args, n.name, n.span)
-        return mk_nominal(self, info.id, args)
+    // A type declared in a module this one does not import stays unknown; name the module.
+    look match {
+        NomLookHidden(info) => {
+            push_diag_e(
+                self,
+                n.span,
+                E_UNKNOWN_TYPE,
+                $"unknown type `{n.name}` - it is declared in `{info.module}`, which is not imported here",
+            )
+            return TY_ERROR
+        }
+        _ => {}
     }
 
     if n.name == SELF_NAME {

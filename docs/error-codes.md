@@ -449,7 +449,8 @@ if (true) { ... }  // OK: boolean condition
 A type name was used but no type with that name exists in the current scope. This typically occurs when:
 
 - The type name is misspelled
-- The type hasn't been imported
+- The type hasn't been imported. Imports are not transitive: a type from a module that only an imported
+  module imports is not visible, and the message names the module to import
 - The type doesn't exist
 
 #### Example

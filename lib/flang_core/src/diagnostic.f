@@ -2,6 +2,7 @@
 // consumed by the CLI, the LSP and the formatter. `flang_core.render` draws the terminal form; the
 // LSP encodes the same values into the protocol's own shape.
 
+import std.allocator
 import std.string
 
 import flang_core.span
