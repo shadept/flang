@@ -152,6 +152,8 @@ pub type Pair = (i32, i32)
 
 `type Name = <type-expression>` where the RHS is anything other than a `struct(...) { ... }` or `enum(...) { ... }` builder declares a **transparent alias**: `Name` resolves to the RHS type everywhere it appears. No nominal identity is introduced and no conversion is required at use sites — `let v: VarId = 7u32` and `let n: u32 = v` are both valid without any cast.
 
+An alias is another name for its body, usable in every position the body is: in value position (`size_of(VarId)`, `type_info(VarId)`, `#if`), as a variant path (`type Grade = Level` makes `Grade.High(7)` valid), and as an instantiation. An alias whose body is a bare generic type name renames that type and takes its arguments: `type Shelf = Box` makes `Shelf(i32)` the type `Box(i32)`.
+
 Aliases participate in module visibility like struct/enum declarations (`pub type` is exported, bare `type` is module-private). Cyclic aliases — `type A = B; type B = A` — are rejected with **E2036**. Generic aliases (`type Pair(T, U) = (T, U)`) are not yet supported; use a `struct` or `enum` wrapper if you need a polymorphic named type.
 
 ### 2.3.2 Block-scoped types

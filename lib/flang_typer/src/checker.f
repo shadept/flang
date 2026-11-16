@@ -1383,9 +1383,7 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
     if found_id.is_some() {
         warn_deprecated_type(self, found_id.unwrap(), n.name, n.span)
         record_nominal_ref(self, head_span(n.span, n.name.len), found_id.unwrap())
-        let args = resolve_generic_args(self, n)
-        apply_nominal_bounds(self, found_id.unwrap(), &args, n.name, n.span)
-        return mk_nominal(self, found_id.unwrap(), args)
+        return instantiate_named(self, found_id.unwrap(), n)
     }
 
     // Alias? Expand its stored body lazily. Resolving the body here (rather than at registration)
@@ -1394,7 +1392,7 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
     // and cycle detection are follow-ups.
     let alias_body = self.aliases.lookup_ref(n.name, &vis)
     if alias_body.is_some() {
-        return expand_alias(self, n.name, n.span, te, alias_body.unwrap())
+        return resolve_alias_use(self, n, te, alias_body.unwrap())
     }
 
     // A type declared in a module this one does not import stays unknown; name the module.
@@ -1456,17 +1454,74 @@ fn resolve_local_named(self: &Checker, n: &NamedType, te: &TypeExpr, ln: &LocalN
     const id = self.nominals.lookup_fqn(fqn.view())
     if id.is_some() {
         record_nominal_ref(self, head_span(n.span, n.name.len), id.unwrap())
-        let args = local_implicit_args(self, id.unwrap())
-        let spelled = resolve_generic_args(self, n)
-        args.push_all(spelled.as_slice())
-        spelled.deinit()
-        apply_nominal_bounds(self, id.unwrap(), &args, n.name, n.span)
-        return Some(mk_nominal(self, id.unwrap(), args))
+        return Some(instantiate_named(self, id.unwrap(), n))
     }
     let vis = current_visibility(self)
     defer vis.deinit()
     const body = self.aliases.lookup_ref(fqn.view(), &vis) ?? return null
-    return Some(expand_alias(self, n.name, n.span, te, body))
+    return Some(resolve_alias_use(self, n, te, body))
+}
+
+// `n`'s arguments applied to nominal `id`, after the implicit ones a scoped nominal takes.
+fn instantiate_named(self: &Checker, id: NominalId, n: &NamedType) Ty {
+    let args = local_implicit_args(self, id)
+    let spelled = resolve_generic_args(self, n)
+    args.push_all(spelled.as_slice())
+    spelled.deinit()
+    apply_nominal_bounds(self, id, &args, n.name, n.span)
+    return mk_nominal(self, id, args)
+}
+
+// `n` naming an alias of `body`. An alias is another name for its body: a rename of a nominal takes
+// `n`'s arguments as the nominal does, any other alias expands.
+fn resolve_alias_use(self: &Checker, n: &NamedType, te: &TypeExpr, body: &TypeExpr) Ty {
+    let vis = current_visibility(self)
+    defer vis.deinit()
+    return renamed_nominal(self, n.name, body, &vis) match {
+        Some(id) => instantiate_named(self, id, n)
+        None => expand_alias(self, n.name, n.span, te, body)
+    }
+}
+
+// The body of the alias `name` names here: a scoped alias first, then a module-level one.
+fn alias_body(self: &Checker, name: String, vis: &Visibility) &TypeExpr? {
+    const local = local_named(self, name)
+    if local.is_some() {
+        const ln = local.unwrap()
+        let fqn = local_fqn(self.current_module.unwrap_or(""), ln.path, ln.index)
+        defer fqn.deinit()
+        return self.aliases.lookup_ref(fqn.view(), vis)
+    }
+    return self.aliases.lookup_ref(name, vis)
+}
+
+// The nominal alias `name` of `body` renames: `body` is a bare type name, through any chain of
+// aliases, that names a nominal. Null for any other alias.
+fn renamed_nominal(self: &Checker, name: String, body: &TypeExpr, vis: &Visibility) NominalId? {
+    const target = body.* match {
+        Named(n) => n
+        _ => return null
+    }
+    const bare = target.generic_args.len == 0 and target.assoc_args.len == 0
+    if !bare or contains_view(&self.alias_stack, name) {
+        return null
+    }
+    self.alias_stack.push(name)
+    const id = find_nominal(self, target.name, vis)
+    let _p = self.alias_stack.pop()
+    return id
+}
+
+// The type alias `name` stands for when it renames no nominal, resolved here. Null when `name`
+// names no such alias.
+fn alias_type(self: &Checker, name: String, span: SourceSpan) Ty? {
+    let vis = current_visibility(self)
+    defer vis.deinit()
+    const body = alias_body(self, name, &vis) ?? return null
+    if is_contract_body(body) or renamed_nominal(self, name, body, &vis).is_some() {
+        return null
+    }
+    return Some(expand_alias(self, name, span, body, body))
 }
 
 // `Owner(args).Name` naming a type declared in `Owner`'s body (RFC-046): the owner's arguments
@@ -1494,10 +1549,8 @@ fn resolve_nested(self: &Checker, p: &ProjectionType, te: &TypeExpr) Ty? {
     if !nested_visible(self, owner.id, &ln, p.span) {
         return Some(TY_ERROR)
     }
-    let fqn = local_fqn(nominal_module(self, owner.id), ln.path, ln.index)
-    defer fqn.deinit()
     let args = owner_args(self, owner.args, p.generic_args.len)
-    const id = self.nominals.lookup_fqn(fqn.view())
+    const id = scoped_nominal(self, nominal_module(self, owner.id), &ln)
     if id.is_some() {
         record_nominal_ref(self, p.span, id.unwrap())
         for &arg in p.generic_args {
@@ -1506,19 +1559,34 @@ fn resolve_nested(self: &Checker, p: &ProjectionType, te: &TypeExpr) Ty? {
         apply_nominal_bounds(self, id.unwrap(), &args, p.name, p.span)
         return Some(mk_nominal(self, id.unwrap(), args))
     }
+    const out = expand_nested_alias(self, owner.id, &ln, &args, p.span, Some(te))
+    args.deinit()
+    return out
+}
+
+// Nested alias `ln` of `owner` expanded with the owner's parameters bound to `args`, the owner's
+// arguments. Null when `ln` is no alias.
+fn expand_nested_alias(
+    self: &Checker,
+    owner: NominalId,
+    ln: &LocalName,
+    args: &List(Ty),
+    span: SourceSpan,
+    te: &TypeExpr?,
+) Ty? {
+    let fqn = local_fqn(nominal_module(self, owner), ln.path, ln.index)
+    defer fqn.deinit()
     let vis = current_visibility(self)
     defer vis.deinit()
     const body = self.aliases.lookup_ref(fqn.view(), &vis) ?? return null
-    // The alias names the owner's parameters: bind them to the owner's arguments.
     self.env.push_scope()
     for i in 0..ln.implicit.len {
         if i < args.len {
-            bind_type_name(self, ln.implicit[i], args[i], p.span)
+            bind_type_name(self, ln.implicit[i], args[i], span)
         }
     }
-    const out = expand_alias(self, p.name, p.span, te, body)
+    const out = expand_alias(self, ln.name, span, te ?? body, body)
     self.env.pop_scope()
-    args.deinit()
     return Some(out)
 }
 
@@ -2360,6 +2428,10 @@ fn find_nominal(self: &Checker, name: String, vis: &Visibility) NominalId? {
     const local = local_nominal(self, name)
     if local.is_some() {
         return local
+    }
+    const body = alias_body(self, name, vis)
+    if body.is_some() {
+        return renamed_nominal(self, name, body.unwrap(), vis)
     }
     return self.nominals.lookup(name, vis) match {
         NomLookFound(id) => Some(id)
@@ -3933,10 +4005,9 @@ fn checker_name(raw: &u8, name: String, span: SourceSpan) CtValue? {
         }
         None => {}
     }
-    return directive_nominal(chk, name) match {
-        Some(ty) => Some(directive_type(chk, ty, span))
-        None => null
-    }
+    const nominal = directive_nominal(chk, name)
+    const ty = if nominal.is_some() { nominal } else { alias_type(chk, name, span) }
+    return Some(directive_type(chk, ty ?? return null, span))
 }
 
 fn directive_type(self: &Checker, ty: Ty, span: SourceSpan) CtValue {
@@ -9308,6 +9379,10 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
         }
         return reified_type_of(self, nominal_with_fresh_args(self, tn.unwrap()))
     }
+    const aliased = alias_type(self, id.name, id.span)
+    if aliased.is_some() {
+        return reified_type_of(self, aliased.unwrap())
+    }
 
     // `_` in value position projects with no name.
     if id.name.len == 0 {
@@ -13462,7 +13537,12 @@ fn enum_receiver(self: &Checker, recv: &Expr) NominalId? {
             }
             let vis = current_visibility(self)
             defer vis.deinit()
-            find_nominal(self, ide.name, &vis)
+            const id = find_nominal(self, ide.name, &vis)
+            if id.is_some() {
+                id
+            } else {
+                aliased_nominal(self, ide.name, ide.span)
+            }
         }
         MemberAccess(ma) => {
             if !starts_uppercase(ma.member) {
@@ -13494,7 +13574,17 @@ fn is_type_path(self: &Checker, e: &Expr) bool {
 fn local_or_found(self: &Checker, name: String) bool {
     let vis = current_visibility(self)
     defer vis.deinit()
-    return find_nominal(self, name, &vis).is_some()
+    return find_nominal(self, name, &vis).is_some() or alias_body(self, name, &vis).is_some()
+}
+
+// The nominal under alias `name`'s instantiation (`type Ints = Box(i32)`). As with `Box(i32).Kind`,
+// the arguments are inferred where the variant is used.
+fn aliased_nominal(self: &Checker, name: String, span: SourceSpan) NominalId? {
+    const t = alias_type(self, name, span) ?? return null
+    return ty_node(self, self.engine.resolve(t)) match {
+        NNominal(nn) => Some(nn.id)
+        _ => null
+    }
 }
 
 // `Owner.Name` or `Owner(args).Name(args)` in value position naming a nested type (RFC-046): the
@@ -13519,7 +13609,14 @@ fn nested_type_value(
     if !nested_visible(self, owner.id, &ln, span) {
         return Some(TY_ERROR)
     }
-    const id = scoped_nominal(self, nominal_module(self, owner.id), &ln) ?? return null
+    const nested_id = scoped_nominal(self, nominal_module(self, owner.id), &ln)
+    if nested_id.is_none() {
+        let oargs = owner_args(self, owner.args, 0)
+        const t = expand_nested_alias(self, owner.id, &ln, &oargs, span, null)
+        oargs.deinit()
+        return if t.is_some() { Some(reified_type_of(self, t.unwrap())) } else { null }
+    }
+    const id = nested_id.unwrap()
     if own_arity(self, id) != own.len {
         push_diag_e(
             self,
