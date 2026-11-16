@@ -1136,9 +1136,8 @@ fn parse_statement(self: &Parser) CstNodeId {
             self.eat_optional_semicolon(&b)
             self.finish(b)
         }
-        // Local type decl - wrap in TypeAliasDecl (kind may be rewritten by
-        // parse_type_decl_with_directives). We bypass directive collection because the spec
-        // disallows them on local types.
+        // Local type decl (RFC-046) - wrap in TypeAliasDecl (kind may be rewritten by
+        // parse_type_decl_with_directives).
         Type => self.parse_type_decl_with_directives(list(0, self.allocator))
         Return => self.parse_return_stmt()
         Break => self.parse_jump_stmt(NodeKind.BreakStmt)
@@ -1162,11 +1161,50 @@ fn parse_statement(self: &Parser) CstNodeId {
         // free-floating - a directive node, and parsing continues.
         Hash => if self.peek_kind(1) == TokenKind.If {
             self.parse_if_directive_stmt()
+        } else if self.at_directives_then_type() {
+            self.parse_local_type_with_directives()
         } else {
             self.parse_directive()
         }
         _ => self.parse_expression_stmt()
     }
+}
+
+fn parse_local_type_with_directives(self: &Parser) CstNodeId {
+    let leading: List(CstNodeId) = list(0, self.allocator)
+    while self.current_kind() == TokenKind.Hash {
+        leading.push(self.parse_directive())
+    }
+    return self.parse_type_decl_with_directives(leading)
+}
+
+// Whether a run of directives (`#name`, `#name(...)`) leads to `type`.
+fn at_directives_then_type(self: &Parser) bool {
+    let k = 0usize
+    while self.peek_kind(k) == TokenKind.Hash {
+        k = k + 1
+        if self.peek_kind(k) == TokenKind.Identifier {
+            k = k + 1
+        }
+        if self.peek_kind(k) != TokenKind.OpenParenthesis {
+            continue
+        }
+        let depth = 0usize
+        loop {
+            const kind = self.peek_kind(k)
+            k = k + 1
+            kind match {
+                OpenParenthesis => depth = depth + 1
+                CloseParenthesis => depth = depth - 1
+                Eof => return false
+                _ => {}
+            }
+            if depth == 0 {
+                break
+            }
+        }
+    }
+    return self.peek_kind(k) == TokenKind.Type
 }
 
 fn parse_expression_stmt(self: &Parser) CstNodeId {

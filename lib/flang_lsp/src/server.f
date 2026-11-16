@@ -1312,7 +1312,7 @@ fn target_label(result: &TypeCheckResult, target: &ResolvedTarget, slice: String
     return target.* match {
         RtEnumVariant(nom, _) => result.nominals.find(nom) match {
             Some(def) => def.* match {
-                NomEnum(ed) => $"{short_name(ed.fqn)}.{slice}"
+                NomEnum(ed) => $"{declared_name(ed.fqn)}.{slice}"
                 NomStruct(_) => from_view(slice)
             }
             None => from_view(slice)
@@ -1702,7 +1702,7 @@ fn registry_decl_spans(self: &LspServer, pi: ProjectId, name: String) List(Sourc
         }
     }
     for entry in result.nominals.by_fqn.iter() {
-        if short_name(entry.key) != name {
+        if declared_name(entry.key) != name {
             continue
         }
         const def = result.nominals.find(entry.value)

@@ -72,8 +72,7 @@ pub fn evict_module(self: &FqnMap($V), module: String) {
     defer doomed.deinit()
     for entry in self.entries {
         const fqn = self.names.get(entry.key)
-        const dot = last_dot(fqn)
-        if module_of(fqn, dot) == module {
+        if module_of(fqn) == module {
             doomed.push(entry.key)
         }
     }
@@ -129,11 +128,10 @@ pub fn lookup_id(self: &FqnMap($V), name: String, vis: &Visibility) StrId? {
 
     for entry in self.entries {
         const fqn = self.names.get(entry.key)
-        const dot = last_dot(fqn)
-        if short_name_of(fqn, dot) != name {
+        if short_name_of(fqn) != name {
             continue
         }
-        if vis.allows(module_of(fqn, dot)) {
+        if vis.allows(module_of(fqn)) {
             return Some(entry.key)
         }
     }

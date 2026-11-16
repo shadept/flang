@@ -152,6 +152,27 @@ pub type Pair = (i32, i32)
 
 Aliases participate in module visibility like struct/enum declarations (`pub type` is exported, bare `type` is module-private). Cyclic aliases — `type A = B; type B = A` — are rejected with **E2036**. Generic aliases (`type Pair(T, U) = (T, U)`) are not yet supported; use a `struct` or `enum` wrapper if you need a polymorphic named type.
 
+### 2.3.2 Block-scoped types
+
+```
+pub fn main() i32 {
+    const e: Event = Accepted(7)          // used above its declaration
+    type Event = enum { Accepted(i32), Stop }
+    return e match { Accepted(n) => n, Stop => 0 }
+}
+```
+
+Any block may declare types with the module-level form, directives included: a function or test body, a nested `{ }`, a loop body, an `if`/`match` arm block, a lambda body (RFC-046).
+
+- A block-scoped type is visible throughout its block, above and below its declaration, and in every block nested in it, never outside it. Two declarations of one name in the same block are **E2005**.
+- A name resolves from the innermost block outward, then at module level. An inner declaration shadows an outer one, and a module-level type of the same name. A block-scoped enum's bare variants resolve exactly where the enum does.
+- `pub` is not valid in a block.
+- A block-scoped type may be generic, and may name its function's `$T` parameters. Each instantiation of the function has its own copy: the type takes those parameters ahead of its own, filled from the bindings in scope wherever it is named.
+- Each declaration is its own nominal type: two blocks declaring `Event` declare two types. Diagnostics and `type_info(T).name` show the declared name.
+- Nothing outside the block can spell the type, so no return type, module-level field or UFCS function names it; a value still leaves through a generic parameter.
+
+Planned (RFC-046 phase 2): types declared in struct and enum bodies, reached through the owner as `Tree(i32).Node`.
+
 ### 2.4 Structs
 
 ```

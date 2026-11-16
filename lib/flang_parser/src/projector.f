@@ -39,6 +39,18 @@ type Projector = struct {
     // Where `error_pattern` reports. Null discards it, which is what a consumer that wants only the
     // shape passes - a CST dump, an editor query that never checks.
     diags: &List(Diagnostic)?
+    // Where block-scoped `type` declarations are recorded. Null outside a module projection.
+    locals: &LocalSink?
+}
+
+// The block scopes and local types of one module, collected while its bodies project (RFC-046).
+type LocalSink = struct {
+    types: List(LocalType)
+    parents: List(u32)
+    // The block scopes being projected, innermost last.
+    open: List(u32)
+    // The `$T` names of the function whose body is projecting.
+    generics: String[]
 }
 
 // Project a parsed CST `Module` node into the typed AST `Module`. `allocator` is the backing
@@ -48,7 +60,18 @@ pub fn project_module(cst: CstNode, file_id: i32, diags: &List(Diagnostic)? = nu
     const backing = context.allocator
     let arena = arena_allocator(backing)
     let arena_a = arena.allocator()
-    const p: Projector = .{ alloc = &arena_a, file_id = file_id, diags = diags }
+    let sink: LocalSink = .{
+        types = list(0, &arena_a),
+        parents = list(0, &arena_a),
+        open = list(0, &arena_a),
+        generics = frozen(list(0, &arena_a)),
+    }
+    const p: Projector = .{
+        alloc = &arena_a,
+        file_id = file_id,
+        diags = diags,
+        locals = Some(&sink),
+    }
 
     let decls: List(Decl) = list(0, p.alloc)
     for i in 0..cst.child_count() {
@@ -67,6 +90,8 @@ pub fn project_module(cst: CstNode, file_id: i32, diags: &List(Diagnostic)? = nu
         span = p.span_from(cst),
         decls = move decls,
         labels = p.project_labels(&cst.cst.labels),
+        local_types = frozen(sink.types),
+        scope_parents = frozen(sink.parents),
         arena = move arena,
     }
 }
@@ -343,13 +368,16 @@ fn project_function(self: &Projector, cst: CstNode) FunctionDecl {
     let params: List(FunctionParam) = list(cst.node_child_count(), self.alloc)
     let return_type: TypeExpr? = null
     let body: BlockExpr? = null
+    const bounds = self.project_bounds(cst)
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
                 if child.kind == NodeKind.FunctionParam {
                     params.push(self.project_function_param(child))
                 } else if child.kind == NodeKind.BlockExpr {
+                    self.enter_function(&params, &return_type, &bounds)
                     install(&body, self.project_block_node(child))
+                    self.leave_function()
                 } else if is_type_kind(child.kind) and return_type.is_none() {
                     install(&return_type, Some(self.project_type_expr(child)))
                 }
@@ -364,9 +392,36 @@ fn project_function(self: &Projector, cst: CstNode) FunctionDecl {
         name = self.function_name(cst),
         params = frozen(params),
         return_type = self.boxed_opt(return_type),
-        bounds = frozen(self.project_bounds(cst)),
+        bounds = frozen(bounds),
         body = self.boxed_opt(body),
     }
+}
+
+// Local types in the body may name the function's `$T` parameters.
+fn enter_function(
+    self: &Projector,
+    params: &List(FunctionParam),
+    return_type: &Option(TypeExpr),
+    bounds: &List(TypeBound),
+) {
+    const sink = self.locals ?? return
+    let names: List(String) = list(0, self.alloc)
+    for &p in params {
+        collect_generic_names(p.type_expr, &names)
+    }
+    return_type.* match {
+        Some(rt) => collect_generic_names(&rt, &names)
+        None => {}
+    }
+    for &b in bounds {
+        collect_generic_names(b.bound, &names)
+    }
+    sink.generics = frozen(names)
+}
+
+fn leave_function(self: &Projector) {
+    const sink = self.locals ?? return
+    sink.generics = frozen(list(0, self.alloc))
 }
 
 // The `where` clause's entries, in order: one `WhereBound` child node each.
@@ -1119,8 +1174,19 @@ fn project_stmt(self: &Projector, cst: CstNode) Stmt? {
         WhileExpr => Some(Stmt.While(self.project_while_stmt(cst)))
         LoopExpr => Some(Stmt.Loop(self.project_loop_stmt(cst)))
         IfDirectiveStmt => Some(Stmt.IfDirective(self.project_if_directive_stmt(cst)))
+        StructDecl => Some(self.local_type(self.project_struct_decl(cst)))
+        EnumDecl => Some(self.local_type(self.project_enum_decl(cst)))
+        TypeAliasDecl => Some(self.local_type(self.project_type_alias(cst)))
         else => self.project_expr_as_stmt(cst)
     }
+}
+
+// A `type` in a block, recorded against the innermost open block scope.
+fn local_type(self: &Projector, td: move TypeDecl) Stmt {
+    const decl = self.boxed(td)
+    const sink = self.locals ?? return Stmt.Type(decl)
+    sink.types.push(LocalType { decl = decl, scope = innermost(sink), fn_generics = sink.generics })
+    return Stmt.Type(decl)
 }
 
 // `if`/`match`/bare-block in statement position. flang has no statement form for these, so the CST
@@ -1434,7 +1500,7 @@ fn is_expr_kind(kind: NodeKind) bool {
 // Project one expression CST outside a module (template expressions). `allocator` must outlive the
 // returned Expr - callers pass the arena that owns the rest of their template state.
 pub fn project_expression(cst: CstNode, file_id: i32, allocator: &Allocator) Expr {
-    const p: Projector = .{ alloc = allocator, file_id = file_id, diags = null }
+    const p: Projector = .{ alloc = allocator, file_id = file_id, diags = null, locals = null }
     return p.project_expr(cst)
 }
 
@@ -2499,6 +2565,8 @@ fn project_block_node(self: &Projector, cst: CstNode) BlockExpr? {
     if cst.kind != NodeKind.BlockExpr {
         return null
     }
+    self.open_scope()
+    defer self.close_scope()
     let stmts: List(Stmt) = list(cst.node_child_count(), self.alloc)
     let trailing: Expr? = null
     // First pass: identify the last NodeChild - candidate for trailing.
@@ -2571,6 +2639,23 @@ fn project_block_node(self: &Projector, cst: CstNode) BlockExpr? {
         stmts = frozen(stmts),
         trailing = trailing_ref,
     })
+}
+
+fn open_scope(self: &Projector) {
+    const sink = self.locals ?? return
+    const parent = innermost(sink)
+    sink.open.push(sink.parents.len as u32)
+    sink.parents.push(parent)
+}
+
+fn close_scope(self: &Projector) {
+    const sink = self.locals ?? return
+    const _s = sink.open.pop()
+}
+
+// The innermost open block scope, or `NO_SCOPE` outside any.
+fn innermost(sink: &LocalSink) u32 {
+    return if sink.open.len > 0 { sink.open[sink.open.len - 1] } else { NO_SCOPE }
 }
 
 fn ends_with_semicolon(cst: CstNode) bool {

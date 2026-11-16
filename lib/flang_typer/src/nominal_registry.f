@@ -424,12 +424,11 @@ pub fn lookup(self: &NominalRegistry, name: String, vis: &Visibility) NomLookup 
     for entry in self.by_fqn {
         let fqn = entry.key
         let id = entry.value
-        let dot = last_dot(fqn)
-        let short = short_name_of(fqn, dot)
+        let short = short_name_of(fqn)
         if short != name {
             continue
         }
-        let module = module_of(fqn, dot)
+        let module = module_of(fqn)
         if vis.allows(module) {
             return NomLookup.NomLookFound(id)
         }
@@ -470,7 +469,7 @@ pub fn lookup_variant(
             continue
         }
         let e = ed.unwrap()
-        if !vis.allows(e.module) {
+        if !vis.allows(e.module) or is_scoped_fqn(e.fqn) {
             continue
         }
         for &v in e.variants {
@@ -486,36 +485,36 @@ pub fn lookup_variant(
 // Helpers
 // ─────────────────────────────────────────────────────────────────────
 
-// Index of the final `.` in an FQN, or -1 when the name is unqualified.
-pub fn last_dot(s: String) isize {
-    let i: isize = (s.len as isize) - 1
-    loop {
-        if i < 0 {
-            break
-        }
-        if s[i as usize] == 46u8 {
-            return i
-        } // '.' = 46
-        i = i - 1
-    }
-    return -1
+// Whether `fqn` names a block-scoped declaration, `{module}.{Name}#{k}` (RFC-046): reachable only
+// through the checker's scopes, never by a bare name.
+pub fn is_scoped_fqn(fqn: String) bool {
+    return fqn.find('#').is_some()
 }
 
-// The short (module-less) name of an FQN, given its `last_dot` index.
-pub fn short_name_of(fqn: String, dot: isize) String {
-    if dot < 0 {
-        return fqn
+// The name an FQN's declaration spells: its last dot-separated segment, less a block-scoped
+// declaration's `#k`.
+pub fn declared_name(fqn: String) String {
+    const short = short_name_of(fqn)
+    return short.find('#') match {
+        Some(i) => short[0..i]
+        None => short
     }
-    return fqn[((dot as usize) + 1)..fqn.len]
 }
 
-// The owning module prefix of an FQN, given its `last_dot` index; empty when the name is
-// unqualified.
-pub fn module_of(fqn: String, dot: isize) String {
-    if dot < 0 {
-        return ""
+// The last dot-separated segment of an FQN, `#k` kept; the whole FQN when it is unqualified.
+pub fn short_name_of(fqn: String) String {
+    return fqn.rfind('.') match {
+        Some(i) => fqn[i + 1..fqn.len]
+        None => fqn
     }
-    return fqn[0..(dot as usize)]
+}
+
+// The owning module prefix of an FQN; empty when the name is unqualified.
+pub fn module_of(fqn: String) String {
+    return fqn.rfind('.') match {
+        Some(i) => fqn[0..i]
+        None => ""
+    }
 }
 
 pub fn nominal_fqn(def: &NominalDef) String {

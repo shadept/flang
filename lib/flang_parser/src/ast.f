@@ -33,7 +33,22 @@ pub type Module = struct {
     span: SourceSpan
     decls: List(Decl)
     labels: LabelRef[]
+    // The types declared in function and block scopes, in source order (RFC-046).
+    local_types: LocalType[]
+    // The block enclosing block scope `s`, or `NO_SCOPE` for a function, test or lambda body's
+    // outermost block.
+    scope_parents: u32[]
     arena: ArenaAllocator
+}
+
+pub const NO_SCOPE: u32 = 0xFFFF_FFFF as u32
+
+// A `type` declared in a block. It is visible in block `scope` and the blocks nested in it.
+pub type LocalType = struct {
+    decl: &TypeDecl
+    scope: u32
+    // The `$T` names the enclosing function introduces, which the declaration may name.
+    fn_generics: String[]
 }
 
 // A loop label occurrence and the declaration it resolves to (RFC-042). A declaration refers to
@@ -325,6 +340,7 @@ pub type Stmt = enum {
     While(WhileStmt)
     Loop(LoopStmt)
     IfDirective(IfDirectiveStmt)
+    Type(&TypeDecl)
 }
 
 // `let|const name(: T)? (= init)?` - LHS is an identifier only. There is no destructuring `let` in
@@ -1218,7 +1234,8 @@ pub fn bound_generic_names(decl: &FunctionDecl, out: &List(String)) {
     }
 }
 
-fn collect_generic_names(te: &TypeExpr, out: &List(String)) {
+// Appends the `$T` names `te` introduces that `out` lacks, in order.
+pub fn collect_generic_names(te: &TypeExpr, out: &List(String)) {
     te.* match {
         GenericBind(g) => {
             if !out.contains(g.name) {

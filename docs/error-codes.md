@@ -581,6 +581,9 @@ pub fn main() i32 {
 A variable was declared twice in the same scope with the same name. Each variable name can only be declared once per
 scope.
 
+The same code reports two type declarations of one name in one module, or in one block (RFC-046). An inner block may
+shadow an outer declaration; only the same block is an error.
+
 #### Example
 
 ```flang

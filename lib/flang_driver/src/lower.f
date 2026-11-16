@@ -2257,6 +2257,8 @@ fn lower_stmt(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, stmt: &Stmt) bool {
                 Invalid(_) => { let _u = unlowerable(ctx) }
             }
         }
+        // A block-scoped type declares; layouts come from the registry on demand.
+        Type(_) => {}
     }
     return false
 }

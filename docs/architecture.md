@@ -204,6 +204,19 @@ touching a disk. The two functions that did read the world, `cwd` and
 - **`TypeLayoutService`** computes memory layouts (alignment, offsets) for struct types, used by lowering for implicit reference passing of large values.
 - **`op_deref` peel:** For field access, when `member_deref_retry` can't find a field on a nominal type it resolves `op_deref(&Type)` and retries on the target, hop by hop. For UFCS calls `resolve_overload` probes the receiver's shapes in tiers across all candidates - as written, then adapted value<->`&T`, then each `op_deref` hop by reference and by value (`RecvAlt`, built by `deref_alternatives`) - and moves to the next tier only when nothing matched (`peel_needed`). Arguments peel in `probe_candidate`: a failed unify retries through `peel_arg` (by reference, then by value when the peeled type is copyable, fewest hops first, `2 * hops` of penalty), and the winner's chain is recorded per argument node by `commit_arg_peel`, which `lower_arg` replays. Binary operators peel through `binary_dispatch`: operand chains from `operand_chain`, fewest hops first, hops recorded on the operator node and replayed by `lower_operand`. The winner's `hops` selects the chain prefix `commit_deref_chain` records on the call node (`receiver_derefs`); lowering replays it as function calls before the field GEP or function call. The protocol operators go through the same path via `receiver_pick`: `check_index` (`op_index_ref`/`op_index`, chain on the index node), `try_set_index_assignment` (`op_set_index`, chain on the assignment node) and `resolve_for_protocol` (`iter`/`iter_ref`, chain on the body node beside the `iter` pick), and `index_operator_call`, `set_index_operator_call` and `lower_for_iter` replay them through `lower_deref_receiver`. So `xs[i]` and `for x in xs` on a wrapper compile exactly as `xs.op_index_ref(i)` and `xs.iter()` would.
 
+**Block-scoped types (RFC-046).** The projector records every `type` in a block as a `Stmt.Type` and,
+on `Module.local_types`, with its block scope (`Module.scope_parents` links each block to the one
+around it) and the enclosing function's `$T` names. The checker registers them in the module's
+two passes beside its own declarations, as `{module}.{Name}#{k}` (`k` their index in
+`local_types`): the module stays theirs, so retirement and re-demands treat them like declared
+names, and no bare-name lookup can match that last segment (`is_scoped_fqn` keeps their variants
+out of `lookup_variant`; `declared_name` drops the suffix for display). Bodies resolve with the
+frames of the scopes around them open (`open_scope_chain`); `check_block` opens a frame for the
+types a block declares (`local_scopes`), and `find_nominal`/`find_variant` and `resolve_named`
+consult those frames before the registry. A local nominal takes its function's `$T` names as
+leading type parameters (`local_generics`), filled at every use from the bindings in scope
+(`local_implicit_args`), so each instantiation of the function names its own instance.
+
 **Contracts (RFC-035).** A contract declaration is a `type` whose body is `contract { ... }` or a
 `+` combination; it lives in the alias table, so lookup, visibility and re-demand change detection
 are an alias's, and naming one where a type is resolved is E2138 - except while a parameter's own

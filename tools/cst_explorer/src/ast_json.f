@@ -411,6 +411,7 @@ fn emit_stmt(sb: &StringBuilder, s: &Stmt) {
             }
             sb.append("]}")
         }
+        Type(td) => emit_type_decl(sb, td)
     }
 }
 

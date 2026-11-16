@@ -586,7 +586,7 @@ fn append_type_token(it: &TypeInterner, sb: &StringBuilder, ty: Ty, reg: &Nomina
         NNominal(nn) => {
             // The name is an FQN, so it carries dots - route it through the same escaping as a
             // module path or the token is not a valid C identifier.
-            append_module_path(sb, nominal_name(reg, nn.id))
+            append_module_path(sb, nominal_fqn(reg.get(nn.id)))
             for i in 0..nn.args.len {
                 sb.append("_")
                 append_type_token(it, sb, it.child_at(nn.args, i), reg)
@@ -595,14 +595,6 @@ fn append_type_token(it: &TypeInterner, sb: &StringBuilder, ty: Ty, reg: &Nomina
         NVoid => sb.append("void")
         NNever => sb.append("never")
         _ => sb.append("t")
-    }
-}
-
-// The declaring FQN, so two same-named types from different modules do not produce the same token.
-fn nominal_name(reg: &NominalRegistry, id: NominalId) String {
-    return reg.get(id).* match {
-        NomStruct(s) => s.fqn
-        NomEnum(e) => e.fqn
     }
 }
 
@@ -654,7 +646,7 @@ fn append_type_pretty(it: &TypeInterner, sb: &StringBuilder, ty: Ty, reg: &Nomin
             sb.append(")")
         }
         NNominal(nn) => {
-            sb.append(short_name(nominal_name(reg, nn.id)))
+            sb.append(declared_name(nominal_fqn(reg.get(nn.id))))
             if nn.args.len > 0 {
                 sb.append("(")
                 for i in 0..nn.args.len {
@@ -669,14 +661,6 @@ fn append_type_pretty(it: &TypeInterner, sb: &StringBuilder, ty: Ty, reg: &Nomin
         NVoid => sb.append("void")
         NNever => sb.append("never")
         _ => sb.append("?")
-    }
-}
-
-// The last dotted segment of an FQN.
-fn short_name(fqn: String) String {
-    return rfind(fqn, '.') match {
-        Some(i) => fqn[(i + 1)..fqn.len]
-        None => fqn
     }
 }
 

@@ -408,6 +408,14 @@ pub type Checker = struct {
     // Monotonic id behind lambda/closure symbols. Advances per *check*, so a template body's lambda
     // mints a fresh symbol per instantiation.
     next_lambda: u32
+    // RFC-046 block-scoped types. A declaration's span -> its index in its module's `local_types`,
+    // which names it in the registry (`local_fqn`). Absent for a same-scope duplicate.
+    local_types: Dict(NodeId, u32)
+    // A block-scoped nominal -> the enclosing function's `$T` names: its leading type parameters,
+    // which every use fills from the bindings in scope.
+    local_generics: Dict(NominalId, String[])
+    // The block scopes open around the current check, innermost last: the types each declares.
+    local_scopes: List(List(LocalName))
 
     // FQN -> the id a definition held before it was taken out of the registry for this demand: the
     // declared names of modules being collected again, and every closure environment (rebuilt by
@@ -805,6 +813,9 @@ pub fn checker() Checker {
         lambda_frames = list(0),
         closures = dict(),
         next_lambda = 0u32,
+        local_types = dict(),
+        local_generics = dict(),
+        local_scopes = list(0),
         recycled = dict(),
         saw_new_name = false,
         nominal_diags = dict(),
@@ -870,6 +881,8 @@ pub fn begin_demand(self: &Checker) {
     let body_cache_keys = replace(&self.body_cache_keys, list(0))
     let ttypes = replace(&self.template_types, dict())
     let ttype_keys = replace(&self.template_type_keys, list(0))
+    let locals = replace(&self.local_types, dict())
+    let local_generics = replace(&self.local_generics, dict())
     const ct = self.comptime
 
     let next = checker()
@@ -898,6 +911,8 @@ pub fn begin_demand(self: &Checker) {
     install(&next.body_cache_keys, body_cache_keys)
     install(&next.template_types, ttypes)
     install(&next.template_type_keys, ttype_keys)
+    install(&next.local_types, locals)
+    install(&next.local_generics, local_generics)
     next.comptime = ct
     // Replaces the checker and releases what it still owns: the tables carried above already left,
     // so what goes is this demand's own.
@@ -984,6 +999,12 @@ fn register_collected(self: &Checker, def: move NominalDef, fqn_owned: move Owne
 // registry's own FQN buffer, and whether it came from a module retirement (a declared or generated
 // name) as opposed to a closure environment. Only the former count as removed declarations when
 // they go unclaimed.
+// A type a block scope declares: its name, and its module-local index (`local_fqn`).
+type LocalName = struct {
+    name: String
+    index: u32
+}
+
 type RetiredName = struct {
     id: NominalId
     fqn: String
@@ -1036,6 +1057,13 @@ pub fn deinit(self: move Checker) {
     self.project_origin.deinit()
     self.lambda_frames.deinit()
     self.closures.deinit()
+    self.local_types.deinit()
+    self.local_generics.deinit()
+    loop {
+        const frame = self.local_scopes.pop() ?? break
+        frame.deinit()
+    }
+    self.local_scopes.deinit()
     self.recycled.deinit()
     self.nominal_diags.deinit()
     self.nominal_diag_keys.deinit()
@@ -1309,6 +1337,14 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
         }
     }
 
+    const local = local_type_index(self, n.name)
+    if local.is_some() {
+        const t = resolve_local_named(self, n, te, local.unwrap())
+        if t.is_some() {
+            return t.unwrap()
+        }
+    }
+
     // Nominal?
     let vis = current_visibility(self)
     defer vis.deinit()
@@ -1332,25 +1368,7 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
     // and cycle detection are follow-ups.
     let alias_body = self.aliases.lookup_ref(n.name, &vis)
     if alias_body.is_some() {
-        // `type A = B` / `type B = A`: expanding either one reaches itself, so the expansion never
-        // terminates (E2036). The names currently being expanded are the cycle witness.
-        if contains_view(&self.alias_stack, n.name) {
-            push_diag_e(
-                self,
-                n.span,
-                E_CYCLIC_ALIAS,
-                $"type alias `{n.name}` is cyclic - it expands to itself",
-            )
-            return TY_ERROR
-        }
-        let body = alias_body.unwrap()
-        if is_contract_body(body) {
-            return contract_param(self, te, n.name, n.span)
-        }
-        self.alias_stack.push(n.name)
-        const out = resolve_type_expr(self, body)
-        let _p = self.alias_stack.pop()
-        return out
+        return expand_alias(self, n, te, alias_body.unwrap())
     }
 
     // A registered type outside the import scope still resolves: the reference compiler resolves
@@ -1380,6 +1398,49 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
     }
     push_diag_e(self, n.span, E_UNKNOWN_TYPE, $"unknown type `{n.name}`")
     return TY_ERROR
+}
+
+// Expand alias `n` to `body`, resolved where it is used.
+fn expand_alias(self: &Checker, n: &NamedType, te: &TypeExpr, body: &TypeExpr) Ty {
+    // `type A = B` / `type B = A`: expanding either one reaches itself, so the expansion never
+    // terminates (E2036). The names currently being expanded are the cycle witness.
+    if contains_view(&self.alias_stack, n.name) {
+        push_diag_e(
+            self,
+            n.span,
+            E_CYCLIC_ALIAS,
+            $"type alias `{n.name}` is cyclic - it expands to itself",
+        )
+        return TY_ERROR
+    }
+    if is_contract_body(body) {
+        return contract_param(self, te, n.name, n.span)
+    }
+    self.alias_stack.push(n.name)
+    const out = resolve_type_expr(self, body)
+    let _p = self.alias_stack.pop()
+    return out
+}
+
+// `n` naming block-scoped type `k` (RFC-046): a nominal takes its implicit arguments ahead of the
+// spelled ones; an alias expands. Null when the declaration did not register.
+fn resolve_local_named(self: &Checker, n: &NamedType, te: &TypeExpr, k: u32) Ty? {
+    let fqn = local_fqn(self.current_module.unwrap_or(""), n.name, k)
+    defer fqn.deinit()
+    const id = self.nominals.lookup_fqn(fqn.view())
+    if id.is_some() {
+        record_nominal_ref(self, head_span(n.span, n.name.len), id.unwrap())
+        let args = local_implicit_args(self, id.unwrap())
+        let spelled = resolve_generic_args(self, n)
+        args.push_all(spelled.as_slice())
+        spelled.deinit()
+        apply_nominal_bounds(self, id.unwrap(), &args, n.name, n.span)
+        return Some(mk_nominal(self, id.unwrap(), args))
+    }
+    let vis = current_visibility(self)
+    defer vis.deinit()
+    const body = self.aliases.lookup_ref(fqn.view(), &vis) ?? return null
+    return Some(expand_alias(self, n, te, body))
 }
 
 // W2001: naming a `#deprecated` struct or enum. Fires at every use site, including inside the
@@ -1925,6 +1986,7 @@ pub fn collect_nominal_names(self: &Checker, module: &Module, module_path: Strin
     for &decl in module.decls {
         collect_one_name(self, decl, module_path)
     }
+    collect_local_names(self, module, module_path)
 }
 
 // Resolve one module's type bodies (struct fields, enum payloads). Runs only after every module's
@@ -1934,6 +1996,207 @@ pub fn resolve_nominal_bodies(self: &Checker, module: &Module, module_path: Stri
     for &decl in module.decls {
         resolve_one_body(self, decl, module_path)
     }
+    resolve_local_bodies(self, module, module_path)
+}
+
+// A block-scoped declaration registers as `{module}.{Name}#{k}`, `k` its index in the module's
+// `local_types`. No bare name matches that last segment, so only `local_scopes` reaches it.
+fn local_fqn(module_path: String, name: String, k: u32) OwnedString {
+    return $"{module_path}.{name}#{k}"
+}
+
+// Whether local type `k` repeats a name declared earlier in the same block scope.
+fn redeclared_in_scope(module: &Module, k: usize) bool {
+    const lt = &module.local_types[k]
+    for j in 0..k {
+        const other = &module.local_types[j]
+        if other.scope == lt.scope and other.decl.name == lt.decl.name {
+            return true
+        }
+    }
+    return false
+}
+
+// Register the module's block-scoped type names (RFC-046), beside its module-level ones.
+fn collect_local_names(self: &Checker, module: &Module, module_path: String) {
+    for k in 0..module.local_types.len {
+        const lt = &module.local_types[k]
+        const td = lt.decl
+        const node = node_id_of(td.span)
+        check_type_name(self, td.name, td.span)
+        if redeclared_in_scope(module, k) {
+            push_diag_e(self, td.span, E_DUP_TYPE_DECL, $"duplicate type declaration `{td.name}`")
+            const _gone = self.local_types.remove(node)
+            continue
+        }
+        self.local_types.set(node, k as u32)
+        const id = collect_type_decl(self, td, local_fqn(module_path, td.name, k as u32))
+        if id.is_some() {
+            self.local_generics.set(id.unwrap(), lt.fn_generics)
+        }
+    }
+}
+
+// Resolve the block-scoped bodies, each seeing the types of the scopes around its declaration.
+fn resolve_local_bodies(self: &Checker, module: &Module, module_path: String) {
+    for k in 0..module.local_types.len {
+        if redeclared_in_scope(module, k) {
+            continue
+        }
+        const lt = &module.local_types[k]
+        const opened = open_scope_chain(self, module, lt.scope)
+        let fqn = local_fqn(module_path, lt.decl.name, k as u32)
+        resolve_type_body(self, lt.decl, fqn.view(), lt.fn_generics)
+        fqn.deinit()
+        close_scopes(self, opened)
+    }
+}
+
+// Open the frames of block scope `scope` and every scope around it, outermost first. Returns how
+// many opened.
+fn open_scope_chain(self: &Checker, module: &Module, scope: u32) usize {
+    let chain: List(u32) = list(0)
+    defer chain.deinit()
+    let s = scope
+    while s != NO_SCOPE {
+        chain.push(s)
+        s = module.scope_parents[s as usize]
+    }
+    let i = chain.len
+    while i > 0 {
+        i = i - 1
+        let frame: List(LocalName) = list(0)
+        for k in 0..module.local_types.len {
+            const lt = &module.local_types[k]
+            if lt.scope == chain[i] and !redeclared_in_scope(module, k) {
+                frame.push(LocalName { name = lt.decl.name, index = k as u32 })
+            }
+        }
+        self.local_scopes.push(frame)
+    }
+    return chain.len
+}
+
+// Open a frame for the types `blk` declares, when it declares any. Returns how many opened.
+fn open_block_types(self: &Checker, blk: &BlockExpr) usize {
+    let frame: List(LocalName) = list(0)
+    for &stmt in blk.stmts {
+        stmt.* match {
+            Type(td) => {
+                self.local_types.get(node_id_of(td.span)) match {
+                    Some(k) => frame.push(LocalName { name = td.name, index = k })
+                    None => {}
+                }
+            }
+            _ => {}
+        }
+    }
+    if frame.len == 0 {
+        frame.deinit()
+        return 0
+    }
+    self.local_scopes.push(frame)
+    return 1
+}
+
+fn close_scopes(self: &Checker, n: usize) {
+    for _i in 0..n {
+        const frame = self.local_scopes.pop() ?? break
+        frame.deinit()
+    }
+}
+
+// The module-local index of the block-scoped type `name` names here, innermost scope first.
+fn local_type_index(self: &Checker, name: String) u32? {
+    let i = self.local_scopes.len
+    while i > 0 {
+        i = i - 1
+        for &ln in self.local_scopes[i] {
+            if ln.name == name {
+                return Some(ln.index)
+            }
+        }
+    }
+    return null
+}
+
+// The block-scoped nominal `name` names here, if any.
+fn local_nominal(self: &Checker, name: String) NominalId? {
+    return local_nominal_at(self, name, local_type_index(self, name) ?? return null)
+}
+
+// The nominal a bare type name resolves to: a block-scoped one first, then the registry's.
+fn find_nominal(self: &Checker, name: String, vis: &Visibility) NominalId? {
+    const local = local_nominal(self, name)
+    if local.is_some() {
+        return local
+    }
+    return self.nominals.lookup(name, vis) match {
+        NomLookFound(id) => Some(id)
+        _ => null
+    }
+}
+
+// The enum declaring variant `name` with `arity` payloads: a block-scoped one first, innermost
+// scope first, then the registry's.
+fn find_variant(self: &Checker, name: String, arity: usize, vis: &Visibility) NominalId? {
+    let i = self.local_scopes.len
+    while i > 0 {
+        i = i - 1
+        for &ln in self.local_scopes[i] {
+            const id = local_nominal_at(self, ln.name, ln.index) ?? continue
+            if enum_has_variant(self, id, name, arity) {
+                return Some(id)
+            }
+        }
+    }
+    return self.nominals.lookup_variant(name, arity, vis)
+}
+
+fn local_nominal_at(self: &Checker, name: String, k: u32) NominalId? {
+    let fqn = local_fqn(self.current_module.unwrap_or(""), name, k)
+    defer fqn.deinit()
+    return self.nominals.lookup_fqn(fqn.view())
+}
+
+fn enum_has_variant(self: &Checker, id: NominalId, name: String, arity: usize) bool {
+    return self.nominals.get(id).* match {
+        NomEnum(e) => {
+            for &v in e.variants {
+                if v.name == name and v.payloads.len == arity {
+                    return true
+                }
+            }
+            false
+        }
+        _ => false
+    }
+}
+
+// The leading type arguments of a block-scoped nominal: the enclosing function's `$T` names, as
+// bound where it is used. Empty for every other nominal.
+fn local_implicit_args(self: &Checker, id: NominalId) List(Ty) {
+    let out: List(Ty) = list(0)
+    const names = self.local_generics.get(id) ?? return out
+    for name in names {
+        const b = self.env.lookup(name)
+        const bound = b.is_some() and b.unwrap().is_type_param
+        out.push(
+            if bound { self.engine.specialize(
+                &b.unwrap().scheme,
+            ) } else { self.engine.fresh_var() },
+        )
+    }
+    return out
+}
+
+// The type arguments a use spells: a block-scoped nominal's implicit ones come first.
+fn own_arity(self: &Checker, id: NominalId) usize {
+    const implicit = self.local_generics.get(id) match {
+        Some(names) => names.len
+        None => 0usize
+    }
+    return nominal_arity(self, id) - implicit
 }
 
 fn collect_one_name(self: &Checker, decl: &Decl, module_path: String) {
@@ -1951,50 +2214,111 @@ fn collect_one_name(self: &Checker, decl: &Decl, module_path: String) {
                 fqn_owned.deinit()
                 return
             }
-            // Decide nominal vs alias by inspecting the body. The OwnedString is consumed by
-            // whichever registry takes it: the nominal registry for struct/enum, the alias registry
-            // for an alias body (stored unresolved for lazy expansion at use).
-            let kind = nominal_kind_of(td.body)
-            kind match {
-                NkStruct => note_bound_text(
-                    self,
-                    register_struct_placeholder(self, &td, fqn_owned),
-                    td.body,
-                )
-                NkEnum => note_bound_text(
-                    self,
-                    register_enum_placeholder(self, &td, fqn_owned),
-                    td.body,
-                )
-                NkAlias => {
-                    td.body match {
-                        Contract(c) => self.self_decls.set(node_id_of(c.span), td.span)
-                        _ => {}
-                    }
-                    register_alias(self, fqn_owned, td.body)
-                }
-            }
+            const _id = collect_type_decl(self, &td, fqn_owned)
         }
         _ => {}
+    }
+}
+
+// Register one declaration under `fqn_owned`, nominal or alias by its body. The registry taking it
+// owns the string: the nominal registry for a struct or enum, the alias registry for an alias body
+// (stored unresolved for lazy expansion at use). Returns the nominal's id.
+fn collect_type_decl(self: &Checker, td: &TypeDecl, fqn_owned: move OwnedString) NominalId? {
+    let kind = nominal_kind_of(td.body)
+    return kind match {
+        NkStruct => {
+            const id = register_struct_placeholder(self, td, fqn_owned)
+            note_bound_text(self, id, td.body)
+            Some(id)
+        }
+        NkEnum => {
+            const id = register_enum_placeholder(self, td, fqn_owned)
+            note_bound_text(self, id, td.body)
+            Some(id)
+        }
+        NkAlias => {
+            td.body match {
+                Contract(c) => self.self_decls.set(node_id_of(c.span), td.span)
+                _ => {}
+            }
+            register_alias(self, fqn_owned, td.body)
+            null
+        }
     }
 }
 
 fn resolve_one_body(self: &Checker, decl: &Decl, module_path: String) {
     decl.* match {
         Type(td) => {
-            let kind = nominal_kind_of(td.body)
-            kind match {
-                NkStruct => resolve_struct_body(self, &td, module_path)
-                NkEnum => resolve_enum_body(self, &td, module_path)
-                NkAlias => {
-                    if is_contract_body(td.body) {
-                        validate_contract_decl(self, &td)
-                    }
-                }
-            }
+            let fqn = $"{module_path}.{td.name}"
+            let none: List(String) = list(0)
+            resolve_type_body(self, &td, fqn.view(), none.as_slice())
+            none.deinit()
+            fqn.deinit()
         }
         _ => {}
     }
+}
+
+// Resolve the body of the declaration registered as `fqn`. `implicit` names the type parameters it
+// takes ahead of its own: a block-scoped declaration's enclosing `$T` names.
+fn resolve_type_body(self: &Checker, td: &TypeDecl, fqn: String, implicit: String[]) {
+    let kind = nominal_kind_of(td.body)
+    kind match {
+        NkStruct => resolve_struct_body(self, td, fqn, implicit)
+        NkEnum => resolve_enum_body(self, td, fqn, implicit)
+        NkAlias => {
+            if is_contract_body(td.body) {
+                validate_contract_decl(self, td)
+            }
+        }
+    }
+}
+
+// Bind a declaration's type parameters - `implicit` first, then its own - and `Self`, returning
+// their variables in order.
+fn bind_decl_params(
+    self: &Checker,
+    id: NominalId,
+    td: &TypeDecl,
+    implicit: String[],
+    generics: GenericParam[],
+) List(VarId) {
+    let type_params: List(VarId) = list(implicit.len + generics.len)
+    let self_args: List(Ty) = list(implicit.len + generics.len)
+    for name in implicit {
+        bind_decl_param(self, name, td.span, &type_params, &self_args)
+    }
+    for &gp in generics {
+        check_type_name(self, gp.name, gp.span)
+        bind_decl_param(self, gp.name, gp.span, &type_params, &self_args)
+    }
+    bind_type_name(self, SELF_NAME, mk_nominal(self, id, self_args), td.span)
+    lower_type_params(self, id, generics, implicit.len)
+    return type_params
+}
+
+fn bind_decl_param(
+    self: &Checker,
+    name: String,
+    span: SourceSpan,
+    type_params: &List(VarId),
+    self_args: &List(Ty),
+) {
+    let fresh = self.engine.fresh_var()
+    let vid = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
+    type_params.push(vid)
+    self_args.push(fresh)
+    self.tp_names.set(vid, name)
+    self.env.bind(
+        name,
+        Binding {
+            scheme = mono(fresh),
+            decl = self.node_of(span),
+            is_const = true,
+            is_type_param = true,
+        },
+    )
 }
 
 type Nk = enum {
@@ -2110,10 +2434,8 @@ fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedStrin
     return register_collected(self, NominalDef.NomEnum(move ed), fqn)
 }
 
-fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
-    let fqn_owned = $"{module_path}.{td.name}"
-    let id_opt = self.nominals.lookup_fqn(fqn_owned.view())
-    fqn_owned.deinit()
+fn resolve_struct_body(self: &Checker, td: &TypeDecl, fqn: String, implicit: String[]) {
+    let id_opt = self.nominals.lookup_fqn(fqn)
     if id_opt.is_none() {
         return
     }
@@ -2130,27 +2452,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, module_path: String) {
 
     // Bind generics into a fresh scope so field type-exprs can see them.
     self.env.push_scope()
-    let type_params: List(VarId) = list(anon.generics.len)
-    let self_args: List(Ty) = list(anon.generics.len)
-    for &gp in anon.generics {
-        check_type_name(self, gp.name, gp.span)
-        let fresh = self.engine.fresh_var()
-        let id = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
-        type_params.push(id)
-        self_args.push(fresh)
-        self.tp_names.set(id, gp.name)
-        self.env.bind(
-            gp.name,
-            Binding {
-                scheme = mono(fresh),
-                decl = self.node_of(gp.span),
-                is_const = true,
-                is_type_param = true,
-            },
-        )
-    }
-    bind_type_name(self, SELF_NAME, mk_nominal(self, id, self_args), td.span)
-    lower_type_params(self, id, anon.generics)
+    let type_params = bind_decl_params(self, id, td, implicit, anon.generics)
 
     let fields: List(Field) = list(anon.fields.len)
     const outer_depth = self.type_depth
@@ -2497,10 +2799,8 @@ fn parse_i64_text(text: String) i64 {
     }
 }
 
-fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
-    let fqn_owned = $"{module_path}.{td.name}"
-    let id_opt = self.nominals.lookup_fqn(fqn_owned.view())
-    fqn_owned.deinit()
+fn resolve_enum_body(self: &Checker, td: &TypeDecl, fqn: String, implicit: String[]) {
+    let id_opt = self.nominals.lookup_fqn(fqn)
     if id_opt.is_none() {
         return
     }
@@ -2516,27 +2816,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, module_path: String) {
     let anon = anon_opt.unwrap()
 
     self.env.push_scope()
-    let type_params: List(VarId) = list(anon.generics.len)
-    let self_args: List(Ty) = list(anon.generics.len)
-    for &gp in anon.generics {
-        check_type_name(self, gp.name, gp.span)
-        let fresh = self.engine.fresh_var()
-        let vid = ty_node(self, fresh) match { NVar(v) => v.id, _ => 0u32 }
-        type_params.push(vid)
-        self_args.push(fresh)
-        self.tp_names.set(vid, gp.name)
-        self.env.bind(
-            gp.name,
-            Binding {
-                scheme = mono(fresh),
-                decl = self.node_of(gp.span),
-                is_const = true,
-                is_type_param = true,
-            },
-        )
-    }
-    bind_type_name(self, SELF_NAME, mk_nominal(self, id, self_args), td.span)
-    lower_type_params(self, id, anon.generics)
+    let type_params = bind_decl_params(self, id, td, implicit, anon.generics)
 
     let variants: List(VariantDef) = list(anon.variants.len)
     // Naked-enum tag assignment mirrors C: an explicit `= N` sets the counter, an implicit variant
@@ -3439,10 +3719,7 @@ fn directive_info(self: &Checker, ty: Ty) CtTypeInfo {
 fn directive_nominal(self: &Checker, name: String) Ty? {
     let vis = current_visibility(self)
     defer vis.deinit()
-    const id = self.nominals.lookup(name, &vis) match {
-        NomLookFound(i) => i
-        _ => return null
-    }
+    const id = find_nominal(self, name, &vis) ?? return null
     const generic = self.nominals.get(id).* match {
         NomStruct(s) => s.type_params.len > 0
         NomEnum(e) => e.type_params.len > 0
@@ -4477,7 +4754,9 @@ type NomMember = struct {
 // Lowers a struct's or enum's parameter bounds (`struct(I: Iterator, F: fn(I.Item) bool)`) on its
 // parameters' variables, bound in the current scope. Each parameter's associated types are bound
 // under its name, for the bounds after it.
-fn lower_type_params(self: &Checker, id: NominalId, generics: GenericParam[]) {
+// `offset` is how many type parameters precede `generics` (a block-scoped declaration's implicit
+// ones).
+fn lower_type_params(self: &Checker, id: NominalId, generics: GenericParam[], offset: usize) {
     self.nom_bounds.remove(id) match {
         Some(old) => old.deinit()
         None => {}
@@ -4508,7 +4787,7 @@ fn lower_type_params(self: &Checker, id: NominalId, generics: GenericParam[]) {
         lower_bound(self, subject, g.bound.unwrap(), g.name, "", g.span, &atoms, &sub, 0usize)
         for &s in sub {
             bind_member(self, intern_path(self, g.name, s.name), s.ty, g.span, true, s.decl)
-            members.push(NomMember { param = i, path = s.name, ty = s.ty, decl = s.decl })
+            members.push(NomMember { param = offset + i, path = s.name, ty = s.ty, decl = s.decl })
         }
         sub.deinit()
     }
@@ -6443,11 +6722,10 @@ fn resolve_context_field(self: &Checker, name: String, span: SourceSpan) CtxHit?
     let hit: CtxHit? = null
     for entry in self.ctx_fields.entries {
         const fqn = self.ctx_fields.name(entry.key)
-        const dot = last_dot(fqn)
-        if short_name_of(fqn, dot) != name {
+        if short_name_of(fqn) != name {
             continue
         }
-        const module = module_of(fqn, dot)
+        const module = module_of(fqn)
         const visible = module == here or (entry.value.is_pub and vis.allows(module))
         if !visible {
             continue
@@ -7085,11 +7363,7 @@ fn match_names_variant(self: &Checker, m: &MatchExpr) bool {
         arm.pattern match {
             EnumVariant(_) => return true
             Variable(v) => {
-                let known = self.nominals.lookup(v.name, &vis) match {
-                    NomLookFound(_) => true
-                    _ => false
-                }
-                if known {
+                if find_nominal(self, v.name, &vis).is_some() {
                     return true
                 }
             }
@@ -8745,7 +9019,7 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
     }
 
     // Bare payload-less variant (`None`) - locals and functions win first.
-    let vid = self.nominals.lookup_variant(id.name, 0usize, &vis)
+    let vid = find_variant(self, id.name, 0usize, &vis)
     if vid.is_some() {
         let vt = construct_nullary(self, vid.unwrap(), id.name, id.span)
         if vt.is_some() {
@@ -8761,14 +9035,11 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
     if prim.is_some() {
         return reified_type_of(self, prim_of(prim.unwrap()))
     }
-    let tn = self.nominals.lookup(id.name, &vis) match {
-        NomLookFound(n) => Some(n)
-        _ => null
-    }
+    let tn = find_nominal(self, id.name, &vis)
     if tn.is_some() {
         // `size_of(Box)` where `Box` is `struct(T)`: a reified type has to be a CONCRETE one, so
         // the arguments must be spelled (E2104).
-        if nominal_arity(self, tn.unwrap()) > 0 {
+        if own_arity(self, tn.unwrap()) > 0 {
             push_diag_e(
                 self,
                 id.span,
@@ -8823,12 +9094,10 @@ fn nominal_arity(self: &Checker, id: NominalId) usize {
 }
 
 fn nominal_with_fresh_args(self: &Checker, id: NominalId) Ty {
-    let n = self.nominals.get(id).* match {
-        NomStruct(s) => s.type_params.len
-        NomEnum(e) => e.type_params.len
+    let args = local_implicit_args(self, id)
+    for _k in args.len..nominal_arity(self, id) {
+        args.push(self.engine.fresh_var())
     }
-    let args = list(n)
-    for k in 0..n { args.push(self.engine.fresh_var()) }
     return mk_nominal(self, id, args)
 }
 
@@ -9050,6 +9319,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
 
 fn check_block(self: &Checker, blk: &BlockExpr) Ty {
     self.env.push_scope()
+    const types_opened = open_block_types(self, blk)
     // A block containing a diverging statement produces no value: `never` is the bottom type and
     // unifies with anything, so a `match` arm or `if` branch that returns does not drag the result
     // type to `void`. Without it, `x match { A => return 1, B => false }` types as void and a
@@ -9068,6 +9338,7 @@ fn check_block(self: &Checker, blk: &BlockExpr) Ty {
         Some(e) => check_expr(self, e)
         None => TY_VOID
     }
+    close_scopes(self, types_opened)
     self.env.pop_scope()
     if diverges {
         return TY_NEVER
@@ -12375,7 +12646,7 @@ fn unqualified_variant_call(
     }
     let vis = current_visibility(self)
     defer vis.deinit()
-    let nid = self.nominals.lookup_variant(ide.name, arg_tys.len, &vis)
+    let nid = find_variant(self, ide.name, arg_tys.len, &vis)
     if nid.is_none() {
         return null
     }
@@ -12404,24 +12675,17 @@ fn type_instantiation_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List(
     }
     let vis = current_visibility(self)
     defer vis.deinit()
-    let nid = self.nominals.lookup(ide.name, &vis) match {
-        NomLookFound(n) => Some(n)
-        _ => null
-    }
+    let nid = find_nominal(self, ide.name, &vis)
     if nid.is_none() {
         return null
     }
     let id = nid.unwrap()
-    let n_params = self.nominals.get(id).* match {
-        NomStruct(s) => s.type_params.len
-        NomEnum(e) => e.type_params.len
-    }
-    if n_params != arg_tys.len {
+    if own_arity(self, id) != arg_tys.len {
         return null
     }
     // The arguments are TYPE names, so each already arrived reified (`i32` types as `Type(i32)`);
     // the instantiation wants the types themselves, and the RESULT is what gets reified.
-    let args = list(arg_tys.len)
+    let args = local_implicit_args(self, id)
     for i in 0..arg_tys.len {
         args.push(unreify_type(self, arg_tys[i]))
     }
@@ -12645,7 +12909,7 @@ fn generic_struct_missing_args(self: &Checker, ty: Ty) String? {
     if nn.args.len == sd.type_params.len {
         return null
     }
-    return Some(short_name_of(sd.fqn, last_dot(sd.fqn)))
+    return Some(short_name_of(sd.fqn))
 }
 
 // The value of a field initializer: the explicit `f = expr`, or - for shorthand `S { f }` - the
@@ -12947,10 +13211,7 @@ fn enum_receiver(self: &Checker, recv: &Expr) NominalId? {
 
     let vis = current_visibility(self)
     defer vis.deinit()
-    return self.nominals.lookup(name.unwrap(), &vis) match {
-        NomLookFound(id) => Some(id)
-        _ => null
-    }
+    return find_nominal(self, name.unwrap(), &vis)
 }
 
 fn construct_nullary(self: &Checker, id: NominalId, vname: String, span: SourceSpan) Ty? {
@@ -12998,8 +13259,12 @@ fn construct_variant(
     }
 
     let subst = dict()
-    let args = list(e.type_params.len)
+    let args = local_implicit_args(self, id)
     for k in 0..e.type_params.len {
+        if k < args.len {
+            subst.set(e.type_params[k], args[k])
+            continue
+        }
         let fresh = self.engine.fresh_var()
         subst.set(e.type_params[k], fresh)
         args.push(fresh)
@@ -15902,6 +16167,7 @@ fn own_stmt(self: &Checker, p: &OwnPass, st: &Stmt) {
         }
         Loop(ls) => own_loop(self, p, ls.body, null, ls.label, false)
         IfDirective(ifd) => own_if_directive(self, p, &ifd)
+        Type(_) => {}
     }
 }
 
@@ -17177,42 +17443,60 @@ fn burn_type_param_vars(self: &Checker, module: &Module, path: String) {
     }
     for &decl in module.decls {
         decl.* match {
-            Type(td) => {
-                td.body match {
-                    AnonStruct(a) => {
-                        for &g in a.generics {
-                            const _v = self.engine.fresh_var()
-                            const _n = self.node_of(g.span)
-                        }
-                    }
-                    AnonEnum(e) => {
-                        for &g in e.generics {
-                            const _v = self.engine.fresh_var()
-                            const _n = self.node_of(g.span)
-                        }
-                    }
-                    _ => {}
-                }
-            }
+            Type(td) => burn_decl_params(self, &td, 0usize)
             _ => {}
         }
+    }
+    for k in 0..module.local_types.len {
+        if redeclared_in_scope(module, k) {
+            continue
+        }
+        const lt = &module.local_types[k]
+        burn_decl_params(self, lt.decl, lt.fn_generics.len)
+    }
+}
+
+// What `bind_decl_params` mints for a struct or enum with `implicit` leading parameters.
+fn burn_decl_params(self: &Checker, td: &TypeDecl, implicit: usize) {
+    const generics = decl_generics(td) ?? return
+    for _i in 0..implicit {
+        const _v = self.engine.fresh_var()
+        const _n = self.node_of(td.span)
+    }
+    for &g in generics {
+        const _v = self.engine.fresh_var()
+        const _n = self.node_of(g.span)
     }
 }
 
 fn type_param_count(module: &Module) u32 {
     let n = 0u32
     for &decl in module.decls {
-        const k = decl.* match {
-            Type(td) => td.body.* match {
-                AnonStruct(a) => a.generics.len
-                AnonEnum(e) => e.generics.len
-                _ => 0usize
-            }
-            _ => 0usize
+        decl.* match {
+            Type(td) => n = n + decl_param_count(&td, 0usize)
+            _ => {}
         }
-        n = n + k as u32
+    }
+    for k in 0..module.local_types.len {
+        if !redeclared_in_scope(module, k) {
+            const lt = &module.local_types[k]
+            n = n + decl_param_count(lt.decl, lt.fn_generics.len)
+        }
     }
     return n
+}
+
+fn decl_param_count(td: &TypeDecl, implicit: usize) u32 {
+    return (implicit + (decl_generics(td) ?? return 0u32).len) as u32
+}
+
+// A struct or enum declaration's own type parameters; null for an alias.
+fn decl_generics(td: &TypeDecl) GenericParam[]? {
+    return td.body.* match {
+        AnonStruct(a) => Some(a.generics)
+        AnonEnum(e) => Some(e.generics)
+        _ => null
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -17801,7 +18085,7 @@ where F: fn(V) Ty {
     let out: Dict(StrId, Ty) = dict()
     for entry in map.entries {
         const fqn = map.name(entry.key)
-        if retiring.contains(module_of(fqn, last_dot(fqn))) {
+        if retiring.contains(module_of(fqn)) {
             out.set(entry.key, ty_of(entry.value))
         }
     }
@@ -17815,7 +18099,7 @@ where F: fn(V) Ty {
     let count: usize = 0
     for entry in map.entries {
         const fqn = map.name(entry.key)
-        if !retiring.contains(module_of(fqn, last_dot(fqn))) {
+        if !retiring.contains(module_of(fqn)) {
             continue
         }
         count = count + 1
@@ -17849,7 +18133,7 @@ fn assemble_context(self: &Checker) List(OwnedString) {
     defer rows.deinit()
     for entry in self.ctx_fields.entries {
         const fqn = self.ctx_fields.name(entry.key)
-        rows.push(CtxRow { fqn = fqn, module = module_of(fqn, last_dot(fqn)), field = entry.value })
+        rows.push(CtxRow { fqn = fqn, module = module_of(fqn), field = entry.value })
     }
     rows.sort(cmp_ctx_row)
     let fqns: List(OwnedString) = list(rows.len)
@@ -18061,8 +18345,7 @@ fn snapshot_aliases(self: &Checker, retiring: &Set(String)) Dict(StrId, OwnedStr
     let out: Dict(StrId, OwnedString) = dict()
     for entry in self.aliases.entries {
         const fqn = self.aliases.name(entry.key)
-        const dot = last_dot(fqn)
-        if !retiring.contains(module_of(fqn, dot)) {
+        if !retiring.contains(module_of(fqn)) {
             continue
         }
         let sb = string_builder(32)
@@ -18082,8 +18365,7 @@ fn aliases_differ(self: &Checker, old: &Dict(StrId, OwnedString), retiring: &Set
     let current: usize = 0
     for entry in self.aliases.entries {
         const fqn = self.aliases.name(entry.key)
-        const dot = last_dot(fqn)
-        if !retiring.contains(module_of(fqn, dot)) {
+        if !retiring.contains(module_of(fqn)) {
             continue
         }
         current = current + 1
@@ -18440,6 +18722,31 @@ test "a carried slot restores its closures and specializations" {
     )
     assert_eq(r.first, 0 as usize, "the program type-checks cold")
     assert_eq(r.second, 0 as usize, "and identically when the slot replays")
+}
+
+test "carried block-scoped types survive a re-demand" {
+    // Module a's bodies name local types, one naming its function's `$T`. Re-demanding with only b
+    // dirty carries a's registrations and replays its slot; a local type lost or re-minted at
+    // another id surfaces as a spurious error.
+    let r = redemand_errors(
+        "pub fn helper() i32 { return 1 }\n",
+        "pub fn helper() i32 { return 2 }\n",
+        "fn wrap(x: $T) i32 where T: copyable {\n    type Box = struct { v: T, n: i32 }\n    const b = Box { v = x, n = 1 }\n    return b.n\n}\nfn main() i32 {\n    type E = enum { A(i32), B }\n    const e: E = A(wrap(true))\n    return e match { A(n) => n, B => 0 }\n}\n",
+    )
+    assert_eq(r.first, 0 as usize, "the program type-checks cold")
+    assert_eq(r.second, 0 as usize, "and identically when a's slot replays")
+}
+
+test "an edited block-scoped type re-resolves" {
+    // The re-parsed module declares the local type again with an f64 field, which breaks the i32
+    // return; the stale i32 definition must not survive the re-collection.
+    let r = redemand_errors(
+        "pub fn f() i32 {\n    type P = struct { v: i32 }\n    const p = P { v = 1 }\n    return p.v\n}\n",
+        "pub fn f() i32 {\n    type P = struct { v: f64 }\n    const p = P { v = 1.0 }\n    return p.v\n}\n",
+        "import b\nfn main() i32 { return f() }\n",
+    )
+    assert_eq(r.first, 0 as usize, "the i32 field type-checks")
+    assert_true(r.second > 0, "the f64 field errors after the edit")
 }
 
 test "a body-tier diagnostic replays from the slot cache" {

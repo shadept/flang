@@ -137,6 +137,8 @@ pub type Pair = (i32, i32)       // pub follows module visibility rules
 
 `type Name = <type-expr>` introduces a transparent alias when the RHS is not a `struct(...) { ... }` / `enum(...) { ... }` builder. No nominal identity, no conversion at use sites. Cyclic aliases (`type A = B; type B = A`) error with E2036.
 
+Any `type` declaration may also sit in a block (function body, nested block, lambda body): visible in that block and the blocks inside it, usable above its declaration, never `pub`, and free to name the function's `$T` (spec §2.3.2, RFC-046).
+
 ## Contracts
 
 ```

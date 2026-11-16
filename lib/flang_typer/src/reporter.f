@@ -177,7 +177,7 @@ pub fn format_with_names(
     let r = reg.unwrap()
     it.node(t) match {
         NNominal(nn) => {
-            sb.append(short_name(nominal_fqn(r, nn.id)))
+            sb.append(declared_name(nominal_fqn(r.get(nn.id))))
             if nn.args.len > 0 {
                 sb.append("(")
                 for i in 0..nn.args.len {
@@ -242,25 +242,6 @@ pub fn format_with_names(
         }
         _ => it.format(t, sb)
     }
-}
-
-fn nominal_fqn(reg: &NominalRegistry, id: NominalId) String {
-    return reg.get(id).* match {
-        NomStruct(sd) => sd.fqn
-        NomEnum(ed) => ed.fqn
-    }
-}
-
-// The last dot-separated segment of an FQN. Public: the LSP matches a cursor's bare identifier
-// against registry FQNs through it.
-pub fn short_name(fqn: String) String {
-    let cut = 0usize
-    for i in 0..fqn.len {
-        if fqn[i] == '.' {
-            cut = i + 1
-        }
-    }
-    return fqn[cut..fqn.len]
 }
 
 fn arity_label(k: ArityKind) String {

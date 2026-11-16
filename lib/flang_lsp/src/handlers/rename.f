@@ -22,7 +22,6 @@ import flang_typer.function_registry
 import flang_typer.inference_results
 import flang_typer.node_id
 import flang_typer.nominal_registry
-import flang_typer.reporter
 import flang_typer.result
 import flang_typer.specialization
 import flang_typer.type
@@ -238,7 +237,7 @@ fn struct_member(
     name: String,
     want: SourceSpan,
 ) ResolvedTarget? {
-    if short_name(sd.fqn) == name and names_at(unit, sd.decl_span, name, want) {
+    if declared_name(sd.fqn) == name and names_at(unit, sd.decl_span, name, want) {
         return Some(ResolvedTarget.RtType(node_id_of(sd.decl_span)))
     }
     for i in 0..sd.fields.len {
@@ -262,7 +261,7 @@ fn enum_member(
     name: String,
     want: SourceSpan,
 ) ResolvedTarget? {
-    if short_name(ed.fqn) == name and names_at(unit, ed.decl_span, name, want) {
+    if declared_name(ed.fqn) == name and names_at(unit, ed.decl_span, name, want) {
         return Some(ResolvedTarget.RtType(node_id_of(ed.decl_span)))
     }
     for i in 0..ed.variants.len {

@@ -20,19 +20,12 @@ pub fn rtti_name(it: &TypeInterner, reg: &NominalRegistry, t: Ty) String {
         NPrim(p) => prim_name(p)
         NVoid => "void"
         NNever => "never"
-        NNominal(nn) => short_name(nominal_fqn(reg.get(nn.id)))
+        NNominal(nn) => declared_name(nominal_fqn(reg.get(nn.id)))
         NRef(_) => "reference"
         NArray(_) => "array"
         NFunc(_) => "function"
         NTuple(_) => "tuple"
         _ => ""
-    }
-}
-
-fn short_name(fqn: String) String {
-    return fqn.rfind('.') match {
-        Some(i) => fqn[i + 1..fqn.len]
-        None => fqn
     }
 }
 
