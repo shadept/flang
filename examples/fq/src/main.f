@@ -104,14 +104,14 @@ pub fn main() i32 {
         return 0
     }
 
-    const opened = open_file(file_path, FileMode.Read)
-    if opened.is_err() {
-        print("fq: cannot open ")
-        println(file_path)
-        return 1
+    let file = open_file(file_path, FileMode.Read) match {
+        Ok(f) => move f
+        Err(_) => {
+            print("fq: cannot open ")
+            println(file_path)
+            return 1
+        }
     }
-
-    let file = opened.unwrap()
     const parsed = parse_json(file.reader())
     close_file(file)
 

@@ -225,21 +225,24 @@ fn run(
 }
 
 fn run_count(file_path: String) i32 {
-    const result = open_file(file_path, FileMode.Read)
-    if result.is_err() {
-        print("fcsv: cannot open ")
-        println(file_path)
-        return 1
+    let file = open_file(file_path, FileMode.Read) match {
+        Ok(f) => move f
+        Err(_) => {
+            print("fcsv: cannot open ")
+            println(file_path)
+            return 1
+        }
     }
-    let file = result.unwrap()
     const data = read_all(&file)
     close_file(file)
-    if data.is_err() {
-        println("fcsv: read failed")
-        return 1
+    let owned = data match {
+        Ok(text) => move text
+        Err(_) => {
+            println("fcsv: read failed")
+            return 1
+        }
     }
-    let owned = data.unwrap()
-    const n = simd_count_byte(owned, '\n')
+    const n = simd_count_byte(owned.view(), '\n')
     let sb = string_builder(32)
     sb.append(n)
     println(sb.as_view())
@@ -297,12 +300,12 @@ pub fn main() i32 {
 
         // First non-range arg: try as file, fall back to columns
         if file_path.len == 0 and columns_arg.len == 0 {
-            const probe = open_file(argv, FileMode.Read)
-            if probe.is_ok() {
-                close_file(probe.unwrap())
-                file_path = argv
-            } else {
-                columns_arg = argv
+            open_file(argv, FileMode.Read) match {
+                Ok(f) => {
+                    close_file(f)
+                    file_path = argv
+                }
+                Err(_) => columns_arg = argv
             }
         } else if columns_arg.len == 0 {
             columns_arg = argv
@@ -318,13 +321,14 @@ pub fn main() i32 {
     }
 
     if file_path.len > 0 {
-        const result = open_file(file_path, FileMode.Read)
-        if result.is_err() {
-            print("fcsv: cannot open ")
-            println(file_path)
-            return 1
+        let file = open_file(file_path, FileMode.Read) match {
+            Ok(f) => move f
+            Err(_) => {
+                print("fcsv: cannot open ")
+                println(file_path)
+                return 1
+            }
         }
-        let file = result.unwrap()
         let reader: CsvReader
         csv_reader_init(&reader, file.reader())
         const code = run(

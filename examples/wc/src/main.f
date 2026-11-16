@@ -109,14 +109,15 @@ pub fn main() i32 {
     } else {
         for i in 0..files.len {
             const a = files[i]
-            const f = open_file(a, FileMode.Read)
-            if f.is_err() {
-                print("wc: ")
-                print(a)
-                println(": No such file or directory")
-                continue
+            const file = open_file(a, FileMode.Read) match {
+                Ok(f) => move f
+                Err(_) => {
+                    print("wc: ")
+                    print(a)
+                    println(": No such file or directory")
+                    continue
+                }
             }
-            const file = f.unwrap()
             let lines = 0
             let words = 0
             let bytes_count = 0

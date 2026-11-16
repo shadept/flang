@@ -140,7 +140,7 @@ fn collect_entries(path: String, state: &State) Result(List(Entry), DirError) {
 // -----------------------------------------------------------------------------
 
 fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state: &State) {
-    let sb = string_builder(prefix.len + entry.name.len + 16)
+    let sb = string_builder(prefix.len + entry.name.view().len + 16)
     defer sb.deinit()
 
     sb.append(prefix)
@@ -174,7 +174,7 @@ fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state
     }
 
     if state.show_size and entry.kind != FileKind.Dir {
-        let stat_sb = string_builder(path.len + entry.name.len + 2)
+        let stat_sb = string_builder(path.len + entry.name.view().len + 2)
         defer stat_sb.deinit()
         append_join(&stat_sb, path, entry.name.view())
 
@@ -201,17 +201,17 @@ fn render_line(prefix: String, is_last: bool, path: String, entry: &Entry, state
 // Depth-first pre-order walk. `path` is an ordinary view - std.io copies it before it reaches the
 // OS, so no NUL termination is required here.
 fn walk(path: String, prefix: String, depth: usize, state: &State) {
-    const entries_r = collect_entries(path, state)
-    if entries_r.is_err() {
-        let sb = string_builder(prefix.len + 20)
-        defer sb.deinit()
-        sb.append(prefix)
-        sb.append("[error opening dir]")
-        println(sb.as_view())
-        return
+    let entries = collect_entries(path, state) match {
+        Ok(e) => move e
+        Err(_) => {
+            let sb = string_builder(prefix.len + 20)
+            defer sb.deinit()
+            sb.append(prefix)
+            sb.append("[error opening dir]")
+            println(sb.as_view())
+            return
+        }
     }
-
-    let entries = entries_r.unwrap()
     defer entries.deinit()
 
     for i in 0..entries.len {
@@ -225,7 +225,7 @@ fn walk(path: String, prefix: String, depth: usize, state: &State) {
 
             const can_descend = state.max_depth == 0 or depth + 1 < state.max_depth
             if can_descend {
-                let child_path = string_builder(path.len + entry_ref.name.len + 2)
+                let child_path = string_builder(path.len + entry_ref.name.view().len + 2)
                 defer child_path.deinit()
                 append_join(&child_path, path, entry_ref.name.view())
 

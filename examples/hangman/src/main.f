@@ -181,8 +181,9 @@ pub fn main() i32 {
     let rng = random(monotonic_ns())
 
     let dict = load_dictionary().ok()
+    defer dict.deinit()
     const word = dict match {
-        Some(text) => { pick_word(text, &rng) }
+        Some(text) => { pick_word(text.view(), &rng) }
         None => { FALLBACK_WORD }
     }
 
@@ -228,8 +229,5 @@ pub fn main() i32 {
         }
     }
 
-    if dict.is_some() {
-        dict.unwrap().deinit()
-    }
     return 0
 }
