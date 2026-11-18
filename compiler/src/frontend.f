@@ -101,6 +101,22 @@ pub fn render_project_diagnostics(
     }
 }
 
+// Render the diagnostics of one file whose spans all point into `source`.
+pub fn render_file_diagnostics(
+    diags: &List(Diagnostic),
+    path: String,
+    source: String,
+    style: &RenderStyle,
+) {
+    let idx = line_index(source)
+    defer idx.deinit()
+    for &d in diags {
+        const text = render_diagnostic(path, source, &idx, d, style)
+        defer text.deinit()
+        write_err(text.view())
+    }
+}
+
 // Diagnostics go to stderr, build progress to stdout, so either can be redirected alone.
 fn write_err(text: String) {
     const _r = write(&stderr, text)

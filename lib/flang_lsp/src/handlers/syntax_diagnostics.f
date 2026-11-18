@@ -42,6 +42,7 @@ pub fn parse_raw(text: String) ParsedDoc {
     let lx = lexer(text)
     let tokens = lx.tokenize()
     let p = parser(tokens, text)
+    p.set_file_id(0i32)
     let cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, 0i32, Some(&diagnostics))
     for d in p.diagnostics.drain() {

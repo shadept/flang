@@ -62,6 +62,7 @@ pub fn analyze(source: move OwnedString, path: String) AnalyzedUnit {
     let lx = lexer(src)
     let tokens = lx.tokenize()
     let p = parser(tokens, src)
+    p.set_file_id(0i32)
     const cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, 0i32, Some(&diagnostics))
 
@@ -807,6 +808,7 @@ fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List
     let lx = lexer(src)
     let tokens = lx.tokenize()
     let p = parser(tokens, src)
+    p.set_file_id(file_id)
     let cst = p.tree.node_at(p.parse_module())
     let module = project_module(cst, file_id, Some(diags))
     flatten_module_decls(&module, target, diags)
@@ -1251,4 +1253,28 @@ test "a path no override names falls through to the file on disk" {
     assert_true(missing.is_none(), "an unnamed path reads from disk, and misses")
     const no_map = read_source("no/such/file.f", null)
     assert_true(no_map.is_none(), "so does no override map at all")
+}
+
+// `x += 1` in the sources below: the parser takes `x +`, then stops at the `=` (offset 46).
+const COMPOUND_ASSIGN_SRC: String = "pub fn main() i32 {\n    let x: i32 = 1\n    x += 1\n    return x\n}\n"
+
+test "a parse error in a single unit points at its token" {
+    let unit = analyze(from_view(COMPOUND_ASSIGN_SRC), "pe.f")
+    defer unit.deinit()
+    assert_true(!unit.checked, "the unit did not parse")
+    assert_eq(unit.diagnostics.len, 1 as usize, "one parse error")
+    const d = &unit.diagnostics[0]
+    assert_true(d.code == "E1001", "an unexpected token")
+    assert_eq(d.span.file_id, 0i32, "the span names the file")
+    assert_eq(d.span.start, 46 as usize, "and the offending `=`")
+}
+
+test "a parse error in a project module names the module's file" {
+    let unit = tested_unit(COMPOUND_ASSIGN_SRC, false)
+    defer unit.deinit()
+    assert_eq(unit.diagnostics.len, 1 as usize, "one parse error")
+    const d = &unit.diagnostics[0]
+    assert_true(d.code == "E1001", "an unexpected token")
+    assert_eq(d.span.file_id, 0i32, "the span names the only module")
+    assert_eq(d.span.start, 46 as usize, "and the offending `=`")
 }

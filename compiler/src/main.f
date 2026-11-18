@@ -32,12 +32,14 @@ import flang_analysis.project
 import flang_analysis.resolver
 import flang_codegen.backend
 import flang_core.diagnostic
+import flang_core.render
 import flang_driver.bindings
 import flang_driver.compile
 import flang_fmt.fmt
 import flang_lsp.server
 import flang_parser.comptime
 import flang_parser.lexer
+import flang_parser.parser
 import flang_typer.interner
 import flang_typer.result
 import flang_typer.type
@@ -1144,10 +1146,11 @@ fn run_fmt(cli: &Cli) i32 {
         return 1
     }
 
+    const style = resolve_style(cli.color)
     let changed: usize = 0
     let failed: usize = 0
     for &s in sources {
-        fmt_file(s.view(), &cfg, check) match {
+        fmt_file(s.view(), &cfg, check, &style) match {
             Unchanged => {}
             Changed => { changed = changed + 1 }
             Failed => { failed = failed + 1 }
@@ -1175,7 +1178,7 @@ fn run_fmt(cli: &Cli) i32 {
 
 // Format one file in place. In check mode nothing is written; a file that would change reports
 // itself.
-fn fmt_file(path: String, cfg: &FmtConfig, check: bool) FmtStatus {
+fn fmt_file(path: String, cfg: &FmtConfig, check: bool, style: &RenderStyle) FmtStatus {
     const read_res = read_source(path)
     if read_res.is_err() {
         report_read_error(path, read_res.unwrap_err())
@@ -1186,7 +1189,12 @@ fn fmt_file(path: String, cfg: &FmtConfig, check: bool) FmtStatus {
 
     const fmt_res = format_source(source.view(), cfg)
     if fmt_res.is_err() {
-        report_fmt_error(path, fmt_res.unwrap_err())
+        const e = fmt_res.unwrap_err()
+        e match {
+            ParseFailed(_) => render_parse_errors(path, source.view(), style)
+            VerifyFailed => {}
+        }
+        report_fmt_error(path, e)
         return FmtStatus.Failed
     }
     let formatted = fmt_res.unwrap()
@@ -1216,6 +1224,18 @@ fn fmt_file(path: String, cfg: &FmtConfig, check: bool) FmtStatus {
         return FmtStatus.Failed
     }
     return FmtStatus.Changed
+}
+
+// The parse diagnostics behind a `ParseFailed`, rendered with their locations. The formatter only
+// counts them, so the file is parsed again here; this runs on the failure path alone.
+fn render_parse_errors(path: String, source: String, style: &RenderStyle) {
+    let lx = lexer(source)
+    defer lx.deinit()
+    let p = parser(lx.tokenize(), source)
+    defer p.deinit()
+    p.set_file_id(0i32)
+    const _root = p.parse_module()
+    render_file_diagnostics(&p.diagnostics, path, source, style)
 }
 
 fn report_fmt_error(path: String, e: FmtError) {

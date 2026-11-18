@@ -18980,6 +18980,7 @@ fn parse_src(src: String, fid: i32) Module {
     let lx = lexer(src)
     let tokens = lx.tokenize()
     let p = parser(tokens, src)
+    p.set_file_id(fid)
     let cst = p.tree.node_at(p.parse_module())
     let m = project_module(cst, fid)
     p.deinit()

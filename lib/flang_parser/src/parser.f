@@ -107,12 +107,14 @@ pub fn deinit(self: move Parser) {
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────
 
-// Position control for callers that drive the parser over a token stream they scan themselves (the
-// template body parser, RFC-021): jump to a token index, read where parsing stopped.
+// The file id stamped on every recorded diagnostic. Callers that render or publish them must set
+// it: a parser left at the default `-1` reports errors with no location.
 pub fn set_file_id(self: &Parser, file_id: i32) {
     self.file_id = file_id
 }
 
+// Position control for callers that drive the parser over a token stream they scan themselves (the
+// template body parser, RFC-021): jump to a token index, read where parsing stopped.
 pub fn seek(self: &Parser, index: usize) {
     self.position = index
 }
