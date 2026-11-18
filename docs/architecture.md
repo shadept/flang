@@ -782,7 +782,8 @@ Design:
   commas set aside (the one token separator policy may add or drop), and
   the two parse trees must have the same shape. A mismatch discards the
   output (`VerifyFailed`). Files with parse errors are refused, not
-  formatted.
+  formatted; `flang fmt` prints the parse diagnostics with their source
+  locations, as `flang check` would.
 - **The layout shows the parse.** FLang has no statement terminator and the
   parser is greedy, so a line opening with a binary operator, `.`, `(` or
   `[` continues the line above rather than starting a statement. Three of
