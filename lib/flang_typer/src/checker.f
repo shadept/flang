@@ -418,6 +418,9 @@ pub type Checker = struct {
     local_scopes: List(List(LocalName))
     // A struct or enum -> the types its body declares, which `Owner(args).Name` reaches.
     nested: Dict(NominalId, List(LocalName))
+    // A struct or enum collected this demand -> its declared type parameter count. Its definition
+    // holds none until its body resolves, and a body earlier in the order may name it first.
+    declared_arity: Dict(NominalId, usize)
 
     // FQN -> the id a definition held before it was taken out of the registry for this demand: the
     // declared names of modules being collected again, and every closure environment (rebuilt by
@@ -819,6 +822,7 @@ pub fn checker() Checker {
         local_generics = dict(),
         local_scopes = list(0),
         nested = dict(),
+        declared_arity = dict(),
         recycled = dict(),
         saw_new_name = false,
         nominal_diags = dict(),
@@ -1074,6 +1078,7 @@ pub fn deinit(self: move Checker) {
     }
     self.local_scopes.deinit()
     self.nested.deinit()
+    self.declared_arity.deinit()
     self.recycled.deinit()
     self.nominal_diags.deinit()
     self.nominal_diag_keys.deinit()
@@ -1338,14 +1343,17 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
     // Primitive?
     let prim = prim_from_name(n.name)
     if prim.is_some() {
+        check_type_arg_count(self, n, 0)
         return prim_of(prim.unwrap())
     }
 
     // Builtin non-primitive types.
     if n.name == "void" {
+        check_type_arg_count(self, n, 0)
         return TY_VOID
     }
     if n.name == "never" {
+        check_type_arg_count(self, n, 0)
         return TY_NEVER
     }
 
@@ -1358,6 +1366,7 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
         if b.is_type_param {
             const t = self.engine.specialize(&b.scheme)
             record_type_ref(self, n.span, n.name)
+            check_type_arg_count(self, n, 0)
             return t
         }
     }
@@ -1464,6 +1473,9 @@ fn resolve_local_named(self: &Checker, n: &NamedType, te: &TypeExpr, ln: &LocalN
 
 // `n`'s arguments applied to nominal `id`, after the implicit ones a scoped nominal takes.
 fn instantiate_named(self: &Checker, id: NominalId, n: &NamedType) Ty {
+    if !check_type_arg_count(self, n, declared_arity(self, id)) {
+        return TY_ERROR
+    }
     let args = local_implicit_args(self, id)
     let spelled = resolve_generic_args(self, n)
     args.push_all(spelled.as_slice())
@@ -1479,8 +1491,41 @@ fn resolve_alias_use(self: &Checker, n: &NamedType, te: &TypeExpr, body: &TypeEx
     defer vis.deinit()
     return renamed_nominal(self, n.name, body, &vis) match {
         Some(id) => instantiate_named(self, id, n)
-        None => expand_alias(self, n.name, n.span, te, body)
+        None => {
+            check_type_arg_count(self, n, 0)
+            expand_alias(self, n.name, n.span, te, body)
+        }
     }
+}
+
+// The type parameters `id` declares, less the implicit ones of a scoped nominal.
+fn declared_arity(self: &Checker, id: NominalId) usize {
+    return self.declared_arity.get(id) ?? own_arity(self, id)
+}
+
+// Whether `n`'s type arguments fit a type taking `arity`; E2165 when not. No arguments at all is a
+// bare generic name, which other checks own.
+fn check_type_arg_count(self: &Checker, n: &NamedType, arity: usize) bool {
+    return report_type_arg_count(self, n.name, n.span, n.generic_args.len, arity)
+}
+
+fn report_type_arg_count(
+    self: &Checker,
+    name: String,
+    span: SourceSpan,
+    spelled: usize,
+    arity: usize,
+) bool {
+    if spelled == 0 or spelled == arity {
+        return true
+    }
+    const msg = if arity == 0 {
+        $"`{name}` takes no type arguments"
+    } else {
+        $"`{name}` takes {arity} type argument(s), got {spelled}"
+    }
+    push_diag_e(self, span, E_TYPE_ARG_COUNT, msg)
+    return false
 }
 
 // The body of the alias `name` names here: a scoped alias first, then a module-level one.
@@ -1553,12 +1598,23 @@ fn resolve_nested(self: &Checker, p: &ProjectionType, te: &TypeExpr) Ty? {
     const id = scoped_nominal(self, nominal_module(self, owner.id), &ln)
     if id.is_some() {
         record_nominal_ref(self, p.span, id.unwrap())
+        if !report_type_arg_count(
+            self,
+            p.name,
+            p.span,
+            p.generic_args.len,
+            declared_arity(self, id.unwrap()),
+        ) {
+            args.deinit()
+            return Some(TY_ERROR)
+        }
         for &arg in p.generic_args {
             args.push(resolve_type_expr(self, arg))
         }
         apply_nominal_bounds(self, id.unwrap(), &args, p.name, p.span)
         return Some(mk_nominal(self, id.unwrap(), args))
     }
+    report_type_arg_count(self, p.name, p.span, p.generic_args.len, 0)
     const out = expand_nested_alias(self, owner.id, &ln, &args, p.span, Some(te))
     args.deinit()
     return out
@@ -2531,12 +2587,12 @@ fn collect_type_decl(self: &Checker, td: &TypeDecl, fqn_owned: move OwnedString)
     return kind match {
         NkStruct => {
             const id = register_struct_placeholder(self, td, fqn_owned)
-            note_bound_text(self, id, td.body)
+            note_decl_params(self, id, td.body)
             Some(id)
         }
         NkEnum => {
             const id = register_enum_placeholder(self, td, fqn_owned)
-            note_bound_text(self, id, td.body)
+            note_decl_params(self, id, td.body)
             Some(id)
         }
         NkAlias => {
@@ -2640,13 +2696,15 @@ fn nominal_kind_of(body: &TypeExpr) Nk {
     }
 }
 
-// Records how `id`'s parameter bounds spell, and whether that differs from the last collection's.
-fn note_bound_text(self: &Checker, id: NominalId, body: &TypeExpr) {
+// Records how many parameters `id` declares, how their bounds spell, and whether that differs from
+// the last collection's.
+fn note_decl_params(self: &Checker, id: NominalId, body: &TypeExpr) {
     const generics = body.* match {
         AnonStruct(a) => a.generics
         AnonEnum(e) => e.generics
         _ => return
     }
+    self.declared_arity.set(id, generics.len)
     let sb = string_builder(32)
     let spelled = true
     for &g in generics {

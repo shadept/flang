@@ -3038,6 +3038,7 @@ Report the issue with sample code that reproduces the error.
 | **E2162** | Type Checking     | A pattern destructuring a union |
 | **E2163** | Type Checking     | `#it` on a parameter no arrow-less lambda fills |
 | **E2164** | Name Resolution   | `pub` on a type no `pub` owner allows           |
+| **E2165** | Type Checking     | Type arguments a type does not declare          |
 
 ### E2115: Unsupported Pattern Form
 
@@ -4328,6 +4329,34 @@ pub fn main() i32 {
 #### Solution
 
 Drop the `pub`, or make the owner `pub`.
+
+---
+
+### E2165: Type Arguments a Type Does Not Declare
+
+**Category**: Type Checking
+**Severity**: Error
+
+#### Description
+
+A type written with arguments takes exactly the parameters its `struct(...)` or `enum(...)` declares.
+A primitive, a type parameter, an alias of anything but a generic type name, and a non-generic struct
+or enum take none.
+
+#### Example
+
+```flang
+type Word = i32
+type Box = struct(T) { v: T }
+
+const a: i32(u8) = 1        // error[E2165]
+const b: Word(u8) = 2       // error[E2165]
+const c: Box(i32, u8) = ... // error[E2165]
+```
+
+#### Solution
+
+Drop the arguments, or give as many as the type declares.
 
 ---
 
