@@ -608,6 +608,7 @@ fn project_struct_decl(self: &Projector, cst: CstNode) TypeDecl {
         is_pub = has_token(cst, TokenKind.Pub),
         directives = frozen(self.project_directives(cst)),
         name = self.type_decl_name(cst),
+        generics = frozen(list(0, self.alloc)),
         body = self.boxed(body),
     }
 }
@@ -619,11 +620,14 @@ fn project_enum_decl(self: &Projector, cst: CstNode) TypeDecl {
         is_pub = has_token(cst, TokenKind.Pub),
         directives = frozen(self.project_directives(cst)),
         name = self.type_decl_name(cst),
+        generics = frozen(list(0, self.alloc)),
         body = self.boxed(body),
     }
 }
 
 fn project_type_alias(self: &Projector, cst: CstNode) TypeDecl {
+    let generics: List(GenericParam) = list(0, self.alloc)
+    self.collect_type_params(cst, &generics)
     let body: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -639,13 +643,38 @@ fn project_type_alias(self: &Projector, cst: CstNode) TypeDecl {
             TokenChild(_) => {}
         }
     }
+    const params = frozen(generics)
+    const taken = contract_taking(&body, params)
+    const own = taken.is_some()
+    if own {
+        install(&body, taken.unwrap())
+    }
     return TypeDecl {
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
         directives = frozen(self.project_directives(cst)),
         name = self.type_decl_name(cst),
+        generics = if own { frozen(list(0, self.alloc)) } else { params },
         body = self.boxed(body),
     }
+}
+
+// Contract `body` taking the name's `params`, when it has none of its own. Null for any other body,
+// which keeps them as alias parameters.
+fn contract_taking(body: &TypeExpr, params: GenericParam[]) TypeExpr? {
+    const c = body.* match {
+        Contract(c) => c
+        _ => return null
+    }
+    if params.len == 0 or c.generics.len > 0 {
+        return null
+    }
+    return Some(TypeExpr.Contract(ContractType {
+        span = c.span,
+        generics = params,
+        requirements = c.requirements,
+        assoc_types = c.assoc_types,
+    }))
 }
 
 // Identifier between `type` keyword and `=`. Same shape for struct, enum, and alias decls.

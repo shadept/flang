@@ -237,15 +237,14 @@ pub type FunctionParam = struct {
     it_name: String?
 }
 
-// `[pub] [directives] type Name = TypeExpr`
-// FLang has exactly one declaration form for types. Generics live on the RHS TypeExpr (`struct(T) {
-// ... }`, `enum(T, E) { ... }`); a plain alias such as `type Index = usize` reuses the same shape
-// with a `Named` body.
+// `[pub] [directives] type Name(P...) = TypeExpr`. A struct, enum or contract body carries the
+// parameters as its own `generics`; `generics` here holds those of any other body, a generic alias.
 pub type TypeDecl = struct {
     span: SourceSpan
     is_pub: bool
     directives: DeclAttribute[]
     name: String
+    generics: GenericParam[]
     body: &TypeExpr
 }
 

@@ -133,9 +133,10 @@ fn close(h: move File) {}                   // takes ownership: `h.close()` move
 type VarId = u32                 // transparent — VarId and u32 are interchangeable
 type Buf = [u8; 16]
 pub type Pair = (i32, i32)       // pub follows module visibility rules
+type Grid(T) = List(List(T))     // generic: Grid(i32) is List(List(i32))
 ```
 
-`type Name = <type-expr>` introduces a transparent alias when the RHS is not a `struct(...) { ... }` / `enum(...) { ... }` builder. No nominal identity, no conversion at use sites. Cyclic aliases (`type A = B; type B = A`) error with E2036.
+`type Name = <type-expr>` introduces a transparent alias when the RHS is not a `struct { ... }` / `enum { ... }` builder. No nominal identity, no conversion at use sites. A generic alias takes exactly its declared arguments at every use (E2165, bare: E2104), and its parameters take bounds as a struct's do, adding to the aliased type's (`type Pairs(I: Iterator) = (I.Item, I.Item)`). Cyclic aliases (`type A = B; type B = A`) error with E2036.
 
 Any `type` declaration may also sit in a block (function body, nested block, lambda body): visible in that block and the blocks inside it, usable above its declaration, never `pub`, and free to name the function's `$T` (spec §2.3.2, RFC-046). Struct and enum bodies may declare types too, reached from outside through the owner: `Tree(i32).Node`, `Shape.Size { ... }`, `Shape.Kind.Wide(4)` (spec §2.3.3).
 
@@ -151,7 +152,7 @@ pub type Iterable = contract {
     type Item = Iter.Item                 // derived
     fn iter(self: &Self) Iter
 }
-pub type Into = contract(T: copyable) {   // a parameter, bounded in place
+pub type Into(T: copyable) = contract {   // a parameter, bounded in place
     fn into(self: Self) T
 }
 pub type Key = copyable + Hash + Eq       // `+` combines contracts
@@ -168,8 +169,8 @@ fn read(b: &$B) T where B: contract { fn get(self: &Self) $T } { ... }   // anon
 
 ```
 type Point = struct { x: i32, y: i32 }
-type Pair = struct(T) { first: T, second: T }                // generic
-type Filtered = struct(I: Iterator, F: fn(I.Item) bool) {    // bounded parameters
+type Pair(T) = struct { first: T, second: T }                // generic
+type Filtered(I: Iterator, F: fn(I.Item) bool) = struct {    // bounded parameters
     it: I
     f: F
 }
@@ -190,7 +191,7 @@ Commas between fields optional. Field assignment uses `=`. A parameter's bound s
 
 ```
 type Color = enum { Red, Green, Blue }
-type Result = enum(T, E) { Ok(T), Err(E) }                   // generic with payloads
+type Result(T, E) = enum { Ok(T), Err(E) }                   // generic with payloads
 type JsonError = enum { UnexpectedChar, UnexpectedEnd }
 
 // Naked enum (C-style integers, no payloads allowed):

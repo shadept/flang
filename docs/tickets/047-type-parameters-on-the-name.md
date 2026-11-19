@@ -1,7 +1,7 @@
 ---
 type: language
 created: 2026-11-17
-linear: SH-111
+linear: SH-112
 relates: [RFC-008, RFC-035, RFC-046]
 ---
 
@@ -74,6 +74,16 @@ application and no erasure: with `type Map(K, V) = Dict(K, V)`, both `Map(i32)` 
 are errors. The same holds for an alias body: `type Shelf = Box` is an error, and a rename of a
 generic type spells its parameters (`type Shelf(T) = Box(T)`). This replaces the bare rename SH-107
 added.
+
+An alias's parameters take bounds as a struct's do. The aliased type's own bounds carry over and
+are never restated: `type Index(K) = UnmanagedDict(K, usize)` is valid, and `Index(Foo)` fails on
+`UnmanagedDict`'s `K: Hash + Eq`. A bound on the alias adds to them, checked at each use and
+implied in a signature as a struct's are (`type SortedIndex(K: Ordered) = UnmanagedDict(K, usize)`
+needs `Hash + Eq + Ordered`). A bound lets the body name what it provides:
+`type Pairs(I: Iterator) = (I.Item, I.Item)`.
+
+Since implied bounds are written nowhere at the use site, the LSP shows them as inlay hints, for
+functions and types as well as aliases.
 
 ### Nested types
 

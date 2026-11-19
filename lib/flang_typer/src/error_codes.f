@@ -61,6 +61,8 @@ pub const E_PUB_NESTED_TYPE: String = "E2164"
 // Type arguments on a type that takes none, or a count other than its parameters.
 pub const E_TYPE_ARG_COUNT: String = "E2165"
 
+// A bound on a generic alias's parameter (RFC-047).
+
 // Duplicate declarations the reference rejects at their declaration site: a struct field name twice
 // (E2076), an enum tag value twice (E2048), a `let`/`const`/global re-declared in the same scope
 // (E2005, shared with the duplicate-type code).

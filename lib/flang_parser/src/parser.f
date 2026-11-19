@@ -844,6 +844,8 @@ fn parse_type_decl_with_directives(self: &Parser, leading: move List(CstNodeId))
     } else {
         self.record_expected(TokenKind.Identifier, "E1002")
     }
+    const named_params = self.current_kind() == TokenKind.OpenParenthesis
+    self.parse_type_params_into(&b)
     self.expect_into(&b, TokenKind.Equals, "E1002")
     // Inline directives on the rhs (e.g. `type X = #foreign struct {...}`). `#foreign fn` is a type
     // of its own and stays with it.
@@ -854,11 +856,13 @@ fn parse_type_decl_with_directives(self: &Parser, leading: move List(CstNodeId))
     self.current_kind() match {
         Struct => {
             b.kind = NodeKind.StructDecl
+            self.refuse_keyword_params(named_params)
             self.eat_into(&b)
             self.parse_struct_body_into(&b)
         }
         Enum => {
             b.kind = NodeKind.EnumDecl
+            self.refuse_keyword_params(named_params)
             self.eat_into(&b)
             self.parse_enum_body_into(&b)
         }
@@ -870,12 +874,26 @@ fn parse_type_decl_with_directives(self: &Parser, leading: move List(CstNodeId))
                 self.eat_into(&b)
                 self.parse_struct_body_into(&b)
             } else {
+                if self.current_kind() == TokenKind.Contract {
+                    self.refuse_keyword_params(named_params)
+                }
                 const t = self.parse_bound_type()
                 self.push_node_into(&b, t)
             }
         }
     }
     return self.finish(b)
+}
+
+// A second parameter list after the `struct`, `enum` or `contract` keyword at the cursor when the
+// name already carries one (RFC-047).
+fn refuse_keyword_params(self: &Parser, named_params: bool) {
+    if named_params and self.peek_kind(1) == TokenKind.OpenParenthesis {
+        self.record_error_here(
+            "E1002",
+            from_view("type parameters go on the name only: `type Name(T) = struct { ... }`"),
+        )
+    }
 }
 
 // `union {` on a type declaration's right-hand side. `union` is contextual, not a keyword: it stays
@@ -920,8 +938,9 @@ fn parse_struct_body_into(self: &Parser, b: &NodeBuilder) {
     self.expect_into(b, TokenKind.CloseBrace, "E1002")
 }
 
-// `(T, U: Bound)` on a struct, enum or contract, when present. A bound sits on the parameter it
-// constrains; `where` after the list is refused (E2145), since each position has one spelling.
+// `(T, U: Bound)` on a type declaration's name, or on a struct, enum or contract, when present. A
+// bound sits on the parameter it constrains; `where` after the list is refused (E2145), since each
+// position has one spelling.
 fn parse_type_params_into(self: &Parser, b: &NodeBuilder) {
     if self.current_kind() == TokenKind.OpenParenthesis {
         let pl = self.open(NodeKind.TypeParamList)
@@ -948,7 +967,7 @@ fn parse_type_params_into(self: &Parser, b: &NodeBuilder) {
         self.record_error_here(
             "E2145",
             from_view(
-                "a type declares its bounds on its parameters: `struct(T: Bound)`, not `where`",
+                "a type declares its bounds on its parameters: `type Name(T: Bound)`, not `where`",
             ),
         )
         self.parse_where_into(b)

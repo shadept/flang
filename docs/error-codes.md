@@ -4339,19 +4339,21 @@ Drop the `pub`, or make the owner `pub`.
 
 #### Description
 
-A type written with arguments takes exactly the parameters its `struct(...)` or `enum(...)` declares.
-A primitive, a type parameter, an alias of anything but a generic type name, and a non-generic struct
-or enum take none.
+A type written with arguments takes exactly the parameters its declaration names. A primitive, a
+type parameter, a non-generic alias, and a non-generic struct or enum take none. A generic alias
+takes all of its own: it is never partially applied (RFC-047).
 
 #### Example
 
 ```flang
 type Word = i32
-type Box = struct(T) { v: T }
+type Box(T) = struct { v: T }
+type Pairs(K, V) = (K, V)[]
 
 const a: i32(u8) = 1        // error[E2165]
 const b: Word(u8) = 2       // error[E2165]
 const c: Box(i32, u8) = ... // error[E2165]
+fn f(p: Pairs(i32)) {}      // error[E2165]
 ```
 
 #### Solution

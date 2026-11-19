@@ -69,13 +69,15 @@ An anonymous struct is a layout: it may name the type parameters in scope, and i
 fn identity(x: $T) T { return x }
 ```
 
-Generic structs and enums use parentheses on the `struct` / `enum` keyword. A parameter may carry a bound there, on the parameter it constrains (§2.3.2):
+A generic type declares its parameters on its name, and its right-hand side uses them (RFC-047). A parameter of a struct, enum or contract may carry a bound, on the parameter it constrains (§2.3.2):
 
 ```
-type Pair = struct(T) { first: T, second: T }
-type Result = enum(T, E) { Ok(T), Err(E) }
-type UnmanagedSet = struct(T: Hash + Eq) { __inner: UnmanagedDict(T, u8) }
+type Pair(T) = struct { first: T, second: T }
+type Result(T, E) = enum { Ok(T), Err(E) }
+type UnmanagedSet(T: Hash + Eq) = struct { __inner: UnmanagedDict(T, u8) }
 ```
+
+The older spelling on the keyword (`type Pair = struct(T) { ... }`) is still accepted while the sources migrate; one declaration may not use both (E1002).
 
 **Instantiation uses parentheses**: `Option(i32)`, `List(String)`, `Result(Value, JsonError)`.
 
@@ -152,9 +154,11 @@ pub type Pair = (i32, i32)
 
 `type Name = <type-expression>` where the RHS is anything other than a `struct(...) { ... }` or `enum(...) { ... }` builder declares a **transparent alias**: `Name` resolves to the RHS type everywhere it appears. No nominal identity is introduced and no conversion is required at use sites — `let v: VarId = 7u32` and `let n: u32 = v` are both valid without any cast.
 
-An alias is another name for its body, usable in every position the body is: in value position (`size_of(VarId)`, `type_info(VarId)`, `#if`), as a variant path (`type Grade = Level` makes `Grade.High(7)` valid), and as an instantiation. An alias whose body is a bare generic type name renames that type and takes its arguments: `type Shelf = Box` makes `Shelf(i32)` the type `Box(i32)`.
+An alias is another name for its body, usable in every position the body is: in value position (`size_of(VarId)`, `type_info(VarId)`, `#if`), as a variant path (`type Grade = Level` makes `Grade.High(7)` valid), and as an instantiation.
 
-Aliases participate in module visibility like struct/enum declarations (`pub type` is exported, bare `type` is module-private). Cyclic aliases — `type A = B; type B = A` — are rejected with **E2036**. Generic aliases (`type Pair(T, U) = (T, U)`) are not yet supported; use a `struct` or `enum` wrapper if you need a polymorphic named type.
+An alias with parameters is generic: each use substitutes its arguments and expands the body, so with `type Grid(T) = List(List(T))`, `Grid(i32)` is `List(List(i32))`. A use passes exactly the arguments the alias declares: `Grid(i32, u8)` is **E2165**, a bare `Grid` is **E2104**. A body naming a generic type passes it all its arguments, so `type Shelf = Box` is E2104 and the rename is `type Shelf(T) = Box(T)`. The aliased type's bounds carry over and are never restated: `type Shelf(T) = Box(T)` requires whatever `Box` requires of `T`. A bound on an alias's parameter adds to them, checked at each use (**E2134**) and implied in a signature as a struct's are (§2.3), so `type Twin(T: copyable) = Box(T)` requires both. A bound lets the body name what it provides: `type Pairs(I: Iterator) = (I.Item, I.Item)`.
+
+Aliases participate in module visibility like struct/enum declarations (`pub type` is exported, bare `type` is module-private). Cyclic aliases (`type A = B; type B = A`) are rejected with **E2036**.
 
 ### 2.3.2 Block-scoped types
 

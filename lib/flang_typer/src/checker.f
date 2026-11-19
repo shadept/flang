@@ -231,7 +231,7 @@ pub type Checker = struct {
     nominals: NominalRegistry
     // Type-alias bodies (expanded lazily at use) and module-level constant types, both FQN-keyed
     // with import-visibility lookup.
-    aliases: FqnMap(TypeExpr)
+    aliases: FqnMap(AliasDef)
     constants: FqnMap(Ty)
     // Runtime context fields (RFC-038), registered by the signature pass and carried like the
     // constants. Lookup is `resolve_context_field`'s: the FqnMap's first-match rule would hide an
@@ -986,8 +986,13 @@ fn retire_names(self: &Checker, retiring: &Set(String)) {
 // one. A registration with no retired id to reclaim is a name this demand added - noted, because
 // carried bodies stay valid only while the name set they resolved against holds still. The alias
 // registry holds the body the module arena owns.
-fn register_alias(self: &Checker, fqn_owned: move OwnedString, body: &TypeExpr) {
-    self.aliases.register(fqn_owned, body.*)
+fn register_alias(self: &Checker, fqn_owned: move OwnedString, td: &TypeDecl) {
+    const def = AliasDef {
+        params = td.generics,
+        body = td.body.*,
+        module = self.current_module.unwrap_or(""),
+    }
+    self.aliases.register(fqn_owned, def)
 }
 
 fn register_collected(self: &Checker, def: move NominalDef, fqn_owned: move OwnedString) NominalId {
@@ -1008,6 +1013,14 @@ fn register_collected(self: &Checker, def: move NominalDef, fqn_owned: move Owne
 // registry's own FQN buffer, and whether it came from a module retirement (a declared or generated
 // name) as opposed to a closure environment. Only the former count as removed declarations when
 // they go unclaimed.
+// A type alias: the parameters its name declares, the body they stand in, and the module declaring
+// it, whose view checks its bounds.
+type AliasDef = struct {
+    params: GenericParam[]
+    body: TypeExpr
+    module: String
+}
+
 // A type a scope declares: its name, and what names it in the registry (`local_fqn`).
 type LocalName = struct {
     name: String
@@ -1399,9 +1412,9 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
     // handles alias chains and cross-module targets without ordering concerns. ponytail:
     // non-generic aliases only; no cycle guard (the self-host sources have none). Generic aliases
     // and cycle detection are follow-ups.
-    let alias_body = self.aliases.lookup_ref(n.name, &vis)
-    if alias_body.is_some() {
-        return resolve_alias_use(self, n, te, alias_body.unwrap())
+    let alias = self.aliases.lookup_ref(n.name, &vis)
+    if alias.is_some() {
+        return resolve_alias_use(self, n, te, alias.unwrap())
     }
 
     // A type declared in a module this one does not import stays unknown; name the module.
@@ -1467,8 +1480,8 @@ fn resolve_local_named(self: &Checker, n: &NamedType, te: &TypeExpr, ln: &LocalN
     }
     let vis = current_visibility(self)
     defer vis.deinit()
-    const body = self.aliases.lookup_ref(fqn.view(), &vis) ?? return null
-    return Some(resolve_alias_use(self, n, te, body))
+    const def = self.aliases.lookup_ref(fqn.view(), &vis) ?? return null
+    return Some(resolve_alias_use(self, n, te, def))
 }
 
 // `n`'s arguments applied to nominal `id`, after the implicit ones a scoped nominal takes.
@@ -1484,18 +1497,119 @@ fn instantiate_named(self: &Checker, id: NominalId, n: &NamedType) Ty {
     return mk_nominal(self, id, args)
 }
 
-// `n` naming an alias of `body`. An alias is another name for its body: a rename of a nominal takes
-// `n`'s arguments as the nominal does, any other alias expands.
-fn resolve_alias_use(self: &Checker, n: &NamedType, te: &TypeExpr, body: &TypeExpr) Ty {
+// `n` naming alias `def`. An alias is another name for its body: a rename of a nominal is that
+// nominal, any other alias expands with its parameters bound to `n`'s arguments.
+fn resolve_alias_use(self: &Checker, n: &NamedType, te: &TypeExpr, def: &AliasDef) Ty {
     let vis = current_visibility(self)
     defer vis.deinit()
-    return renamed_nominal(self, n.name, body, &vis) match {
+    return renamed_nominal(self, n.name, def, &vis) match {
         Some(id) => instantiate_named(self, id, n)
         None => {
-            check_type_arg_count(self, n, 0)
-            expand_alias(self, n.name, n.span, te, body)
+            if !check_alias_arity(self, n.name, n.span, n.generic_args.len, def.params.len) {
+                return TY_ERROR
+            }
+            let args: List(Ty) = list(n.generic_args.len)
+            for &arg in n.generic_args {
+                args.push(resolve_type_expr(self, arg))
+            }
+            const out = expand_generic_alias(self, n.name, n.span, te, def, &args)
+            args.deinit()
+            out
         }
     }
+}
+
+// Alias `def` expanded with its parameters bound to `args`, resolved where it is used. The
+// arguments resolve before the parameters bind, so a parameter never captures a name an argument
+// spells. Its bounds apply as a struct's do, and the associated types they declare bind under the
+// parameter's name for the body (`I.Item`).
+fn expand_generic_alias(
+    self: &Checker,
+    name: String,
+    span: SourceSpan,
+    te: &TypeExpr,
+    def: &AliasDef,
+    args: &List(Ty),
+) Ty {
+    if def.params.len == 0 {
+        return expand_alias(self, name, span, te, &def.body)
+    }
+    self.env.push_scope()
+    for i in 0..def.params.len {
+        bind_type_name(self, def.params[i].name, args[i], span)
+    }
+    const diags0 = self.diagnostics.len
+    let bounds = lower_alias_bounds(self, def.params, args, span)
+    drop_diags_from(self, diags0)
+    const failed = settle_bounds(self, def.module, &bounds.atoms, null, &bounds.members)
+    for &m in bounds.members {
+        bind_type_name(self, intern_path(self, def.params[m.param].name, m.path), m.ty, span)
+    }
+    const out = expand_alias(self, name, span, te, &def.body)
+    self.env.pop_scope()
+    if self.sig_open {
+        imply_bounds(self, &bounds, null, args, name, span)
+    } else if self.check_apps and !self.rigid_mode {
+        report_unsatisfied(self, failed, name, span)
+    }
+    bounds.deinit()
+    return out
+}
+
+// An alias's parameter bounds over `args`, lowered in the scope binding its parameters. Each
+// parameter's associated types bind under its name for the bounds after it.
+fn lower_alias_bounds(
+    self: &Checker,
+    params: GenericParam[],
+    args: &List(Ty),
+    span: SourceSpan,
+) NomBounds {
+    let atoms: List(BoundAtom) = list(0)
+    let members: List(NomMember) = list(0)
+    for i in 0..params.len {
+        const g = &params[i]
+        if g.bound.is_none() {
+            continue
+        }
+        if names_later_param(params, i) {
+            push_diag_e(
+                self,
+                g.span,
+                E_LATER_PARAM,
+                $"the bound on `{g.name}` names a later parameter - a bound reads only the parameters before it",
+            )
+            continue
+        }
+        let sub: List(Member) = list(0)
+        lower_bound(self, args[i], g.bound.unwrap(), g.name, "", g.span, &atoms, &sub, 0usize)
+        for &s in sub {
+            bind_type_name(self, intern_path(self, g.name, s.name), s.ty, span)
+            members.push(NomMember { param = i, path = s.name, ty = s.ty, decl = s.decl })
+        }
+        sub.deinit()
+    }
+    return NomBounds { atoms = move atoms, members = move members, assoc = set() }
+}
+
+// Whether a use spelling `spelled` arguments fits an alias declaring `arity`: exactly, since an
+// alias is neither curried (E2165) nor erased (E2104).
+fn check_alias_arity(
+    self: &Checker,
+    name: String,
+    span: SourceSpan,
+    spelled: usize,
+    arity: usize,
+) bool {
+    if spelled == 0 and arity > 0 {
+        push_diag_e(
+            self,
+            span,
+            E_BARE_GENERIC,
+            $"generic type `{name}` needs its type arguments here",
+        )
+        return false
+    }
+    return report_type_arg_count(self, name, span, spelled, arity)
 }
 
 // The type parameters `id` declares, less the implicit ones of a scoped nominal.
@@ -1528,8 +1642,8 @@ fn report_type_arg_count(
     return false
 }
 
-// The body of the alias `name` names here: a scoped alias first, then a module-level one.
-fn alias_body(self: &Checker, name: String, vis: &Visibility) &TypeExpr? {
+// The alias `name` names here: a scoped alias first, then a module-level one.
+fn alias_def(self: &Checker, name: String, vis: &Visibility) &AliasDef? {
     const local = local_named(self, name)
     if local.is_some() {
         const ln = local.unwrap()
@@ -1540,10 +1654,13 @@ fn alias_body(self: &Checker, name: String, vis: &Visibility) &TypeExpr? {
     return self.aliases.lookup_ref(name, vis)
 }
 
-// The nominal alias `name` of `body` renames: `body` is a bare type name, through any chain of
-// aliases, that names a nominal. Null for any other alias.
-fn renamed_nominal(self: &Checker, name: String, body: &TypeExpr, vis: &Visibility) NominalId? {
-    const target = body.* match {
+// The nominal alias `name` of `def` renames: a body that is a bare type name, through any chain of
+// aliases, naming a nominal, with no parameters of the alias's own. Null for any other alias.
+fn renamed_nominal(self: &Checker, name: String, def: &AliasDef, vis: &Visibility) NominalId? {
+    if def.params.len > 0 {
+        return null
+    }
+    const target = def.body match {
         Named(n) => n
         _ => return null
     }
@@ -1558,13 +1675,17 @@ fn renamed_nominal(self: &Checker, name: String, body: &TypeExpr, vis: &Visibili
 }
 
 // The type alias `name` stands for when it renames no nominal, resolved here. Null when `name`
-// names no such alias.
+// names no such alias; an error when the alias is generic, since a bare name passes no arguments.
 fn alias_type(self: &Checker, name: String, span: SourceSpan) Ty? {
     let vis = current_visibility(self)
     defer vis.deinit()
-    const body = alias_body(self, name, &vis) ?? return null
-    if is_contract_body(body) or renamed_nominal(self, name, body, &vis).is_some() {
+    const def = alias_def(self, name, &vis) ?? return null
+    const body = &def.body
+    if is_contract_body(body) or renamed_nominal(self, name, def, &vis).is_some() {
         return null
+    }
+    if !check_alias_arity(self, name, span, 0, def.params.len) {
+        return Some(TY_ERROR)
     }
     return Some(expand_alias(self, name, span, body, body))
 }
@@ -1614,19 +1735,24 @@ fn resolve_nested(self: &Checker, p: &ProjectionType, te: &TypeExpr) Ty? {
         apply_nominal_bounds(self, id.unwrap(), &args, p.name, p.span)
         return Some(mk_nominal(self, id.unwrap(), args))
     }
-    report_type_arg_count(self, p.name, p.span, p.generic_args.len, 0)
-    const out = expand_nested_alias(self, owner.id, &ln, &args, p.span, Some(te))
+    let own: List(Ty) = list(p.generic_args.len)
+    for &arg in p.generic_args {
+        own.push(resolve_type_expr(self, arg))
+    }
+    const out = expand_nested_alias(self, owner.id, &ln, &args, &own, p.span, Some(te))
+    own.deinit()
     args.deinit()
     return out
 }
 
 // Nested alias `ln` of `owner` expanded with the owner's parameters bound to `args`, the owner's
-// arguments. Null when `ln` is no alias.
+// arguments, and its own to `own`. Null when `ln` is no alias.
 fn expand_nested_alias(
     self: &Checker,
     owner: NominalId,
     ln: &LocalName,
     args: &List(Ty),
+    own: &List(Ty),
     span: SourceSpan,
     te: &TypeExpr?,
 ) Ty? {
@@ -1634,14 +1760,17 @@ fn expand_nested_alias(
     defer fqn.deinit()
     let vis = current_visibility(self)
     defer vis.deinit()
-    const body = self.aliases.lookup_ref(fqn.view(), &vis) ?? return null
+    const def = self.aliases.lookup_ref(fqn.view(), &vis) ?? return null
+    if !check_alias_arity(self, ln.name, span, own.len, def.params.len) {
+        return Some(TY_ERROR)
+    }
     self.env.push_scope()
     for i in 0..ln.implicit.len {
         if i < args.len {
             bind_type_name(self, ln.implicit[i], args[i], span)
         }
     }
-    const out = expand_alias(self, ln.name, span, te ?? body, body)
+    const out = expand_generic_alias(self, ln.name, span, te ?? &def.body, def, own)
     self.env.pop_scope()
     return Some(out)
 }
@@ -2485,9 +2614,9 @@ fn find_nominal(self: &Checker, name: String, vis: &Visibility) NominalId? {
     if local.is_some() {
         return local
     }
-    const body = alias_body(self, name, vis)
-    if body.is_some() {
-        return renamed_nominal(self, name, body.unwrap(), vis)
+    const def = alias_def(self, name, vis)
+    if def.is_some() {
+        return renamed_nominal(self, name, def.unwrap(), vis)
     }
     return self.nominals.lookup(name, vis) match {
         NomLookFound(id) => Some(id)
@@ -2600,7 +2729,7 @@ fn collect_type_decl(self: &Checker, td: &TypeDecl, fqn_owned: move OwnedString)
                 Contract(c) => self.self_decls.set(node_id_of(c.span), td.span)
                 _ => {}
             }
-            register_alias(self, fqn_owned, td.body)
+            register_alias(self, fqn_owned, td)
             null
         }
     }
@@ -2632,7 +2761,41 @@ fn resolve_type_body(self: &Checker, td: &TypeDecl, fqn: String, implicit: Strin
             if is_contract_body(td.body) {
                 validate_contract_decl(self, td)
             }
+            check_alias_decl(self, td)
         }
+    }
+}
+
+// A generic alias's parameter bounds lower over placeholders, so a bad one is reported once, here
+// rather than at each use. A body naming a generic type passes it all its arguments (E2104).
+fn check_alias_decl(self: &Checker, td: &TypeDecl) {
+    self.env.push_scope()
+    let args: List(Ty) = list(td.generics.len)
+    for &g in td.generics {
+        check_type_name(self, g.name, g.span)
+        args.push(self.engine.fresh_var())
+        bind_type_name(self, g.name, args[args.len - 1], g.span)
+    }
+    lower_alias_bounds(self, td.generics, &args, td.span).deinit()
+    args.deinit()
+    self.env.pop_scope()
+    const target = td.body match {
+        Named(n) => n
+        _ => return
+    }
+    if target.generic_args.len > 0 or target.assoc_args.len > 0 {
+        return
+    }
+    let vis = current_visibility(self)
+    defer vis.deinit()
+    const id = find_nominal(self, target.name, &vis) ?? return
+    if declared_arity(self, id) > 0 {
+        push_diag_e(
+            self,
+            target.span,
+            E_BARE_GENERIC,
+            $"generic type `{target.name}` needs its type arguments here",
+        )
     }
 }
 
@@ -4901,7 +5064,8 @@ fn assoc_named_before(args: AssocArg[], i: usize) bool {
 fn contract_body(self: &Checker, name: String) &TypeExpr? {
     let vis = current_visibility(self)
     defer vis.deinit()
-    return self.aliases.lookup_ref(name, &vis)
+    const def = self.aliases.lookup_ref(name, &vis) ?? return null
+    return Some(&def.body)
 }
 
 fn is_contract_body(te: &TypeExpr) bool {
@@ -5363,9 +5527,18 @@ fn apply_nominal_bounds(
         binds.set(v, self.engine.fresh_var())
     }
     if self.sig_open {
-        imply_bounds(self, nb.unwrap(), &binds, args, name, span)
+        imply_bounds(self, nb.unwrap(), Some(&binds), args, name, span)
     } else {
-        check_app_bounds(self, id, nb.unwrap(), &binds, name, span)
+        let none: List(NomMember) = list(0)
+        const failed = settle_bounds(
+            self,
+            nominal_module(self, id),
+            &nb.unwrap().atoms,
+            Some(&binds),
+            &none,
+        )
+        none.deinit()
+        report_unsatisfied(self, failed, name, span)
     }
 }
 
@@ -5386,14 +5559,14 @@ fn nominal_module(self: &Checker, id: NominalId) String {
 fn imply_bounds(
     self: &Checker,
     nb: &NomBounds,
-    binds: &Dict(VarId, Ty),
+    binds: &Dict(VarId, Ty)?,
     args: &List(Ty),
     owner: String,
     span: SourceSpan,
 ) {
     for &a in nb.atoms {
-        const subject = atom_inst(self, a.subject, Some(binds))
-        const shape = atom_inst(self, a.shape, Some(binds))
+        const subject = atom_inst(self, a.subject, binds)
+        const shape = atom_inst(self, a.shape, binds)
         // Over concrete types the bound is the body check's, at the type expression.
         const ground = self.engine.interner.is_ground(subject)
             and self.engine.interner.is_ground(shape)
@@ -5418,7 +5591,7 @@ fn imply_bounds(
             bind_member(
                 self,
                 intern_path(self, base.unwrap(), m.path),
-                atom_inst(self, m.ty, Some(binds)),
+                atom_inst(self, m.ty, binds),
                 span,
                 true,
                 m.decl,
@@ -5445,48 +5618,65 @@ fn sig_param_name(self: &Checker, t: Ty) String? {
     return null
 }
 
-// A bounded type applied in a body: its bounds checked in its defining module's view, as a call's
-// are in the callee's, and undone afterwards. Inside an instantiation the failure is reported at
-// the call that chose the arguments.
-fn check_app_bounds(
+// A bound `settle_bounds` found failing, and its subject as the failing verdict saw it.
+type AtomFailure = struct {
+    atom: BoundAtom
+    subject: Ty
+}
+
+// Runs `atoms` under `binds` in `home`'s view, as a call's bounds run in the callee's, and undoes
+// what they unified: the first that fails, if one does. Each of `members` whose type the verdicts
+// solved to a ground type takes it (`I.Item` of a concrete iterator).
+fn settle_bounds(
     self: &Checker,
-    id: NominalId,
-    nb: &NomBounds,
-    binds: &Dict(VarId, Ty),
-    name: String,
-    span: SourceSpan,
-) {
-    if self.bound_depth >= MAX_BOUND_DEPTH {
-        return
+    home: String,
+    atoms: &List(BoundAtom),
+    binds: &Dict(VarId, Ty)?,
+    members: &List(NomMember),
+) AtomFailure? {
+    if atoms.len == 0 or self.bound_depth >= MAX_BOUND_DEPTH {
+        return null
     }
     const diags0 = self.diagnostics.len
     self.bound_depth = self.bound_depth + 1
-    const switched = enter_view(self, nominal_module(self, id))
+    const switched = enter_view(self, home)
     self.engine.push_checkpoint()
-    let failed: BoundAtom? = null
-    let subject = TY_ERROR
-    for &a in nb.atoms {
-        const fails = atom_verdict(self, a, Some(binds)) match {
+    let failed: AtomFailure? = null
+    for &a in atoms {
+        const fails = atom_verdict(self, a, binds) match {
             Fails => true
             _ => false
         }
         if fails {
-            failed = Some(a.*)
-            subject = self.engine.zonk(atom_inst(self, a.subject, Some(binds)))
+            const subject = self.engine.zonk(atom_inst(self, a.subject, binds))
+            failed = Some(AtomFailure { atom = a.*, subject = subject })
             break
         }
+    }
+    let solved: List(Ty) = list(members.len)
+    for &m in members {
+        solved.push(self.engine.zonk(m.ty))
     }
     self.engine.rollback()
     leave_bound_view(self, switched)
     self.bound_depth = self.bound_depth - 1
     drop_diags_from(self, diags0)
-    if failed.is_none() {
-        return
+    for i in 0..members.len {
+        if self.engine.interner.is_ground(solved[i]) {
+            members[i].ty = solved[i]
+        }
     }
-    const a = failed.unwrap()
+    solved.deinit()
+    return failed
+}
+
+// E2134 at `span` for the bound of `name` that `failed`. Inside an instantiation the failure is
+// reported at the call that chose the arguments.
+fn report_unsatisfied(self: &Checker, failed: AtomFailure?, name: String, span: SourceSpan) {
+    const f = failed ?? return
     let sb = string_builder(160)
-    sb.append($"`{name}` requires `{a.param}: {a.bound_name}`")
-    append_bound_failure(self, &a, subject, &sb)
+    sb.append($"`{name}` requires `{f.atom.param}: {f.atom.bound_name}`")
+    append_bound_failure(self, &f.atom, f.subject, &sb)
     own_report(self, span, E_BOUND_UNSATISFIED, sb.to_string())
 }
 
@@ -13036,6 +13226,35 @@ fn unqualified_variant_call(
     return construct_variant(self, nid.unwrap(), ide.name, arg_tys, span, node)
 }
 
+// `Grid(i32)` - a generic alias called with its type arguments yields its expansion, reified.
+fn generic_alias_call(
+    self: &Checker,
+    ide: &IdentifierExpr,
+    arg_tys: &List(Ty),
+    vis: &Visibility,
+) Ty? {
+    const def = alias_def(self, ide.name, vis) ?? return null
+    if def.params.len == 0 {
+        return null
+    }
+    if !check_alias_arity(self, ide.name, ide.span, arg_tys.len, def.params.len) {
+        return Some(TY_ERROR)
+    }
+    let args = unreified_all(self, arg_tys)
+    const t = expand_generic_alias(self, ide.name, ide.span, &def.body, def, &args)
+    args.deinit()
+    return Some(reified_type_of(self, t))
+}
+
+// The types `tys` reify, in order.
+fn unreified_all(self: &Checker, tys: &List(Ty)) List(Ty) {
+    let out: List(Ty) = list(tys.len)
+    for t in tys {
+        out.push(unreify_type(self, t))
+    }
+    return out
+}
+
 // True when the name resolves as a value - a local binding or a visible function. Values always win
 // over variant and type-name interpretations.
 fn name_is_value_bound(self: &Checker, name: String) bool {
@@ -13060,7 +13279,7 @@ fn type_instantiation_call(self: &Checker, ide: &IdentifierExpr, arg_tys: &List(
     defer vis.deinit()
     let nid = find_nominal(self, ide.name, &vis)
     if nid.is_none() {
-        return null
+        return generic_alias_call(self, ide, arg_tys, &vis)
     }
     let id = nid.unwrap()
     if own_arity(self, id) != arg_tys.len {
@@ -13632,7 +13851,7 @@ fn is_type_path(self: &Checker, e: &Expr) bool {
 fn local_or_found(self: &Checker, name: String) bool {
     let vis = current_visibility(self)
     defer vis.deinit()
-    return find_nominal(self, name, &vis).is_some() or alias_body(self, name, &vis).is_some()
+    return find_nominal(self, name, &vis).is_some() or alias_def(self, name, &vis).is_some()
 }
 
 // The nominal under alias `name`'s instantiation (`type Ints = Box(i32)`). As with `Box(i32).Kind`,
@@ -13670,7 +13889,9 @@ fn nested_type_value(
     const nested_id = scoped_nominal(self, nominal_module(self, owner.id), &ln)
     if nested_id.is_none() {
         let oargs = owner_args(self, owner.args, 0)
-        const t = expand_nested_alias(self, owner.id, &ln, &oargs, span, null)
+        let mine = unreified_all(self, own)
+        const t = expand_nested_alias(self, owner.id, &ln, &oargs, &mine, span, null)
+        mine.deinit()
         oargs.deinit()
         return if t.is_some() { Some(reified_type_of(self, t.unwrap())) } else { null }
     }
@@ -18826,8 +19047,7 @@ fn snapshot_aliases(self: &Checker, retiring: &Set(String)) Dict(StrId, OwnedStr
             continue
         }
         let sb = string_builder(32)
-        const body = &entry.value
-        if !render_alias_body(body, &sb) {
+        if !render_alias_def(&entry.value, &sb) {
             sb.deinit()
             continue
         }
@@ -18852,8 +19072,7 @@ fn aliases_differ(self: &Checker, old: &Dict(StrId, OwnedString), retiring: &Set
         }
         let sb = string_builder(32)
         defer sb.deinit()
-        const body = &entry.value
-        if !render_alias_body(body, &sb) {
+        if !render_alias_def(&entry.value, &sb) {
             return true
         }
         if sb.as_view() != prev.unwrap().view() {
@@ -18861,6 +19080,21 @@ fn aliases_differ(self: &Checker, old: &Dict(StrId, OwnedString), retiring: &Set
         }
     }
     return current != old.len()
+}
+
+// An alias's parameters, then its body, spelled as `render_alias_body` does.
+fn render_alias_def(def: &AliasDef, sb: &StringBuilder) bool {
+    let ok = true
+    for &g in def.params {
+        sb.append(g.name)
+        if g.bound.is_some() {
+            sb.append(":")
+            ok = render_alias_body(g.bound.unwrap(), sb) and ok
+        }
+        sb.append(";")
+    }
+    sb.append("=")
+    return render_alias_body(&def.body, sb) and ok
 }
 
 // `(a, b)` after a generic name; nothing when `args` is empty.

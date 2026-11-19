@@ -2,14 +2,14 @@
 //! EXIT: 63
 
 // An alias is another name for its body: it works in every position the body does, value position
-// and variant paths included, and a rename of a generic type takes that type's arguments.
+// and variant paths included.
 
 type Word = i64
 type Box = struct(T) {
     type Item = T
     v: T
 }
-type Shelf = Box
+type Shelf(T) = Box(T)
 type Ints = Box(i32)
 type Tag = enum(T) {
     On(T)
