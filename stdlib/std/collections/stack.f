@@ -15,7 +15,7 @@ import std.test
 // A last-in, first-out stack of `T` that carries no allocator: `push` and `deinit` take one as
 // their last argument, and the same allocator must be passed every time. A zero-initialised value
 // is a valid empty stack. Elements are owned: `deinit` deinits each.
-pub type UnmanagedStack = struct(T) {
+pub type UnmanagedStack(T) = struct {
     __inner: UnmanagedList(T)
 }
 
@@ -23,7 +23,7 @@ pub type UnmanagedStack = struct(T) {
 // frees through. Every `UnmanagedStack` operation applies to it as well, reached through
 // `op_deref`, and `push` comes without the allocator argument. A zero-initialised value is a valid
 // empty stack on the global allocator.
-pub type Stack = struct(T) {
+pub type Stack(T) = struct {
     __storage: UnmanagedStack(T)
     allocator: &Allocator
 }

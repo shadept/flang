@@ -4,7 +4,7 @@
 // RFC-046: a struct or enum body declares types beside its fields and variants. Inside the body
 // they are named bare and see the owner's parameters; outside, through the owner:
 // `Tree(bool).Node`.
-type Tree = struct(T) {
+type Tree(T) = struct {
     type Node = struct {
         value: T
         weight: Weight

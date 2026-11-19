@@ -19,7 +19,7 @@ import std.test
 // A hash set of `T` that carries no allocator: `add` and `deinit` take one as their last argument,
 // and the same allocator must be passed every time. A zero-initialised value is a valid empty set.
 // Elements are owned: `deinit` deinits each.
-pub type UnmanagedSet = struct(T: Hash + Eq) {
+pub type UnmanagedSet(T: Hash + Eq) = struct {
     __inner: UnmanagedDict(T, u8)
 }
 
@@ -27,7 +27,7 @@ pub type UnmanagedSet = struct(T: Hash + Eq) {
 // Every `UnmanagedSet` operation applies to it as well, reached through `op_deref`, and the
 // allocating ones come without the allocator argument. A zero-initialised value is a valid empty
 // set on the global allocator.
-pub type Set = struct(T: Hash + Eq) {
+pub type Set(T: Hash + Eq) = struct {
     __storage: UnmanagedSet(T)
     allocator: &Allocator
 }
@@ -168,7 +168,7 @@ pub fn all(self: &UnmanagedSet($T), pred: fn(T) bool) bool where T: copyable {
 
 // Iterator over a set's elements, by value, in unspecified order. A snapshot: the set is not
 // modified while it is being iterated.
-pub type SetIterator = struct(T) {
+pub type SetIterator(T) = struct {
     __inner: DictIterator(T, u8)
 }
 
@@ -194,7 +194,7 @@ pub fn next(it: &SetIterator($T)) T? where T: copyable {
 
 // Iterator over a set's elements, each lent, in unspecified order. What an owning element type
 // iterates through.
-pub type SetRefIterator = struct(T) {
+pub type SetRefIterator(T) = struct {
     __inner: DictIterator(T, u8)
 }
 

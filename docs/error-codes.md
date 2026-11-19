@@ -1189,7 +1189,7 @@ Ensure the target type is a struct, or provide a type annotation for anonymous s
 
 #### Description
 
-This error occurs when a struct construction is missing one or more required fields, or when a generic struct is constructed by name without its type arguments (`Pair { ... }` where `Pair` is `struct(T)` — write `Pair(i64) { ... }`, or use the anonymous `.{ ... }` form to infer them). Both compilers report the generic-arguments case.
+This error occurs when a struct construction is missing one or more required fields, or when a generic struct is constructed by name without its type arguments (`Pair { ... }` where `Pair` takes `T` — write `Pair(i64) { ... }`, or use the anonymous `.{ ... }` form to infer them). Both compilers report the generic-arguments case.
 
 #### Example
 
@@ -3189,7 +3189,7 @@ type Pair(T) = struct {
 }
 
 // Correct:
-type Pair = struct(T) {
+type Pair(T) = struct {
     first: T
     second: T
 }
@@ -3628,7 +3628,7 @@ twice(handle)       // error[E2134]: `twice` requires `T: copyable`; `FileHandle
 drain_all(3i32)     // error[E2134]: `drain_all` requires `I: Iterator`: `i32` has no `next` of type `fn(&i32) Option(T)`
 apply(&h, take)     // error[E2134]: `apply` requires `F: fn`: `fn(move Handle) i32` is not callable as `fn(T) i32`
 
-type Table = struct(K: Keyed) { first: K }
+type Table(K: Keyed) = struct { first: K }
 let t: Table(Point) = ...   // error[E2134]: `Table` requires `K: Keyed`: `Point` has no `key` of type `fn(Point) i32`
 ```
 
@@ -3686,7 +3686,7 @@ type Holder = struct { r: Reader }      // error[E2138]
 
 #### Solution
 
-Bound a type parameter: `type Holder = struct(R) { r: R }` and `where R: Reader` on the functions
+Bound a type parameter: `type Holder(R) = struct { r: R }` and `where R: Reader` on the functions
 that need it.
 
 ---
@@ -3823,7 +3823,7 @@ parameter and its associated types, never a later one.
 #### Example
 
 ```flang
-type Bad = struct(F: fn(I.Item) bool, I: Iterator) { f: F, it: I }   // error[E2144]
+type Bad(F: fn(I.Item) bool, I: Iterator) = struct { f: F, it: I }   // error[E2144]
 ```
 
 #### Solution
@@ -3846,12 +3846,12 @@ position has one spelling.
 #### Example
 
 ```flang
-type Wrap = struct(T) where T: copyable { x: T }   // error[E2145]
+type Wrap(T) where T: copyable = struct { x: T }   // error[E2145]
 ```
 
 #### Solution
 
-Move the bound onto the parameter: `struct(T: copyable)`.
+Move the bound onto the parameter: `type Wrap(T: copyable)`.
 
 ---
 
@@ -4452,7 +4452,7 @@ The check fires on direct assignment of the form `expr.field = value` whose rece
 
 ```flang
 // stdlib/std/collections/list.f defines List.
-pub type List = struct(T) {
+pub type List(T) = struct {
     ptr: &T
     len: usize
     cap: usize
@@ -4467,7 +4467,7 @@ pub fn pop(list: &List($T)) T? {
 }
 
 // stdlib/std/collections/stack.f wraps List.
-pub type Stack = struct(T) { inner: List(T) }
+pub type Stack(T) = struct { inner: List(T) }
 
 pub fn pop(self: &Stack($T)) T? {
     if self.inner.len == 0 { return null }

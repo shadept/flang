@@ -11,7 +11,7 @@ import std.option
 type Foo = struct { x: i32 }
 type Bar = struct { y: i32 }
 
-type Wrap = struct(T) {
+type Wrap(T) = struct {
     val: T?
     cleanup: fn(&T) void
 }

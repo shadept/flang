@@ -9354,7 +9354,7 @@ test "an omitted `null` default on a tagged Option parameter lowers" {
     // well-known Option (see the niche tests above), so the module is labelled core.option.
     let unit = analyze(
         from_view(
-            "pub type Option = enum(T) { None, Some(T) }\nfn pick(v: i32, cap: usize? = null) i32 { return v }\nfn main() i32 { return pick(4) }",
+            "pub type Option(T) = enum { None, Some(T) }\nfn pick(v: i32, cap: usize? = null) i32 { return v }\nfn main() i32 { return pick(4) }",
         ),
         "core.option",
     )
@@ -9629,7 +9629,7 @@ test "a generic field reads at its substituted width" {
     // loading at its placeholder width would read 4 of the 8 bytes. The load must be i64-wide.
     let unit = analyze(
         from_view(
-            "type Pair = struct(T) { a: T, b: T }\ntype W = struct { p: Pair(i64) }\nfn f(w: W) i64 { return w.p.a }",
+            "type Pair(T) = struct { a: T, b: T }\ntype W = struct { p: Pair(i64) }\nfn f(w: W) i64 { return w.p.a }",
         ),
         "test.f",
     )
@@ -9659,7 +9659,7 @@ test "a generic struct literal named without its arguments is a checker error, n
     // literal types as `Error`, which also refuses the function if a caller lowers anyway.
     let unit = analyze(
         from_view(
-            "type Pair = struct(T) { a: T, b: T }\nfn main() i64 { let p = Pair { a = 1i64, b = 2i64 } return p.a }",
+            "type Pair(T) = struct { a: T, b: T }\nfn main() i64 { let p = Pair { a = 1i64, b = 2i64 } return p.a }",
         ),
         "test.f",
     )
@@ -9763,7 +9763,7 @@ test "a generic variant payload stores at its substituted width" {
     // `S(9)` into `Opt(i64)`: the raw payload type is the type parameter, and storing at its
     // placeholder width would write 4 of the 8 bytes.
     let unit = analyze(
-        from_view("type Opt = enum(T) { N, S(T) }\nfn f(x: i64) Opt(i64) { return S(x) }"),
+        from_view("type Opt(T) = enum { N, S(T) }\nfn f(x: i64) Opt(i64) { return S(x) }"),
         "test.f",
     )
     let m = lower_module(&unit.module, &unit.result)
@@ -9793,7 +9793,7 @@ test "an aggregate payload copies its bytes into the slot" {
 test "niche Some is a retype: the payload pointer IS the value" {
     let unit = analyze(
         from_view(
-            "pub type Option = enum(T) { None, Some(T) }\nfn f(x: &i32) &i32? { return Some(x) }",
+            "pub type Option(T) = enum { None, Some(T) }\nfn f(x: &i32) &i32? { return Some(x) }",
         ),
         "core.option",
     )
@@ -9808,7 +9808,7 @@ test "niche Some is a retype: the payload pointer IS the value" {
 
 test "niche None is the null pointer" {
     let unit = analyze(
-        from_view("pub type Option = enum(T) { None, Some(T) }\nfn f() &i32? { return None }"),
+        from_view("pub type Option(T) = enum { None, Some(T) }\nfn f() &i32? { return None }"),
         "core.option",
     )
     let m = lower_module(&unit.module, &unit.result)
@@ -9883,7 +9883,7 @@ test "an anonymous literal follows its coerced nominal type" {
 test "coalesce unwraps the payload or falls through to the right side" {
     let unit = analyze(
         from_view(
-            "pub type Option = enum(T) { None, Some(T) }\nfn f(o: i32?, d: i32) i32 { return o ?? d }",
+            "pub type Option(T) = enum { None, Some(T) }\nfn f(o: i32?, d: i32) i32 { return o ?? d }",
         ),
         "core.option",
     )
@@ -9899,7 +9899,7 @@ test "coalesce unwraps the payload or falls through to the right side" {
 test "coalesce chains keep the whole option" {
     let unit = analyze(
         from_view(
-            "pub type Option = enum(T) { None, Some(T) }\nfn g(a: i32?, b: i32?) i32? { return a ?? b }",
+            "pub type Option(T) = enum { None, Some(T) }\nfn g(a: i32?, b: i32?) i32? { return a ?? b }",
         ),
         "core.option",
     )
@@ -9918,7 +9918,7 @@ test "coalesce chains keep the whole option" {
 test "coalesce over the niche form tests the pointer against null" {
     let unit = analyze(
         from_view(
-            "pub type Option = enum(T) { None, Some(T) }\nfn h(p: &i32?, q: &i32) &i32 { return p ?? q }",
+            "pub type Option(T) = enum { None, Some(T) }\nfn h(p: &i32?, q: &i32) &i32 { return p ?? q }",
         ),
         "core.option",
     )
@@ -9933,7 +9933,7 @@ test "coalesce over the niche form tests the pointer against null" {
 test "postfix ? on a monomorphic op_try lowers the call, the branch, and the early return" {
     let unit = analyze(
         from_view(
-            "pub type TryResult = enum(T, R) { Continue(T), Return(R) }\ntype Res = enum { Bad, Good(i32) }\nfn op_try(self: Res) TryResult(i32, Res) { return self match { Good(v) => TryResult.Continue(v), Bad => TryResult.Return(Bad) } }\nfn f(r: Res) Res { let v = r? return Good(v + 1) }",
+            "pub type TryResult(T, R) = enum { Continue(T), Return(R) }\ntype Res = enum { Bad, Good(i32) }\nfn op_try(self: Res) TryResult(i32, Res) { return self match { Good(v) => TryResult.Continue(v), Bad => TryResult.Return(Bad) } }\nfn f(r: Res) Res { let v = r? return Good(v + 1) }",
         ),
         "core.try",
     )
@@ -9952,7 +9952,7 @@ test "postfix ? on a monomorphic op_try lowers the call, the branch, and the ear
 test "postfix ? through a generic op_try lowers via its specialization" {
     let unit = analyze(
         from_view(
-            "pub type TryResult = enum(T, R) { Continue(T), Return(R) }\ntype Box = enum(T) { Empty, Full(T) }\nfn op_try(self: Box($T)) TryResult(T, Box($U)) { return self match { Full(v) => TryResult.Continue(v), Empty => TryResult.Return(Empty) } }\nfn f(b: Box(i32)) Box(i32) { let v = b? return Full(v) }",
+            "pub type TryResult(T, R) = enum { Continue(T), Return(R) }\ntype Box(T) = enum { Empty, Full(T) }\nfn op_try(self: Box($T)) TryResult(T, Box($U)) { return self match { Full(v) => TryResult.Continue(v), Empty => TryResult.Return(Empty) } }\nfn f(b: Box(i32)) Box(i32) { let v = b? return Full(v) }",
         ),
         "core.try",
     )
@@ -10195,7 +10195,7 @@ test "break fires the defers of the scopes it escapes" {
 test "the ? early return fires active defers on both paths" {
     let unit = analyze(
         from_view(
-            "pub type TryResult = enum(T, R) { Continue(T), Return(R) }\ntype Res = enum { Bad, Good(i32) }\nfn op_try(self: Res) TryResult(i32, Res) { return self match { Good(v) => TryResult.Continue(v), Bad => TryResult.Return(Bad) } }\nfn f(r: Res, p: &i32) Res { defer p.* = 7 let v = r? return Good(v + 1) }",
+            "pub type TryResult(T, R) = enum { Continue(T), Return(R) }\ntype Res = enum { Bad, Good(i32) }\nfn op_try(self: Res) TryResult(i32, Res) { return self match { Good(v) => TryResult.Continue(v), Bad => TryResult.Return(Bad) } }\nfn f(r: Res, p: &i32) Res { defer p.* = 7 let v = r? return Good(v + 1) }",
         ),
         "core.try",
     )
@@ -10221,7 +10221,7 @@ test "an escape from inside a deferred expression refuses" {
 
 test "an interpolated string lowers through its recorded desugar" {
     let srcs: List(OwnedString) = list(4)
-    srcs.push(from_view("pub type Option = enum(T) { None, Some(T) }"))
+    srcs.push(from_view("pub type Option(T) = enum { None, Some(T) }"))
     srcs.push(from_view("pub type String = struct { ptr: &u8, len: usize }"))
     srcs.push(from_view(
         "import core.string\nimport core.option\npub type SB = struct { n: usize }\npub fn string_builder(capacity: usize, allocator: &SB? = null) SB { return SB { n = capacity } }\npub fn append(sb: &SB, text: String) { sb.n = sb.n + text.len }\npub fn append(sb: &SB, v: i64) { sb.n = sb.n + 1 }\npub fn writer(sb: &SB) &SB { return sb }\npub fn format(v: i64, w: &SB, spec: String) { w.n = w.n + 1 }\npub fn to_string(sb: &SB) String { return \"done\" }\npub fn deinit(sb: &SB) {}",
@@ -10322,7 +10322,7 @@ test "a nested generic call lowers through both specializations" {
 test "a generic aggregate parameter lowers at its substituted layout" {
     let unit = analyze(
         from_view(
-            "type Pair = struct(T) { a: T\nb: T }\nfn second(p: Pair($T)) T { return p.b }\nfn main() i64 { let p = Pair(i64) { a = 1i64, b = 2i64 } return second(p) }",
+            "type Pair(T) = struct { a: T\nb: T }\nfn second(p: Pair($T)) T { return p.b }\nfn main() i64 { let p = Pair(i64) { a = 1i64, b = 2i64 } return second(p) }",
         ),
         "test.f",
     )
@@ -10470,7 +10470,7 @@ test "two unannotated lambdas settling to one signature dedup the spec symbol" {
 test "a closure stored in a generic struct field dispatches on h.f(x)" {
     let unit = analyze(
         from_view(
-            "type Holder = struct(F) { f: F }\nfn hold(f: $F) Holder(F) { return .{ f = f } }\nfn invoke(h: &Holder($F), x: i32) i32 { return h.f(x) }\nfn main() i32 { let b = 5\n let h = hold({ v: i32 => v + b })\n return invoke(&h, 1) }",
+            "type Holder(F) = struct { f: F }\nfn hold(f: $F) Holder(F) { return .{ f = f } }\nfn invoke(h: &Holder($F), x: i32) i32 { return h.f(x) }\nfn main() i32 { let b = 5\n let h = hold({ v: i32 => v + b })\n return invoke(&h, 1) }",
         ),
         "test.f",
     )
@@ -10501,7 +10501,7 @@ test "a UFCS receiver behind op_deref calls the hop, not the wrapper's address" 
 test "a generic op_deref wrapper instantiates and the method call routes through it" {
     let unit = analyze(
         from_view(
-            "type Box = struct(T) { tag: i64, v: T }\nfn op_deref(b: &Box($T)) &T { return &b.v }\nfn get(x: &i64) i64 { return x.* }\nfn f(b: &Box(i64)) i64 { return b.get() }",
+            "type Box(T) = struct { tag: i64, v: T }\nfn op_deref(b: &Box($T)) &T { return &b.v }\nfn get(x: &i64) i64 { return x.* }\nfn f(b: &Box(i64)) i64 { return b.get() }",
         ),
         "test.f",
     )
@@ -10520,7 +10520,7 @@ test "a generic op_deref wrapper instantiates and the method call routes through
 
 test "a let-bound array argument decays into a slice view at the call" {
     let srcs: List(OwnedString) = list(2)
-    srcs.push(from_view("pub type Slice = struct(T) { ptr: &T, len: usize }"))
+    srcs.push(from_view("pub type Slice(T) = struct { ptr: &T, len: usize }"))
     srcs.push(from_view(
         "fn takes(s: u8[]) i64 { return 7 }\nfn f() i64 { const buf = [0u8; 4]\n return takes(buf) }",
     ))

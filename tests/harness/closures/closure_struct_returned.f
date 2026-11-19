@@ -6,7 +6,7 @@
 // that builds the closure itself has nothing to bind `F`, so the return type
 // is unwritable and the field never resolves to a callable.
 
-type Adder = struct(F) {
+type Adder(F) = struct {
     f: F,
 }
 

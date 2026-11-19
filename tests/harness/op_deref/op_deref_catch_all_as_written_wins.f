@@ -18,7 +18,7 @@ fn op_deref(w: &Wrap) &Inner {
     return &w.inner
 }
 
-type Box = struct(T) {
+type Box(T) = struct {
     pad: i64
     inner: T
 }

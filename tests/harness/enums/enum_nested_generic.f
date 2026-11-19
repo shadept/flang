@@ -1,12 +1,12 @@
 //! TEST: enum_nested_generic
 //! EXIT: 99
 
-type Option = enum(T) {
+type Option(T) = enum {
     Some(T)
     None
 }
 
-type Result = enum(T, E) {
+type Result(T, E) = enum {
     Ok(T)
     Err(E)
 }

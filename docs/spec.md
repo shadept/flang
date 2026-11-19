@@ -57,7 +57,7 @@ FLang is a statically-typed compiled language designed for explicit control, str
 
 **Anonymous type expressions**: `struct { ... }` and `enum { ... }` are valid anywhere a type appears — parameters, return types, variable annotations, function fields, and the right-hand side of a `type` alias. Anonymous struct *values* (`.{ ... }`) require a target type from context — context-less `.{}` errors with a hint to add a type annotation.
 
-An anonymous struct is a layout: it may name the type parameters in scope, and is generic over them. In `type Pair = struct(T) { inner: struct { a: T, b: T } }`, `Pair(i32).inner` and `Pair(bool).inner` are records of `i32` and `bool` fields.
+An anonymous struct is a layout: it may name the type parameters in scope, and is generic over them. In `type Pair(T) = struct { inner: struct { a: T, b: T } }`, `Pair(i32).inner` and `Pair(bool).inner` are records of `i32` and `bool` fields.
 
 **Structural typing**: FLang is nominally typed for named structs and enums. However, tuples and anonymous structs are structurally typed — compatibility is determined by field names and types, not by declaration identity. A function accepting `{ _0: i32, _1: i32 }` will accept a tuple `(i32, i32)`. This is the foundation for planned broader structural typing: anonymous structs will serve as the entry point for TypeScript-style structural compatibility, where any value with matching fields satisfies an anonymous struct type constraint.
 
@@ -99,7 +99,7 @@ A type parameter in scope **shadows** any nominal of the same name: inside `fn w
 
 #### 2.3.2 Contracts
 
-A contract (RFC-035) names a set of functions a type must have. It is declared as a type, takes parameters on its keyword as `struct` does (bounded the same way, `contract(T: copyable)`), and holds requirements (function declarations without a body) and associated types:
+A contract (RFC-035) names a set of functions a type must have. It is declared as a type, takes parameters on its name as a struct does (bounded the same way, `type Shows(T: copyable) = contract { ... }`), and holds requirements (function declarations without a body) and associated types:
 
 ```
 pub type Iterator = contract {
@@ -130,7 +130,7 @@ pub type Key = copyable + Hash + Eq
 - **A contract in a parameter's type is a bounded type parameter.** `fn copy_all(src: Reader)` is `fn copy_all(src: $R) where R: Reader`, and `it: move Iterator(Item: Hash)` is `it: move $I where I: Iterator(Item: Hash)`. The same holds behind a reference or a slice (`src: &Reader`, `xs: Reader[]`). Each occurrence introduces its own type parameter, so `fn eq(a: Eq, b: Eq)` takes two possibly different types; a function whose types must agree, or that names the parameter's associated types, writes the `$T` form.
 - **A contract has no values.** Anywhere else a type is needed - a field, a payload, a type argument, `Reader?`, a tuple or array element, a return type, a local annotation - it is E2138; bound a type parameter instead.
 
-`core` declares `Eq` (`fn op_eq(a: Self, b: Self) bool`), `Hash` (`fn hash(self: Self) usize`) and `Ordered` (`Eq` plus `fn op_cmp(a: Self, b: Self) Ord`), which `core`'s own slice, hash and math functions use; `std.collections.iter` declares `Iterator` and `Iterable` in the associated-type form above. The hashed containers bound their keys on the type, `struct(K: Hash + Eq, V)` (`UnmanagedDict`, `Dict`, `DictRef`, `UnmanagedSet`, `Set`, `MultiMap`), the searches by value (`contains`, `index_of`, `last_index_of` on slices and lists, slice `==`) bound their element `Eq`, and what orders values (`min`, `max`, `clamp`, the binary searches, `std.iter`'s `min`/`max`/`min_by`/`max_by`) bounds it `Ordered`, so a key without `==` or `hash` is refused where the container type is written or constructed, naming the contract (E2134).
+`core` declares `Eq` (`fn op_eq(a: Self, b: Self) bool`), `Hash` (`fn hash(self: Self) usize`) and `Ordered` (`Eq` plus `fn op_cmp(a: Self, b: Self) Ord`), which `core`'s own slice, hash and math functions use; `std.collections.iter` declares `Iterator` and `Iterable` in the associated-type form above. The hashed containers bound their keys on the type, `type Dict(K: Hash + Eq, V)` (`UnmanagedDict`, `Dict`, `DictRef`, `UnmanagedSet`, `Set`, `MultiMap`), the searches by value (`contains`, `index_of`, `last_index_of` on slices and lists, slice `==`) bound their element `Eq`, and what orders values (`min`, `max`, `clamp`, the binary searches, `std.iter`'s `min`/`max`/`min_by`/`max_by`) bounds it `Ordered`, so a key without `==` or `hash` is refused where the container type is written or constructed, naming the contract (E2134).
 
 Not yet: a contract in a return type or a local annotation (RFC-035 lets the body or the initializer bind it), a call on a value of an open type parameter typed through its bounds inside the generic body, the ambiguity check for a requirement that resolves two ways, mode pinning (a lambda taking `move` from a `fn(move T)` bound), `type_info` of a contract, and `dyn` (docs/known-issues.md).
 
@@ -152,7 +152,7 @@ type Buf = [u8; 4]
 pub type Pair = (i32, i32)
 ```
 
-`type Name = <type-expression>` where the RHS is anything other than a `struct(...) { ... }` or `enum(...) { ... }` builder declares a **transparent alias**: `Name` resolves to the RHS type everywhere it appears. No nominal identity is introduced and no conversion is required at use sites — `let v: VarId = 7u32` and `let n: u32 = v` are both valid without any cast.
+`type Name = <type-expression>` where the RHS is anything other than a `struct { ... }` or `enum { ... }` builder declares a **transparent alias**: `Name` resolves to the RHS type everywhere it appears. No nominal identity is introduced and no conversion is required at use sites — `let v: VarId = 7u32` and `let n: u32 = v` are both valid without any cast.
 
 An alias is another name for its body, usable in every position the body is: in value position (`size_of(VarId)`, `type_info(VarId)`, `#if`), as a variant path (`type Grade = Level` makes `Grade.High(7)` valid), and as an instantiation.
 
@@ -182,7 +182,7 @@ Any block may declare types with the module-level form, directives included: a f
 ### 2.3.3 Nested types
 
 ```
-pub type Tree = struct(T) {
+pub type Tree(T) = struct {
     pub type Node = struct { value: T, children: List(Node) }
     root: Node?
 }
@@ -207,7 +207,7 @@ type Point = struct { x: i32, y: i32 }
 type Vec2 = struct { x: f32, y: f32 }
 ```
 
-Structs are always declared as a `type` alias whose RHS is a `struct(...) { ... }` builder. The legacy `struct Name { ... }` form has been removed (RFC-008, error E1050).
+Structs are always declared as a `type` alias whose RHS is a `struct { ... }` builder. The legacy `struct Name { ... }` form has been removed (RFC-008, error E1050).
 
 - All fields public (readable from any file).
 - Field writes restricted to the defining file — see §8 *Scoped mutability* (E2114).
@@ -216,8 +216,8 @@ Structs are always declared as a `type` alias whose RHS is a `struct(...) { ... 
 - Anonymous construction: `.{ x = 10, y = 20 }` (type from context).
 - Field shorthand: `.{ x, y = 20 }` equivalent to `.{ x = x, y = 20 }`, and `.{ move h }` to `.{ h = move h }`. Shorthand copies like any value slot, so a non-copyable binding is written `move h` (E2124).
 - **Strict construction**: every field must be assigned. `Point { x = 10 }` errors with E2050 ("struct literal missing field `<name>`") if `Point` has more fields. `Marker { }` is valid only when `Marker` has zero fields. Context-less `.{}` is invalid.
-- **Bounded parameters**: `struct(I: Iterator, F: fn(I.Item) bool)` - see §2.3, *Where a type's bounds hold*. A field may name a parameter's associated type: `type Peekable = struct(I: Iterator) { it: I, peeked: I.Item? }` stores an `i64?` in `Peekable(Counter)` when `Counter` yields `i64`. Each instance's associated types are solved from its arguments, as a call solves a function's.
-- **`Self`** inside a named struct or enum body is the type applied to its own parameters: in `type Node = struct(T) { value: T, next: &Self? }`, `Self` is `Node(T)`. By value it is the infinite-size error a by-value self-reference is (E2035). `Self` is a predeclared type name, not a keyword: valid only inside a named struct, enum or contract body (E2139), and nothing may be declared with it - a type, a `$Self`, a generic parameter (E2140).
+- **Bounded parameters**: `struct(I: Iterator, F: fn(I.Item) bool)` - see §2.3, *Where a type's bounds hold*. A field may name a parameter's associated type: `type Peekable(I: Iterator) = struct { it: I, peeked: I.Item? }` stores an `i64?` in `Peekable(Counter)` when `Counter` yields `i64`. Each instance's associated types are solved from its arguments, as a call solves a function's.
+- **`Self`** inside a named struct or enum body is the type applied to its own parameters: in `type Node(T) = struct { value: T, next: &Self? }`, `Self` is `Node(T)`. By value it is the infinite-size error a by-value self-reference is (E2035). `Self` is a predeclared type name, not a keyword: valid only inside a named struct, enum or contract body (E2139), and nothing may be declared with it - a type, a `$Self`, a generic parameter (E2140).
 
 #### Memory layout
 
@@ -240,13 +240,13 @@ Two consequences follow, and both matter at an FFI boundary:
 
 ```
 type Color = enum { Red, Green, Blue }
-type Result = enum(T, E) { Ok(T), Err(E) }
+type Result(T, E) = enum { Ok(T), Err(E) }
 type JsonError = enum { UnexpectedChar, UnexpectedEnd }
 ```
 
-Enums are always declared as a `type` alias whose RHS is an `enum(...) { ... }` builder. The legacy `enum Name { ... }` form has been removed (RFC-008, error E1051).
+Enums are always declared as a `type` alias whose RHS is an `enum { ... }` builder. The legacy `enum Name { ... }` form has been removed (RFC-008, error E1051).
 
-Variants can carry zero or more payload types. Tags assigned sequentially starting at 0 (first variant = 0, next = 1, ...). Parameters take bounds as a struct's do: `type Tree = enum(T: Ordered) { Leaf, Node(&Self, T, &Self) }` (§2.3).
+Variants can carry zero or more payload types. Tags assigned sequentially starting at 0 (first variant = 0, next = 1, ...). Parameters take bounds as a struct's do: `type Tree(T: Ordered) = enum { Leaf, Node(&Self, T, &Self) }` (§2.3).
 
 **Naked enums** (C-style): when any variant has `= value`, all variants are integer-tagged with no payloads. Tags auto-increment from previous value.
 
@@ -323,7 +323,7 @@ Content at least as wide as `width` is emitted whole; the spec never truncates. 
 ### 2.7 Option and Nullability
 
 ```
-pub type Option = enum(T) {
+pub type Option(T) = enum {
     None,
     Some(T),
 }
@@ -354,7 +354,7 @@ The legacy field-access shims (`opt.has_value` / `opt.value`) have been removed;
 ### 2.8 Result
 
 ```
-pub type Result = enum(T, E) { Ok(T), Err(E) }
+pub type Result(T, E) = enum { Ok(T), Err(E) }
 ```
 
 Methods: `is_ok()`, `is_err()`, `unwrap()`, `unwrap_err()`, `unwrap_or(default)`, `expect(msg)`.

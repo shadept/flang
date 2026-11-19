@@ -16,7 +16,7 @@ import std.string
 import std.test
 
 // One entry: the key's hash, the key and its value.
-pub type OrderedEntry = struct(K, V) {
+pub type OrderedEntry(K, V) = struct {
     hash: usize
     key: K
     value: V
@@ -30,7 +30,7 @@ pub fn deinit(self: move OrderedEntry($K, $V)) {
 
 // A map from `K` to `V` that iterates in insertion order and carries no allocator. A
 // zero-initialised value is a valid empty dict. Keys and values are owned: `deinit` deinits each.
-pub type UnmanagedOrderedDict = struct(K: Hash + Eq, V) {
+pub type UnmanagedOrderedDict(K: Hash + Eq, V) = struct {
     entries: UnmanagedList(OrderedEntry(K, V))
     index: Memory
 }
@@ -39,7 +39,7 @@ pub type UnmanagedOrderedDict = struct(K: Hash + Eq, V) {
 // frees through. Every `UnmanagedOrderedDict` operation applies to it through `op_deref`, the
 // allocating ones without the allocator argument. A zero-initialised value is a valid empty dict on
 // the global allocator.
-pub type OrderedDict = struct(K: Hash + Eq, V) {
+pub type OrderedDict(K: Hash + Eq, V) = struct {
     __storage: UnmanagedOrderedDict(K, V)
     allocator: &Allocator
 }

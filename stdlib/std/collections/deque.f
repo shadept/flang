@@ -14,7 +14,7 @@ import std.test
 // A double-ended queue of `T` over a ring buffer, carrying no allocator: `push_back`, `push_front`
 // and `deinit` take one as their last argument, and the same allocator must be passed every time. A
 // zero-initialised value is a valid empty deque. Elements are owned: `deinit` deinits each.
-pub type UnmanagedDeque = struct(T) {
+pub type UnmanagedDeque(T) = struct {
     owned mem: Memory
     head: usize // index of the front element when len > 0
     len: usize
@@ -24,7 +24,7 @@ pub type UnmanagedDeque = struct(T) {
 // frees through. Every `UnmanagedDeque` operation applies to it as well, reached through
 // `op_deref`, and the allocating ones come without the allocator argument. A zero-initialised value
 // is a valid empty deque on the global allocator.
-pub type Deque = struct(T) {
+pub type Deque(T) = struct {
     __storage: UnmanagedDeque(T)
     allocator: &Allocator
 }
@@ -193,7 +193,7 @@ pub fn clear(self: &UnmanagedDeque($T)) {
 
 // Iterator over a deque's elements, by value, front to back. A snapshot: the deque is not modified
 // while it is being iterated.
-pub type DequeIterator = struct(T) {
+pub type DequeIterator(T) = struct {
     deque: &UnmanagedDeque(T)
     current: usize // logical offset from head, 0 .. len
 }

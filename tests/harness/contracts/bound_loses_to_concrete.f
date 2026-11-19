@@ -9,7 +9,7 @@ fn next(self: &Counter) i32? {
     return null
 }
 
-type Iter = contract(T) {
+type Iter(T) = contract {
     fn next(self: &Self) T?
 }
 

@@ -9,7 +9,7 @@ pub fn describe(self: &Inner) i32 {
     return 7
 }
 
-type Wrap = struct(T) {
+type Wrap(T) = struct {
     value: T
 }
 

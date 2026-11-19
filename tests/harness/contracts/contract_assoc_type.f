@@ -23,12 +23,12 @@ fn iter(self: &Bag) Range3 {
     return Range3 { n = 0 }
 }
 
-type Iterator = contract(T) {
+type Iterator(T) = contract {
     fn next(self: &Self) T?
 }
 
 // `S` is solved from `iter`'s return type, then held to its own bound.
-type Iterable = contract(T) {
+type Iterable(T) = contract {
     type S: Iterator(T)
     fn iter(self: &Self) S
 }

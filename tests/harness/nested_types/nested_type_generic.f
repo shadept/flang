@@ -5,8 +5,8 @@
 // generic function, or in an anonymous struct. Its name is its path from the owner.
 import std.io.print
 
-type Outer = struct(A) {
-    type Pair = struct(B) {
+type Outer(A) = struct {
+    type Pair(B) = struct {
         a: A
         b: B
         type Deep = enum { Yes(A), No }

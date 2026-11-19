@@ -1,7 +1,7 @@
 //! TEST: generic_return_with_match
 //! EXIT: 42
 
-type Option = enum(T) {
+type Option(T) = enum {
     Some(T)
     None
 }

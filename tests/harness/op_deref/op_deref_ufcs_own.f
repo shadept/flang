@@ -4,7 +4,7 @@
 // Methods on the wrapper type itself should resolve directly,
 // NOT go through op_deref.
 
-type Box = struct(T) { __value: T }
+type Box(T) = struct { __value: T }
 
 fn op_deref(self: &Box($T)) &T {
     return &self.__value

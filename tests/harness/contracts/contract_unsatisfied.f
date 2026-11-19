@@ -2,7 +2,7 @@
 //! COMPILE-ERROR: E2134
 //! EXIT: 1
 
-type Iter = contract(T) {
+type Iter(T) = contract {
     fn next(self: &Self) T?
 }
 

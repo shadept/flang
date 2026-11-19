@@ -19469,7 +19469,7 @@ test "carried nested types survive a re-demand" {
     let r = redemand_errors(
         "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
-        "type Tree = struct(T) {\n    type Node = struct { v: T, n: i32 }\n    root: Node\n}\ntype Shape = struct {\n    type Kind = enum { A(i32), B }\n    k: Kind\n}\nfn main() i32 {\n    const n: Tree(bool).Node = Tree(bool).Node { v = true, n = 1 }\n    const k = Shape.Kind.A(n.n)\n    return k match { A(x) => x, B => 0 }\n}\n",
+        "type Tree(T) = struct {\n    type Node = struct { v: T, n: i32 }\n    root: Node\n}\ntype Shape = struct {\n    type Kind = enum { A(i32), B }\n    k: Kind\n}\nfn main() i32 {\n    const n: Tree(bool).Node = Tree(bool).Node { v = true, n = 1 }\n    const k = Shape.Kind.A(n.n)\n    return k match { A(x) => x, B => 0 }\n}\n",
     )
     assert_eq(r.first, 0 as usize, "the program type-checks cold")
     assert_eq(r.second, 0 as usize, "and identically when a's slot replays")
@@ -19767,7 +19767,7 @@ test "generic and unqualified variant construction type-checks" {
     // declared return.
     let errors = count_check_errors(
         [
-            "pub type Opt = enum(T) { N\nS(T) }\nfn f() Opt(i32) { return Opt.S(3) }\nfn g() Opt(i32) { return S(3) }\nfn h() Opt(i32) { return N }\n",
+            "pub type Opt(T) = enum { N\nS(T) }\nfn f() Opt(i32) { return Opt.S(3) }\nfn g() Opt(i32) { return S(3) }\nfn h() Opt(i32) { return N }\n",
         ],
         ["opts"],
     )
@@ -19909,7 +19909,7 @@ test "indexing a type with no operator is reported" {
 test "a generic struct literal named without type arguments is E2019" {
     let errors = count_check_errors(
         [
-            "type Pair = struct(T) { a: T, b: T }\nfn f() i64 { let p = Pair { a = 1i64, b = 2i64 } return p.a }\n",
+            "type Pair(T) = struct { a: T, b: T }\nfn f() i64 { let p = Pair { a = 1i64, b = 2i64 } return p.a }\n",
         ],
         ["underinst"],
     )
@@ -19919,7 +19919,7 @@ test "a generic struct literal named without type arguments is E2019" {
 test "a generic struct literal with explicit arguments checks clean" {
     let errors = count_check_errors(
         [
-            "type Pair = struct(T) { a: T, b: T }\nfn f() i64 { let p = Pair(i64) { a = 1, b = 2 } return p.a }\n",
+            "type Pair(T) = struct { a: T, b: T }\nfn f() i64 { let p = Pair(i64) { a = 1, b = 2 } return p.a }\n",
         ],
         ["inst"],
     )
@@ -19940,7 +19940,7 @@ test "a bool index is rejected before any operator lookup" {
 // explicitly, in either arm order. A real
 // `core.option` module is part of each test program — without it the
 // registry has no Option, `null` types as `TY_ERROR`, and every outcome passes vacuously.
-const OPTION_SRC: String = "pub type Option = enum(T) {\n    None,\n    Some(T),\n}\n"
+const OPTION_SRC: String = "pub type Option(T) = enum {\n    None,\n    Some(T),\n}\n"
 
 test "match arms join a Some arm and a null arm into an optional" {
     let errors = count_check_errors(
@@ -20036,8 +20036,8 @@ test "coalesce rejects a mismatched fallback and a non-Option left side" {
 
 // The `?` fixtures register the real well-known modules: `core.try` for `TryResult` and
 // `core.option` for `Option` plus its `op_try`, copied from the stdlib.
-const TRY_SRC: String = "pub type TryResult = enum(T, R) {\n    Continue(T),\n    Return(R),\n}\n"
-const OPTION_TRY_SRC: String = "import core.try\npub type Option = enum(T) {\n    None,\n    Some(T),\n}\npub fn op_try(self: move Option($T)) TryResult(T, Option($U)) {\n    return self match {\n        Some(v) => TryResult.Continue(move v),\n        None => TryResult.Return(None),\n    }\n}\n"
+const TRY_SRC: String = "pub type TryResult(T, R) = enum {\n    Continue(T),\n    Return(R),\n}\n"
+const OPTION_TRY_SRC: String = "import core.try\npub type Option(T) = enum {\n    None,\n    Some(T),\n}\npub fn op_try(self: move Option($T)) TryResult(T, Option($U)) {\n    return self match {\n        Some(v) => TryResult.Continue(move v),\n        None => TryResult.Return(None),\n    }\n}\n"
 
 test "postfix ? types as the Continue payload and constrains the return" {
     let errors = count_check_errors(
@@ -20253,7 +20253,7 @@ test "structural specificity outranks quantifier count in overload ranking" {
     // the check errors — 0 errors proves the structured overload won.
     let errs = count_check_errors(
         [
-            "pub type Pair = struct(A, B) { a: A b: B }\npub fn pick(x: Pair($A, $B)) i32 { return 1 }\npub fn pick(x: $T) bool { return true }\nfn main() i32 { let p: Pair(i32, u8) p.a = 1i32 p.b = 2u8 return pick(p) }\n",
+            "pub type Pair(A, B) = struct { a: A b: B }\npub fn pick(x: Pair($A, $B)) i32 { return 1 }\npub fn pick(x: $T) bool { return true }\nfn main() i32 { let p: Pair(i32, u8) p.a = 1i32 p.b = 2u8 return pick(p) }\n",
         ],
         ["m"],
     )
@@ -20390,7 +20390,7 @@ test "ranking: a catch-all matched as written beats a concrete overload through 
 
 test "ranking: the peel also runs through a generic wrapper" {
     let src = with_wrap(
-        "pub type Box = struct(T) { pad: i64 inner: T }\npub fn op_deref(b: &Box($T)) &T { return &b.inner }\npub fn f(x: &Inner) i64 { return 1 }\nfn main(b: &Box(Inner)) i64 { return b.f() }\n",
+        "pub type Box(T) = struct { pad: i64 inner: T }\npub fn op_deref(b: &Box($T)) &T { return &b.inner }\npub fn f(x: &Inner) i64 { return 1 }\nfn main(b: &Box(Inner)) i64 { return b.f() }\n",
     )
     defer src.deinit()
     let r = resolved_call(src.view(), "f")
@@ -20499,7 +20499,7 @@ test "a generic member call inside a partially-fixed generic instantiates" {
     // unbound, and the stray pick could never infer `cap`'s type arguments.
     let errors = count_check_errors(
         [
-            "type Key = struct { n: usize }\ntype D = struct(K, V) { n: usize\n    k: K\n    v: V\n}\nfn cap(self: &D($K, $V)) usize { return self.n }\nfn set2(self: &D(Key, $V), value: V) usize { return self.cap() }\nfn main() i32 {\n    let d: D(Key, i32) = D(Key, i32) { n = 0usize, k = Key { n = 1usize }, v = 3i32 }\n    const c = d.set2(5i32)\n    return 0\n}\n",
+            "type Key = struct { n: usize }\ntype D(K, V) = struct { n: usize\n    k: K\n    v: V\n}\nfn cap(self: &D($K, $V)) usize { return self.n }\nfn set2(self: &D(Key, $V), value: V) usize { return self.cap() }\nfn main() i32 {\n    let d: D(Key, i32) = D(Key, i32) { n = 0usize, k = Key { n = 1usize }, v = 3i32 }\n    const c = d.set2(5i32)\n    return 0\n}\n",
         ],
         ["m"],
     )

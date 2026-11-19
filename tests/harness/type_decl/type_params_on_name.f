@@ -6,7 +6,7 @@ import std.collections.list
 // A type declaration's parameters sit on its name (RFC-047): structs, enums and contracts take them
 // as their own, and any other body is a generic alias that expands at each use.
 
-type Box = struct(T) {
+type Box(T) = struct {
     type Keyed(K) = (K, T)
     v: T
 }

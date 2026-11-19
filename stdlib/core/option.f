@@ -8,7 +8,7 @@
 
 // `None` is declared first so it gets discriminant tag 0. Many call sites rely on zero-initialized
 // memory representing `None` (e.g. struct fields of type `Option(T)` with no explicit initializer).
-pub type Option = enum(T) {
+pub type Option(T) = enum {
     None
     Some(T)
 }

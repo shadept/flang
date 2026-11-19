@@ -11,11 +11,11 @@ fn iter(self: &Bag) i32 {
     return self.size
 }
 
-type Iterator = contract(T) {
+type Iterator(T) = contract {
     fn next(self: &Self) T?
 }
 
-type Iterable = contract(T) {
+type Iterable(T) = contract {
     type S: Iterator(T)
     fn iter(self: &Self) S
 }

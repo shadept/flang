@@ -5,7 +5,7 @@ import std.test
 
 // Result(T, E) - a type representing either success (Ok) or failure (Err) T is the success value
 // type, E is the error value type
-pub type Result = enum(T, E) {
+pub type Result(T, E) = enum {
     Ok(T)
     Err(E)
 }

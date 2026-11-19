@@ -23,7 +23,7 @@ type Iter = contract {
     fn next(self: &Self) Item?
 }
 
-type Peekable = struct(I: Iter) {
+type Peekable(I: Iter) = struct {
     it: I
     peeked: I.Item?
 }

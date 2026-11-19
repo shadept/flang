@@ -22,7 +22,7 @@ type Iter = contract {
 }
 
 // A field typed by the parameter's associated type: `Peekable(Counter)` stores an `i64?`.
-type Peekable = struct(I: Iter) {
+type Peekable(I: Iter) = struct {
     it: I
     peeked: I.Item?
 }
@@ -48,7 +48,7 @@ fn next(self: &Peekable($I)) I.Item? where I.Item: copyable {
 }
 
 // An enum payload projects the same way.
-type Step = enum(I: Iter) {
+type Step(I: Iter) = enum {
     Done
     Got(I.Item)
 }

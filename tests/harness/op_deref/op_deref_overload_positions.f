@@ -11,7 +11,7 @@
 // `b.*` is a Point VALUE, so a free call needs `&b.*` for a `&Point`
 // parameter - the same rule as any other argument, nothing deref-specific.
 
-type Box = struct(T) { __value: T }
+type Box(T) = struct { __value: T }
 
 fn op_deref(self: &Box($T)) &T {
     return &self.__value

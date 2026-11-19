@@ -3,7 +3,7 @@
 
 // op_deref on &Wrapper - auto-deref through the reference, then op_deref.
 
-type Box = struct(T) { __value: T }
+type Box(T) = struct { __value: T }
 
 fn op_deref(self: &Box($T)) &T {
     return &self.__value

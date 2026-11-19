@@ -10,7 +10,7 @@ fn key(self: i32) i32 {
     return self
 }
 
-type Table = struct(K: Keyed) {
+type Table(K: Keyed) = struct {
     first: K
 }
 

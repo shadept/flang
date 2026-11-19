@@ -9,7 +9,7 @@ type Event = enum {
     Stop
 }
 
-type Arms = struct(R) {
+type Arms(R) = struct {
     result: R
     done: bool
 }

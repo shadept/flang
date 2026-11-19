@@ -9,7 +9,7 @@ type Iter = contract {
     fn next(self: &Self) Item?
 }
 
-type Later = struct(F: fn(I.Item) bool, I: Iter) { // error E2144: names the later `I`
+type Later(F: fn(I.Item) bool, I: Iter) = struct { // error E2144: names the later `I`
     f: F
     it: I
 }

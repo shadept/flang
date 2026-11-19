@@ -1,7 +1,7 @@
 //! TEST: generic_struct_basic
 //! EXIT: 7
 
-type Pair = struct(T) {
+type Pair(T) = struct {
     first: T
     second: T
 }

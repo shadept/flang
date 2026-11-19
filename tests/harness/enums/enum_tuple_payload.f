@@ -4,7 +4,7 @@
 // Test that a genuine tuple used as a single enum variant payload
 // is NOT flattened into multiple bindings.
 
-type Result = enum(T, E) {
+type Result(T, E) = enum {
     Ok(T)
     Err(E)
 }

@@ -6,7 +6,7 @@
 
 import std.allocator
 
-type Pair = struct(T) {
+type Pair(T) = struct {
     first: T
     second: T
 }

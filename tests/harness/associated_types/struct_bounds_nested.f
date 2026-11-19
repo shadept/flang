@@ -21,11 +21,11 @@ type Iter = contract {
     fn next(self: &Self) Item?
 }
 
-type Source = struct(I: Iter) {
+type Source(I: Iter) = struct {
     it: I
 }
 
-type Holder = struct(T) {
+type Holder(T) = struct {
     inner: T
 }
 

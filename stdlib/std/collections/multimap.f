@@ -27,7 +27,7 @@ pub type Chain = struct {
 }
 
 // One value in the pool and the index of the next value of the same key.
-pub type Slot = struct(V) {
+pub type Slot(V) = struct {
     value: V
     next: u32
 }
@@ -38,7 +38,7 @@ pub type Slot = struct(V) {
 // two allocations and adding a value never allocates a block of its own. Values are reached by
 // walking a key's chain (`values`, `values_ref`); there is no contiguous `V[]` per key. Removing a
 // key unlinks its chain and leaves the slots behind until `compact`.
-pub type MultiMap = struct(K: Hash + Eq, V) {
+pub type MultiMap(K: Hash + Eq, V) = struct {
     chains: UnmanagedDict(K, Chain)
     pool: UnmanagedList(Slot(V))
     // Slots unlinked by `remove_key`, reclaimed by `compact`.
@@ -161,7 +161,7 @@ pub fn capacity_bytes(self: &MultiMap($K, $V)) usize {
 
 // Iterator over one key's values, by value, in insertion order. A snapshot of the chain: the map is
 // not modified while it is being iterated.
-pub type ValuesIter = struct(V) {
+pub type ValuesIter(V) = struct {
     pool: &UnmanagedList(Slot(V))
     cur: u32
 }
@@ -193,7 +193,7 @@ pub fn next(it: &ValuesIter($V)) V? where V: copyable {
 // Iterator over one key's values by reference into the pool, in insertion order, so a loop can
 // write them in place: `for v in m.values_ref(k) { v.* = ... }`. A reference is valid until the
 // next `add` or `compact`, either of which may move the pool.
-pub type ValuesRefIter = struct(V) {
+pub type ValuesRefIter(V) = struct {
     pool: &UnmanagedList(Slot(V))
     cur: u32
 }

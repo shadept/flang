@@ -28,7 +28,7 @@ import std.test
 // takes one as its last argument, and the same allocator must be passed every time. A
 // zero-initialised value is a valid empty list. Elements are owned: `deinit` deinits each before
 // freeing the buffer.
-pub type UnmanagedList = struct(T) {
+pub type UnmanagedList(T) = struct {
     owned mem: Memory
     len: usize
 }
@@ -37,7 +37,7 @@ pub type UnmanagedList = struct(T) {
 // through. Every `UnmanagedList` operation applies to it as well, reached through `op_deref`, and
 // the allocating ones come without the allocator argument. A zero-initialised value is a valid
 // empty list on the global allocator.
-pub type List = struct(T) {
+pub type List(T) = struct {
     __storage: UnmanagedList(T)
     allocator: &Allocator
 }
@@ -51,7 +51,7 @@ pub fn op_deref(self: &List($T)) &UnmanagedList(T) {
 // is known: `s.items.managed(s.allocator).push(v)` grows `s.items` in place. It holds the storage
 // by reference, so nothing is copied and there is nothing to deinit; the owner of the storage frees
 // it, through the same allocator.
-pub type ListRef = struct(T) {
+pub type ListRef(T) = struct {
     __storage: &UnmanagedList(T)
     allocator: &Allocator
 }
@@ -720,7 +720,7 @@ pub fn uniq(s: &UnmanagedList($T), allocator: &Allocator) UnmanagedList(T) where
 
 // Hands the list's elements over, one at a time. The list reads as empty while a drain is live, and
 // what the drain does not take goes back when it is released.
-pub type Drain = struct(T) {
+pub type Drain(T) = struct {
     __list: &UnmanagedList(T)
     // A copy would hand the elements out twice.
     __unique: NoCopy

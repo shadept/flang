@@ -4,7 +4,7 @@
 // Named struct construction with generic type args: TypeName(TypeArg) { ... }
 // Previously gave a semantic error; now supported.
 
-type Foo = struct(T) {
+type Foo(T) = struct {
     value: T
 }
 

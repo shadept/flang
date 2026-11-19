@@ -5,7 +5,7 @@
 
 import core.rtti
 
-type Box = struct(T) {
+type Box(T) = struct {
     value: T
 }
 

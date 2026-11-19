@@ -22,7 +22,7 @@ type Iter = contract {
 }
 
 // `F`'s bound reads `I.Item`, which `I`'s bound declares.
-type Filtered = struct(I: Iter, F: fn(I.Item) bool) {
+type Filtered(I: Iter, F: fn(I.Item) bool) = struct {
     it: I
     f: F
 }

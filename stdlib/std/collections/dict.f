@@ -31,7 +31,7 @@ const HASH_DEAD: usize = 1
 
 // A single entry in the hash map. `hash` is also the slot state - see the header comment; `key` and
 // `value` are meaningful only when it is at least 2.
-pub type Entry = struct(K, V) {
+pub type Entry(K, V) = struct {
     hash: usize
     key: K
     value: V
@@ -47,7 +47,7 @@ pub fn deinit(self: move Entry($K, $V)) {
 // table takes one as its last argument, and the same allocator must be passed every time. A
 // zero-initialised value is a valid empty dict. Keys and values are owned: `deinit` deinits each
 // before freeing the table.
-pub type UnmanagedDict = struct(K: Hash + Eq, V) {
+pub type UnmanagedDict(K: Hash + Eq, V) = struct {
     owned mem: Memory
     length: usize
     // Tombstones left by removals. They occupy probe slots until the next rehash, so the load
@@ -59,7 +59,7 @@ pub type UnmanagedDict = struct(K: Hash + Eq, V) {
 // through. Every `UnmanagedDict` operation applies to it as well, reached through `op_deref`, and
 // the allocating ones come without the allocator argument. A zero-initialised value is a valid
 // empty dict on the global allocator.
-pub type Dict = struct(K: Hash + Eq, V) {
+pub type Dict(K: Hash + Eq, V) = struct {
     __storage: UnmanagedDict(K, V)
     allocator: &Allocator
 }
@@ -73,7 +73,7 @@ pub fn op_deref(self: &Dict($K, $V)) &UnmanagedDict(K, V) {
 // is known: `s.index.managed(s.allocator).set(k, v)` inserts into `s.index` in place. It holds the
 // table by reference, so nothing is copied and there is nothing to deinit; the owner of the table
 // frees it, through the same allocator.
-pub type DictRef = struct(K: Hash + Eq, V) {
+pub type DictRef(K: Hash + Eq, V) = struct {
     __storage: &UnmanagedDict(K, V)
     allocator: &Allocator
 }
@@ -572,7 +572,7 @@ pub fn count(self: &UnmanagedDict($K, $V), pred: fn(K, V) bool) usize {
 
 // Iterator over a dict's entries, each entry lent in table order. A snapshot: the dict is not
 // modified while it is being iterated.
-pub type DictIterator = struct(K, V) {
+pub type DictIterator(K, V) = struct {
     dict: &UnmanagedDict(K, V)
     current: usize
 }
@@ -605,7 +605,7 @@ pub fn next(it: &DictIterator($K, $V)) &Entry(K, V)? {
 
 // Hands every entry over, one at a time, emptying the dict as it goes. The table itself is kept and
 // still has to be freed (`deinit`); a drain that stops early leaves the untaken entries in place.
-pub type DictDrain = struct(K, V) {
+pub type DictDrain(K, V) = struct {
     __dict: &UnmanagedDict(K, V)
     current: usize
     taken: usize
@@ -654,7 +654,7 @@ pub fn deinit(self: move DictDrain($K, $V)) {
 }
 
 // Iterator over a dict's keys, in unspecified order.
-pub type KeysIter = struct(K, V) {
+pub type KeysIter(K, V) = struct {
     it: DictIterator(K, V)
 }
 
@@ -678,7 +678,7 @@ pub fn keys(self: &UnmanagedDict($K, $V)) KeysIter(K, V) {
 }
 
 // Iterator over a dict's values, in unspecified order.
-pub type ValuesIter = struct(K, V) {
+pub type ValuesIter(K, V) = struct {
     it: DictIterator(K, V)
 }
 

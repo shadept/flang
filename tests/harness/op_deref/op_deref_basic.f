@@ -1,7 +1,7 @@
 //! TEST: op_deref_basic
 //! EXIT: 35
 
-type Wrapper = struct(T) { __value: T }
+type Wrapper(T) = struct { __value: T }
 
 fn op_deref(self: &Wrapper($T)) &T {
     return &self.__value

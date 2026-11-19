@@ -21,7 +21,7 @@
 // named function, a lambda or a capturing closure, and supplies the parameter types of an
 // unannotated lambda. An adapter stores it, so each chain instantiates per iterator type only:
 //
-//     type FilterIter = struct(I: Iterator) { it: I, f: fn(I.Item) bool }
+//     type FilterIter(I: Iterator) = struct { it: I, f: fn(I.Item) bool }
 //
 // The stored value borrows the closure it came from: an adapter must not outlive the frame that
 // built its closure.
@@ -56,7 +56,7 @@ pub type Iterable = contract {
 // Filter
 // =============================================================================
 
-type FilterIter = struct(I: Iterator) {
+type FilterIter(I: Iterator) = struct {
     it: I
     f: fn(I.Item) bool
 }
@@ -90,7 +90,7 @@ pub fn filter(it: move $I, f: fn(I.Item) bool) FilterIter(I) where I: Iterator {
 // Map
 // =============================================================================
 
-type MapIter = struct(I: Iterator, U) {
+type MapIter(I: Iterator, U) = struct {
     it: I
     f: fn(move I.Item) U
 }
@@ -119,7 +119,7 @@ pub fn map(it: move $I, f: fn(move I.Item) $U) MapIter(I, U) where I: Iterator {
 // Enumerate — pairs each element with its 0-based position.
 // =============================================================================
 
-type EnumerateIter = struct(I: Iterator) {
+type EnumerateIter(I: Iterator) = struct {
     it: I
     idx: usize
 }
@@ -150,7 +150,7 @@ pub fn enumerate(it: move $I) EnumerateIter(I) {
 // Take / Skip
 // =============================================================================
 
-type TakeIter = struct(I: Iterator) {
+type TakeIter(I: Iterator) = struct {
     it: I
     left: usize
 }
@@ -176,7 +176,7 @@ pub fn take(it: move $I, n: usize) TakeIter(I) {
     return .{ it = move it, left = n }
 }
 
-type SkipIter = struct(I: Iterator) {
+type SkipIter(I: Iterator) = struct {
     it: I
     pending: usize
 }
@@ -209,7 +209,7 @@ pub fn skip(it: move $I, n: usize) SkipIter(I) {
 // Take-while / Skip-while
 // =============================================================================
 
-type TakeWhileIter = struct(I: Iterator) {
+type TakeWhileIter(I: Iterator) = struct {
     it: I
     f: fn(I.Item) bool
     done: bool
@@ -246,7 +246,7 @@ pub fn take_while(it: move $I, f: fn(I.Item) bool) TakeWhileIter(I) where I: Ite
     return .{ it = move it, f = f, done = false }
 }
 
-type SkipWhileIter = struct(I: Iterator) {
+type SkipWhileIter(I: Iterator) = struct {
     it: I
     f: fn(I.Item) bool
     skipping: bool
@@ -287,7 +287,7 @@ pub fn skip_while(it: move $I, f: fn(I.Item) bool) SkipWhileIter(I) where I: Ite
 // Zip / Chain
 // =============================================================================
 
-type ZipIter = struct(I: Iterator, J: Iterator) {
+type ZipIter(I: Iterator, J: Iterator) = struct {
     a: I
     b: J
 }
@@ -319,7 +319,7 @@ pub fn zip(a: move $I, b: move $J) ZipIter(I, J) {
     return .{ a = move a, b = move b }
 }
 
-type ChainIter = struct(I: Iterator, J: Iterator(Item = I.Item)) {
+type ChainIter(I: Iterator, J: Iterator(Item = I.Item)) = struct {
     a: I
     b: J
     on_b: bool
@@ -351,7 +351,7 @@ pub fn chain(a: move $I, b: move $J) ChainIter(I, J) {
     return .{ a = move a, b = move b, on_b = false }
 }
 
-type ZipLongestIter = struct(I: Iterator, J: Iterator) {
+type ZipLongestIter(I: Iterator, J: Iterator) = struct {
     a: I
     b: J
     fill_a: I.Item
@@ -400,7 +400,7 @@ pub fn zip_longest(
 // Cycle
 // =============================================================================
 
-type CycleIter = struct(I: Iterator + copyable) {
+type CycleIter(I: Iterator + copyable) = struct {
     start: I
     it: I
 }
@@ -434,7 +434,7 @@ pub fn cycle(it: move $I) CycleIter(I) {
 // Step by
 // =============================================================================
 
-type StepByIter = struct(I: Iterator) {
+type StepByIter(I: Iterator) = struct {
     it: I
     step: usize
 }
@@ -472,7 +472,7 @@ pub fn step_by(it: move $I, step: usize) StepByIter(I) {
 // Peekable
 // =============================================================================
 
-type PeekableIter = struct(I: Iterator) {
+type PeekableIter(I: Iterator) = struct {
     it: I
     // The element `next` will return, pulled one step ahead; null at the end.
     ahead: I.Item?
@@ -508,7 +508,7 @@ pub fn peekable(it: move $I) PeekableIter(I) {
 // Tap
 // =============================================================================
 
-type TapIter = struct(I: Iterator) {
+type TapIter(I: Iterator) = struct {
     it: I
     f: fn(I.Item)
 }
@@ -540,7 +540,7 @@ pub fn tap(it: move $I, f: fn(I.Item)) TapIter(I) where I: Iterator {
 // Scan
 // =============================================================================
 
-type ScanIter = struct(I: Iterator, A) {
+type ScanIter(I: Iterator, A) = struct {
     it: I
     acc: A
     f: fn(A, I.Item) A
@@ -576,7 +576,7 @@ pub fn scan(it: move $I, init: move $A, f: fn(A, I.Item) A) ScanIter(I, A) where
 // Uniq
 // =============================================================================
 
-type UniqIter = struct(I: Iterator) {
+type UniqIter(I: Iterator) = struct {
     it: I
     // The next element to yield, pulled one step ahead; null at the end.
     ahead: I.Item?
@@ -620,7 +620,7 @@ pub fn uniq(it: move $I) UniqIter(I) {
 // Sources
 // =============================================================================
 
-type OnceIter = struct(T) {
+type OnceIter(T) = struct {
     value: T
     done: bool
 }
@@ -646,7 +646,7 @@ pub fn once(value: move $T) OnceIter(T) {
     return .{ value = move value, done = false }
 }
 
-type RepeatIter = struct(T) {
+type RepeatIter(T) = struct {
     value: T
 }
 

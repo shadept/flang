@@ -1,7 +1,7 @@
 //! TEST: enum_generic
 //! EXIT: 15
 
-type Result = enum(T, E) {
+type Result(T, E) = enum {
     Ok(T)
     Err(E)
 }

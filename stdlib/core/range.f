@@ -9,7 +9,7 @@
 
 // A (half-open) range bounded inclusively below and exclusively above (start..end). The range
 // start..end contains all values with start <= x < end. It is empty if start >= end.
-pub type Range = struct(T) {
+pub type Range(T) = struct {
     start: T
     end: T
 }
@@ -26,7 +26,7 @@ pub fn op_index(r: &Range($T), index: usize) T? {
 // =============================================================================
 
 // Iterator state for ranges
-pub type RangeIterator = struct(T) {
+pub type RangeIterator(T) = struct {
     current: T
     end: T
 }

@@ -1,7 +1,7 @@
 //! TEST: op_deref_ufcs
 //! EXIT: 5
 
-type Box = struct(T) { __value: T }
+type Box(T) = struct { __value: T }
 
 fn op_deref(self: &Box($T)) &T {
     return &self.__value

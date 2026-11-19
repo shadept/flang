@@ -3,17 +3,17 @@
 
 // An anonymous struct is a layout over the type parameters in scope: a field, payload or nested
 // type naming the owner's `T` gets the instance's argument, and two instances coexist.
-type Pair = struct(T) {
+type Pair(T) = struct {
     inner: struct { a: T, b: T }
     tag: i32
 }
 
-type Msg = enum(T) {
+type Msg(T) = enum {
     Point(struct { x: T, y: T })
     Empty
 }
 
-type Tree = struct(K) {
+type Tree(K) = struct {
     type Node = struct {
         meta: struct { key: K, depth: i32 }
     }

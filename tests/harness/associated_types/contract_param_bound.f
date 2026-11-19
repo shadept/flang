@@ -2,7 +2,7 @@
 //! EXIT: 9
 
 // A contract's own parameter takes its bound inline.
-type Into = contract(T: copyable) {
+type Into(T: copyable) = contract {
     fn into(self: Self) T
 }
 

@@ -2501,12 +2501,12 @@ test "spacing normalizes around punctuation and operators" {
 
 test "an open parenthesis glues to a name and stands off after a keyword or operator" {
     const cfg = default_config()
-    const src = "type Box = struct(T) { v: T }\n#allow (W2004)\nfn f(a: i32) (i32, i32) {\n    let b: Box (i32) = Box (i32) { v = a }\n    let t = (a, b.v)\n    if (a + (b.v)) > 0 {\n        return (t.0, t.1)\n    }\n    return t\n}\n"
+    const src = "type Box(T) = struct { v: T }\n#allow (W2004)\nfn f(a: i32) (i32, i32) {\n    let b: Box (i32) = Box (i32) { v = a }\n    let t = (a, b.v)\n    if (a + (b.v)) > 0 {\n        return (t.0, t.1)\n    }\n    return t\n}\n"
     const r = format_source(src, &cfg)
     let out = r.unwrap()
     defer out.deinit()
     assert_true(
-        out.view() == "type Box = struct(T) { v: T }\n#allow(W2004)\nfn f(a: i32) (i32, i32) {\n    let b: Box(i32) = Box(i32) { v = a }\n    let t = (a, b.v)\n    if (a + (b.v)) > 0 {\n        return (t.0, t.1)\n    }\n    return t\n}\n",
+        out.view() == "type Box(T) = struct { v: T }\n#allow(W2004)\nfn f(a: i32) (i32, i32) {\n    let b: Box(i32) = Box(i32) { v = a }\n    let t = (a, b.v)\n    if (a + (b.v)) > 0 {\n        return (t.0, t.1)\n    }\n    return t\n}\n",
         "names, struct literals and annotations glue; tuple, grouping and keyword parens stand off",
     )
 }

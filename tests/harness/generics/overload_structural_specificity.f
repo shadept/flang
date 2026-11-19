@@ -10,7 +10,7 @@ import std.collections.dict
 import std.collections.list
 import std.option
 
-pub type Pair = struct(A, B) {
+pub type Pair(A, B) = struct {
     a: A
     b: B
 }

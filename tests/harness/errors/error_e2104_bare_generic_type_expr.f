@@ -3,7 +3,7 @@
 
 // Bare generic type (without type args) in expression context should be an error.
 
-type Box = struct(T) {
+type Box(T) = struct {
     value: T
 }
 

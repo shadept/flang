@@ -10,7 +10,7 @@ type Shape = struct {
     kind: Kind
 }
 
-type Box = struct(T) {
+type Box(T) = struct {
     type Cell = struct { v: T }
     c: Cell
 }

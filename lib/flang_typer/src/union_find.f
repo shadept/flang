@@ -20,7 +20,7 @@ import std.option
 // One partition's bookkeeping: the parent pointer (self-referential at the root) plus the size of
 // the partition rooted here. Size doesn't drive balancing - see `merge` below - but it's exposed
 // for debug / statistics consumers.
-pub type UnionFindNode = struct(K) {
+pub type UnionFindNode(K) = struct {
     parent: K
     size: usize
 }
@@ -28,7 +28,7 @@ pub type UnionFindNode = struct(K) {
 // One entry in the undo log: enough to restore a single dict mutation. `was_new` covers the case
 // where the key did not exist before the mutation, so rollback must remove it rather than restore a
 // prior value.
-pub type UnionFindUndo = struct(K) {
+pub type UnionFindUndo(K) = struct {
     key: K
     old_parent: K
     old_size: usize
@@ -38,7 +38,7 @@ pub type UnionFindUndo = struct(K) {
 // Disjoint-set forest over keys of type `K`, with speculative regions: `push_checkpoint` opens one,
 // and every `find` and `merge` inside it is either kept by `commit` or undone by `rollback`. One
 // allocator serves the node table and the undo journal.
-pub type UnionFind = struct(K) {
+pub type UnionFind(K) = struct {
     nodes: UnmanagedDict(K, UnionFindNode(K))
     // The undo log of the open speculative regions: `push_checkpoint` opens one, `rollback` replays
     // it in reverse, `commit` folds it into the enclosing region.

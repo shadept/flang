@@ -17,7 +17,7 @@ type Bag = struct {
     size: i32
 }
 
-type Iter = contract(T) {
+type Iter(T) = contract {
     fn next(self: &Self) T?
 }
 

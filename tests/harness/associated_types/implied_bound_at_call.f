@@ -6,7 +6,7 @@ type Keyed = contract {
     fn key(self: Self) i32
 }
 
-type Table = struct(K: Keyed) {
+type Table(K: Keyed) = struct {
     first: K
 }
 

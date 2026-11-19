@@ -73,7 +73,7 @@ pub type Scope = struct {
 // A Task is a handle to the result of a spawned task. `await` consumes it. A Task that is never
 // awaited is reported by W2006, and its result is dropped, unreleased, when the scope ends. A Task
 // must not be used after its scope has ended.
-pub type Task = struct(T) {
+pub type Task(T) = struct {
     // Where the task stores its result.
     owned __result: &T
     // The task record holding the task, and that record's generation; the pair stops matching once
@@ -138,7 +138,7 @@ type ScopeRecord = struct {
 }
 
 // TaskSlot holds a spawned task's job and function and, once it has run, its result.
-type TaskSlot = struct(T) {
+type TaskSlot(T) = struct {
     job: Job
     body: fn() T
     result: T
@@ -150,7 +150,7 @@ type LaunchSlot = struct {
 }
 
 // RootSlot holds the body of an outermost scope and, once it has run, its value.
-type RootSlot = struct(R) {
+type RootSlot(R) = struct {
     start: Start
     body: fn(&Scope) R
     result: R
@@ -377,7 +377,7 @@ pub fn yield_now() Result((), Cancelled) {
 
 // A Selector is the handle a body of `select` registers its arms through. It is valid only while
 // that body runs.
-pub type Selector = struct(R) {
+pub type Selector(R) = struct {
     __select: &Select
     // Where the winning arm's handler stores the select's value.
     __result: &R
@@ -564,7 +564,7 @@ pub fn __win(self: &Arm) bool {
 }
 
 // TaskArm is a select's arm waiting for a task to finish.
-type TaskArm = struct(F, R) {
+type TaskArm(F, R) = struct {
     index: u32
     handler: F
     out: &R

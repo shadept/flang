@@ -8,7 +8,7 @@ pub type Pub = struct {
     o: Open
 }
 
-pub type Gen = struct(T) {
-    pub type Cell = struct(U) { t: T, u: U }
+pub type Gen(T) = struct {
+    pub type Cell(U) = struct { t: T, u: U }
     c: Cell(T)
 }

@@ -15,7 +15,7 @@ pub type TypeKind = enum {
 
 // Generic alias for TypeInfo.
 // Allows couple of T to its TypeInfo.
-pub type Type = struct(T) {}
+pub type Type(T) = struct {}
 
 pub type ParamInfo = struct {
     name: String

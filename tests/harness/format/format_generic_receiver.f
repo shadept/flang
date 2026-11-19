@@ -10,7 +10,7 @@ import std.io.writer
 import std.string
 import std.string_builder
 
-type Box = struct(T) {
+type Box(T) = struct {
     v: T
 }
 

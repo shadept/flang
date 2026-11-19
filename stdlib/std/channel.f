@@ -24,7 +24,7 @@ import std.test
 
 // A Channel carries values of type `T` between tasks. Tasks share it by reference; its owner
 // releases it with `deinit` once no task uses it.
-pub type Channel = struct(T) {
+pub type Channel(T) = struct {
     owned __state: &ChannelState(T)
 }
 
@@ -37,7 +37,7 @@ pub type RecvError = enum {
 }
 
 // SendError is why a send failed. It gives back the value that was not sent.
-pub type SendError = enum(T) {
+pub type SendError(T) = enum {
     // The channel was closed before the value was taken.
     Closed(T)
     // The sending task's scope was cancelled while it waited.
@@ -53,7 +53,7 @@ pub fn deinit(self: move SendError($T)) {
 }
 
 // TrySendError is why a send that does not wait failed. It gives back the value that was not sent.
-pub type TrySendError = enum(T) {
+pub type TrySendError(T) = enum {
     // No receiver was waiting and the channel had no room.
     Full(T)
     // The channel is closed.
@@ -77,13 +77,13 @@ pub type TryRecvError = enum {
 }
 
 // SendOp is a send not yet performed; `.await()` performs it.
-pub type SendOp = struct(T) {
+pub type SendOp(T) = struct {
     __channel: &Channel(T)
     __value: T
 }
 
 // RecvOp is a receive not yet performed; `.await()` performs it.
-pub type RecvOp = struct(T) {
+pub type RecvOp(T) = struct {
     __channel: &Channel(T)
 }
 
@@ -97,7 +97,7 @@ type WaitStatus = enum {
 
 // SendWaiter is a sender waiting for room or for a receiver. It lives on the sender's stack while
 // the sender waits.
-type SendWaiter = struct(T) {
+type SendWaiter(T) = struct {
     coroutine: &Coroutine
     // The value being sent, still in the sender's frame; a receiver moves it out.
     owned value: &T
@@ -109,7 +109,7 @@ type SendWaiter = struct(T) {
 
 // RecvWaiter is a receiver waiting for a value. It lives on the receiver's stack while the receiver
 // waits.
-type RecvWaiter = struct(T) {
+type RecvWaiter(T) = struct {
     coroutine: &Coroutine
     // Where a sender stores the value, in the receiver's frame.
     owned slot: &T
@@ -121,7 +121,7 @@ type RecvWaiter = struct(T) {
 
 // ChannelState is a channel's buffer and its queues of waiting senders and receivers. At most one
 // of the two queues is non-empty at a time, and receivers wait only while the buffer is empty.
-type ChannelState = struct(T) {
+type ChannelState(T) = struct {
     buffer: Deque(T)
     cap: usize
     closed: bool
@@ -472,7 +472,7 @@ where F: fn(move Result((), SendError(T))) R {
 }
 
 // RecvArm is a select's arm waiting to receive.
-type RecvArm = struct(T, F, R) {
+type RecvArm(T, F, R) = struct {
     waiter: RecvWaiter(T)
     received: T
     channel: &Channel(T)
@@ -481,7 +481,7 @@ type RecvArm = struct(T, F, R) {
 }
 
 // SendArm is a select's arm waiting to send.
-type SendArm = struct(T, F, R) {
+type SendArm(T, F, R) = struct {
     waiter: SendWaiter(T)
     // The value being sent, until a receiver moves it out.
     value: T

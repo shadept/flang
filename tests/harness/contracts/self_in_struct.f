@@ -4,7 +4,7 @@
 import std.option
 
 // `Self` in a named struct or enum is the type applied to its own parameters.
-type Node = struct(T) {
+type Node(T) = struct {
     value: T
     next: &Self?
 }

@@ -2861,7 +2861,7 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
 
 // A small analyzed project for the cursor-request tests, fabricated in memory: one file at
 // /t/m.f, no disk, no stdlib.
-const DEMO_SRC: String = "pub fn point(q: i32) i32 { return q }\npub type P = struct { x: i32 }\npub fn go(n: i32) i32 {\n    let a = point(3)\n    let s = P { x = 1 }\n    for v in 0..n {\n        let b = v\n    }\n    return a\n}\n// see Wide\npub fn pick(x: $T) $T { return x }\npub fn wait(k: i32) {\n    while k > 0 {\n        k = k - 1\n    }\n}\npub fn use_pick() i32 { return pick(7) }\npub fn wrap(y: $T) i32 { return point(8) }\npub fn use_wrap() i32 { return wrap(true) }\npub fn lone(z: $T) i32 { return point(4) }\npub fn read_x(pp: P) i32 { return pp.x }\npub fn solo(w: $T, point: i32) i32 { return point }\npub type E = enum { A B }\npub fn pick_e() E { return E.A }\npub type Q = struct {\n    // The y.\n    y: i32\n}\npub fn read_y(qq: Q) i32 { return qq.y }\npub type It = contract {\n    type Item\n    fn next(self: &Self) Item\n}\npub fn first(it: &$I) I.Item where I: It { return it.next() }\npub fn keep(it: &$I, b: I) I where I: It, I.Item: It { return b }\npub type Node = struct(T) { next: &Self }\npub fn apply(x: $T, f: $F) T where F: fn(T) T { return f(x) }\npub fn use_apply() i32 { return apply(3i32) { v => v } }\n"
+const DEMO_SRC: String = "pub fn point(q: i32) i32 { return q }\npub type P = struct { x: i32 }\npub fn go(n: i32) i32 {\n    let a = point(3)\n    let s = P { x = 1 }\n    for v in 0..n {\n        let b = v\n    }\n    return a\n}\n// see Wide\npub fn pick(x: $T) $T { return x }\npub fn wait(k: i32) {\n    while k > 0 {\n        k = k - 1\n    }\n}\npub fn use_pick() i32 { return pick(7) }\npub fn wrap(y: $T) i32 { return point(8) }\npub fn use_wrap() i32 { return wrap(true) }\npub fn lone(z: $T) i32 { return point(4) }\npub fn read_x(pp: P) i32 { return pp.x }\npub fn solo(w: $T, point: i32) i32 { return point }\npub type E = enum { A B }\npub fn pick_e() E { return E.A }\npub type Q = struct {\n    // The y.\n    y: i32\n}\npub fn read_y(qq: Q) i32 { return qq.y }\npub type It = contract {\n    type Item\n    fn next(self: &Self) Item\n}\npub fn first(it: &$I) I.Item where I: It { return it.next() }\npub fn keep(it: &$I, b: I) I where I: It, I.Item: It { return b }\npub type Node(T) = struct { next: &Self }\npub fn apply(x: $T, f: $F) T where F: fn(T) T { return f(x) }\npub fn use_apply() i32 { return apply(3i32) { v => v } }\n"
 
 fn demo_project_into(srv: &LspServer) {
     let srcs: List(OwnedString) = list(2)
@@ -3321,7 +3321,7 @@ test "hover on a type parameter reads typevar, on Self the type it names" {
     assert_true(hover_shows(60, 35, 24, "typevar I"), "a bare `I`")
     assert_true(hover_shows(61, 32, 19, "pub type It = contract"), "`Self` in a contract")
     assert_true(hover_shows(62, 32, 25, "type Item"), "a bare associated type")
-    assert_true(hover_shows(63, 36, 35, "pub type Node = struct(T)"), "`Self` in a struct")
+    assert_true(hover_shows(63, 36, 35, "pub type Node(T) = struct"), "`Self` in a struct")
     assert_true(
         hover_shows(64, 37, 55, "param f: F where F: fn(T) T"),
         "a generic body's parameter shows its type parameter and its bound, not an instantiation's",

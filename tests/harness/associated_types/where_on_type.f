@@ -2,7 +2,7 @@
 //! COMPILE-ERROR: E2145
 //! EXIT: 1
 
-type Wheres = struct(T) where T: copyable { // error E2145: the bound sits on the parameter
+type Wheres(T) where T: copyable = struct { // error E2145: the bound sits on the parameter
     x: T
 }
 

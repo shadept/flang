@@ -4,7 +4,7 @@
 // Own fields take priority over op_deref - accessing 'tag' should
 // return the wrapper's own field, not look through op_deref.
 
-type Tagged = struct(T) { tag: i32, __value: T }
+type Tagged(T) = struct { tag: i32, __value: T }
 
 fn op_deref(self: &Tagged($T)) &T {
     return &self.__value

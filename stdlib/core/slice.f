@@ -23,7 +23,7 @@ import std.test
 
 // A view into a contiguous sequence of elements of type T. A Slice does not own ptr.
 
-pub type Slice = struct(T) {
+pub type Slice(T) = struct {
     ptr: &T
     len: usize
 }
@@ -482,7 +482,7 @@ pub fn reinterpret(src: $T[]) $U[] {
 
 // Iterator state for slices. Created by `iter(&slice)`. Stores a copy of the slice and tracks the
 // current position.
-pub type SliceIterator = struct(T) {
+pub type SliceIterator(T) = struct {
     slice: T[]
     index: usize
 }
@@ -509,7 +509,7 @@ pub fn next(iter: &SliceIterator($T)) T? where T: copyable {
 
 // Reference iterator: `for x in xs.iter_ref()` yields `&T` into the slice's storage instead of a
 // copy.
-pub type SliceRefIterator = struct(T) {
+pub type SliceRefIterator(T) = struct {
     slice: T[]
     index: usize
 }
@@ -536,7 +536,7 @@ pub fn next(iter: &SliceRefIterator($T)) &T? {
 
 // Iterator over a slice's elements by value, last to first. A snapshot of the view it was made
 // from: the storage is not modified while it is being iterated.
-pub type SliceRevIterator = struct(T) {
+pub type SliceRevIterator(T) = struct {
     slice: T[]
     remaining: usize
 }

@@ -5,13 +5,13 @@
 // and variant paths included.
 
 type Word = i64
-type Box = struct(T) {
+type Box(T) = struct {
     type Item = T
     v: T
 }
 type Shelf(T) = Box(T)
 type Ints = Box(i32)
-type Tag = enum(T) {
+type Tag(T) = enum {
     On(T)
     Off
 }

@@ -3,8 +3,8 @@
 
 // Two layers of wrappers - chained op_deref resolves through both.
 
-type Outer = struct(T) { __inner: T }
-type Inner = struct(T) { __value: T }
+type Outer(T) = struct { __inner: T }
+type Inner(T) = struct { __value: T }
 
 fn op_deref(self: &Outer($T)) &T {
     return &self.__inner

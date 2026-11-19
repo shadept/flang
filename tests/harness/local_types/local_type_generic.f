@@ -9,7 +9,7 @@ fn wrap(x: $T, n: i32) i32 where T: copyable {
         value: T
         count: i32
     }
-    type Pair = struct(A) {
+    type Pair(A) = struct {
         left: A
         right: T
     }

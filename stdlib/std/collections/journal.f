@@ -26,7 +26,7 @@ import std.test
 // keeps them. Regions nest, and a committed inner region's entries belong to the region around it.
 // The log is one contiguous buffer plus one of marks, both kept at their high-water mark: after the
 // first few regions a checkpoint allocates nothing.
-pub type Journal = struct(T) {
+pub type Journal(T) = struct {
     // Every open checkpoint's entries, oldest first.
     entries: UnmanagedList(T)
     // Where each open checkpoint's entries start, outermost first.

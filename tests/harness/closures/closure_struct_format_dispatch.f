@@ -12,7 +12,7 @@ import std.io.writer
 import std.string
 import std.string_builder
 
-type Deferred = struct(F) {
+type Deferred(F) = struct {
     emit: F
 }
 

@@ -8,13 +8,13 @@ import std.test
 
 // Reference-counted pointer to a heap-allocated value of type T. Each handle holds one count, so a
 // handle is not copyable: a second one is `retain`, and each gives its count back in `deinit`.
-pub type Rc = struct(T) {
+pub type Rc(T) = struct {
     owned __inner: &RcInner(T)
     __allocator: &Allocator
 }
 
 // Internal control block: ref count + value, allocated on the heap.
-type RcInner = struct(T) {
+type RcInner(T) = struct {
     ref_count: usize
     value: T
 }
@@ -166,7 +166,7 @@ test "rc_alloc zero-initialized" {
 
 // Atomically reference-counted pointer to a heap-allocated value of type T. Same control block as
 // Rc, but retain/deinit use atomic operations on ref_count.
-pub type Arc = struct(T) {
+pub type Arc(T) = struct {
     owned __inner: &RcInner(T)
     __allocator: &Allocator
 }

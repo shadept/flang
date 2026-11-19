@@ -6,7 +6,7 @@
 // where `T` is the value to keep on the happy path and `R` is the value to propagate via early
 // `return` from the enclosing function.
 
-pub type TryResult = enum(T, R) {
+pub type TryResult(T, R) = enum {
     Continue(T)
     Return(R)
 }

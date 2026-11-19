@@ -11,7 +11,7 @@ fn op_call(self: &Counter) i32 {
     return self.n
 }
 
-type Wrapper = struct(T) { __value: T }
+type Wrapper(T) = struct { __value: T }
 
 fn op_deref(self: &Wrapper($T)) &T {
     return &self.__value

@@ -22,7 +22,7 @@ import flang_typer.nominal_registry
 import flang_typer.visibility
 
 // A registry of `V`s named by FQN. One allocator serves the table and the name pool.
-pub type FqnMap = struct(V) {
+pub type FqnMap(V) = struct {
     // Name id -> value. Values are stored as-is and never freed here: they borrow the AST or the
     // engine's allocator.
     entries: UnmanagedDict(StrId, V)
@@ -91,7 +91,7 @@ pub fn get_fqn(self: &FqnMap($V), fqn: String) V? where V: copyable {
 
 // A visibility-scoped hit: the winning FQN, as a view into the name pool valid until the next
 // `register`, and its value.
-pub type FqnHit = struct(V) {
+pub type FqnHit(V) = struct {
     fqn: String
     value: V
 }

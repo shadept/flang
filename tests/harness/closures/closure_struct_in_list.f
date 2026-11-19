@@ -6,7 +6,7 @@
 
 import std.collections.list
 
-type Thunk = struct(F) {
+type Thunk(F) = struct {
     f: F
 }
 

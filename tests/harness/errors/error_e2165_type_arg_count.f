@@ -7,7 +7,7 @@ type Word = i32
 type Point = struct {
     x: i32
 }
-type Box = struct(T) {
+type Box(T) = struct {
     v: T
 }
 

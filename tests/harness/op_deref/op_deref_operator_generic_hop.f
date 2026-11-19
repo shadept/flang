@@ -1,7 +1,7 @@
 //! TEST: op_deref_operator_generic_hop
 //! EXIT: 3
 
-type Wrap = struct(T) {
+type Wrap(T) = struct {
     value: T
 }
 

@@ -5,7 +5,7 @@
 // dispatches via the closure type's op_call, without needing the `let g = h.f; g(x)` local-copy
 // workaround.
 
-type Holder = struct(F) {
+type Holder(F) = struct {
     f: F
 }
 

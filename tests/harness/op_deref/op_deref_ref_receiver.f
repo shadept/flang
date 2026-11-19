@@ -37,7 +37,7 @@ fn by_ref_ufcs(w: &Wrap) i64 {
     return w.value_of()
 }
 
-type Box = struct(T) {
+type Box(T) = struct {
     pad: i64
     v: T
 }
