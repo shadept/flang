@@ -659,14 +659,14 @@ fn project_type_alias(self: &Projector, cst: CstNode) TypeDecl {
     }
 }
 
-// Contract `body` taking the name's `params`, when it has none of its own. Null for any other body,
-// which keeps them as alias parameters.
+// Contract `body` taking the name's `params`. Null for any other body, which keeps them as alias
+// parameters.
 fn contract_taking(body: &TypeExpr, params: GenericParam[]) TypeExpr? {
     const c = body.* match {
         Contract(c) => c
         _ => return null
     }
-    if params.len == 0 or c.generics.len > 0 {
+    if params.len == 0 {
         return null
     }
     return Some(TypeExpr.Contract(ContractType {

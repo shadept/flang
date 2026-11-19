@@ -1371,8 +1371,9 @@ fn resolve_named(self: &Checker, n: &NamedType, te: &TypeExpr) Ty {
     }
 
     // A type parameter in scope shadows every nominal - it is the innermost binding. Without this,
-    // a project type named `E` captures the stdlib's `enum(T, E)` payload declarations through the
-    // program-wide nominal fallback below, poisoning the registry for the whole compilation.
+    // a project type named `E` captures the payload declarations of the stdlib's `Result(T, E)`
+    // through the program-wide nominal fallback below, poisoning the registry for the whole
+    // compilation.
     let tp = self.env.lookup(n.name)
     if tp.is_some() {
         let b = tp.unwrap()
@@ -5293,7 +5294,7 @@ type NomMember = struct {
     decl: SourceSpan
 }
 
-// Lowers a struct's or enum's parameter bounds (`struct(I: Iterator, F: fn(I.Item) bool)`) on its
+// Lowers a struct's or enum's parameter bounds (`type F(I: Iterator, G: fn(I.Item) bool)`) on its
 // parameters' variables, bound in the current scope. Each parameter's associated types are bound
 // under its name, for the bounds after it.
 // `offset` is how many type parameters precede `generics` (a block-scoped declaration's implicit
@@ -9605,8 +9606,8 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
     }
     let tn = find_nominal(self, id.name, &vis)
     if tn.is_some() {
-        // `size_of(Box)` where `Box` is `struct(T)`: a reified type has to be a CONCRETE one, so
-        // the arguments must be spelled (E2104).
+        // `size_of(Box)` where `Box` takes `T`: a reified type has to be a CONCRETE one, so the
+        // arguments must be spelled (E2104).
         if own_arity(self, tn.unwrap()) > 0 {
             push_diag_e(
                 self,

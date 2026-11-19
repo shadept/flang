@@ -77,7 +77,7 @@ type Result(T, E) = enum { Ok(T), Err(E) }
 type UnmanagedSet(T: Hash + Eq) = struct { __inner: UnmanagedDict(T, u8) }
 ```
 
-The older spelling on the keyword (`type Pair = struct(T) { ... }`) is still accepted while the sources migrate; one declaration may not use both (E1002).
+A parameter list on the keyword (`type Pair = struct(T) { ... }`, RFC-008's spelling) is a parse error (E1002), as is one on an anonymous body.
 
 **Instantiation uses parentheses**: `Option(i32)`, `List(String)`, `Result(Value, JsonError)`.
 

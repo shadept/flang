@@ -3170,34 +3170,10 @@ Replace `enum Name { ... }` with `type Name = enum { ... }`.
 
 ---
 
-### E1052: Type Parameters on Type Name
+### E1052: Type Parameters on Type Name (retired)
 
-**Category**: Parsing
-**Severity**: Error
-
-#### Description
-
-Generic type parameters must be placed on the `struct`/`enum` keyword, not on the type name.
-
-#### Example
-
-```flang
-// Error:
-type Pair(T) = struct {
-    first: T
-    second: T
-}
-
-// Correct:
-type Pair(T) = struct {
-    first: T
-    second: T
-}
-```
-
-#### Solution
-
-Move the type parameters from the name to after the `struct`/`enum` keyword.
+Retired by RFC-047. Type parameters go on the name, `type Pair(T) = struct { ... }`; a list on the
+`struct`, `enum` or `contract` keyword is E1002.
 
 ---
 

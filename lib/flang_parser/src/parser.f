@@ -844,7 +844,6 @@ fn parse_type_decl_with_directives(self: &Parser, leading: move List(CstNodeId))
     } else {
         self.record_expected(TokenKind.Identifier, "E1002")
     }
-    const named_params = self.current_kind() == TokenKind.OpenParenthesis
     self.parse_type_params_into(&b)
     self.expect_into(&b, TokenKind.Equals, "E1002")
     // Inline directives on the rhs (e.g. `type X = #foreign struct {...}`). `#foreign fn` is a type
@@ -856,13 +855,11 @@ fn parse_type_decl_with_directives(self: &Parser, leading: move List(CstNodeId))
     self.current_kind() match {
         Struct => {
             b.kind = NodeKind.StructDecl
-            self.refuse_keyword_params(named_params)
             self.eat_into(&b)
             self.parse_struct_body_into(&b)
         }
         Enum => {
             b.kind = NodeKind.EnumDecl
-            self.refuse_keyword_params(named_params)
             self.eat_into(&b)
             self.parse_enum_body_into(&b)
         }
@@ -874,9 +871,6 @@ fn parse_type_decl_with_directives(self: &Parser, leading: move List(CstNodeId))
                 self.eat_into(&b)
                 self.parse_struct_body_into(&b)
             } else {
-                if self.current_kind() == TokenKind.Contract {
-                    self.refuse_keyword_params(named_params)
-                }
                 const t = self.parse_bound_type()
                 self.push_node_into(&b, t)
             }
@@ -885,15 +879,17 @@ fn parse_type_decl_with_directives(self: &Parser, leading: move List(CstNodeId))
     return self.finish(b)
 }
 
-// A second parameter list after the `struct`, `enum` or `contract` keyword at the cursor when the
-// name already carries one (RFC-047).
-fn refuse_keyword_params(self: &Parser, named_params: bool) {
-    if named_params and self.peek_kind(1) == TokenKind.OpenParenthesis {
-        self.record_error_here(
-            "E1002",
-            from_view("type parameters go on the name only: `type Name(T) = struct { ... }`"),
-        )
+// A parameter list after the `struct`, `enum` or `contract` keyword (RFC-047). It is parsed, so the
+// body after it still parses.
+fn refuse_keyword_params(self: &Parser, b: &NodeBuilder) {
+    if self.current_kind() != TokenKind.OpenParenthesis {
+        return
     }
+    self.record_error_here(
+        "E1002",
+        from_view("type parameters go on the name: `type Name(T) = struct { ... }`"),
+    )
+    self.parse_type_params_into(b)
 }
 
 // `union {` on a type declaration's right-hand side. `union` is contextual, not a keyword: it stays
@@ -920,7 +916,7 @@ fn directive_name_of(self: &Parser, id: CstNodeId) String {
 }
 
 fn parse_struct_body_into(self: &Parser, b: &NodeBuilder) {
-    self.parse_type_params_into(b)
+    self.refuse_keyword_params(b)
     if !self.expect_into(b, TokenKind.OpenBrace, "E1002") {
         return
     }
@@ -938,9 +934,8 @@ fn parse_struct_body_into(self: &Parser, b: &NodeBuilder) {
     self.expect_into(b, TokenKind.CloseBrace, "E1002")
 }
 
-// `(T, U: Bound)` on a type declaration's name, or on a struct, enum or contract, when present. A
-// bound sits on the parameter it constrains; `where` after the list is refused (E2145), since each
-// position has one spelling.
+// `(T, U: Bound)` on a type declaration's name, when present. A bound sits on the parameter it
+// constrains; `where` after the list is refused (E2145), since each position has one spelling.
 fn parse_type_params_into(self: &Parser, b: &NodeBuilder) {
     if self.current_kind() == TokenKind.OpenParenthesis {
         let pl = self.open(NodeKind.TypeParamList)
@@ -1002,7 +997,7 @@ fn parse_struct_field(self: &Parser) CstNodeId {
 }
 
 fn parse_enum_body_into(self: &Parser, b: &NodeBuilder) {
-    self.parse_type_params_into(b)
+    self.refuse_keyword_params(b)
     if !self.expect_into(b, TokenKind.OpenBrace, "E1002") {
         return
     }
@@ -2608,12 +2603,12 @@ fn parse_fn_type_tail_into(self: &Parser, b: &NodeBuilder) {
     }
 }
 
-// `contract(T: B) { members }` - members are requirements (`fn name(params) ret`) and associated
-// types (`type S`, `type S: Bound`, `type S = T`), separated by newlines or commas.
+// `contract { members }` - members are requirements (`fn name(params) ret`) and associated types
+// (`type S`, `type S: Bound`, `type S = T`), separated by newlines or commas.
 fn parse_contract_type(self: &Parser) CstNodeId {
     let b = self.open(NodeKind.ContractType)
     self.eat_into(&b)
-    self.parse_type_params_into(&b)
+    self.refuse_keyword_params(&b)
     if !self.expect_into(&b, TokenKind.OpenBrace, "E1002") {
         return self.finish(b)
     }

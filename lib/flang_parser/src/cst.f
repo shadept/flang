@@ -198,7 +198,7 @@ pub type NodeKind = enum {
     // Inline `struct { ... }` and `enum { ... }` in type position.
     AnonymousStructType
     AnonymousEnumType
-    // `contract(T: B) { fn name(params) ret, type S: Bound, type D = T }`.
+    // `contract { fn name(params) ret, type S: Bound, type D = T }`.
     ContractType
     // `fn name(params) ret` inside a contract body.
     ContractRequirement

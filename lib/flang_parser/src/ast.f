@@ -1112,8 +1112,9 @@ pub type FunctionType = struct {
     foreign: bool
 }
 
-// `struct(T1, T2) { field: T, ... }` - generics are optional and live on the type expression
-// itself. Same node whether named (RHS of a `TypeDecl`) or anonymous in argument position.
+// `struct { field: T, ... }`. Same node whether named (RHS of a `TypeDecl`) or anonymous in
+// argument position. `generics` are the name's parameters (`type Pair(T) = struct { ... }`); empty
+// when anonymous.
 pub type AnonStructType = struct {
     span: SourceSpan
     generics: GenericParam[]
@@ -1134,8 +1135,8 @@ pub type StructField = struct {
     owned: bool
 }
 
-// `enum(T) { Variant, Variant(T) }` - generics optional. Same node whether named (RHS of TypeDecl)
-// or anonymous in type position.
+// `enum { Variant, Variant(T) }`. Same node whether named (RHS of TypeDecl) or anonymous in type
+// position. `generics` are the name's parameters; empty when anonymous.
 pub type AnonEnumType = struct {
     span: SourceSpan
     generics: GenericParam[]
@@ -1161,8 +1162,8 @@ pub type GenericParam = struct {
     bound: &TypeExpr?
 }
 
-// `contract(T: B) { fn next(self: &Self) T?  type S: Iterator }` (RFC-035). Same node whether named
-// (RHS of a `TypeDecl`) or anonymous in bound position.
+// `contract { fn next(self: &Self) T?  type S: Iterator }` (RFC-035). Same node whether named (RHS
+// of a `TypeDecl`) or anonymous in bound position. `generics` are the name's parameters.
 pub type ContractType = struct {
     span: SourceSpan
     generics: GenericParam[]

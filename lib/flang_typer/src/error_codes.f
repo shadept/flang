@@ -21,8 +21,8 @@ pub const E_UNINFERRED: String = "E2001"
 pub const E_DUP_SIGNATURE: String = "E2103"
 // A pattern form the front end cannot yet represent. Reported rather than ignored: an unrepresented
 // pattern would otherwise be indistinguishable from a wildcard and silently match everything. A
-// generic struct constructed by name without its type arguments (`Pair { ... }` where `Pair` is
-// `struct(T)`). Same code the reference checker uses for this shape.
+// generic struct constructed by name without its type arguments (`Pair { ... }` where `Pair` takes
+// `T`). Same code the reference checker uses for this shape.
 pub const E_GENERIC_NEEDS_ARGS: String = "E2019"
 // Indexing. `bool` is never a valid index; a type with neither `op_index_ref` nor `op_index` cannot
 // be indexed at all. Branch joins: if/else branches, and match arms, that cannot agree on one type.
