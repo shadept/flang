@@ -95,6 +95,74 @@ pub fn type_param_names(self: &Checker) &Dict(VarId, String) {
     return &self.tp_names
 }
 
+// A bound a type named in a declaration places on it without the declaration spelling it (RFC-036,
+// RFC-047). `label` is the contract's name, `fn` or `contract` for an anonymous one; `shape` is an
+// anonymous callable bound's function type.
+pub type ImpliedBound = struct {
+    subject: Ty
+    label: String
+    shape: Ty?
+}
+
+// A bound a generic alias's body carries onto the parameter declared at `param` (`type Shelf(T) =
+// Box(T)` takes what `Box` requires of `T`), beyond the parameter's own. `label` is rendered.
+pub type AliasBound = struct {
+    param: SourceSpan
+    label: String
+}
+
+// The bounds function `fid`'s signature implies through the types it names, beyond its `where`, one
+// per subject and contract.
+pub fn implied_bounds(self: &Checker, fid: u32) List(ImpliedBound) {
+    let out: List(ImpliedBound) = list(0)
+    const atoms = self.fn_bounds.get_ref(fid) ?? return out
+    for &a in atoms {
+        const implied = a.owner.len > 0
+        if !implied or spelled(atoms, a.subject, a.bound_name) or listed(&out, a) {
+            continue
+        }
+        out.push(ImpliedBound {
+            subject = a.subject,
+            label = a.bound_name,
+            shape = if is_anon_callable(a) { Some(a.shape) } else { null },
+        })
+    }
+    return out
+}
+
+// What module `module`'s generic aliases carry onto their parameters, from its last resolve.
+pub fn alias_bounds(self: &Checker, module: String) &List(AliasBound)? {
+    return self.nominal_diags.get_ref(module) match {
+        Some(e) => Some(&e.alias_bounds)
+        None => null
+    }
+}
+
+fn spelled(atoms: &List(BoundAtom), subject: Ty, label: String) bool {
+    for &a in atoms {
+        if a.owner.len == 0 and a.subject == subject and a.bound_name == label {
+            return true
+        }
+    }
+    return false
+}
+
+fn listed(out: &List(ImpliedBound), a: &BoundAtom) bool {
+    for &b in out {
+        if b.subject == a.subject and b.label == a.bound_name {
+            return true
+        }
+    }
+    return false
+}
+
+fn is_anon_callable(a: &BoundAtom) bool {
+    return a.kind match {
+        Callable => a.bound_name == "fn"
+        _ => false
+    }
+}
+
 // One type-parameter binding created while resolving the current signature - a `$T` collected by
 // `resolve_generic_bind`, or an associated type's path (`I.Item`, RFC-036) bound by its bounds -
 // drained by `register_function_sig`. `ty` is zonked once the signature is done.
@@ -310,6 +378,11 @@ pub type Checker = struct {
     // The parameter whose type is resolving, for those bounds' diagnostics.
     sugar_param: String
     sig_implied: List(BoundAtom)
+    // Set while `log_carried_bounds` expands an alias body: what its types imply joins
+    // `sig_implied`.
+    alias_open: bool
+    // What the resolving module's generic aliases carry onto their parameters, for its cache entry.
+    alias_log: List(AliasBound)
     sig_declared: List(String)
     proj_pending: List(PendingProj)
     // Set while bodies are checked: a bounded type applied to settled arguments is checked at the
@@ -493,10 +566,12 @@ pub type ModuleNomDiags = struct {
     resolve_burn: u32?
     // The go-to-definition edges the resolve pass recorded (projections in fields and bounds).
     resolve_refs: List(TypeRefFact)
+    alias_bounds: List(AliasBound)
 }
 
 pub fn deinit(self: move ModuleNomDiags) {
     self.resolve_refs.deinit()
+    self.alias_bounds.deinit()
     self.collect.deinit()
     self.resolve.deinit()
     self.signatures.deinit()
@@ -782,6 +857,8 @@ pub fn checker() Checker {
         sig_sugar = list(0),
         sugar_param = "",
         sig_implied = list(0),
+        alias_open = false,
+        alias_log = list(0),
         sig_declared = list(0),
         proj_pending = list(0),
         check_apps = false,
@@ -1063,6 +1140,7 @@ pub fn deinit(self: move Checker) {
     self.self_decls.deinit()
     self.sig_refs.deinit()
     self.sig_implied.deinit()
+    self.alias_log.deinit()
     self.sig_sugar.deinit()
     self.sig_declared.deinit()
     self.proj_pending.deinit()
@@ -1548,7 +1626,7 @@ fn expand_generic_alias(
     }
     const out = expand_alias(self, name, span, te, &def.body)
     self.env.pop_scope()
-    if self.sig_open {
+    if self.sig_open or self.alias_open {
         imply_bounds(self, &bounds, null, args, name, span)
     } else if self.check_apps and !self.rigid_mode {
         report_unsatisfied(self, failed, name, span)
@@ -2777,7 +2855,9 @@ fn check_alias_decl(self: &Checker, td: &TypeDecl) {
         args.push(self.engine.fresh_var())
         bind_type_name(self, g.name, args[args.len - 1], g.span)
     }
-    lower_alias_bounds(self, td.generics, &args, td.span).deinit()
+    let own = lower_alias_bounds(self, td.generics, &args, td.span)
+    log_carried_bounds(self, td, &args, &own)
+    own.deinit()
     args.deinit()
     self.env.pop_scope()
     const target = td.body match {
@@ -2798,6 +2878,93 @@ fn check_alias_decl(self: &Checker, td: &TypeDecl) {
             $"generic type `{target.name}` needs its type arguments here",
         )
     }
+}
+
+// The bounds alias `td`'s body carries onto its parameters, logged for the LSP. The expansion's
+// diagnostics are its uses' to report.
+fn log_carried_bounds(self: &Checker, td: &TypeDecl, args: &List(Ty), own: &NomBounds) {
+    if td.generics.len == 0 or is_contract_body(td.body) {
+        return
+    }
+    for i in 0..args.len {
+        name_var(self, args[i], td.generics[i].name)
+    }
+    const diags0 = self.diagnostics.len
+    self.sig_implied.clear()
+    self.alias_open = true
+    resolve_type_expr(self, td.body)
+    self.alias_open = false
+    drop_diags_from(self, diags0)
+    let implied = replace(&self.sig_implied, list(0))
+    defer implied.deinit()
+    for &a in implied {
+        // ponytail: a bound on a compound subject (`List(T): Hash`) is not shown.
+        const i = arg_index(self, args, a.subject) ?? continue
+        const label = carried_label(self, a)
+        const g = &td.generics[i]
+        if own_bound(own, g.name, label) or logged(self, g.span, label) {
+            continue
+        }
+        self.alias_log.push(AliasBound { param = g.span, label = label })
+    }
+}
+
+fn name_var(self: &Checker, t: Ty, name: String) {
+    ty_node(self, self.engine.resolve(t)) match {
+        NVar(v) => self.tp_names.set(v.id, name)
+        _ => {}
+    }
+}
+
+fn arg_index(self: &Checker, args: &List(Ty), t: Ty) usize? {
+    const want = ty_node(self, self.engine.resolve(t)) match {
+        NVar(v) => v.id
+        _ => return null
+    }
+    for i in 0..args.len {
+        const hit = ty_node(self, self.engine.resolve(args[i])) match {
+            NVar(v) => v.id == want
+            _ => false
+        }
+        if hit {
+            return Some(i)
+        }
+    }
+    return null
+}
+
+fn carried_label(self: &Checker, a: &BoundAtom) String {
+    if !is_anon_callable(a) {
+        return a.bound_name
+    }
+    let sb = string_builder(32)
+    defer sb.deinit()
+    format_with_names(
+        &self.engine.interner,
+        self.engine.zonk(a.shape),
+        &sb,
+        Some(&self.nominals),
+        Some(&self.tp_names),
+    )
+    return intern_text(self, sb.to_string())
+}
+
+fn own_bound(own: &NomBounds, param: String, label: String) bool {
+    for &a in own.atoms {
+        if a.param == param and a.bound_name == label {
+            return true
+        }
+    }
+    return false
+}
+
+fn logged(self: &Checker, param: SourceSpan, label: String) bool {
+    for &b in self.alias_log {
+        if b.param.start == param.start and b.param.file_id == param.file_id and b.label == label {
+            return true
+        }
+    }
+    return false
 }
 
 // Bind a declaration's type parameters - `implicit` first, then its own - and `Self`, returning
@@ -4472,14 +4639,17 @@ fn bound_path(self: &Checker, param: String, path: String[]) String {
 // `base.name` as a stable view: binding names, template type-parameter names and `tp_names` entries
 // outlive the strings they were built from.
 fn intern_path(self: &Checker, base: String, name: String) String {
-    let joined = $"{base}.{name}"
-    const known = self.paths.get(joined.view())
+    return intern_text(self, $"{base}.{name}")
+}
+
+fn intern_text(self: &Checker, text: move OwnedString) String {
+    const known = self.paths.get(text.view())
     if known.is_some() {
-        joined.deinit()
+        text.deinit()
         return known.unwrap()
     }
-    const view = joined.view()
-    self.path_bufs.push(joined)
+    const view = text.view()
+    self.path_bufs.push(text)
     self.paths.set(view, view)
     return view
 }
@@ -5508,7 +5678,8 @@ fn apply_nominal_bounds(
     span: SourceSpan,
 ) {
     const in_body = self.check_apps and !self.rigid_mode
-    if !self.sig_open and !in_body {
+    const implies = self.sig_open or self.alias_open
+    if !implies and !in_body {
         return
     }
     const nb = self.nom_bounds.get_ref(id)
@@ -5527,7 +5698,7 @@ fn apply_nominal_bounds(
     for v in nb.unwrap().assoc {
         binds.set(v, self.engine.fresh_var())
     }
-    if self.sig_open {
+    if implies {
         imply_bounds(self, nb.unwrap(), Some(&binds), args, name, span)
     } else {
         let none: List(NomMember) = list(0)
@@ -17500,6 +17671,7 @@ pub fn check_all(
         const diags_from = self.diagnostics.len
         const vars_from = self.engine.var_counter
         self.ref_log.clear()
+        self.alias_log.clear()
         self.ref_logging = true
         resolve_nominal_bodies(self, &modules[i], paths[i])
         self.ref_logging = false
@@ -17882,6 +18054,7 @@ fn module_diags_entry(
                 bodies = list(0),
                 resolve_burn = null,
                 resolve_refs = list(0),
+                alias_bounds = list(0),
             },
         )
     }
@@ -17893,12 +18066,13 @@ fn module_diags_entry(
 // Also takes the pass's logged go-to-definition edges, replayed with the burn.
 fn stash_resolve_burn(self: &Checker, path: String, minted: u32, params: u32) {
     const extra = minted != params
-    const found = module_diags_entry(self, path, self.diagnostics.len, extra
-        or self.ref_log.len > 0)
+    const found = module_diags_entry(self, path, self.diagnostics.len, extra or self.ref_log.len > 0
+        or self.alias_log.len > 0)
     if found.is_some() {
         let entry = found.unwrap()
         entry.resolve_burn = if extra { Some(minted) } else { null }
         install(&entry.resolve_refs, replace(&self.ref_log, list(0)))
+        install(&entry.alias_bounds, replace(&self.alias_log, list(0)))
     }
 }
 

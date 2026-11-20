@@ -8,6 +8,7 @@
 // inside `#define` bodies are not visited (template bodies are CST byte ranges, not AST).
 
 import std.allocator
+import std.char
 import std.collections.list
 import std.option
 import std.test
@@ -110,6 +111,142 @@ pub fn live_hint_sites(live_text: String, analyzed: &Module) List(HintSite) {
     live.deinit()
     doc.deinit()
     return out
+}
+
+// Where an implied-bound hint renders: `offset` in the displayed text, and the analyzed declaration
+// it reads - a function (`name`, `decl` its span) or a generic alias's parameter (`decl` the
+// parameter's span). A function site with a `param` sits before the first `where` entry that
+// projects through it (`I.Item: ...`) and shows the bounds on that parameter; one without sits
+// after the signature and shows the rest. `lead` and `tail` join the hint to the text.
+pub type BoundSite = struct {
+    offset: usize
+    decl: SourceSpan
+    name: String
+    is_fn: bool
+    param: String
+    lead: String
+    tail: String
+}
+
+// Bound hint sites at positions in `text`, paired by name with the analyzed module's declarations
+// as `live_hint_sites` pairs binders: pairing stops at the first declaration added, removed or
+// renamed. `analyzed_text` is the text `analyzed` was parsed from.
+pub fn bound_sites(text: String, analyzed_text: String, analyzed: &Module) List(BoundSite) {
+    let anal = bound_anchors(analyzed_text, analyzed)
+    if text == analyzed_text {
+        return anal
+    }
+    let doc = parse_doc(text)
+    let live = bound_anchors(text, &doc.module)
+    let out: List(BoundSite) = list(anal.len)
+    const n = if live.len < anal.len { live.len } else { anal.len }
+    for i in 0..n {
+        const same = live[i].name == anal[i].name and live[i].is_fn == anal[i].is_fn
+            and live[i].param == anal[i].param
+        if !same {
+            break
+        }
+        out.push(.{
+            offset = live[i].offset,
+            decl = anal[i].decl,
+            name = anal[i].name,
+            is_fn = anal[i].is_fn,
+            param = anal[i].param,
+            lead = live[i].lead,
+            tail = live[i].tail,
+        })
+    }
+    live.deinit()
+    doc.deinit()
+    anal.deinit()
+    return out
+}
+
+fn bound_anchors(text: String, m: &Module) List(BoundSite) {
+    let out: List(BoundSite) = list(0)
+    for &d in m.decls {
+        d.* match {
+            Function(f) => push_fn_anchor(&out, text, &f)
+            Type(t) => push_alias_anchors(&out, &t)
+            _ => {}
+        }
+    }
+    return out
+}
+
+fn push_fn_anchor(out: &List(BoundSite), text: String, f: &FunctionDecl) {
+    const body = f.body ?? return
+    for i in 0..f.bounds.len {
+        if first_projection(f.bounds, i) {
+            out.push(.{
+                offset = f.bounds[i].subject_spans[0].start,
+                decl = f.span,
+                name = f.name,
+                is_fn = true,
+                param = f.bounds[i].param,
+                lead = "",
+                tail = ", ",
+            })
+        }
+    }
+    out.push(.{
+        offset = trim_back(text, body.span.start),
+        decl = f.span,
+        name = f.name,
+        is_fn = true,
+        param = "",
+        lead = if f.bounds.len > 0 { ", " } else { " where " },
+        tail = "",
+    })
+}
+
+// Whether `bounds[i]` is the first entry projecting through its parameter.
+fn first_projection(bounds: TypeBound[], i: usize) bool {
+    if bounds[i].path.len == 0 or bounds[i].subject_spans.len == 0 {
+        return false
+    }
+    for j in 0..i {
+        if bounds[j].path.len > 0 and bounds[j].param == bounds[i].param {
+            return false
+        }
+    }
+    return true
+}
+
+// The offset just past the last non-blank byte before `end`.
+fn trim_back(text: String, end: usize) usize {
+    let i = end
+    while i > 0 and is_whitespace(text[i - 1]) {
+        i = i - 1
+    }
+    return i
+}
+
+fn push_alias_anchors(out: &List(BoundSite), t: &TypeDecl) {
+    const nominal = t.body.* match {
+        AnonStruct(_) => true
+        AnonEnum(_) => true
+        Contract(_) => true
+        _ => false
+    }
+    if nominal {
+        return
+    }
+    for &g in t.generics {
+        const end = g.bound match {
+            Some(b) => type_expr_span(b)
+            None => g.span
+        }
+        out.push(.{
+            offset = end.start + end.length,
+            decl = g.span,
+            name = g.name,
+            is_fn = false,
+            param = "",
+            lead = if g.bound.is_some() { " + " } else { ": " },
+            tail = "",
+        })
+    }
 }
 
 fn push_params(out: &List(Binder), params: FunctionParam[], owner: SourceSpan) {
@@ -359,4 +496,29 @@ test "module_binders carries params with annotations and owners" {
     assert_true(bs[1].annotation.is_none(), "unannotated let")
     assert_true(bs[1].hintable, "unannotated let is hintable")
     assert_true(bs[1].owner.start == bs[0].owner.start, "same enclosing declaration")
+}
+
+test "bound sites follow a shifted live buffer and stop at a renamed declaration" {
+    const src = "type S(T) = B(T)\nfn f(b: B($T)) i32 { return 0 }\nfn g(b: B($T)) i32 { return 0 }\n"
+    let doc = parse_doc(src)
+    defer doc.deinit()
+    let same = bound_sites(src, src, &doc.module)
+    defer same.deinit()
+    assert_eq(same.len, 3 as usize, "alias parameter and two functions")
+    assert_eq(same[0].lead, ": ", "unbounded parameter")
+    assert_eq(same[1].lead, " where ", "no where clause")
+
+    const padded = "// pad\ntype S(T) = B(T)\nfn f(b: B($T)) i32 { return 0 }\nfn g(b: B($T)) i32 { return 0 }\n"
+    let shifted = bound_sites(padded, src, &doc.module)
+    defer shifted.deinit()
+    assert_eq(shifted.len, 3 as usize, "every declaration pairs")
+    assert_eq(shifted[1].offset, same[1].offset + 7, "positions move with the text")
+
+    let renamed = bound_sites(
+        "type S(T) = B(T)\nfn h(b: B($T)) i32 { return 0 }\n",
+        src,
+        &doc.module,
+    )
+    defer renamed.deinit()
+    assert_eq(renamed.len, 1 as usize, "pairing stops at the rename")
 }

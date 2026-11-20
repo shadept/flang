@@ -3804,7 +3804,7 @@ type Bad(F: fn(I.Item) bool, I: Iterator) = struct { f: F, it: I }   // error[E2
 
 #### Solution
 
-Declare the parameter the bound reads first: `struct(I: Iterator, F: fn(I.Item) bool)`.
+Declare the parameter the bound reads first: `type F(I: Iterator, G: fn(I.Item) bool) = struct { ... }`.
 
 ---
 

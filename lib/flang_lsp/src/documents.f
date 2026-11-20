@@ -78,6 +78,16 @@ pub fn get(self: &DocumentStore, uri: String) &Document? {
     return self.docs.get_ref(uri)
 }
 
+// Whether a buffer is open for the file at `path`.
+pub fn has_path(self: &DocumentStore, path: String) bool {
+    for entry in self.docs.iter() {
+        if entry.value.path.view() == path {
+            return true
+        }
+    }
+    return false
+}
+
 // Tests
 
 test "open, change, close lifecycle" {

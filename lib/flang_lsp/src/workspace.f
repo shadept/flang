@@ -1,6 +1,6 @@
 // The set of projects the server has opened: one `flang.toml` directory per entry, each with its
 // resolution context and its `AnalyzedProject`. Projects open lazily - the first didOpen of a file
-// under a manifest triggers the analysis - and re-analyze on save and on watcher events.
+// under a manifest triggers the analysis - and re-analyze on save and on `flang/catchUp`.
 //
 // Open editor buffers always win over disk: every analysis passes the document store's buffers as
 // overrides, keyed by the uri.f path convention (forward slashes, lowercase drive letter).
@@ -12,6 +12,8 @@ import std.allocator
 import std.collections.dict
 import std.collections.list
 import std.collections.set
+import std.io.dir
+import std.io.file
 import std.io.fs
 import std.option
 import std.path
@@ -33,6 +35,8 @@ pub type OpenProject = struct {
     name: OwnedString
     ctx: ResolveCtx
     unit: AnalyzedProject
+    // The `flang.toml` text the project was loaded from.
+    manifest: OwnedString
     // Per-module symbol indexes, parallel to `unit.modules` by file id. Rebuilt after every
     // analysis; dependency and stdlib slots stay empty so workspace/symbol reports project code
     // only.
@@ -43,6 +47,7 @@ pub fn deinit(self: move OpenProject) {
     self.index.deinit()
     self.unit.deinit()
     self.ctx.deinit()
+    self.manifest.deinit()
     self.name.deinit()
     self.dir.deinit()
 }
@@ -215,9 +220,9 @@ fn load_project(self: &Workspace, dir: String, docs: &DocumentStore) OpenProject
         return null
     }
     let toml = text.unwrap()
-    defer toml.deinit()
     const parsed = parse_project(toml.view())
     if parsed.is_err() {
+        toml.deinit()
         return null
     }
     let proj = parsed.unwrap()
@@ -241,6 +246,7 @@ fn load_project(self: &Workspace, dir: String, docs: &DocumentStore) OpenProject
     if entries.len == 0 {
         entries.deinit()
         ctx.deinit()
+        toml.deinit()
         return null
     }
 
@@ -255,8 +261,83 @@ fn load_project(self: &Workspace, dir: String, docs: &DocumentStore) OpenProject
         name = from_view(proj.name.view()),
         ctx = move ctx,
         unit = move unit,
+        manifest = move toml,
         index = move index,
     })
+}
+
+// Whether project `idx`'s manifest text or its source glob's file set differs from what it was
+// loaded with: what `reopen_project` must rebuild. False when the manifest is unreadable, as
+// `reopen_project` would keep the old analysis then.
+pub fn set_changed(self: &Workspace, idx: ProjectId) bool {
+    const p = &self.projects[idx]
+    const manifest = $"{p.dir.view()}/flang.toml"
+    const text = read_text(manifest.view())
+    manifest.deinit()
+    if text.is_none() {
+        return false
+    }
+    let toml = text.unwrap()
+    defer toml.deinit()
+    if toml.view() != p.manifest.view() {
+        return true
+    }
+    const parsed = parse_project(toml.view())
+    if parsed.is_err() {
+        return false
+    }
+    let proj = parsed.unwrap()
+    defer proj.deinit()
+    const pattern = $"{p.dir.view()}/{proj.source.view()}"
+    let raw = glob_sources(pattern.view())
+    pattern.deinit()
+    defer raw.deinit()
+    return !same_files(&p.unit, &raw)
+}
+
+fn same_files(unit: &AnalyzedProject, globbed: &List(OwnedString)) bool {
+    let own: Set(String) = set()
+    defer own.deinit()
+    for i in 0..unit.project_origin.len {
+        if unit.project_origin[i] {
+            own.add(unit.file_paths[i].view())
+        }
+    }
+    if own.len() != globbed.len {
+        return false
+    }
+    for &g in globbed {
+        let n = normalize_sep(g.view())
+        const hit = own.contains(n.view())
+        n.deinit()
+        if !hit {
+            return false
+        }
+    }
+    return true
+}
+
+// The paths of `unit`'s modules whose text on disk differs from the analyzed text, open buffers
+// excepted (they win over disk). An unreadable file counts as changed. Views into `unit`.
+pub fn disk_changes(unit: &AnalyzedProject, docs: &DocumentStore) Set(String) {
+    let dirty: Set(String) = set()
+    for i in 0..unit.modules.len {
+        const path = unit.file_paths[i].view()
+        if docs.has_path(path) {
+            continue
+        }
+        const disk = read_text(path)
+        if disk.is_none() {
+            dirty.add(path)
+            continue
+        }
+        let text = disk.unwrap()
+        if text.view() != unit.sources[i].view() {
+            dirty.add(path)
+        }
+        text.deinit()
+    }
+    return dirty
 }
 
 // One ModuleIndex per module, parallel to `unit.modules`. Only project-origin modules are indexed;
@@ -293,4 +374,72 @@ test "path_under requires a separator boundary" {
     assert_true(path_under("c:/w/proj/src/a.f", "c:/w/proj"), "file inside the dir")
     assert_true(!path_under("c:/w/proj2/a.f", "c:/w/proj"), "sibling with a shared prefix")
     assert_true(!path_under("c:/w/proj", "c:/w/proj"), "the dir itself is not under itself")
+}
+
+// Writes `text` to `path`, replacing it.
+fn put_file(path: String, text: String) {
+    let f = open_file(path, FileMode.Write).unwrap()
+    const _w = f.write(text)
+    const _c = close_file(f)
+}
+
+test "catch-up sees edited sources, a new project file and a changed manifest" {
+    let tmp = temp_dir().unwrap()
+    defer tmp.deinit()
+    const dir = $"{tmp.as_view()}/flang_lsp_catch_up"
+    defer dir.deinit()
+    const _clean = remove_dir_all(dir.view())
+    const src_dir = $"{dir.view()}/src"
+    defer src_dir.deinit()
+    const _made = create_dir_all(src_dir.view())
+    const manifest = "[project]\nname = \"t\"\n"
+    const toml = $"{dir.view()}/flang.toml"
+    defer toml.deinit()
+    put_file(toml.view(), manifest)
+    const a = $"{src_dir.view()}/a.f"
+    defer a.deinit()
+    put_file(a.view(), "pub fn a() i32 { return 1 }\n")
+
+    let srcs: List(OwnedString) = list(1)
+    srcs.push(from_view("pub fn a() i32 { return 1 }\n"))
+    let paths: List(String) = list(1)
+    paths.push(a.view())
+    let unit = analyze_source_set(srcs, &paths)
+    paths.deinit()
+    unit.project_origin.push(true)
+    let proj = parse_project(manifest).unwrap()
+    let ctx = resolve_ctx(&proj, "")
+    proj.deinit()
+    let ws = workspace("")
+    defer ws.deinit()
+    ws.projects.push(OpenProject {
+        dir = from_view(dir.view()),
+        name = from_view("t"),
+        ctx = move ctx,
+        unit = move unit,
+        manifest = from_view(manifest),
+        index = list(0),
+    })
+    let docs = document_store()
+    defer docs.deinit()
+
+    let clean = disk_changes(&ws.projects[0].unit, &docs)
+    assert_eq(clean.len(), 0 as usize, "disk matches the analysis")
+    clean.deinit()
+    assert_true(!set_changed(&ws, 0), "same manifest, same files")
+
+    put_file(a.view(), "pub fn a() i32 { return 2 }\n")
+    let edited = disk_changes(&ws.projects[0].unit, &docs)
+    assert_true(edited.contains(a.view()), "the edited file is dirty")
+    edited.deinit()
+
+    const b = $"{src_dir.view()}/b.f"
+    defer b.deinit()
+    put_file(b.view(), "pub fn b() i32 { return 3 }\n")
+    assert_true(set_changed(&ws, 0), "a new project file changes the set")
+    const _rb = remove_file(b.view())
+
+    put_file(toml.view(), "[project]\nname = \"u\"\n")
+    assert_true(set_changed(&ws, 0), "an edited manifest changes the set")
+    const _done = remove_dir_all(dir.view())
 }

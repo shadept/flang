@@ -179,6 +179,7 @@ fn dispatch(self: &LspServer, msg: &RpcMessage) {
         "textDocument/rename" => self.on_rename(msg)
         "workspace/symbol" => self.on_workspace_symbol(msg)
         "workspace/didChangeWatchedFiles" => self.on_watched_files(msg)
+        "flang/catchUp" => self.on_catch_up()
         else => self.on_unknown(msg)
     }
 }
@@ -806,6 +807,21 @@ fn recheck_project(self: &LspServer, pi: ProjectId, dirty_path: String) {
     dirty.deinit()
 }
 
+// Rebuild project `pi` whole (its module set changed) and publish what it says.
+fn reload_project(self: &LspServer, pi: ProjectId) {
+    const title = $"FLang: checking {self.ws.projects[pi].name.view()}"
+    const token = self.progress_begin(title.view())
+    title.deinit()
+    const ok = reopen_project(&self.ws, pi, &self.docs)
+    self.progress_end(token.view())
+    token.deinit()
+    if ok {
+        self.publish_project(pi)
+        self.send_status()
+        self.request_hint_refresh()
+    }
+}
+
 fn recheck_with(self: &LspServer, pi: ProjectId, dirty: &Set(String)) {
     const title = $"FLang: checking {self.ws.projects[pi].name.view()}"
     const token = self.progress_begin(title.view())
@@ -816,6 +832,28 @@ fn recheck_with(self: &LspServer, pi: ProjectId, dirty: &Set(String)) {
     self.publish_project(pi)
     self.send_status()
     self.request_hint_refresh()
+}
+
+// ---- flang/catchUp ----
+
+// Sent by the client when its window regains focus, standing in for the parked watcher: disk edits
+// made meanwhile (an agent, git) reach the analysis in one pass per project. A changed manifest or
+// project file set reloads the project; changed module sources re-check it; open buffers win.
+fn on_catch_up(self: &LspServer) {
+    if !self.can_analyze() {
+        return
+    }
+    for pi in 0..self.ws.projects.len {
+        if set_changed(&self.ws, pi) {
+            self.reload_project(pi)
+            continue
+        }
+        let dirty = disk_changes(&self.ws.projects[pi].unit, &self.docs)
+        if dirty.len() > 0 {
+            self.recheck_with(pi, &dirty)
+        }
+        dirty.deinit()
+    }
 }
 
 // ---- Watched files ----
@@ -888,7 +926,7 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
             path.deinit()
             continue
         }
-        if self.is_open_path(path.view()) {
+        if self.docs.has_path(path.view()) {
             path.deinit()
             continue
         }
@@ -898,17 +936,7 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
 
     for pi in 0..self.ws.projects.len {
         if reopen[pi] {
-            const title = $"FLang: checking {self.ws.projects[pi].name.view()}"
-            const token = self.progress_begin(title.view())
-            title.deinit()
-            const ok = reopen_project(&self.ws, pi, &self.docs)
-            self.progress_end(token.view())
-            token.deinit()
-            if ok {
-                self.publish_project(pi)
-                self.send_status()
-                self.request_hint_refresh()
-            }
+            self.reload_project(pi)
             continue
         }
         let dirty: Set(String) = set()
@@ -922,15 +950,6 @@ fn on_watched_files(self: &LspServer, msg: &RpcMessage) {
         }
         dirty.deinit()
     }
-}
-
-fn is_open_path(self: &LspServer, path: String) bool {
-    for entry in self.docs.docs.iter() {
-        if entry.value.path.view() == path {
-            return true
-        }
-    }
-    return false
 }
 
 // ---- Tier-1 requests ----
@@ -2099,7 +2118,145 @@ fn on_inlay_hint(self: &LspServer, msg: &RpcMessage) {
         })
         rendered.deinit()
     }
+
+    let bsites = bound_sites(text, atext, &unit.modules[fid as usize])
+    defer bsites.deinit()
+    const aliases = alias_bounds(&unit.checker, unit.fqns[fid as usize].view())
+    for &site in bsites {
+        if site.offset < lo or site.offset > hi {
+            continue
+        }
+        let body = if site.is_fn { fn_bound_text(unit, site, &bsites, vars) }
+        else { alias_bound_text(aliases, site) }
+        if body.view().len > 0 {
+            hints.push(InlayHint {
+                position = lidx.to_position(text, site.offset, self.encoding),
+                label = $"{site.lead}{body.view()}{site.tail}",
+                kind = 1,
+            })
+        }
+        body.deinit()
+    }
     self.out.respond(msg.id().unwrap(), &hints)
+}
+
+// `I: Iterator + Hash, K: Eq`: what function `site` implies and shows (see `lands_at`), grouped by
+// subject; empty when nothing.
+fn fn_bound_text(
+    unit: &AnalyzedProject,
+    site: &BoundSite,
+    sites: &List(BoundSite),
+    vars: &Dict(VarId, String),
+) OwnedString {
+    let sb = string_builder(32)
+    defer sb.deinit()
+    const fid = function_at(&unit.result, site) ?? return sb.to_string()
+    let bounds = implied_bounds(&unit.checker, fid)
+    defer bounds.deinit()
+    const result = &unit.result
+    for i in 0..bounds.len {
+        const b = &bounds[i]
+        if !renderable_ty(result, b.subject, vars) or !first_of_subject(&bounds, i) {
+            continue
+        }
+        let subject = render_ty(result, b.subject, Some(vars))
+        if !lands_at(subject.view(), site, sites) {
+            subject.deinit()
+            continue
+        }
+        if sb.len > 0 {
+            sb.append(", ")
+        }
+        sb.append($"{subject.view()}: ")
+        subject.deinit()
+        let sep = ""
+        for &c in bounds {
+            if c.subject == b.subject {
+                sb.append(sep)
+                append_bound(&sb, result, c, vars)
+                sep = " + "
+            }
+        }
+    }
+    return sb.to_string()
+}
+
+// Whether a bound on `subject` shows at `site`: before the first `where` entry projecting through
+// its root parameter, else after the signature.
+fn lands_at(subject: String, site: &BoundSite, sites: &List(BoundSite)) bool {
+    const root = root_param(subject)
+    if site.param.len > 0 {
+        return site.param == root
+    }
+    for &s in sites {
+        const same_fn = s.is_fn and s.decl.start == site.decl.start
+            and s.decl.file_id == site.decl.file_id
+        if same_fn and s.param == root {
+            return false
+        }
+    }
+    return true
+}
+
+fn root_param(subject: String) String {
+    return find(subject, '.') match {
+        Some(i) => subject[0..i]
+        None => subject
+    }
+}
+
+fn function_at(result: &TypeCheckResult, site: &BoundSite) u32? {
+    const overloads = result.functions.by_name.get_ref(site.name) ?? return null
+    for &s in overloads {
+        if !s.retired and s.decl_span.start == site.decl.start
+            and s.decl_span.file_id == site.decl.file_id {
+            return Some(s.id)
+        }
+    }
+    return null
+}
+
+fn first_of_subject(bounds: &List(ImpliedBound), i: usize) bool {
+    for j in 0..i {
+        if bounds[j].subject == bounds[i].subject {
+            return false
+        }
+    }
+    return true
+}
+
+fn append_bound(
+    sb: &StringBuilder,
+    result: &TypeCheckResult,
+    b: &ImpliedBound,
+    vars: &Dict(VarId, String),
+) {
+    b.shape match {
+        Some(shape) => {
+            let s = render_ty(result, shape, Some(vars))
+            sb.append(s.view())
+            s.deinit()
+        }
+        None => sb.append(b.label)
+    }
+}
+
+// `Hash + Eq`: what the alias parameter at `site` carries; empty when nothing.
+fn alias_bound_text(aliases: &List(AliasBound)?, site: &BoundSite) OwnedString {
+    let sb = string_builder(16)
+    defer sb.deinit()
+    if aliases.is_none() {
+        return sb.to_string()
+    }
+    for &a in aliases.unwrap() {
+        if a.param.start == site.decl.start and a.param.file_id == site.decl.file_id {
+            if sb.len > 0 {
+                sb.append(" + ")
+            }
+            sb.append(a.label)
+        }
+    }
+    return sb.to_string()
 }
 
 fn range_bound(range: &Value, key: String) Position? {
@@ -2839,6 +2996,7 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
         name = from_view("t"),
         ctx = move ctx,
         unit = move unit,
+        manifest = from_view(""),
         index = move index,
     })
     srv.run()
@@ -2864,8 +3022,13 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
 const DEMO_SRC: String = "pub fn point(q: i32) i32 { return q }\npub type P = struct { x: i32 }\npub fn go(n: i32) i32 {\n    let a = point(3)\n    let s = P { x = 1 }\n    for v in 0..n {\n        let b = v\n    }\n    return a\n}\n// see Wide\npub fn pick(x: $T) $T { return x }\npub fn wait(k: i32) {\n    while k > 0 {\n        k = k - 1\n    }\n}\npub fn use_pick() i32 { return pick(7) }\npub fn wrap(y: $T) i32 { return point(8) }\npub fn use_wrap() i32 { return wrap(true) }\npub fn lone(z: $T) i32 { return point(4) }\npub fn read_x(pp: P) i32 { return pp.x }\npub fn solo(w: $T, point: i32) i32 { return point }\npub type E = enum { A B }\npub fn pick_e() E { return E.A }\npub type Q = struct {\n    // The y.\n    y: i32\n}\npub fn read_y(qq: Q) i32 { return qq.y }\npub type It = contract {\n    type Item\n    fn next(self: &Self) Item\n}\npub fn first(it: &$I) I.Item where I: It { return it.next() }\npub fn keep(it: &$I, b: I) I where I: It, I.Item: It { return b }\npub type Node(T) = struct { next: &Self }\npub fn apply(x: $T, f: $F) T where F: fn(T) T { return f(x) }\npub fn use_apply() i32 { return apply(3i32) { v => v } }\n"
 
 fn demo_project_into(srv: &LspServer) {
+    project_into(srv, DEMO_SRC)
+}
+
+// A project of `src` at `/t/m.f`, beside a non-project-origin module.
+fn project_into(srv: &LspServer, src: String) {
     let srcs: List(OwnedString) = list(2)
-    srcs.push(from_view(DEMO_SRC))
+    srcs.push(from_view(src))
     // A second, NON-project-origin module (a stand-in for stdlib/dependency code): absent from the
     // ModuleIndex, so its declarations resolve only through the registry fallback.
     srcs.push(from_view("pub type Wide = struct { w: i32 }\n"))
@@ -2886,18 +3049,23 @@ fn demo_project_into(srv: &LspServer) {
         name = from_view("t"),
         ctx = move ctx,
         unit = move unit,
+        manifest = from_view(""),
         index = move index,
     })
 }
 
 // The demo source as a JSON string body (newlines escaped).
 fn demo_src_json() OwnedString {
-    let sb = string_builder(DEMO_SRC.len + 32)
-    for i in 0..DEMO_SRC.len {
-        if DEMO_SRC[i] == '\n' {
+    return src_json(DEMO_SRC)
+}
+
+fn src_json(src: String) OwnedString {
+    let sb = string_builder(src.len + 32)
+    for i in 0..src.len {
+        if src[i] == '\n' {
             sb.append("\\n")
         } else {
-            sb.append(DEMO_SRC[i..(i + 1)])
+            sb.append(src[i..(i + 1)])
         }
     }
     const out = sb.to_string()
@@ -3039,6 +3207,7 @@ fn demo_import_run(request: String, out: &StringBuilder, links: bool = false) {
         name = from_view("t"),
         ctx = move ctx,
         unit = move unit,
+        manifest = from_view(""),
         index = move index,
     })
     srv.run()
@@ -3437,6 +3606,35 @@ test "inlayHint lists annotation-less binders with their types" {
     assert_true(contains(out.as_view(), "\"kind\":1"), "typed as type hints")
 }
 
+test "inlayHint shows the bounds a signature or an alias takes on implicitly" {
+    let out = string_builder(8192)
+    defer out.deinit()
+    const src = "type Show = contract {\n    fn show(self: &Self) i32\n}\ntype Boxed(T: Show) = struct { v: T }\ntype Shelf(T) = Boxed(T)\ntype Twin(T: copyable) = Boxed(T)\npub fn unbox(b: &Boxed($T)) i32 { return 0 }\npub fn twin(b: &Boxed($T)) i32 where T: copyable { return 0 }\ntype Src = contract {\n    type Item\n    fn get(self: &Self) Item\n}\ntype Pipe(I: Src) = struct { v: I }\npub fn head(p: &Pipe($I)) i32 where I.Item: copyable { return 0 }\n"
+    let input = string_builder(1024)
+    defer input.deinit()
+    const text = src_json(src)
+    const open = $"{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///t/m.f\",\"version\":1,\"text\":\"{text.view()}\"}}}}}}"
+    text.deinit()
+    frame_into(&input, open.view())
+    open.deinit()
+    frame_into(
+        &input,
+        "{\"jsonrpc\":\"2.0\",\"id\":40,\"method\":\"textDocument/inlayHint\",\"params\":{\"textDocument\":{\"uri\":\"file:///t/m.f\"}}}",
+    )
+    let mr = mem_reader(input.as_view())
+    let srv = lsp_server(mr.reader(), out.writer())
+    defer srv.deinit()
+    project_into(&srv, src)
+    srv.run()
+    const o = out.as_view()
+    assert_true(contains(o, "\"label\":\" where T: Show\""), "signature without a where clause")
+    assert_true(contains(o, "\"label\":\", T: Show\""), "signature with a where clause")
+    assert_true(contains(o, "\"label\":\": Show\""), "alias parameter without a bound")
+    assert_true(contains(o, "\"label\":\" + Show\""), "alias parameter with a bound")
+    assert_true(contains(o, "\"label\":\"I: Src, \""), "before the entry projecting through it")
+    assert_true(!contains(o, "\"label\":\", I: Src\""), "not repeated after the signature")
+}
+
 test "inlayHint answers empty when the edited buffer shares no binders" {
     let out = string_builder(8192)
     defer out.deinit()
@@ -3693,6 +3891,7 @@ fn open_test_project(
         name = from_view(name),
         ctx = move ctx,
         unit = move unit,
+        manifest = from_view(""),
         index = move index,
     })
     return &srv.ws.projects[srv.ws.projects.len - 1].unit
