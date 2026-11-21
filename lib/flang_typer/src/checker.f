@@ -4587,9 +4587,9 @@ fn prebind_bound_names(self: &Checker, fd: &FunctionDecl) {
     if fd.bounds.len == 0 {
         return
     }
-    let names: List(String) = list(0)
-    defer names.deinit()
-    bound_generic_names(fd, &names)
+    let names: UnmanagedList(String) = unmanaged_list(0, context.allocator)
+    defer names.deinit(context.allocator)
+    bound_generic_names(fd, &names, context.allocator)
     for name in names {
         if self.env.lookup(name).is_none() {
             const g = GenericBindType { span = fd.span, name = name }
@@ -7658,34 +7658,31 @@ fn check_interp_owned(self: &Checker, interp: &InterpolatedStringExpr, given: Ex
     // The synthesized AST stores the name as a view; the buffer parks with the result tables, which
     // the desugar shares a lifetime with.
     const name = self.results.add_synth_string(fresh_builder_name(self))
-    let stmts: List(Stmt) = list(interp.parts.len + 1)
+    let a = self.results.synth_allocator()
+    let stmts: UnmanagedList(Stmt) = unmanaged_list(interp.parts.len + 1, &a)
 
     const ctor = synth_free_call(self, "string_builder", builder_ctor_args(self, given))
     const let_span = synth_span(self)
-    stmts.push(Stmt.Let(LetStmt {
-        span = let_span,
-        is_const = false,
-        name = name,
-        name_span = let_span,
-        type_annotation = null,
-        init = Some(self.synth_box(ctor)),
-    }))
-    let no_args: List(CallArgument) = list(0)
-    stmts.push(Stmt.Defer(DeferStmt {
-        span = synth_span(self),
-        expr = self.synth_box(synth_method_call(self, name, "deinit", no_args)),
-    }))
+    const init = Some(self.synth_box(ctor))
+    stmts.push(
+        Stmt.Let(LetStmt {
+            span = let_span,
+            is_const = false,
+            name = name,
+            name_span = let_span,
+            type_annotation = null,
+            init = init,
+        }),
+        &a,
+    )
+    const release = self.synth_box(synth_method_call(self, name, "deinit", unmanaged_list(0, &a)))
+    stmts.push(Stmt.Defer(DeferStmt { span = synth_span(self), expr = release }), &a)
     push_append_stmts(self, &stmts, name, interp)
 
-    let empty_args: List(CallArgument) = list(0)
-    const done = synth_method_call(self, name, "to_string", empty_args)
+    const done = synth_box(self, synth_method_call(self, name, "to_string", unmanaged_list(0, &a)))
     let block = box(
-        context.allocator,
-        BlockExpr {
-            span = synth_span(self),
-            stmts = frozen(stmts),
-            trailing = Some(synth_box(self, done)),
-        },
+        &a,
+        BlockExpr { span = synth_span(self), stmts = frozen(stmts), trailing = Some(done) },
     )
     const ty = check_block(self, block)
     self.results.record_desugar(self.node_of(interp.span), block)
@@ -7712,10 +7709,11 @@ fn check_interp_into(self: &Checker, interp: &InterpolatedStringExpr, target: &E
         return TY_VOID
     }
 
-    let stmts: List(Stmt) = list(interp.parts.len)
+    let a = self.results.synth_allocator()
+    let stmts: UnmanagedList(Stmt) = unmanaged_list(interp.parts.len, &a)
     push_append_stmts(self, &stmts, tname, interp)
     let block = box(
-        context.allocator,
+        &a,
         BlockExpr { span = synth_span(self), stmts = frozen(stmts), trailing = null },
     )
     const ty = check_block(self, block)
@@ -7727,17 +7725,21 @@ fn check_interp_into(self: &Checker, interp: &InterpolatedStringExpr, target: &E
 // trailing String argument - overload resolution finds the spec-taking `append`.
 fn push_append_stmts(
     self: &Checker,
-    stmts: &List(Stmt),
+    stmts: &UnmanagedList(Stmt),
     name: String,
     interp: &InterpolatedStringExpr,
 ) {
+    let a = self.results.synth_allocator()
     for i in 0..interp.parts.len {
         interp.parts[i] match {
             Text(t) => {
                 if t.len > 0 {
-                    let args: List(CallArgument) = list(1)
-                    const lit = synth_string_lit(self, segment_literal_text(self, t))
-                    args.push(CallArgument.Positional(synth_box(self, lit)))
+                    let args: UnmanagedList(CallArgument) = unmanaged_list(1, &a)
+                    const lit = synth_box(
+                        self,
+                        synth_string_lit(self, segment_literal_text(self, t)),
+                    )
+                    args.push(CallArgument.Positional(lit), &a)
                     push_expr_stmt(self, stmts, synth_method_call(self, name, "append", args))
                 }
             }
@@ -7752,9 +7754,9 @@ fn push_append_stmts(
                 if hole_is_place(h.expr) {
                     push_expr_stmt(self, stmts, synth_hole_format(self, name, h.expr, spec_lit))
                 } else {
-                    let args: List(CallArgument) = list(2)
-                    args.push(CallArgument.Positional(h.expr))
-                    args.push(CallArgument.Positional(synth_box(self, spec_lit)))
+                    let args: UnmanagedList(CallArgument) = unmanaged_list(2, &a)
+                    args.push(CallArgument.Positional(h.expr), &a)
+                    args.push(CallArgument.Positional(synth_box(self, spec_lit)), &a)
                     push_expr_stmt(self, stmts, synth_method_call(self, name, "append", args))
                 }
             }
@@ -7776,13 +7778,11 @@ fn hole_is_place(e: &Expr) bool {
 
 // `place.format(NAME.writer(), spec)` - the read form of an append.
 fn synth_hole_format(self: &Checker, name: String, place: &Expr, spec_lit: move Expr) Expr {
-    let wargs: List(CallArgument) = list(0)
-    let args: List(CallArgument) = list(2)
-    args.push(CallArgument.Positional(synth_box(
-        self,
-        synth_method_call(self, name, "writer", wargs),
-    )))
-    args.push(CallArgument.Positional(synth_box(self, spec_lit)))
+    let a = self.results.synth_allocator()
+    let args: UnmanagedList(CallArgument) = unmanaged_list(2, &a)
+    const writer = synth_box(self, synth_method_call(self, name, "writer", unmanaged_list(0, &a)))
+    args.push(CallArgument.Positional(writer), &a)
+    args.push(CallArgument.Positional(synth_box(self, spec_lit)), &a)
     const ma = Expr.MemberAccess(MemberAccessExpr {
         span = synth_span(self),
         receiver = place,
@@ -7795,15 +7795,17 @@ fn synth_hole_format(self: &Checker, name: String, place: &Expr, spec_lit: move 
     })
 }
 
-fn push_expr_stmt(self: &Checker, stmts: &List(Stmt), e: move Expr) {
-    stmts.push(Stmt.Expression(ExpressionStmt {
+fn push_expr_stmt(self: &Checker, stmts: &UnmanagedList(Stmt), e: move Expr) {
+    const stmt = Stmt.Expression(ExpressionStmt {
         span = synth_span(self),
         expr = self.synth_box(e),
-    }))
+    })
+    let a = self.results.synth_allocator()
+    stmts.push(stmt, &a)
 }
 
 // `$(…)` args onto `string_builder(capacity)`, full arity.
-fn builder_ctor_args(self: &Checker, given: Expr[]) List(CallArgument) {
+fn builder_ctor_args(self: &Checker, given: Expr[]) UnmanagedList(CallArgument) {
     // The arguments stay the interpolation's: each is shared into the synthesized call as the arena
     // node it already is.
     let cap: &Expr? = null
@@ -7821,15 +7823,16 @@ fn builder_ctor_args(self: &Checker, given: Expr[]) List(CallArgument) {
         alloc_arg = Some(&given[1])
     }
 
-    let out: List(CallArgument) = list(2)
     const cap_e = cap match {
         Some(e) => e
         None => synth_box(self, synth_int_lit(self, "0"))
     }
-    out.push(CallArgument.Positional(cap_e))
+    let a = self.results.synth_allocator()
+    let out: UnmanagedList(CallArgument) = unmanaged_list(2, &a)
+    out.push(CallArgument.Positional(cap_e), &a)
     // No allocator given leaves the parameter's default: the context's.
     alloc_arg match {
-        Some(e) => out.push(CallArgument.Positional(e))
+        Some(e) => out.push(CallArgument.Positional(e), &a)
         None => {}
     }
     return out
@@ -7859,10 +7862,9 @@ fn synth_span(self: &Checker) SourceSpan {
     return SourceSpan { file_id = -2, start = n as usize, length = 0 }
 }
 
-// Synthesized nodes live as long as the check result - allocated on the global allocator and
-// deliberately leaked with it.
 fn synth_box(self: &Checker, e: move Expr) &Expr {
-    return box(context.allocator, e)
+    let a = self.results.synth_allocator()
+    return box(&a, e)
 }
 
 fn synth_ident(self: &Checker, name: String) Expr {
@@ -7890,7 +7892,7 @@ fn synth_method_call(
     self: &Checker,
     recv_name: String,
     method: String,
-    args: move List(CallArgument),
+    args: move UnmanagedList(CallArgument),
 ) Expr {
     const ma = Expr.MemberAccess(MemberAccessExpr {
         span = synth_span(self),
@@ -7904,7 +7906,7 @@ fn synth_method_call(
     })
 }
 
-fn synth_free_call(self: &Checker, name: String, args: move List(CallArgument)) Expr {
+fn synth_free_call(self: &Checker, name: String, args: move UnmanagedList(CallArgument)) Expr {
     return Expr.Call(CallExpr {
         span = synth_span(self),
         callee = synth_box(self, synth_ident(self, name)),
@@ -10208,6 +10210,7 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
     // through `op_deref`, with the hop chain recorded beside the pick on the body node.
     const iter_name = if fs.by_ref { "iter_ref" } else { "iter" }
     let no_args: List(Ty) = list(0)
+    defer no_args.deinit()
     let ip = receiver_pick(self, iter_name, z, &no_args, expr_span(fs.iterable), fs.body.span)
     if ip.is_none() {
         // An unresolved iterable may still become something iterable; a concrete one without `iter`
@@ -10223,6 +10226,7 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         return self.engine.fresh_var()
     }
     let p = ip.unwrap()
+    defer p.deinit()
     check_consuming_receiver(self, &p, iter_name, Some(z), expr_span(fs.iterable))
     self.results.record_operator(self.node_of(fs.body.span), op_record(p.id))
     note_pending(self, fs.body.span, true, &p)
@@ -10246,6 +10250,7 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         return self.engine.fresh_var()
     }
     let n = np.unwrap()
+    defer n.deinit()
     self.results.record_operator(self.node_of(fs.span), op_record(n.id))
     note_pending(self, fs.span, true, &n)
     const borrows = p.hops == 0 and p.params.len > 0 and is_ref_ty(self, p.params[0])
@@ -10306,9 +10311,10 @@ fn record_iter_release(self: &Checker, fs: &ForStmt, owned: Ty?) {
         )
         return
     }
-    const d = dp.unwrap()
+    let d = dp.unwrap()
     self.results.record_operator(self.node_of(fs.var_span), op_record(d.id))
     note_pending(self, fs.var_span, true, &d)
+    d.deinit()
 }
 
 fn check_range_bounds(self: &Checker, r: &RangeExpr) Ty {
@@ -12073,9 +12079,10 @@ fn synth_variadic_pack(
     span: SourceSpan,
 ) Expr {
     // The pack shares the argument nodes the module arena owns.
-    let elems: List(Expr) = list(pos_exprs.len - from)
+    let a = self.results.synth_allocator()
+    let elems: UnmanagedList(Expr) = unmanaged_list(pos_exprs.len - from, &a)
     for e in pos_exprs.as_slice()[from..pos_exprs.len] {
-        elems.push(e.*)
+        elems.push(e.*, &a)
     }
     const arr = Expr.ArrayLit(ArrayLiteralExpr {
         span = synth_span(self),
@@ -13435,10 +13442,7 @@ fn name_is_value_bound(self: &Checker, name: String) bool {
     }
     let vis = fn_visibility(self)
     defer vis.deinit()
-    return self.functions.lookup(name, &vis) match {
-        FnLookFound(_) => true
-        _ => false
-    }
+    return self.functions.any_visible(name, &vis)
 }
 
 // `Entry(K, V)` - a visible nominal called with type arguments yields the instantiated nominal
@@ -14272,16 +14276,13 @@ fn zonk_lambda_info(self: &Checker, info: &LambdaInfo) LambdaInfo {
     }
 }
 
-// Rebuild the active result set's lambda table with zonked entries. The old table is abandoned to
-// the allocator, like `replace_node_types`; the symbol buffers carry over by view-stable copy.
+// Rebuild the active result set's lambda table with zonked entries; each symbol buffer is copied.
 fn zonk_lambda_table(self: &Checker) {
     if self.results.lambdas.len() == 0 {
         return
     }
     let zl: Dict(NodeId, LambdaInfo) = dict()
     for e in self.results.lambdas {
-        // The entry is lent: `zonk_lambda_info` copies the symbol buffer it carries over, and the
-        // old table is abandoned to the allocator whole.
         zl.set(e.key, zonk_lambda_info(self, &e.value))
     }
     self.results.replace_lambdas(zl)
@@ -17865,6 +17866,7 @@ pub fn check_all(
     let out_specializations = replace(&self.specs, specialization_registry())
     let out_desugars = self.results.take_desugars()
     let out_synth_strings = self.results.take_synth_strings()
+    let out_synth_arena = self.results.take_synth_arena()
     let out_default_args = self.results.take_default_args()
     let out_arg_lists = self.results.take_arg_lists()
     let out_receiver_derefs = self.results.take_receiver_derefs()
@@ -17911,6 +17913,7 @@ pub fn check_all(
         specializations = move out_specializations,
         desugars = move out_desugars,
         synth_strings = move out_synth_strings,
+        synth_arena = move out_synth_arena,
         default_args = move out_default_args,
         arg_lists = move out_arg_lists,
         receiver_derefs = move out_receiver_derefs,

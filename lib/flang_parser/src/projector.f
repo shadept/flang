@@ -45,10 +45,10 @@ type Projector = struct {
 
 // The block scopes and local types of one module, collected while its bodies project (RFC-046).
 type LocalSink = struct {
-    types: List(LocalType)
-    parents: List(u32)
+    types: UnmanagedList(LocalType)
+    parents: UnmanagedList(u32)
     // The block scopes being projected, innermost last.
-    open: List(u32)
+    open: UnmanagedList(u32)
     // The type parameters in scope, outermost first: the function's `$T` names, then those of each
     // struct or enum body projecting.
     generics: String[]
@@ -70,11 +70,11 @@ pub fn project_module(cst: CstNode, file_id: i32, diags: &List(Diagnostic)? = nu
     let arena = arena_allocator(backing)
     let arena_a = arena.allocator()
     let sink: LocalSink = .{
-        types = list(0, &arena_a),
-        parents = list(0, &arena_a),
-        open = list(0, &arena_a),
-        generics = frozen(list(0, &arena_a)),
-        path = frozen(list(0, &arena_a)),
+        types = unmanaged_list(0, &arena_a),
+        parents = unmanaged_list(0, &arena_a),
+        open = unmanaged_list(0, &arena_a),
+        generics = [],
+        path = [],
     }
     const p: Projector = .{
         alloc = &arena_a,
@@ -83,18 +83,19 @@ pub fn project_module(cst: CstNode, file_id: i32, diags: &List(Diagnostic)? = nu
         locals = Some(&sink),
     }
 
-    let decls: List(Decl) = list(0, p.alloc)
+    let decls: UnmanagedList(Decl) = unmanaged_list(0, p.alloc)
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
                 if !is_module_child(child.kind) {
                     continue
                 }
-                decls.push(p.project_decl(child))
+                decls.push(p.project_decl(child), p.alloc)
             }
             TokenChild(_) => {}
         }
     }
+    sink.open.deinit(p.alloc)
 
     return Module {
         span = p.span_from(cst),
@@ -107,20 +108,23 @@ pub fn project_module(cst: CstNode, file_id: i32, diags: &List(Diagnostic)? = nu
 }
 
 fn project_labels(self: &Projector, links: &List(LabelLink)) LabelRef[] {
-    let out: List(LabelRef) = list(links.len, self.alloc)
+    let out: UnmanagedList(LabelRef) = unmanaged_list(links.len, self.alloc)
     for &l in links {
-        out.push(LabelRef {
-            decl = SourceSpan {
-                file_id = self.file_id,
-                start = l.decl as usize,
-                length = l.len as usize,
+        out.push(
+            LabelRef {
+                decl = SourceSpan {
+                    file_id = self.file_id,
+                    start = l.decl as usize,
+                    length = l.len as usize,
+                },
+                site = SourceSpan {
+                    file_id = self.file_id,
+                    start = l.site as usize,
+                    length = l.len as usize,
+                },
             },
-            site = SourceSpan {
-                file_id = self.file_id,
-                start = l.site as usize,
-                length = l.len as usize,
-            },
-        })
+            self.alloc,
+        )
     }
     return frozen(out)
 }
@@ -289,7 +293,7 @@ fn boxed_opt(self: &Projector, value: move $T?) &T? {
 }
 
 fn project_import(self: &Projector, cst: CstNode) ImportDecl {
-    let path: List(String) = list(cst.node_child_count(), self.alloc)
+    let path: UnmanagedList(String) = unmanaged_list(cst.node_child_count(), self.alloc)
     let seen_import_keyword = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -302,7 +306,7 @@ fn project_import(self: &Projector, cst: CstNode) ImportDecl {
                     continue
                 }
                 if tok.kind == TokenKind.Identifier or is_keyword(tok.kind) {
-                    path.push(tok.text)
+                    path.push(tok.text, self.alloc)
                 }
             }
             NodeChild(_) => {}
@@ -315,13 +319,13 @@ fn project_import(self: &Projector, cst: CstNode) ImportDecl {
     }
 }
 
-fn project_directives(self: &Projector, cst: CstNode) List(DeclAttribute) {
-    let directives: List(DeclAttribute) = list(0, self.alloc)
+fn project_directives(self: &Projector, cst: CstNode) UnmanagedList(DeclAttribute) {
+    let directives: UnmanagedList(DeclAttribute) = unmanaged_list(0, self.alloc)
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
                 if child.kind == NodeKind.Directive {
-                    directives.push(self.project_directive(child))
+                    directives.push(self.project_directive(child), self.alloc)
                 }
             }
             TokenChild(_) => {}
@@ -336,7 +340,7 @@ fn project_directives(self: &Projector, cst: CstNode) List(DeclAttribute) {
 fn project_directive(self: &Projector, cst: CstNode) DeclAttribute {
     let name: String = ""
     let arg_text: String? = null
-    let arg_idents: List(String) = list(0, self.alloc)
+    let arg_idents: UnmanagedList(String) = unmanaged_list(0, self.alloc)
     let after_open_paren = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -353,12 +357,13 @@ fn project_directive(self: &Projector, cst: CstNode) DeclAttribute {
                     arg_text = Some(tok.text)
                 }
                 if after_open_paren and tok.kind == TokenKind.Identifier {
-                    arg_idents.push(tok.text)
+                    arg_idents.push(tok.text, self.alloc)
                 }
             }
             NodeChild(_) => {}
         }
     }
+    const idents = frozen(arg_idents)
     if name == "foreign" {
         return DeclAttribute.Foreign
     }
@@ -375,7 +380,7 @@ fn project_directive(self: &Projector, cst: CstNode) DeclAttribute {
         return DeclAttribute.Deprecated(arg_text)
     }
     if name == "allow" {
-        return DeclAttribute.Allow(frozen(arg_idents))
+        return DeclAttribute.Allow(idents)
     }
     // Unknown directive - fold to Inline so the AST stays in a known shape. The parser already
     // filed a warning for unknown directives.
@@ -383,7 +388,7 @@ fn project_directive(self: &Projector, cst: CstNode) DeclAttribute {
 }
 
 fn project_function(self: &Projector, cst: CstNode) FunctionDecl {
-    let params: List(FunctionParam) = list(cst.node_child_count(), self.alloc)
+    let params: UnmanagedList(FunctionParam) = unmanaged_list(cst.node_child_count(), self.alloc)
     let return_type: TypeExpr? = null
     let body: BlockExpr? = null
     const bounds = self.project_bounds(cst)
@@ -391,7 +396,7 @@ fn project_function(self: &Projector, cst: CstNode) FunctionDecl {
         cst.child(i) match {
             NodeChild(child) => {
                 if child.kind == NodeKind.FunctionParam {
-                    params.push(self.project_function_param(child))
+                    params.push(self.project_function_param(child), self.alloc)
                 } else if child.kind == NodeKind.BlockExpr {
                     self.enter_function(&params, &return_type, &bounds)
                     install(&body, self.project_block_node(child))
@@ -418,38 +423,39 @@ fn project_function(self: &Projector, cst: CstNode) FunctionDecl {
 // Local types in the body may name the function's `$T` parameters.
 fn enter_function(
     self: &Projector,
-    params: &List(FunctionParam),
+    params: &UnmanagedList(FunctionParam),
     return_type: &Option(TypeExpr),
-    bounds: &List(TypeBound),
+    bounds: &UnmanagedList(TypeBound),
 ) {
     const sink = self.locals ?? return
-    let names: List(String) = list(0, self.alloc)
+    let names: UnmanagedList(String) = unmanaged_list(0, self.alloc)
     for &p in params {
-        collect_generic_names(p.type_expr, &names)
+        collect_generic_names(p.type_expr, &names, self.alloc)
     }
     return_type.* match {
-        Some(rt) => collect_generic_names(&rt, &names)
+        Some(rt) => collect_generic_names(&rt, &names, self.alloc)
         None => {}
     }
     for &b in bounds {
-        collect_generic_names(b.bound, &names)
+        collect_generic_names(b.bound, &names, self.alloc)
     }
     sink.generics = frozen(names)
 }
 
 fn leave_function(self: &Projector) {
     const sink = self.locals ?? return
-    sink.generics = frozen(list(0, self.alloc))
+    let none: String[]
+    sink.generics = none
 }
 
 // The `where` clause's entries, in order: one `WhereBound` child node each.
-fn project_bounds(self: &Projector, cst: CstNode) List(TypeBound) {
-    let out: List(TypeBound) = list(0, self.alloc)
+fn project_bounds(self: &Projector, cst: CstNode) UnmanagedList(TypeBound) {
+    let out: UnmanagedList(TypeBound) = unmanaged_list(0, self.alloc)
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
                 if child.kind == NodeKind.WhereBound {
-                    out.push(self.project_where_bound(child))
+                    out.push(self.project_where_bound(child), self.alloc)
                 }
             }
             TokenChild(_) => {}
@@ -466,8 +472,8 @@ fn project_where_bound(self: &Projector, cst: CstNode) TypeBound {
         } }
         None => {}
     }
-    let path: List(String) = list(0, self.alloc)
-    let spans: List(SourceSpan) = list(1, self.alloc)
+    let path: UnmanagedList(String) = unmanaged_list(0, self.alloc)
+    let spans: UnmanagedList(SourceSpan) = unmanaged_list(1, self.alloc)
     let param: String = ""
     let start = 0usize
     for i in 0..cst.child_count() {
@@ -483,13 +489,16 @@ fn project_where_bound(self: &Projector, cst: CstNode) TypeBound {
                     param = tok.text
                     start = tok.offset
                 } else {
-                    path.push(tok.text)
+                    path.push(tok.text, self.alloc)
                 }
-                spans.push(SourceSpan {
-                    file_id = self.file_id,
-                    start = start,
-                    length = tok.offset + tok.text.len - start,
-                })
+                spans.push(
+                    SourceSpan {
+                        file_id = self.file_id,
+                        start = start,
+                        length = tok.offset + tok.text.len - start,
+                    },
+                    self.alloc,
+                )
             }
             NodeChild(_) => {}
         }
@@ -608,7 +617,7 @@ fn project_struct_decl(self: &Projector, cst: CstNode) TypeDecl {
         is_pub = has_token(cst, TokenKind.Pub),
         directives = frozen(self.project_directives(cst)),
         name = self.type_decl_name(cst),
-        generics = frozen(list(0, self.alloc)),
+        generics = [],
         body = self.boxed(body),
     }
 }
@@ -620,13 +629,13 @@ fn project_enum_decl(self: &Projector, cst: CstNode) TypeDecl {
         is_pub = has_token(cst, TokenKind.Pub),
         directives = frozen(self.project_directives(cst)),
         name = self.type_decl_name(cst),
-        generics = frozen(list(0, self.alloc)),
+        generics = [],
         body = self.boxed(body),
     }
 }
 
 fn project_type_alias(self: &Projector, cst: CstNode) TypeDecl {
-    let generics: List(GenericParam) = list(0, self.alloc)
+    let generics: UnmanagedList(GenericParam) = unmanaged_list(0, self.alloc)
     self.collect_type_params(cst, &generics)
     let body: TypeExpr = TypeExpr.Error(ErrorType { span = self.span_from(cst) })
     for i in 0..cst.child_count() {
@@ -649,12 +658,13 @@ fn project_type_alias(self: &Projector, cst: CstNode) TypeDecl {
     if own {
         install(&body, taken.unwrap())
     }
+    let none: GenericParam[]
     return TypeDecl {
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
         directives = frozen(self.project_directives(cst)),
         name = self.type_decl_name(cst),
-        generics = if own { frozen(list(0, self.alloc)) } else { params },
+        generics = if own { none } else { params },
         body = self.boxed(body),
     }
 }
@@ -701,7 +711,7 @@ fn type_decl_name(self: &Projector, cst: CstNode) String {
 }
 
 // The `TypeParamList` child of a struct, enum or contract, one `GenericParam` per entry.
-fn collect_type_params(self: &Projector, cst: CstNode, out: &List(GenericParam)) {
+fn collect_type_params(self: &Projector, cst: CstNode, out: &UnmanagedList(GenericParam)) {
     for i in 0..cst.child_count() {
         const pl = cst.child(i) match {
             NodeChild(c) => c
@@ -714,7 +724,7 @@ fn collect_type_params(self: &Projector, cst: CstNode, out: &List(GenericParam))
             pl.child(j) match {
                 NodeChild(tp) => {
                     if tp.kind == NodeKind.TypeParam {
-                        out.push(self.project_type_param(tp))
+                        out.push(self.project_type_param(tp), self.alloc)
                     }
                 }
                 TokenChild(_) => {}
@@ -800,7 +810,7 @@ fn project_struct_field(self: &Projector, cst: CstNode) StructField {
 
 fn project_enum_variant(self: &Projector, cst: CstNode) EnumVariant {
     let name: String = ""
-    let payloads: List(TypeExpr) = list(cst.node_child_count(), self.alloc)
+    let payloads: UnmanagedList(TypeExpr) = unmanaged_list(cst.node_child_count(), self.alloc)
     let explicit_tag: Expr? = null
     let in_payload = false
     let saw_equals = false
@@ -854,7 +864,7 @@ fn project_enum_variant(self: &Projector, cst: CstNode) EnumVariant {
             }
             NodeChild(child) => {
                 if in_payload and is_type_kind(child.kind) {
-                    payloads.push(self.project_type_expr(child))
+                    payloads.push(self.project_type_expr(child), self.alloc)
                 }
             }
         }
@@ -949,11 +959,7 @@ fn project_context_decl(self: &Projector, cst: CstNode) ContextDecl {
 
 fn project_test_decl(self: &Projector, cst: CstNode) TestDecl {
     let label: String = ""
-    let body: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = frozen(list(0, self.alloc)),
-        trailing = null,
-    }
+    let body: BlockExpr = .{ span = self.span_from(cst), stmts = [], trailing = null }
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -978,7 +984,7 @@ fn project_test_decl(self: &Projector, cst: CstNode) TestDecl {
 
 fn project_generator_def(self: &Projector, cst: CstNode) GenDef {
     let name: String = ""
-    let params: List(GenParam) = list(0, self.alloc)
+    let params: UnmanagedList(GenParam) = unmanaged_list(0, self.alloc)
     let body_start: usize = cst.end
     let body_end: usize = cst.end
     let saw_define = false
@@ -1051,12 +1057,15 @@ fn project_generator_def(self: &Projector, cst: CstNode) GenDef {
                         if pending_param_name.len == 0 {
                             pending_param_name = tok.text
                         } else if saw_colon {
-                            params.push(GenParam {
-                                span = self.span_from_token(tok),
-                                name = pending_param_name,
-                                kind = tok.text,
-                                variadic = saw_dotdot,
-                            })
+                            params.push(
+                                GenParam {
+                                    span = self.span_from_token(tok),
+                                    name = pending_param_name,
+                                    kind = tok.text,
+                                    variadic = saw_dotdot,
+                                },
+                                self.alloc,
+                            )
                             pending_param_name = ""
                             saw_colon = false
                             saw_dotdot = false
@@ -1082,7 +1091,7 @@ fn project_generator_def(self: &Projector, cst: CstNode) GenDef {
 
 fn project_generator_invocation(self: &Projector, cst: CstNode) GenInvoke {
     let name: String = ""
-    let args: List(GenArg) = list(0, self.alloc)
+    let args: UnmanagedList(GenArg) = unmanaged_list(0, self.alloc)
     let saw_hash = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -1099,14 +1108,17 @@ fn project_generator_invocation(self: &Projector, cst: CstNode) GenInvoke {
                     continue
                 }
                 // A bare identifier argument (see parse_generator_arg_into).
-                args.push(GenArg.IdentArg(GenIdentArg {
-                    span = self.span_from_token(tok),
-                    name = tok.text,
-                }))
+                args.push(
+                    GenArg.IdentArg(GenIdentArg {
+                        span = self.span_from_token(tok),
+                        name = tok.text,
+                    }),
+                    self.alloc,
+                )
             }
             NodeChild(child) => {
                 if is_type_kind(child.kind) {
-                    args.push(GenArg.TypeArg(self.project_type_expr(child)))
+                    args.push(GenArg.TypeArg(self.project_type_expr(child)), self.alloc)
                 }
             }
         }
@@ -1132,8 +1144,8 @@ fn project_if_directive_condition(self: &Projector, cst: CstNode) Expr {
 }
 
 fn project_if_directive_decl(self: &Projector, cst: CstNode) IfDirectiveDecl {
-    let then_decls: List(Decl) = list(cst.node_child_count(), self.alloc)
-    let else_decls: List(Decl) = list(cst.node_child_count(), self.alloc)
+    let then_decls: UnmanagedList(Decl) = unmanaged_list(cst.node_child_count(), self.alloc)
+    let else_decls: UnmanagedList(Decl) = unmanaged_list(cst.node_child_count(), self.alloc)
     let blocks_seen: usize = 0
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -1141,14 +1153,14 @@ fn project_if_directive_decl(self: &Projector, cst: CstNode) IfDirectiveDecl {
                 if child.kind == NodeKind.BlockExpr {
                     // Block body holds module-level decls in directive form; re-walk it as if it
                     // were a Module body.
-                    let target: &List(
+                    let target: &UnmanagedList(
                         Decl,
                     ) = if blocks_seen == 0 { &then_decls } else { &else_decls }
                     for j in 0..child.child_count() {
                         child.child(j) match {
                             NodeChild(sub) => {
                                 if is_module_child(sub.kind) {
-                                    target.push(self.project_decl(sub))
+                                    target.push(self.project_decl(sub), self.alloc)
                                 }
                             }
                             TokenChild(_) => {}
@@ -1207,38 +1219,39 @@ fn local_type(self: &Projector, td: move TypeDecl) Stmt {
 // Record `decl` against the innermost open scope.
 fn record_local(self: &Projector, decl: &TypeDecl) {
     const sink = self.locals ?? return
-    sink.types.push(LocalType {
-        decl = decl,
-        scope = innermost(sink),
-        fn_generics = sink.generics,
-        path = self.path_with(sink.path, decl.name),
-    })
+    sink.types.push(
+        LocalType {
+            decl = decl,
+            scope = innermost(sink),
+            fn_generics = sink.generics,
+            path = self.path_with(sink.path, decl.name),
+        },
+        self.alloc,
+    )
 }
 
 // `outer` with `name` appended.
 fn path_with(self: &Projector, outer: String[], name: String) String[] {
-    let out: List(String) = list(outer.len + 1, self.alloc)
-    out.push_all(outer)
-    out.push(name)
+    let out: UnmanagedList(String) = unmanaged_list(outer.len + 1, self.alloc)
+    out.push_all(outer, self.alloc)
+    out.push(name, self.alloc)
     return frozen(out)
 }
 
 // Open the scope of a struct or enum body: the type `name` names (empty when anonymous), whose own
 // type parameters are `generics`.
-fn enter_type_body(self: &Projector, name: String, generics: &List(GenericParam)) BodySave? {
+fn enter_type_body(self: &Projector, name: String, generics: &UnmanagedList(GenericParam)) BodySave? {
     const sink = self.locals ?? return null
     const saved = BodySave { generics = sink.generics, path = sink.path }
     self.open_scope()
-    let names: List(String) = list(saved.generics.len + generics.len, self.alloc)
-    names.push_all(saved.generics)
+    let names: UnmanagedList(String) = unmanaged_list(saved.generics.len + generics.len, self.alloc)
+    names.push_all(saved.generics, self.alloc)
     for &g in generics {
-        names.push(g.name)
+        names.push(g.name, self.alloc)
     }
     sink.generics = frozen(names)
-    sink.path = if name.len == 0 { frozen(list(
-        0,
-        self.alloc,
-    )) } else { self.path_with(saved.path, name) }
+    let anonymous: String[]
+    sink.path = if name.len == 0 { anonymous } else { self.path_with(saved.path, name) }
     return Some(saved)
 }
 
@@ -1375,11 +1388,7 @@ fn project_for_stmt(self: &Projector, cst: CstNode) ForStmt {
     let var_name: String = ""
     let var_span = self.span_from(cst)
     let iterable: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let body: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = frozen(list(0, self.alloc)),
-        trailing = null,
-    }
+    let body: BlockExpr = .{ span = self.span_from(cst), stmts = [], trailing = null }
     let saw_for = false
     let by_ref = false
     let body_seen = false
@@ -1423,11 +1432,7 @@ fn project_for_stmt(self: &Projector, cst: CstNode) ForStmt {
 
 fn project_while_stmt(self: &Projector, cst: CstNode) WhileStmt {
     let condition: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let body: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = frozen(list(0, self.alloc)),
-        trailing = null,
-    }
+    let body: BlockExpr = .{ span = self.span_from(cst), stmts = [], trailing = null }
     let cond_seen = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -1451,11 +1456,7 @@ fn project_while_stmt(self: &Projector, cst: CstNode) WhileStmt {
 }
 
 fn project_loop_stmt(self: &Projector, cst: CstNode) LoopStmt {
-    let body: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = frozen(list(0, self.alloc)),
-        trailing = null,
-    }
+    let body: BlockExpr = .{ span = self.span_from(cst), stmts = [], trailing = null }
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
@@ -1470,14 +1471,14 @@ fn project_loop_stmt(self: &Projector, cst: CstNode) LoopStmt {
 }
 
 fn project_if_directive_stmt(self: &Projector, cst: CstNode) IfDirectiveStmt {
-    let then_stmts: List(Stmt) = list(cst.node_child_count(), self.alloc)
-    let else_stmts: List(Stmt) = list(cst.node_child_count(), self.alloc)
+    let then_stmts: UnmanagedList(Stmt) = unmanaged_list(cst.node_child_count(), self.alloc)
+    let else_stmts: UnmanagedList(Stmt) = unmanaged_list(cst.node_child_count(), self.alloc)
     let blocks_seen: usize = 0
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
                 if child.kind == NodeKind.BlockExpr {
-                    let target: &List(
+                    let target: &UnmanagedList(
                         Stmt,
                     ) = if blocks_seen == 0 { &then_stmts } else { &else_stmts }
                     self.collect_block_stmts(child, target)
@@ -1495,13 +1496,13 @@ fn project_if_directive_stmt(self: &Projector, cst: CstNode) IfDirectiveStmt {
     }
 }
 
-fn collect_block_stmts(self: &Projector, block: CstNode, out: &List(Stmt)) {
+fn collect_block_stmts(self: &Projector, block: CstNode, out: &UnmanagedList(Stmt)) {
     for i in 0..block.child_count() {
         block.child(i) match {
             NodeChild(child) => {
                 const projected = self.project_stmt(child)
                 projected match {
-                    Some(s) => { out.push(s) }
+                    Some(s) => { out.push(s, self.alloc) }
                     None => {}
                 }
             }
@@ -1935,7 +1936,7 @@ fn project_index(self: &Projector, cst: CstNode) Expr {
 // is NodeChild(a.b) + Dot + Identifier(method). Rebuild from everything before the first `(` so the
 // function name and UFCS method name don't get dropped.
 fn project_call(self: &Projector, cst: CstNode) Expr {
-    let args: List(CallArgument) = list(cst.node_child_count(), self.alloc)
+    let args: UnmanagedList(CallArgument) = unmanaged_list(cst.node_child_count(), self.alloc)
     // Split children at the first `(`: callee tokens before, args after.
     let paren_idx: usize = cst.child_count()
     for i in 0..cst.child_count() {
@@ -2016,10 +2017,10 @@ fn project_call(self: &Projector, cst: CstNode) Expr {
         cst.child(i) match {
             NodeChild(child) => {
                 if child.kind == NodeKind.NamedArgumentExpr {
-                    args.push(CallArgument.Named(self.project_named_argument(child)))
+                    args.push(CallArgument.Named(self.project_named_argument(child)), self.alloc)
                 } else if is_expr_kind(child.kind) {
                     const e = self.project_expr(child)
-                    args.push(CallArgument.Positional(box(self.alloc, e)))
+                    args.push(CallArgument.Positional(box(self.alloc, e)), self.alloc)
                 }
             }
             TokenChild(_) => {}
@@ -2027,7 +2028,7 @@ fn project_call(self: &Projector, cst: CstNode) Expr {
     }
     if trailing.is_some() {
         const lam = self.project_brace_lambda(trailing.unwrap(), true)
-        args.push(CallArgument.Positional(box(self.alloc, Expr.Lambda(lam))))
+        args.push(CallArgument.Positional(box(self.alloc, Expr.Lambda(lam))), self.alloc)
     }
     return Expr.Call(CallExpr {
         span = self.span_from(cst),
@@ -2054,17 +2055,13 @@ fn trailing_lambda_of(cst: CstNode) CstNode? {
 
 // `context(args) { body }`: the argument nodes in order, then the body block.
 fn project_context_bind(self: &Projector, cst: CstNode) Expr {
-    let args: List(CallArgument) = list(cst.node_child_count(), self.alloc)
-    let body: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = frozen(list(0, self.alloc)),
-        trailing = null,
-    }
+    let args: UnmanagedList(CallArgument) = unmanaged_list(cst.node_child_count(), self.alloc)
+    let body: BlockExpr = .{ span = self.span_from(cst), stmts = [], trailing = null }
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
                 if child.kind == NodeKind.NamedArgumentExpr {
-                    args.push(CallArgument.Named(self.project_named_argument(child)))
+                    args.push(CallArgument.Named(self.project_named_argument(child)), self.alloc)
                 } else if child.kind == NodeKind.BlockExpr {
                     self.project_block_node(child) match {
                         Some(b) => install(&body, b)
@@ -2072,7 +2069,7 @@ fn project_context_bind(self: &Projector, cst: CstNode) Expr {
                     }
                 } else if is_expr_kind(child.kind) {
                     const e = self.project_expr(child)
-                    args.push(CallArgument.Positional(box(self.alloc, e)))
+                    args.push(CallArgument.Positional(box(self.alloc, e)), self.alloc)
                 }
             }
             TokenChild(_) => {}
@@ -2159,8 +2156,8 @@ fn project_assignment(self: &Projector, cst: CstNode) Expr {
 // A statement in expression position (`X => return v`, `a ?? break`) as a single-statement block.
 fn stmt_block(self: &Projector, cst: CstNode) Expr? {
     const st = self.project_stmt(cst)?
-    let stmts: List(Stmt) = list(1, self.alloc)
-    stmts.push(st)
+    let stmts: UnmanagedList(Stmt) = unmanaged_list(1, self.alloc)
+    stmts.push(st, self.alloc)
     return Some(Expr.Block(BlockExpr {
         span = self.span_from(cst),
         stmts = frozen(stmts),
@@ -2270,7 +2267,7 @@ fn project_range(self: &Projector, cst: CstNode) Expr {
 // `[1, 2, 3]` or `[v; n]`. The semicolon between value and count distinguishes the two forms.
 fn project_array_literal(self: &Projector, cst: CstNode) Expr {
     let saw_semicolon = false
-    let exprs: List(Expr) = list(cst.node_child_count(), self.alloc)
+    let exprs: UnmanagedList(Expr) = unmanaged_list(cst.node_child_count(), self.alloc)
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -2280,7 +2277,7 @@ fn project_array_literal(self: &Projector, cst: CstNode) Expr {
             }
             NodeChild(child) => {
                 if is_expr_kind(child.kind) {
-                    exprs.push(self.project_expr(child))
+                    exprs.push(self.project_expr(child), self.alloc)
                 }
             }
         }
@@ -2291,6 +2288,7 @@ fn project_array_literal(self: &Projector, cst: CstNode) Expr {
         const value_slot = exprs.remove_at(0)
         const count: Expr = count_slot.unwrap()
         const value: Expr = value_slot.unwrap()
+        exprs.deinit(self.alloc)
         return Expr.ArrayLit(ArrayLiteralExpr {
             span = self.span_from(cst),
             kind = ArrayLiteralKind.Repeat(RepeatLiteral {
@@ -2345,12 +2343,12 @@ fn project_anon_struct_or_tuple(self: &Projector, cst: CstNode) Expr {
         }
     }
     if leads_with_paren {
-        let elements: List(Expr) = list(cst.node_child_count(), self.alloc)
+        let elements: UnmanagedList(Expr) = unmanaged_list(cst.node_child_count(), self.alloc)
         for i in 0..cst.child_count() {
             cst.child(i) match {
                 NodeChild(child) => {
                     if is_expr_kind(child.kind) {
-                        elements.push(self.project_expr(child))
+                        elements.push(self.project_expr(child), self.alloc)
                     }
                 }
                 TokenChild(_) => {}
@@ -2371,7 +2369,7 @@ fn project_struct_construction(self: &Projector, cst: CstNode) Expr {
 // `nominal` is true when the construction names a type (`Point { ... }`, `Type(T) { ... }`); false
 // for the anonymous `.{ ... }` form.
 fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
-    let fields: List(StructFieldInit) = list(cst.node_child_count(), self.alloc)
+    let fields: UnmanagedList(StructFieldInit) = unmanaged_list(cst.node_child_count(), self.alloc)
     let type_expr_opt: TypeExpr? = null
     if nominal {
         install(&type_expr_opt, self.struct_construction_type(cst))
@@ -2402,11 +2400,10 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
                 if tok.kind == TokenKind.Identifier {
                     // Flush previous pending field as shorthand.
                     if pending_active {
-                        fields.push(self.make_struct_field_init(
-                            pending_name,
-                            pending_span,
-                            pending_value,
-                        ))
+                        fields.push(
+                            self.make_struct_field_init(pending_name, pending_span, pending_value),
+                            self.alloc,
+                        )
                     }
                     pending_name = tok.text
                     pending_span = self.span_from_token(tok)
@@ -2437,11 +2434,10 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
                 }
                 if tok.kind == TokenKind.Comma {
                     if pending_active {
-                        fields.push(self.make_struct_field_init(
-                            pending_name,
-                            pending_span,
-                            pending_value,
-                        ))
+                        fields.push(
+                            self.make_struct_field_init(pending_name, pending_span, pending_value),
+                            self.alloc,
+                        )
                         pending_active = false
                         install(&pending_value, null)
                     }
@@ -2449,11 +2445,10 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
                 }
                 if tok.kind == TokenKind.CloseBrace {
                     if pending_active {
-                        fields.push(self.make_struct_field_init(
-                            pending_name,
-                            pending_span,
-                            pending_value,
-                        ))
+                        fields.push(
+                            self.make_struct_field_init(pending_name, pending_span, pending_value),
+                            self.alloc,
+                        )
                         pending_active = false
                         install(&pending_value, null)
                     }
@@ -2476,7 +2471,10 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
         }
     }
     if pending_active {
-        fields.push(self.make_struct_field_init(pending_name, pending_span, pending_value))
+        fields.push(
+            self.make_struct_field_init(pending_name, pending_span, pending_value),
+            self.alloc,
+        )
     }
     let type_ref: &TypeExpr? = null
     type_expr_opt match {
@@ -2519,7 +2517,7 @@ fn struct_construction_type(self: &Projector, cst: CstNode) TypeExpr? {
     }
     let name: String = ""
     let name_span = self.span_from(cst)
-    let generic_args: List(TypeExpr) = list(cst.node_child_count(), self.alloc)
+    let generic_args: UnmanagedList(TypeExpr) = unmanaged_list(cst.node_child_count(), self.alloc)
     let in_generic = false
     let depth: i32 = 0
     for i in 0..cst.child_count() {
@@ -2548,7 +2546,7 @@ fn struct_construction_type(self: &Projector, cst: CstNode) TypeExpr? {
             }
             NodeChild(child) => {
                 if in_generic and is_type_kind(child.kind) {
-                    generic_args.push(self.project_type_expr(child))
+                    generic_args.push(self.project_type_expr(child), self.alloc)
                 } else if in_generic {
                     // `Pair(i64) { ... }` parses its parenthesised args in EXPRESSION position (the
                     // parser rewrites a call into a construction on seeing the brace), so a type
@@ -2556,27 +2554,29 @@ fn struct_construction_type(self: &Projector, cst: CstNode) TypeExpr? {
                     // as a type.
                     let t = self.type_expr_from_expr_cst(child)
                     if t.is_some() {
-                        generic_args.push(t.unwrap())
+                        generic_args.push(t.unwrap(), self.alloc)
                     }
                 }
             }
         }
     }
     if name.len == 0 {
+        generic_args.deinit(self.alloc)
         return null
     }
     return Some(TypeExpr.Named(NamedType {
         span = name_span,
         name = name,
         generic_args = frozen(generic_args),
-        assoc_args = frozen(list(0, self.alloc)),
+        assoc_args = [],
     }))
 }
 
 // Reinterpret an expression-position CST node as a type expression: a bare identifier is a type
-// name, a call is a generic instantiation whose arguments reinterpret recursively (`List(u8)`).
-// Anything else - and any call argument that doesn't reinterpret - yields null, so the caller drops
-// it and the checker reports the under-instantiated type rather than a wrong one.
+// name, a call is a generic instantiation whose arguments reinterpret recursively
+// (`UnmanagedList(u8)`). Anything else - and any call argument that doesn't reinterpret - yields
+// null, so the caller drops it and the checker reports the under-instantiated type rather than a
+// wrong one.
 fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
     const path = self.projection_from_expr_cst(cst)
     if path.is_some() {
@@ -2599,18 +2599,17 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
         if name.len == 0 {
             return null
         }
-        let no_args: List(TypeExpr) = list(0, self.alloc)
         return Some(TypeExpr.Named(NamedType {
             span = span,
             name = name,
-            generic_args = frozen(no_args),
-            assoc_args = frozen(list(0, self.alloc)),
+            generic_args = [],
+            assoc_args = [],
         }))
     }
     if cst.kind == NodeKind.CallExpr {
         let name: String = ""
         let span = self.span_from(cst)
-        let args: List(TypeExpr) = list(cst.node_child_count(), self.alloc)
+        let args: UnmanagedList(TypeExpr) = unmanaged_list(cst.node_child_count(), self.alloc)
         for i in 0..cst.child_count() {
             cst.child(i) match {
                 TokenChild(tok) => {
@@ -2622,20 +2621,24 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
                 NodeChild(child) => {
                     let t = self.type_expr_from_expr_cst(child)
                     t match {
-                        Some(te) => args.push(te)
-                        None => return null
+                        Some(te) => args.push(te, self.alloc)
+                        None => {
+                            args.deinit(self.alloc)
+                            return null
+                        }
                     }
                 }
             }
         }
         if name.len == 0 {
+            args.deinit(self.alloc)
             return null
         }
         return Some(TypeExpr.Named(NamedType {
             span = span,
             name = name,
             generic_args = frozen(args),
-            assoc_args = frozen(list(0, self.alloc)),
+            assoc_args = [],
         }))
     }
     return null
@@ -2652,10 +2655,10 @@ fn projection_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
     // The member form's receiver is its first child; an identifier call starts with a token.
     const recv = child_node(cst, 0) ?? return null
     const base = self.type_expr_from_expr_cst(recv) ?? return null
-    let args: List(TypeExpr) = list(0, self.alloc)
+    let args: UnmanagedList(TypeExpr) = unmanaged_list(0, self.alloc)
     for i in 1..cst.child_count() {
         const child = child_node(cst, i) ?? continue
-        args.push(self.type_expr_from_expr_cst(child) ?? return null)
+        args.push(self.type_expr_from_expr_cst(child) ?? return null, self.alloc)
     }
     return Some(TypeExpr.Projection(ProjectionType {
         span = self.span_from(cst),
@@ -2674,7 +2677,7 @@ fn project_block_node(self: &Projector, cst: CstNode) BlockExpr? {
     }
     self.open_scope()
     defer self.close_scope()
-    let stmts: List(Stmt) = list(cst.node_child_count(), self.alloc)
+    let stmts: UnmanagedList(Stmt) = unmanaged_list(cst.node_child_count(), self.alloc)
     let trailing: Expr? = null
     // First pass: identify the last NodeChild - candidate for trailing.
     let last_child_idx: usize = 0
@@ -2729,7 +2732,7 @@ fn project_block_node(self: &Projector, cst: CstNode) BlockExpr? {
                 }
                 const projected = self.project_stmt(child)
                 projected match {
-                    Some(s) => { stmts.push(s) }
+                    Some(s) => { stmts.push(s, self.alloc) }
                     None => {}
                 }
             }
@@ -2751,8 +2754,8 @@ fn project_block_node(self: &Projector, cst: CstNode) BlockExpr? {
 fn open_scope(self: &Projector) {
     const sink = self.locals ?? return
     const parent = innermost(sink)
-    sink.open.push(sink.parents.len as u32)
-    sink.parents.push(parent)
+    sink.open.push(sink.parents.len as u32, self.alloc)
+    sink.parents.push(parent, self.alloc)
 }
 
 fn close_scope(self: &Projector) {
@@ -2777,11 +2780,7 @@ fn ends_with_semicolon(cst: CstNode) bool {
 
 fn project_if_expr(self: &Projector, cst: CstNode) IfExpr {
     let condition: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let then_branch: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = frozen(list(0, self.alloc)),
-        trailing = null,
-    }
+    let then_branch: BlockExpr = .{ span = self.span_from(cst), stmts = [], trailing = null }
     let else_branch: ElseBranch = ElseBranch.NoElse
     let cond_seen = false
     let then_seen = false
@@ -2830,7 +2829,7 @@ fn project_if_expr(self: &Projector, cst: CstNode) IfExpr {
 
 fn project_match_expr(self: &Projector, cst: CstNode) MatchExpr {
     let scrutinee: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
-    let arms: List(MatchArm) = list(cst.node_child_count(), self.alloc)
+    let arms: UnmanagedList(MatchArm) = unmanaged_list(cst.node_child_count(), self.alloc)
     let scrutinee_seen = false
     for i in 0..cst.child_count() {
         cst.child(i) match {
@@ -2841,7 +2840,7 @@ fn project_match_expr(self: &Projector, cst: CstNode) MatchExpr {
                     continue
                 }
                 if child.kind == NodeKind.MatchArm {
-                    arms.push(self.project_match_arm(child))
+                    arms.push(self.project_match_arm(child), self.alloc)
                 }
             }
             TokenChild(_) => {}
@@ -2855,7 +2854,7 @@ fn project_match_expr(self: &Projector, cst: CstNode) MatchExpr {
 // sub-node BEFORE `=>`. We extract: pattern from tokens, guard from the optional sub-node preceding
 // `=>`, body from the sub-node AFTER `=>`.
 fn project_match_arm(self: &Projector, cst: CstNode) MatchArm {
-    let pattern_tokens: List(Token) = list(cst.node_child_count(), self.alloc)
+    let pattern_tokens: UnmanagedList(Token) = unmanaged_list(cst.node_child_count(), self.alloc)
     let guard: Expr? = null
     let body: Expr = Expr.Error(ErrorExpr { span = self.span_from(cst) })
     let saw_arrow = false
@@ -2878,7 +2877,7 @@ fn project_match_arm(self: &Projector, cst: CstNode) MatchArm {
                         pattern_start = tok.offset
                     }
                     pattern_end = tok.offset + tok.text.len
-                    pattern_tokens.push(tok.*)
+                    pattern_tokens.push(tok.*, self.alloc)
                 }
             }
             NodeChild(child) => {
@@ -2903,6 +2902,7 @@ fn project_match_arm(self: &Projector, cst: CstNode) MatchArm {
         }
     }
     const pattern = self.project_pattern_from_tokens(&pattern_tokens, pattern_start, pattern_end)
+    pattern_tokens.deinit(self.alloc)
     let guard_ref: &Expr? = null
     guard match {
         Some(e) => { guard_ref = Some(self.boxed(e)) }
@@ -2920,13 +2920,9 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
     if is_brace_lambda(cst) {
         return self.project_brace_lambda(cst, false)
     }
-    let params: List(FunctionParam) = list(cst.node_child_count(), self.alloc)
+    let params: UnmanagedList(FunctionParam) = unmanaged_list(cst.node_child_count(), self.alloc)
     let return_type: TypeExpr? = null
-    let body: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = frozen(list(0, self.alloc)),
-        trailing = null,
-    }
+    let body: BlockExpr = .{ span = self.span_from(cst), stmts = [], trailing = null }
     // Lambda params are surfaced as a loose token run: identifier (`:` type-node)? (`,` ...). We
     // walk children, pairing each identifier with the immediately-following type sub-node.
     let pending_name: String = ""
@@ -2953,7 +2949,10 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
                     depth = depth - 1
                     if depth == 0 {
                         if pending_active {
-                            params.push(self.make_lambda_param(pending_name, pending_span))
+                            params.push(
+                                self.make_lambda_param(pending_name, pending_span),
+                                self.alloc,
+                            )
                             pending_active = false
                         }
                         after_close_paren = true
@@ -2963,7 +2962,10 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
                 if saw_open_paren and !after_close_paren {
                     if tok.kind == TokenKind.Identifier {
                         if pending_active {
-                            params.push(self.make_lambda_param(pending_name, pending_span))
+                            params.push(
+                                self.make_lambda_param(pending_name, pending_span),
+                                self.alloc,
+                            )
                         }
                         pending_name = tok.text
                         pending_span = self.span_from_token(tok)
@@ -2971,7 +2973,7 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
                         continue
                     }
                     if tok.kind == TokenKind.Comma and pending_active {
-                        params.push(self.make_lambda_param(pending_name, pending_span))
+                        params.push(self.make_lambda_param(pending_name, pending_span), self.alloc)
                         pending_active = false
                     }
                     if tok.kind == TokenKind.Move and pending_active {
@@ -2996,16 +2998,19 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
                 // Inside the param list - a type-node attaches to the pending identifier.
                 if is_type_kind(child.kind) and pending_active {
                     const t = self.project_type_expr(child)
-                    params.push(FunctionParam {
-                        span = pending_span,
-                        name = pending_name,
-                        type_expr = self.boxed(t),
-                        default_value = null,
-                        is_variadic = false,
-                        is_move = pending_move,
-                        is_slot = false,
-                        it_name = null,
-                    })
+                    params.push(
+                        FunctionParam {
+                            span = pending_span,
+                            name = pending_name,
+                            type_expr = self.boxed(t),
+                            default_value = null,
+                            is_variadic = false,
+                            is_move = pending_move,
+                            is_slot = false,
+                            it_name = null,
+                        },
+                        self.alloc,
+                    )
                     pending_active = false
                     pending_move = false
                 }
@@ -3025,12 +3030,8 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
 // `{ params => body }` / `{ body }`: the parameter run is a token sequence up to `=>`, each name
 // optionally followed by `:`, `move` and a type node.
 fn project_brace_lambda(self: &Projector, cst: CstNode, trailing: bool) LambdaExpr {
-    let params: List(FunctionParam) = list(cst.node_child_count(), self.alloc)
-    let body: BlockExpr = .{
-        span = self.span_from(cst),
-        stmts = frozen(list(0, self.alloc)),
-        trailing = null,
-    }
+    let params: UnmanagedList(FunctionParam) = unmanaged_list(cst.node_child_count(), self.alloc)
+    let body: BlockExpr = .{ span = self.span_from(cst), stmts = [], trailing = null }
     let pending_name: String = ""
     let pending_span = self.span_from(cst)
     let pending_active = false
@@ -3041,7 +3042,7 @@ fn project_brace_lambda(self: &Projector, cst: CstNode, trailing: bool) LambdaEx
             TokenChild(tok) => tok.kind match {
                 Identifier | Underscore => {
                     if pending_active {
-                        params.push(self.make_lambda_param(pending_name, pending_span))
+                        params.push(self.make_lambda_param(pending_name, pending_span), self.alloc)
                     }
                     pending_name = tok.text
                     pending_span = self.span_from_token(tok)
@@ -3054,7 +3055,7 @@ fn project_brace_lambda(self: &Projector, cst: CstNode, trailing: bool) LambdaEx
                 FatArrow => {
                     arrowless = false
                     if pending_active {
-                        params.push(self.make_lambda_param(pending_name, pending_span))
+                        params.push(self.make_lambda_param(pending_name, pending_span), self.alloc)
                         pending_active = false
                     }
                 }
@@ -3067,16 +3068,19 @@ fn project_brace_lambda(self: &Projector, cst: CstNode, trailing: bool) LambdaEx
                 }
                 if is_type_kind(child.kind) and pending_active {
                     const t = self.project_type_expr(child)
-                    params.push(FunctionParam {
-                        span = pending_span,
-                        name = pending_name,
-                        type_expr = self.boxed(t),
-                        default_value = null,
-                        is_variadic = false,
-                        is_move = pending_move,
-                        is_slot = false,
-                        it_name = null,
-                    })
+                    params.push(
+                        FunctionParam {
+                            span = pending_span,
+                            name = pending_name,
+                            type_expr = self.boxed(t),
+                            default_value = null,
+                            is_variadic = false,
+                            is_move = pending_move,
+                            is_slot = false,
+                            it_name = null,
+                        },
+                        self.alloc,
+                    )
                     pending_active = false
                     pending_move = false
                 }
@@ -3085,7 +3089,7 @@ fn project_brace_lambda(self: &Projector, cst: CstNode, trailing: bool) LambdaEx
     }
     if arrowless {
         const brace: SourceSpan = .{ file_id = self.file_id, start = cst.start, length = 1 }
-        params.push(self.make_lambda_param("it", brace))
+        params.push(self.make_lambda_param("it", brace), self.alloc)
     }
     return .{
         span = self.span_from(cst),
@@ -3122,8 +3126,8 @@ fn make_lambda_param(self: &Projector, name: String, span: SourceSpan) FunctionP
 }
 
 fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr {
-    let parts: List(InterpolationPart) = list(cst.node_child_count(), self.alloc)
-    let target_args: List(Expr) = list(0, self.alloc)
+    let parts: UnmanagedList(InterpolationPart) = unmanaged_list(cst.node_child_count(), self.alloc)
+    let target_args: UnmanagedList(Expr) = unmanaged_list(0, self.alloc)
     let into_builder: Expr? = null
     let after_dollar = false
     let after_paren = false
@@ -3166,7 +3170,7 @@ fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr 
                     continue
                 }
                 if in_body and tok.kind == TokenKind.InterpSegment {
-                    parts.push(InterpolationPart.Text(tok.text))
+                    parts.push(InterpolationPart.Text(tok.text), self.alloc)
                     continue
                 }
                 // `{expr:spec}` - the spec token follows the hole's expr node in the CST; attach it
@@ -3191,11 +3195,14 @@ fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr 
             NodeChild(child) => {
                 if in_body and is_expr_kind(child.kind) {
                     const e = self.project_expr(child)
-                    parts.push(InterpolationPart.Hole(InterpolationHole {
-                        span = self.span_from(child),
-                        expr = self.boxed(e),
-                        format = null,
-                    }))
+                    parts.push(
+                        InterpolationPart.Hole(InterpolationHole {
+                            span = self.span_from(child),
+                            expr = self.boxed(e),
+                            format = null,
+                        }),
+                        self.alloc,
+                    )
                     continue
                 }
                 // `$(64, allocator = &a)"…"` - a named builder argument
@@ -3204,9 +3211,9 @@ fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr 
                 if after_paren and child.kind == NodeKind.NamedArgumentExpr {
                     // The argument's value is its own node in the arena; the wrapper is dropped.
                     const named = self.project_named_argument(child)
-                    target_args.push(named.value.*)
+                    target_args.push(named.value.*, self.alloc)
                 } else if after_paren and is_expr_kind(child.kind) {
-                    target_args.push(self.project_expr(child))
+                    target_args.push(self.project_expr(child), self.alloc)
                 }
             }
         }
@@ -3256,8 +3263,8 @@ fn project_type_expr(self: &Projector, cst: CstNode) TypeExpr {
 fn project_named_type(self: &Projector, cst: CstNode) TypeExpr {
     let saw_dollar = false
     let name: String = ""
-    let generic_args: List(TypeExpr) = list(cst.node_child_count(), self.alloc)
-    let assoc_args: List(AssocArg) = list(0, self.alloc)
+    let generic_args: UnmanagedList(TypeExpr) = unmanaged_list(cst.node_child_count(), self.alloc)
+    let assoc_args: UnmanagedList(AssocArg) = unmanaged_list(0, self.alloc)
     for i in 0..cst.child_count() {
         cst.child(i) match {
             TokenChild(tok) => {
@@ -3271,14 +3278,16 @@ fn project_named_type(self: &Projector, cst: CstNode) TypeExpr {
             }
             NodeChild(child) => {
                 if child.kind == NodeKind.NamedTypeArg {
-                    assoc_args.push(self.project_assoc_arg(child))
+                    assoc_args.push(self.project_assoc_arg(child), self.alloc)
                 } else if is_type_kind(child.kind) {
-                    generic_args.push(self.project_type_expr(child))
+                    generic_args.push(self.project_type_expr(child), self.alloc)
                 }
             }
         }
     }
     if saw_dollar {
+        generic_args.deinit(self.alloc)
+        assoc_args.deinit(self.alloc)
         return TypeExpr.GenericBind(GenericBindType { span = self.span_from(cst), name = name })
     }
     return TypeExpr.Named(NamedType {
@@ -3314,11 +3323,11 @@ fn project_projection_type(self: &Projector, cst: CstNode) TypeExpr {
         } }
         None => {}
     }
-    let args: List(TypeExpr) = list(0, self.alloc)
+    let args: UnmanagedList(TypeExpr) = unmanaged_list(0, self.alloc)
     for i in 1..cst.node_child_count() {
         const child = nth_node(cst, i) ?? break
         if is_type_kind(child.kind) {
-            args.push(self.project_type_expr(child))
+            args.push(self.project_type_expr(child), self.alloc)
         }
     }
     return TypeExpr.Projection(ProjectionType {
@@ -3390,12 +3399,12 @@ fn project_slice_type(self: &Projector, cst: CstNode) TypeExpr {
 }
 
 fn project_tuple_type(self: &Projector, cst: CstNode) TypeExpr {
-    let elements: List(TypeExpr) = list(cst.node_child_count(), self.alloc)
+    let elements: UnmanagedList(TypeExpr) = unmanaged_list(cst.node_child_count(), self.alloc)
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
                 if is_type_kind(child.kind) {
-                    elements.push(self.project_type_expr(child))
+                    elements.push(self.project_type_expr(child), self.alloc)
                 }
             }
             TokenChild(_) => {}
@@ -3409,21 +3418,26 @@ fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
 }
 
 fn project_contract_type(self: &Projector, cst: CstNode) TypeExpr {
-    let generics: List(GenericParam) = list(0, self.alloc)
+    let generics: UnmanagedList(GenericParam) = unmanaged_list(0, self.alloc)
     self.collect_type_params(cst, &generics)
-    let requirements: List(ContractRequirement) = list(cst.node_child_count(), self.alloc)
-    let assoc_types: List(AssocType) = list(0, self.alloc)
+    let requirements: UnmanagedList(
+        ContractRequirement,
+    ) = unmanaged_list(cst.node_child_count(), self.alloc)
+    let assoc_types: UnmanagedList(AssocType) = unmanaged_list(0, self.alloc)
     for i in 0..cst.child_count() {
         const child = cst.child(i) match {
             NodeChild(c) => c
             TokenChild(_) => continue
         }
         if child.kind == NodeKind.ContractRequirement {
-            requirements.push(ContractRequirement {
-                span = self.span_from(child),
-                name = first_ident_text(child),
-                signature = self.project_function_signature(child),
-            })
+            requirements.push(
+                ContractRequirement {
+                    span = self.span_from(child),
+                    name = first_ident_text(child),
+                    signature = self.project_function_signature(child),
+                },
+                self.alloc,
+            )
         } else if child.kind == NodeKind.ContractAssocType {
             let ty: TypeExpr? = null
             nth_node(child, 0) match {
@@ -3433,12 +3447,15 @@ fn project_contract_type(self: &Projector, cst: CstNode) TypeExpr {
                 None => {}
             }
             const derived = has_token(child, TokenKind.Equals)
-            assoc_types.push(AssocType {
-                span = self.span_from(child),
-                name = first_ident_text(child),
-                bound = if derived { null } else { self.boxed_opt(ty) },
-                value = if derived { self.boxed_opt(ty) } else { null },
-            })
+            assoc_types.push(
+                AssocType {
+                    span = self.span_from(child),
+                    name = first_ident_text(child),
+                    bound = if derived { null } else { self.boxed_opt(ty) },
+                    value = if derived { self.boxed_opt(ty) } else { null },
+                },
+                self.alloc,
+            )
         }
     }
     return TypeExpr.Contract(ContractType {
@@ -3450,12 +3467,12 @@ fn project_contract_type(self: &Projector, cst: CstNode) TypeExpr {
 }
 
 fn project_combined_type(self: &Projector, cst: CstNode) TypeExpr {
-    let parts: List(TypeExpr) = list(cst.node_child_count(), self.alloc)
+    let parts: UnmanagedList(TypeExpr) = unmanaged_list(cst.node_child_count(), self.alloc)
     for i in 0..cst.child_count() {
         cst.child(i) match {
             NodeChild(child) => {
                 if is_type_kind(child.kind) {
-                    parts.push(self.project_type_expr(child))
+                    parts.push(self.project_type_expr(child), self.alloc)
                 }
             }
             TokenChild(_) => {}
@@ -3466,9 +3483,9 @@ fn project_combined_type(self: &Projector, cst: CstNode) TypeExpr {
 
 // The `(params) ret?` of a function type or a contract requirement.
 fn project_function_signature(self: &Projector, cst: CstNode) FunctionType {
-    let params: List(TypeExpr) = list(cst.node_child_count(), self.alloc)
-    let param_names: List(String) = list(0, self.alloc)
-    let param_moves: List(bool) = list(0, self.alloc)
+    let params: UnmanagedList(TypeExpr) = unmanaged_list(cst.node_child_count(), self.alloc)
+    let param_names: UnmanagedList(String) = unmanaged_list(0, self.alloc)
+    let param_moves: UnmanagedList(bool) = unmanaged_list(0, self.alloc)
     let return_type: TypeExpr? = null
     let in_params = false
     let saw_close = false
@@ -3513,9 +3530,9 @@ fn project_function_signature(self: &Projector, cst: CstNode) FunctionType {
                     continue
                 }
                 if in_params {
-                    params.push(self.project_type_expr(child))
-                    param_names.push(pending_name)
-                    param_moves.push(pending_move)
+                    params.push(self.project_type_expr(child), self.alloc)
+                    param_names.push(pending_name, self.alloc)
+                    param_moves.push(pending_move, self.alloc)
                     pending_name = ""
                     pending_move = false
                 } else if saw_close and return_type.is_none() {
@@ -3553,19 +3570,19 @@ fn project_anon_enum_type(self: &Projector, cst: CstNode) TypeExpr {
 // A struct body: its parameters, fields and nested types, inside the type scope of `name` (empty
 // when anonymous).
 fn project_struct_body(self: &Projector, cst: CstNode, name: String, is_union: bool) AnonStructType {
-    let generics: List(GenericParam) = list(0, self.alloc)
+    let generics: UnmanagedList(GenericParam) = unmanaged_list(0, self.alloc)
     self.collect_type_params(cst, &generics)
-    let fields: List(StructField) = list(cst.node_child_count(), self.alloc)
-    let types: List(TypeDecl) = list(0, self.alloc)
+    let fields: UnmanagedList(StructField) = unmanaged_list(cst.node_child_count(), self.alloc)
+    let types: UnmanagedList(TypeDecl) = unmanaged_list(0, self.alloc)
     const saved = self.enter_type_body(name, &generics)
     for i in 0..cst.child_count() {
         const child = child_node(cst, i) ?? continue
         if child.kind == NodeKind.StructField {
-            fields.push(self.project_struct_field(child))
+            fields.push(self.project_struct_field(child), self.alloc)
             continue
         }
         self.nested_type(child) match {
-            Some(td) => types.push(td)
+            Some(td) => types.push(td, self.alloc)
             None => {}
         }
     }
@@ -3582,19 +3599,19 @@ fn project_struct_body(self: &Projector, cst: CstNode, name: String, is_union: b
 // An enum body: its parameters, variants and nested types, inside the type scope of `name` (empty
 // when anonymous).
 fn project_enum_body(self: &Projector, cst: CstNode, name: String) AnonEnumType {
-    let generics: List(GenericParam) = list(0, self.alloc)
+    let generics: UnmanagedList(GenericParam) = unmanaged_list(0, self.alloc)
     self.collect_type_params(cst, &generics)
-    let variants: List(EnumVariant) = list(cst.node_child_count(), self.alloc)
-    let types: List(TypeDecl) = list(0, self.alloc)
+    let variants: UnmanagedList(EnumVariant) = unmanaged_list(cst.node_child_count(), self.alloc)
+    let types: UnmanagedList(TypeDecl) = unmanaged_list(0, self.alloc)
     const saved = self.enter_type_body(name, &generics)
     for i in 0..cst.child_count() {
         const child = child_node(cst, i) ?? continue
         if child.kind == NodeKind.EnumVariant {
-            variants.push(self.project_enum_variant(child))
+            variants.push(self.project_enum_variant(child), self.alloc)
             continue
         }
         self.nested_type(child) match {
-            Some(td) => types.push(td)
+            Some(td) => types.push(td, self.alloc)
             None => {}
         }
     }
@@ -3625,7 +3642,7 @@ fn project_enum_body(self: &Projector, cst: CstNode, name: String) AnonEnumType 
 
 fn project_pattern_from_tokens(
     self: &Projector,
-    tokens: &List(Token),
+    tokens: &UnmanagedList(Token),
     start: usize,
     end: usize,
 ) Pattern {
@@ -3663,7 +3680,7 @@ fn project_pattern_from_tokens(
         }
     }
     if has_pipe {
-        let alts: List(Pattern) = list(2, self.alloc)
+        let alts: UnmanagedList(Pattern) = unmanaged_list(2, self.alloc)
         depth = 0
         let seg: usize = 0
         for i in 0..tokens.len {
@@ -3675,11 +3692,11 @@ fn project_pattern_from_tokens(
                 depth = depth - 1
             }
             if k2 == TokenKind.Pipe and depth == 0 {
-                alts.push(self.payload_pattern_slice(tokens, seg, i))
+                alts.push(self.payload_pattern_slice(tokens, seg, i), self.alloc)
                 seg = i + 1
             }
         }
-        alts.push(self.payload_pattern_slice(tokens, seg, tokens.len))
+        alts.push(self.payload_pattern_slice(tokens, seg, tokens.len), self.alloc)
         return Pattern.Or(OrPattern { span = span, alternatives = frozen(alts) })
     }
 
@@ -3725,7 +3742,7 @@ fn project_pattern_from_tokens(
     return self.enum_variant_pattern_from_tokens(tokens, span)
 }
 
-fn has_top_level_brace(tokens: &List(Token)) bool {
+fn has_top_level_brace(tokens: &UnmanagedList(Token)) bool {
     for i in 0..tokens.len {
         if tokens[i].kind == TokenKind.OpenBrace {
             return true
@@ -3736,8 +3753,12 @@ fn has_top_level_brace(tokens: &List(Token)) bool {
 
 // `(p0, p1, …)` - the parenthesised run split at top-level commas. An
 // unbalanced or trailing-garbage run degrades to `Error` (E2115) rather than guess a shape.
-fn tuple_pattern_from_tokens(self: &Projector, tokens: &List(Token), span: SourceSpan) Pattern {
-    let elements: List(Pattern) = list(2, self.alloc)
+fn tuple_pattern_from_tokens(
+    self: &Projector,
+    tokens: &UnmanagedList(Token),
+    span: SourceSpan,
+) Pattern {
+    let elements: UnmanagedList(Pattern) = unmanaged_list(2, self.alloc)
     let depth: i32 = 0
     let seg = 1usize
     let i = 0usize
@@ -3752,19 +3773,20 @@ fn tuple_pattern_from_tokens(self: &Projector, tokens: &List(Token), span: Sourc
             depth = depth - 1
             if depth == 0 {
                 if i > seg {
-                    elements.push(self.payload_pattern_slice(tokens, seg, i))
+                    elements.push(self.payload_pattern_slice(tokens, seg, i), self.alloc)
                 }
                 closed = true
                 i = i + 1
                 break
             }
         } else if k == TokenKind.Comma and depth == 1 {
-            elements.push(self.payload_pattern_slice(tokens, seg, i))
+            elements.push(self.payload_pattern_slice(tokens, seg, i), self.alloc)
             seg = i + 1
         }
         i = i + 1
     }
     if !closed or i != tokens.len {
+        elements.deinit(self.alloc)
         return self.error_pattern(span)
     }
     return Pattern.Tuple(TuplePattern { span = span, elements = frozen(elements) })
@@ -3772,13 +3794,18 @@ fn tuple_pattern_from_tokens(self: &Projector, tokens: &List(Token), span: Sourc
 
 // `Name { x = p, y, .. }`. A field with no `= pattern` is shorthand for binding the field's own
 // name; `..` marks the rest as ignored.
-fn struct_pattern_from_tokens(self: &Projector, tokens: &List(Token), span: SourceSpan) Pattern {
+fn struct_pattern_from_tokens(
+    self: &Projector,
+    tokens: &UnmanagedList(Token),
+    span: SourceSpan,
+) Pattern {
     const a = self.alloc
     let name = tokens[0].text
-    let fields: List(StructPatternField) = list(2, a)
+    let fields: UnmanagedList(StructPatternField) = unmanaged_list(2, a)
     let has_rest = false
     let i = 1usize
     if i >= tokens.len or tokens[i].kind != TokenKind.OpenBrace {
+        fields.deinit(a)
         return self.error_pattern(span)
     }
     i = i + 1
@@ -3809,8 +3836,8 @@ fn struct_pattern_from_tokens(self: &Projector, tokens: &List(Token), span: Sour
         type_expr = self.boxed(TypeExpr.Named(NamedType {
             span = self.span_from_token(&tokens[0]),
             name = name,
-            generic_args = frozen(list(0, a)),
-            assoc_args = frozen(list(0, a)),
+            generic_args = [],
+            assoc_args = [],
         })),
         fields = frozen(fields),
         has_rest = has_rest,
@@ -3819,9 +3846,9 @@ fn struct_pattern_from_tokens(self: &Projector, tokens: &List(Token), span: Sour
 
 fn push_struct_pattern_field(
     self: &Projector,
-    fields: &List(StructPatternField),
+    fields: &UnmanagedList(StructPatternField),
     has_rest: &bool,
-    tokens: &List(Token),
+    tokens: &UnmanagedList(Token),
     lo: usize,
     hi: usize,
 ) {
@@ -3839,22 +3866,25 @@ fn push_struct_pattern_field(
     const fname = tokens[lo].text
     // `x` alone binds `x`; `x = <pattern>` binds the sub-pattern.
     if lo + 1 >= hi {
-        fields.push(StructPatternField { span = fspan, name = fname, binding = null })
+        fields.push(StructPatternField { span = fspan, name = fname, binding = null }, self.alloc)
         return
     }
     if tokens[lo + 1].kind != TokenKind.Equals {
-        fields.push(StructPatternField { span = fspan, name = fname, binding = null })
+        fields.push(StructPatternField { span = fspan, name = fname, binding = null }, self.alloc)
         return
     }
     const sub = self.payload_pattern_slice(tokens, lo + 2, hi)
-    fields.push(StructPatternField { span = fspan, name = fname, binding = Some(self.boxed(sub)) })
+    fields.push(
+        StructPatternField { span = fspan, name = fname, binding = Some(self.boxed(sub)) },
+        self.alloc,
+    )
 }
 
 // `lo..hi` in pattern position: at most one literal token on either side of the range token;
 // anything fancier degrades to Error (E2115) rather than guess.
 fn range_pattern_from(
     self: &Projector,
-    tokens: &List(Token),
+    tokens: &UnmanagedList(Token),
     dd: usize,
     inclusive: bool,
     span: SourceSpan,
@@ -4002,12 +4032,12 @@ fn literal_pattern_for(self: &Projector, tok: Token, span: SourceSpan) Pattern {
 
 fn enum_variant_pattern_from_tokens(
     self: &Projector,
-    tokens: &List(Token),
+    tokens: &UnmanagedList(Token),
     span: SourceSpan,
 ) Pattern {
     let qualifier: String? = null
     let name: String = ""
-    let payloads: List(Pattern) = list(0, self.alloc)
+    let payloads: UnmanagedList(Pattern) = unmanaged_list(0, self.alloc)
     // Read leading `Ident (`.`Ident)?` for qualifier + name; then descend into the parenthesised
     // payload list (one pattern per top-level comma).
     let idx: usize = 0
@@ -4033,6 +4063,7 @@ fn enum_variant_pattern_from_tokens(
     }
     // Expect `(` - anything else is a shape this projector cannot read.
     if tokens[idx].kind != TokenKind.OpenParenthesis {
+        payloads.deinit(self.alloc)
         return self.error_pattern(span)
     }
     idx = idx + 1
@@ -4046,12 +4077,12 @@ fn enum_variant_pattern_from_tokens(
         else if tok.kind == TokenKind.CloseParenthesis {
             depth = depth - 1
             if depth == 0 {
-                payloads.push(self.payload_pattern_slice(tokens, segment_start, idx))
+                payloads.push(self.payload_pattern_slice(tokens, segment_start, idx), self.alloc)
                 idx = idx + 1
                 break
             }
         } else if tok.kind == TokenKind.Comma and depth == 1 {
-            payloads.push(self.payload_pattern_slice(tokens, segment_start, idx))
+            payloads.push(self.payload_pattern_slice(tokens, segment_start, idx), self.alloc)
             segment_start = idx + 1
         }
         idx = idx + 1
@@ -4064,10 +4095,15 @@ fn enum_variant_pattern_from_tokens(
     })
 }
 
-fn payload_pattern_slice(self: &Projector, tokens: &List(Token), lo: usize, hi: usize) Pattern {
-    let slice_list: List(Token) = list(0, self.alloc)
+fn payload_pattern_slice(
+    self: &Projector,
+    tokens: &UnmanagedList(Token),
+    lo: usize,
+    hi: usize,
+) Pattern {
+    let slice_list: UnmanagedList(Token) = unmanaged_list(0, self.alloc)
     for i in lo..hi {
-        slice_list.push(tokens[i])
+        slice_list.push(tokens[i], self.alloc)
     }
     let start: usize = 0
     let end: usize = 0
@@ -4077,7 +4113,9 @@ fn payload_pattern_slice(self: &Projector, tokens: &List(Token), lo: usize, hi: 
         start = first.offset
         end = last.offset + last.text.len
     }
-    return self.project_pattern_from_tokens(&slice_list, start, end)
+    const pattern = self.project_pattern_from_tokens(&slice_list, start, end)
+    slice_list.deinit(self.alloc)
+    return pattern
 }
 
 // ─────────────────────────────────────────────────────────────────────────

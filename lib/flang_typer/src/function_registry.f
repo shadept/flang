@@ -272,6 +272,21 @@ pub fn find_by_id(self: &FunctionRegistry, id: u32) &FunctionScheme? {
 // nothing is reachable but some hidden overloads exist, returns one of them along with its module
 // for the diagnostic hint. The candidates point into the registry and stay valid until the next
 // `register`, `retire_module` or `purge_retired`.
+// Whether `lookup` would find `name`, without building the candidate list.
+pub fn any_visible(self: &FunctionRegistry, name: String, vis: &Visibility) bool {
+    const overloads = self.by_name.get_ref(name)
+    if overloads.is_none() {
+        return false
+    }
+    const fs = overloads.unwrap()
+    for j in 0..fs.len {
+        if !fs[j].retired and visibility_for(&fs[j], vis) {
+            return true
+        }
+    }
+    return false
+}
+
 pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup {
     let overloads_opt = self.by_name.get_ref(name)
     if overloads_opt.is_none() {

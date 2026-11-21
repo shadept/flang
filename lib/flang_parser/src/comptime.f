@@ -1209,25 +1209,27 @@ fn pascal_case(env: &CtEnv, text: String) String {
 // Resolves every decl-level #if in the module, immediately after projection: only the active
 // branch's declarations survive into the module's decl list (nested #if resolves recursively).
 // Invalid conditions produce diagnostics and drop both branches.
-pub fn flatten_module_decls(
-    m: &Module,
-    ctx: &ComptimeCtx,
-    diags: &List(Diagnostic),
-    allocator: &Allocator = context.allocator,
-) {
-    let flattened: List(Decl) = list(m.decls.len, allocator)
-    splice_decls(m.decls.as_slice(), ctx, diags, &flattened)
+pub fn flatten_module_decls(m: &Module, ctx: &ComptimeCtx, diags: &List(Diagnostic)) {
+    let a = m.arena.allocator()
+    let flattened: UnmanagedList(Decl) = unmanaged_list(m.decls.len, &a)
+    splice_decls(m.decls.as_slice(), ctx, diags, &flattened, &a)
     m.set_decls(flattened)
 }
 
-fn splice_decls(decls: Decl[], ctx: &ComptimeCtx, diags: &List(Diagnostic), out: &List(Decl)) {
+fn splice_decls(
+    decls: Decl[],
+    ctx: &ComptimeCtx,
+    diags: &List(Diagnostic),
+    out: &UnmanagedList(Decl),
+    allocator: &Allocator,
+) {
     for d in decls {
         d match {
             IfDirective(ifd) => {
                 eval_condition(ctx, ifd.condition) match {
                     Active(active) => {
                         const branch = if active { ifd.then_decls } else { ifd.else_decls }
-                        splice_decls(branch, ctx, diags, out)
+                        splice_decls(branch, ctx, diags, out, allocator)
                     }
                     Invalid(err) => {
                         let empty_hint: OwnedString
@@ -1241,7 +1243,7 @@ fn splice_decls(decls: Decl[], ctx: &ComptimeCtx, diags: &List(Diagnostic), out:
                     }
                 }
             }
-            _ => out.push(d)
+            _ => out.push(d, allocator)
         }
     }
 }

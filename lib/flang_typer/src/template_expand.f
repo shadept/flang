@@ -410,7 +410,7 @@ fn expand_one(
     collect_nominal_names(chk, &chunk_module, paths[item.module])
     let origin = &modules[item.module]
     const decl_base = origin.decls.len
-    origin.append_decls(&chunk_module.decls)
+    origin.append_decls(chunk_module.decls.as_slice())
     index_module(
         state,
         &chunk_module,
@@ -459,8 +459,8 @@ fn bind_arg(
                 const named: TypeExpr = TypeExpr.Named(NamedType {
                     span = id.span,
                     name = id.name,
-                    generic_args = frozen(list(0, a)),
-                    assoc_args = frozen(list(0, a)),
+                    generic_args = [],
+                    assoc_args = [],
                 })
                 Ok(CtValue.TypeInfo(type_info_of(env, box(a, named))))
             }

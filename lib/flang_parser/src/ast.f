@@ -31,7 +31,8 @@ import flang_core.span
 // AST in a single bulk free.
 pub type Module = struct {
     span: SourceSpan
-    decls: List(Decl)
+    // Grown and freed through `arena`: a stored allocator would dangle once the module moves.
+    decls: UnmanagedList(Decl)
     labels: LabelRef[]
     // The types declared in function and block scopes, in source order (RFC-046).
     local_types: LocalType[]
@@ -75,32 +76,30 @@ pub type LabelRef = struct {
 //
 // ponytail: the rebuilt buffer leaks at Module.deinit (arena-only free); fine, modules live to end
 // of build.
-pub fn append_decls(self: &Module, decls: &List(Decl)) {
+pub fn append_decls(self: &Module, decls: Decl[]) {
     // Both modules read the same nodes: a declaration's own slices stay in the arena that built
     // them.
-    let merged: List(Decl) = list(self.decls.len + decls.len)
-    merged.push_all(self.decls.as_slice())
-    merged.push_all(decls.as_slice())
-    // Swapped out, never released: releasing would free through the dead allocator above, and the
-    // buffer is the arena's to reclaim.
-    const _stale = replace(&self.decls, merged)
+    let a = self.arena.allocator()
+    self.decls.push_all(decls, &a)
 }
 
-// The elements of `xs` as the slice an AST node holds. The list is never released: its buffer lives
-// as long as the allocator that holds it, which for a projected node is the module arena.
-pub fn frozen(xs: move List($T)) T[] {
-    return xs.as_slice()
+// The elements of `xs` as the slice an AST node holds, handing the buffer to the region `xs` was
+// built in. The slice is valid for as long as that region, the module arena for a projected node.
+pub fn frozen(xs: move UnmanagedList($T)) T[] {
+    const out = xs.as_slice()
+    leak(xs)
+    return out
 }
 
-pub fn set_decls(self: &Module, decls: move List(Decl)) {
-    self.decls = move decls
+pub fn set_decls(self: &Module, decls: move UnmanagedList(Decl)) {
+    let a = self.arena.allocator()
+    replace(&self.decls, decls).deinit(&a)
 }
 
 pub fn deinit(self: move Module) {
-    // Every AST allocation - the decls list's buffer and every nested list in the tree - lives in
-    // the arena, so ONE bulk free reclaims it all. Do not walk the tree element-wise: the nested
-    // lists carry allocator pointers into the (stack-local) arena view they were built with, which
-    // does not survive the Module being moved (see docs/known-issues.md on allocator identity).
+    // The decls buffer and every slice in the tree live in the arena: one bulk free reclaims them.
+    let a = self.arena.allocator()
+    self.decls.deinit(&a)
     self.arena.deinit()
 }
 
@@ -1223,64 +1222,49 @@ pub fn declares_generic(decl: &FunctionDecl) bool {
     }
 }
 
-// The `$T` names a function's parameters, return type and `where` bounds introduce, each once, in
-// order.
-pub fn generic_names(decl: &FunctionDecl, out: &List(String)) {
-    for &p in decl.params {
-        collect_generic_names(p.type_expr, out)
-    }
-    decl.return_type match {
-        Some(rt) => collect_generic_names(rt, out)
-        None => {}
-    }
-    for &b in decl.bounds {
-        collect_generic_names(b.bound, out)
-    }
-}
-
 // The `$T` names a function's `where` bounds introduce, each once, in order.
-pub fn bound_generic_names(decl: &FunctionDecl, out: &List(String)) {
+pub fn bound_generic_names(decl: &FunctionDecl, out: &UnmanagedList(String), allocator: &Allocator) {
     for &b in decl.bounds {
-        collect_generic_names(b.bound, out)
+        collect_generic_names(b.bound, out, allocator)
     }
 }
 
 // Appends the `$T` names `te` introduces that `out` lacks, in order.
-pub fn collect_generic_names(te: &TypeExpr, out: &List(String)) {
+pub fn collect_generic_names(te: &TypeExpr, out: &UnmanagedList(String), allocator: &Allocator) {
     te.* match {
         GenericBind(g) => {
             if !out.contains(g.name) {
-                out.push(g.name)
+                out.push(g.name, allocator)
             }
         }
         Named(n) => {
-            collect_generic_list(n.generic_args, out)
+            collect_generic_list(n.generic_args, out, allocator)
             for &a in n.assoc_args {
-                collect_generic_names(a.ty, out)
+                collect_generic_names(a.ty, out, allocator)
             }
         }
-        Reference(r) => collect_generic_names(r.inner, out)
-        Optional(o) => collect_generic_names(o.inner, out)
-        Array(a) => collect_generic_names(a.element, out)
-        Slice(sl) => collect_generic_names(sl.element, out)
-        Tuple(t) => collect_generic_list(t.elements, out)
+        Reference(r) => collect_generic_names(r.inner, out, allocator)
+        Optional(o) => collect_generic_names(o.inner, out, allocator)
+        Array(a) => collect_generic_names(a.element, out, allocator)
+        Slice(sl) => collect_generic_names(sl.element, out, allocator)
+        Tuple(t) => collect_generic_list(t.elements, out, allocator)
         Function(f) => {
-            collect_generic_list(f.params, out)
+            collect_generic_list(f.params, out, allocator)
             f.return_type match {
-                Some(rt) => collect_generic_names(rt, out)
+                Some(rt) => collect_generic_names(rt, out, allocator)
                 None => {}
             }
         }
-        Combined(c) => collect_generic_list(c.parts, out)
+        Combined(c) => collect_generic_list(c.parts, out, allocator)
         Projection(p) => {
-            collect_generic_names(p.base, out)
-            collect_generic_list(p.generic_args, out)
+            collect_generic_names(p.base, out, allocator)
+            collect_generic_list(p.generic_args, out, allocator)
         }
         Contract(c) => {
             for &r in c.requirements {
-                collect_generic_list(r.signature.params, out)
+                collect_generic_list(r.signature.params, out, allocator)
                 r.signature.return_type match {
-                    Some(rt) => collect_generic_names(rt, out)
+                    Some(rt) => collect_generic_names(rt, out, allocator)
                     None => {}
                 }
             }
@@ -1289,9 +1273,9 @@ pub fn collect_generic_names(te: &TypeExpr, out: &List(String)) {
     }
 }
 
-fn collect_generic_list(tes: TypeExpr[], out: &List(String)) {
+fn collect_generic_list(tes: TypeExpr[], out: &UnmanagedList(String), allocator: &Allocator) {
     for &te in tes {
-        collect_generic_names(te, out)
+        collect_generic_names(te, out, allocator)
     }
 }
 

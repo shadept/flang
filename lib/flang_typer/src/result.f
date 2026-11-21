@@ -41,6 +41,8 @@ pub type TypeCheckResult = struct {
     desugars: Dict(NodeId, &BlockExpr)
     // Owned buffers the desugars' name/text views point into.
     synth_strings: List(OwnedString)
+    // The region the desugars' nodes and slices live in.
+    synth_arena: ArenaAllocator
     // M11: per call site, the callee's default expressions for omitted parameters, in parameter
     // order - see InferenceResults.default_args.
     default_args: Dict(NodeId, List(&Expr))
@@ -121,6 +123,7 @@ pub fn empty_result() TypeCheckResult {
         specializations = specialization_registry(),
         desugars = dict(),
         synth_strings = list(0),
+        synth_arena = arena_allocator(context.allocator),
         default_args = dict(),
         arg_lists = dict(),
         receiver_derefs = dict(),
@@ -148,6 +151,7 @@ pub fn deinit(self: move TypeCheckResult) {
     self.specializations.deinit()
     self.desugars.deinit()
     self.synth_strings.deinit()
+    self.synth_arena.deinit()
     self.default_args.deinit()
     self.arg_lists.deinit()
     self.receiver_derefs.deinit()
@@ -163,10 +167,9 @@ pub fn deinit(self: move TypeCheckResult) {
 }
 
 // Free the tables a retired snapshot's readers no longer need, keeping the struct valid for a later
-// `deinit`. What survives is `synth_strings`: `RtConst` targets and desugared AST in later results
-// and module caches view those buffers. The interner is a stand-in by retirement time
-// (`take_interner`), the desugar blocks are leaked global boxes, and `phases` is plain data, so
-// none are touched.
+// `deinit`. What survives is `synth_strings` and `synth_arena`: `RtConst` targets and desugared AST
+// in later results and module caches point into them. The interner is a stand-in by retirement time
+// (`take_interner`) and `phases` is plain data, so neither is touched.
 pub fn slim_retire(self: &TypeCheckResult) {
     // Each table is swapped for a fresh empty one and the old one released: the struct stays valid
     // for a later `deinit`.

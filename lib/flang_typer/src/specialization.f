@@ -535,16 +535,14 @@ test "an evicted specialization leaves a hole and never recycles its id" {
 }
 
 fn probe_spec(function_id: u32, name: String) Specialization {
-    let no_dirs: List(DeclAttribute) = list(0)
-    let no_decl_params: List(FunctionParam) = list(0)
     let decl = FunctionDecl {
         span = none_span(),
         is_pub = false,
-        directives = frozen(no_dirs),
+        directives = [],
         name = name,
-        params = frozen(no_decl_params),
+        params = [],
         return_type = null,
-        bounds = frozen(list(0)),
+        bounds = [],
         body = null,
     }
     let it = type_interner()

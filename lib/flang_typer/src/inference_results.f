@@ -142,9 +142,12 @@ pub type InferenceResults = struct {
     // builder locals, re-escaped segment text). The synthesized AST in `desugars` references them
     // as views, so they live and die with this result set.
     synth_strings: List(OwnedString)
+    // Region holding every checker-synthesized AST node and slice, with the same lifetime as
+    // `synth_strings`.
+    synth_arena: ArenaAllocator
     // Checker-synthesized AST keyed by the node it replaces - today only interpolation's
     // StringBuilder desugar (RFC-004). Lowering lowers the stored block instead of the original
-    // node. The blocks are checker-allocated and share the result's lifetime.
+    // node. The blocks live in `synth_arena`.
     desugars: Dict(NodeId, &BlockExpr)
     // Checked lambda literals (RFC-014), keyed by the LambdaExpr node. Lives in the result set -
     // not a global table - so a lambda inside a generic template records once per instantiation
@@ -260,6 +263,7 @@ pub fn inference_results() InferenceResults {
         resolved_targets = dict(),
         instantiated_types = list(0),
         synth_strings = list(0),
+        synth_arena = arena_allocator(context.allocator),
         desugars = dict(),
         lambdas = dict(),
         default_args = dict(),
@@ -346,6 +350,7 @@ pub fn deinit(self: move InferenceResults) {
     self.resolved_targets.deinit()
     self.instantiated_types.deinit()
     self.synth_strings.deinit()
+    self.synth_arena.deinit()
     self.desugars.deinit()
     self.lambdas.deinit()
     self.default_args.deinit()
@@ -418,6 +423,11 @@ pub fn add_synth_string(self: &InferenceResults, owned: move OwnedString) String
     let view = owned.view()
     self.synth_strings.push(owned)
     return view
+}
+
+// The allocator over `synth_arena`. Valid while this result set stays where it is.
+pub fn synth_allocator(self: &InferenceResults) Allocator {
+    return self.synth_arena.allocator()
 }
 
 pub fn record_desugar(self: &InferenceResults, id: NodeId, block: &BlockExpr) {
@@ -502,16 +512,16 @@ pub fn update_receiver_deref(
     chain[index] = target
 }
 
-// Replace the lambda table wholesale - the zonk passes rebuild it (the field itself is
-// module-private under scoped mutability).
+// Replace the lambda table wholesale, releasing the old one - the zonk passes rebuild it (the field
+// itself is module-private under scoped mutability).
 pub fn replace_lambdas(self: &InferenceResults, ls: move Dict(NodeId, LambdaInfo)) {
-    self.lambdas = move ls
+    install(&self.lambdas, ls)
 }
 
-// Replace the node-type table wholesale - the zonk passes rebuild it (scoped mutability keeps the
-// field itself module-private).
+// Replace the node-type table wholesale, releasing the old one - the zonk passes rebuild it (scoped
+// mutability keeps the field itself module-private).
 pub fn replace_node_types(self: &InferenceResults, nt: move Dict(NodeId, Ty)) {
-    self.node_types = move nt
+    install(&self.node_types, nt)
 }
 
 // Append another result set's RTTI instantiations - used when a specialization overlay's entries
@@ -568,10 +578,9 @@ pub fn copy_sig(sig: &ClosureSig) ClosureSig {
 }
 
 // A deep copy of a finished result set: every table an entry-by-entry copy, lambda records
-// duplicated. Desugar blocks stay shared pointers (they are leaked global boxes) and the copy's
-// tables keep viewing the ORIGINAL set's string buffers - `synth_strings` is left empty rather than
-// copied into orphan buffers nothing views - so the copy lives only as long as its source's
-// storage. Capture state starts clean.
+// duplicated. Desugar blocks stay shared pointers and the copy's tables keep viewing the ORIGINAL
+// set's string buffers - `synth_strings` and `synth_arena` start empty - so the copy lives only as
+// long as its source's storage. Capture state starts clean.
 pub fn deep_copy(self: &InferenceResults) InferenceResults {
     // Every container fills as a local and wraps at the end - growing one through a local struct's
     // field is the two-field-hop hazard.
@@ -671,6 +680,10 @@ pub fn take_desugars(self: &InferenceResults) Dict(NodeId, &BlockExpr) {
 pub fn take_synth_strings(self: &InferenceResults) List(OwnedString) {
     const out = replace(&self.synth_strings, list(0))
     return out
+}
+
+pub fn take_synth_arena(self: &InferenceResults) ArenaAllocator {
+    return replace(&self.synth_arena, arena_allocator(context.allocator))
 }
 
 pub fn take_default_args(self: &InferenceResults) Dict(NodeId, List(&Expr)) {
