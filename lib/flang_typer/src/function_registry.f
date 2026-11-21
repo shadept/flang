@@ -13,6 +13,7 @@ import std.collections.dict
 import std.collections.list
 import std.collections.set
 import std.option
+import std.string
 import std.test
 
 import flang_core.span
@@ -82,6 +83,9 @@ pub type FunctionRegistry = struct {
     // name → overload set. The order schemes were registered in is
     // preserved so overload resolution scoring is deterministic.
     by_name: Dict(String, List(FunctionScheme))
+    // The registry's own copy of every name it keys by: a key outlives the source that first
+    // spelled it, since a re-parse retires that source while the slot stays.
+    names: ArenaAllocator
     next_id: u32
     // Set when a reclaim overwrote a slot with a scheme that differs from what the slot held -
     // resolution against the registry can now pick differently, so results that baked earlier
@@ -93,11 +97,17 @@ pub type FunctionRegistry = struct {
 
 pub fn function_registry() FunctionRegistry {
     let by_name: Dict(String, List(FunctionScheme)) = dict()
-    return .{ by_name = move by_name, next_id = 0u32, changed = false }
+    return .{
+        by_name = move by_name,
+        names = arena_allocator(context.allocator),
+        next_id = 0u32,
+        changed = false,
+    }
 }
 
 pub fn deinit(self: move FunctionRegistry) {
     self.by_name.deinit()
+    self.names.deinit()
 }
 
 // Register `scheme` under `scheme.name`. Returns the assigned id. Duplicate-signature detection is
@@ -110,7 +120,7 @@ pub fn deinit(self: move FunctionRegistry) {
 pub fn register(self: &FunctionRegistry, scheme: move FunctionScheme) u32 {
     if self.by_name.get_ref(scheme.name).is_none() {
         let fresh: List(FunctionScheme) = list(1)
-        self.by_name.set(scheme.name, fresh)
+        self.by_name.set(self.names.copy_string(scheme.name), fresh)
     }
     // In place through the stored list: the get-copy-push-set dance both leaked and double-freed
     // once `Dict.set` started deiniting overwritten values (the copy shares the stored buffer).
@@ -246,11 +256,14 @@ pub fn carried_copy(self: &FunctionRegistry) FunctionRegistry {
 
 fn fill_fn_carried(out: &FunctionRegistry, src: &FunctionRegistry) {
     for entry in src.by_name {
+        const key = out.names.copy_string(entry.key)
         let cl: List(FunctionScheme) = list(entry.value.len)
         for &f in entry.value {
-            cl.push(f.clone())
+            let c = f.clone()
+            c.name = key
+            cl.push(c)
         }
-        out.by_name.set(entry.key, cl)
+        out.by_name.set(key, cl)
     }
     out.next_id = src.next_id
 }

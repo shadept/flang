@@ -158,6 +158,9 @@ pub type TypeInterner = struct {
     // Record field names and declaration spans, windowed by `NRecordNode`.
     rec_names: List(String)
     rec_spans: List(SourceSpan)
+    // The table's own copy of every field name it stores: a name outlives the source that first
+    // spelled it, since an equal record interned later reuses the node.
+    names: ArenaAllocator
     // Structural key -> id.
     by_key: Dict(TyKey, Ty)
     // Interned child sequences: cons cell -> list id. Ids live in their own space, never `Ty`.
@@ -192,6 +195,7 @@ pub fn type_interner(capacity: usize) TypeInterner {
         ground = list(capacity),
         rec_names = list(0),
         rec_spans = list(0),
+        names = arena_allocator(context.allocator),
         by_key = dict(capacity),
         kids = dict(capacity),
         field_kids = dict(0),
@@ -253,13 +257,14 @@ fn cons(self: &TypeInterner, head: Ty, tail: u32) u32 {
 }
 
 fn cons_field(self: &TypeInterner, head: Ty, name: String, tail: u32) u32 {
-    const cell = FieldKidsKey { head = head, name = name, tail = tail }
-    const hit = self.field_kids.get(cell)
+    const probe = FieldKidsKey { head = head, name = name, tail = tail }
+    const hit = self.field_kids.get(probe)
     if hit.is_some() {
         return hit.unwrap()
     }
     const id = self.kids_next
     self.kids_next = self.kids_next + 1
+    const cell = FieldKidsKey { head = head, name = self.names.copy_string(name), tail = tail }
     self.field_kids.set(cell, id)
     return id
 }
@@ -292,6 +297,7 @@ pub fn deinit(self: move TypeInterner) {
     self.ground.deinit()
     self.rec_names.deinit()
     self.rec_spans.deinit()
+    self.names.deinit()
     self.by_key.deinit()
     self.kids.deinit()
     self.field_kids.deinit()
@@ -431,7 +437,7 @@ pub fn record_of(self: &TypeInterner, fields: &List(Field)) Ty {
     const names_start = self.rec_names.len
     for i in 0..fields.len {
         self.children.push(fields[i].ty)
-        self.rec_names.push(fields[i].name)
+        self.rec_names.push(self.names.copy_string(fields[i].name))
         self.rec_spans.push(fields[i].decl_span)
         if !self.is_ground(fields[i].ty) {
             g = false

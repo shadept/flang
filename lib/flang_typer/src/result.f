@@ -8,6 +8,7 @@
 import std.allocator
 import std.collections.dict
 import std.collections.list
+import std.rc
 import std.string
 
 import flang_core.span
@@ -43,6 +44,8 @@ pub type TypeCheckResult = struct {
     synth_strings: List(OwnedString)
     // The region the desugars' nodes and slices live in.
     synth_arena: ArenaAllocator
+    // The stores of the body slots whose desugars this snapshot cites, shared with their caches.
+    slot_synth: List(Rc(SynthStore))
     // M11: per call site, the callee's default expressions for omitted parameters, in parameter
     // order - see InferenceResults.default_args.
     default_args: Dict(NodeId, List(&Expr))
@@ -124,6 +127,7 @@ pub fn empty_result() TypeCheckResult {
         desugars = dict(),
         synth_strings = list(0),
         synth_arena = arena_allocator(context.allocator),
+        slot_synth = list(0),
         default_args = dict(),
         arg_lists = dict(),
         receiver_derefs = dict(),
@@ -152,6 +156,7 @@ pub fn deinit(self: move TypeCheckResult) {
     self.desugars.deinit()
     self.synth_strings.deinit()
     self.synth_arena.deinit()
+    self.slot_synth.deinit()
     self.default_args.deinit()
     self.arg_lists.deinit()
     self.receiver_derefs.deinit()

@@ -23,6 +23,7 @@ import std.allocator
 import std.collections.dict
 import std.collections.list
 import std.option
+import std.rc
 import std.string
 
 import flang_core.span
@@ -145,6 +146,9 @@ pub type InferenceResults = struct {
     // Region holding every checker-synthesized AST node and slice, with the same lifetime as
     // `synth_strings`.
     synth_arena: ArenaAllocator
+    // What each body slot whose desugars these tables cite synthesized. A slot's store is shared
+    // with the body cache that replays it, so it lives until both let go.
+    slot_synth: List(Rc(SynthStore))
     // Checker-synthesized AST keyed by the node it replaces - today only interpolation's
     // StringBuilder desugar (RFC-004). Lowering lowers the stored block instead of the original
     // node. The blocks live in `synth_arena`.
@@ -264,6 +268,7 @@ pub fn inference_results() InferenceResults {
         instantiated_types = list(0),
         synth_strings = list(0),
         synth_arena = arena_allocator(context.allocator),
+        slot_synth = list(0),
         desugars = dict(),
         lambdas = dict(),
         default_args = dict(),
@@ -351,6 +356,7 @@ pub fn deinit(self: move InferenceResults) {
     self.instantiated_types.deinit()
     self.synth_strings.deinit()
     self.synth_arena.deinit()
+    self.slot_synth.deinit()
     self.desugars.deinit()
     self.lambdas.deinit()
     self.default_args.deinit()
@@ -423,6 +429,46 @@ pub fn add_synth_string(self: &InferenceResults, owned: move OwnedString) String
     let view = owned.view()
     self.synth_strings.push(owned)
     return view
+}
+
+// The code and names one body slot synthesized.
+pub type SynthStore = struct {
+    strings: List(OwnedString)
+    arena: ArenaAllocator
+}
+
+pub fn deinit(self: move SynthStore) {
+    self.strings.deinit()
+    self.arena.deinit()
+}
+
+// Starts a body slot: synthesis goes to a fresh store until `end_slot_synth`, and the store it
+// replaces is returned to be handed back there.
+pub fn begin_slot_synth(self: &InferenceResults) SynthStore {
+    return .{
+        strings = replace(&self.synth_strings, list(0)),
+        arena = replace(&self.synth_arena, arena_allocator(context.allocator)),
+    }
+}
+
+// Ends a body slot: restores `outer` and returns the slot's store, which these tables cite.
+pub fn end_slot_synth(self: &InferenceResults, outer: move SynthStore) Rc(SynthStore) {
+    const slot: SynthStore = .{
+        strings = replace(&self.synth_strings, outer.strings),
+        arena = replace(&self.synth_arena, outer.arena),
+    }
+    let store = rc(slot)
+    self.slot_synth.push(store.retain())
+    return store
+}
+
+// Cites a replayed slot's store, whose desugars these tables record again.
+pub fn cite_slot_synth(self: &InferenceResults, store: &Rc(SynthStore)) {
+    self.slot_synth.push(store.retain())
+}
+
+pub fn take_slot_synth(self: &InferenceResults) List(Rc(SynthStore)) {
+    return replace(&self.slot_synth, list(0))
 }
 
 // The allocator over `synth_arena`. Valid while this result set stays where it is.

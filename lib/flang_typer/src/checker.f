@@ -30,6 +30,7 @@ import std.collections.list
 import std.collections.set
 import std.collections.string_pool
 import std.option
+import std.rc
 import std.string
 import std.string_builder
 import std.test
@@ -296,6 +297,9 @@ type CtxHit = struct {
 pub type Checker = struct {
     engine: Engine
     env: TypeEnv
+    // Memory that serves one check run and nothing after it, such as query results. Released at the
+    // end of every `check_all`; nothing that outlives the run may point into it.
+    temp: ArenaAllocator
     nominals: NominalRegistry
     // Type-alias bodies (expanded lazily at use) and module-level constant types, both FQN-keyed
     // with import-visibility lookup.
@@ -739,11 +743,15 @@ pub type ModuleBodyCache = struct {
     // specialization it landed on - the replay's reuse hints (RFC-022 5e): a pick whose provisional
     // key cannot match a carried entry's stored final key re-lands on its id by call site.
     spec_sites: List(SpecDep)
+    // The code and names the slot synthesized. A replay records the slot's desugars again, so the
+    // store lives as long as the cache, not only as long as the result that first held it.
+    synth: Rc(SynthStore)
     cacheable: bool
     fresh: bool
 }
 
 pub fn deinit(self: move ModuleBodyCache) {
+    self.synth.deinit()
     self.spec_sites.deinit()
     self.keys.deinit()
     self.types.deinit()
@@ -824,6 +832,7 @@ pub fn checker() Checker {
     return .{
         engine = engine(),
         env = type_env(),
+        temp = arena_allocator(context.allocator),
         nominals = nominal_registry(),
         aliases = fqn_map(),
         constants = fqn_map(),
@@ -1117,6 +1126,7 @@ type RetiredName = struct {
 pub fn deinit(self: move Checker) {
     self.engine.deinit()
     self.env.deinit()
+    self.temp.deinit()
     self.nominals.deinit()
     self.aliases.deinit()
     self.constants.deinit()
@@ -17894,6 +17904,7 @@ pub fn check_all(
     let out_desugars = self.results.take_desugars()
     let out_synth_strings = self.results.take_synth_strings()
     let out_synth_arena = self.results.take_synth_arena()
+    let out_slot_synth = self.results.take_slot_synth()
     let out_default_args = self.results.take_default_args()
     let out_arg_lists = self.results.take_arg_lists()
     let out_receiver_derefs = self.results.take_receiver_derefs()
@@ -17929,6 +17940,7 @@ pub fn check_all(
     // synthesized FQNs, so the next demand's identically-ordered lambdas reclaim these ids and mint
     // what a cold check would.
     self.recycled.clear()
+    install(&self.temp, arena_allocator(context.allocator))
     retire_closures(self, &out_closures)
 
     return TypeCheckResult {
@@ -17941,6 +17953,7 @@ pub fn check_all(
         desugars = move out_desugars,
         synth_strings = move out_synth_strings,
         synth_arena = move out_synth_arena,
+        slot_synth = move out_slot_synth,
         default_args = move out_default_args,
         arg_lists = move out_arg_lists,
         receiver_derefs = move out_receiver_derefs,
@@ -18429,6 +18442,7 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
     const diags_from = self.diagnostics.len
 
     const bodies_start = monotonic_ns()
+    let outer_synth = self.results.begin_slot_synth()
     reset_template_types(self, path)
     self.results.begin_capture()
     check_module_bodies(self, module, path)
@@ -18472,8 +18486,9 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
     mark_flagged_slot_specs(self, lit_window)
     seal_slot(self, lit0)
     let sites = replace(&self.slot_sites, list(0))
+    let synth = self.results.end_slot_synth(outer_synth)
 
-    let cache = ModuleBodyCache { vars_at_start = vars0, var_burn = var_burn, synth_at_start = synth0, synth_burn = synth_burn, lambda_at_start = lambda0, lambda_burn = lambda_burn, keys = move keys, types = list(0), spans = list(0), targets = list(0), ops = list(0), desugars = list(0), lambdas = list(0), closures = list(0), default_args = list(0), arg_lists = list(0), derefs = list(0), arg_derefs = list(0), adapts = list(0), picks = move picks, calls = move calls, spec_sites = move sites, cacheable = self.slot_uninferable == 0
+    let cache = ModuleBodyCache { vars_at_start = vars0, var_burn = var_burn, synth_at_start = synth0, synth_burn = synth_burn, lambda_at_start = lambda0, lambda_burn = lambda_burn, keys = move keys, types = list(0), spans = list(0), targets = list(0), ops = list(0), desugars = list(0), lambdas = list(0), closures = list(0), default_args = list(0), arg_lists = list(0), derefs = list(0), arg_derefs = list(0), adapts = list(0), picks = move picks, calls = move calls, spec_sites = move sites, synth = move synth, cacheable = self.slot_uninferable == 0
         and lits_clean and members_clean, fresh = true }
     store_body_cache(self, path, cache)
     return .{ bodies_ns = bodies_ns, settle_ns = elapsed_ns(settle_start) }
@@ -18513,6 +18528,7 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
     for &f in c.ops {
         self.results.record_operator(f.node, f.op)
     }
+    self.results.cite_slot_synth(&c.synth)
     for &f in c.desugars {
         self.results.record_desugar(f.node, f.block)
     }

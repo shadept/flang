@@ -8,6 +8,7 @@ import std.encoding.utf8
 import std.option
 import std.string_builder
 import std.string_reader
+import std.test
 
 // =============================================================================
 // String stdlib functions
@@ -477,6 +478,20 @@ pub fn from_view(s: String, allocator: &Allocator = context.allocator) OwnedStri
     return from_memory(buf, s.len, allocator)
 }
 
+// Returns a copy of `s` in `arena`, null-terminated like a literal, valid until the arena is reset
+// or deinited. Panics if the allocation fails.
+pub fn copy_string(arena: &ArenaAllocator, s: String) String {
+    let a = arena.allocator()
+    const buf = a.alloc(s.len + 1, align_of(u8)).expect("copy_string: allocation failed")
+    const out: u8[] = buf.as_slice()
+    if s.len > 0 {
+        copy_to(s.as_raw_bytes(), out)
+    }
+    out[s.len] = 0
+    leak(buf)
+    return .{ ptr = out.ptr, len = s.len }
+}
+
 // Frees the buffer. The binding is dead afterwards (RFC-033), so a second release is E2123 rather
 // than a run-time no-op.
 pub fn deinit(self: move OwnedString) {
@@ -602,4 +617,15 @@ pub fn join(parts: String[], sep: String, allocator: &Allocator = context.alloca
         sb.append(parts[i])
     }
     return sb.to_string()
+}
+
+test "copy_string copies into the arena, null-terminated" {
+    let arena = arena_allocator(context.allocator)
+    defer arena.deinit()
+    let src = from_view("name")
+    const copy = arena.copy_string(src.view())
+    src.deinit()
+    assert_eq(copy, "name", "the copy outlives its source")
+    assert_eq((copy.ptr + 4usize).*, 0u8, "and ends in a null byte")
+    assert_eq(arena.copy_string("").len, 0 as usize, "an empty string copies to an empty string")
 }
