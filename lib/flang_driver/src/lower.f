@@ -107,6 +107,8 @@ type LowerCtx = struct {
     // void return.
     sret: Operand?
     ret_size: u64
+    // The current function's return type; null in a void function.
+    ret_ty: Ty?
     // Data segment (M9). `strings` interns literals program-wide by their raw source text - two
     // spellings of the same bytes ("A" vs "A") mint two globals, which is harmless duplication for
     // zero decode work on repeat literals.
@@ -418,6 +420,7 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult) IrModule {
         loops = move loop_stack,
         sret = null,
         ret_size = 0u64,
+        ret_ty = null,
         strings = move interner,
         globals = move globals,
         const_blobs = move const_blobs,
@@ -503,6 +506,7 @@ pub fn lower_program(
         loops = move loop_stack,
         sret = null,
         ret_size = 0u64,
+        ret_ty = null,
         strings = move interner,
         globals = move globals,
         const_blobs = move const_blobs,
@@ -881,6 +885,7 @@ fn lower_test_block(m: &IrModule, ctx: &LowerCtx, td: &TestDecl, fqn: String) {
     ctx.blocked_subject = null
     ctx.sret = null
     ctx.ret_size = 0u64
+    ctx.ret_ty = null
 
     const r = lower_block(ctx, &cur, &env, td.body, null)
     if !r.terminated {
@@ -1963,6 +1968,7 @@ fn lower_function_body(
     ctx.blocked_subject = null
     ctx.sret = sret_op
     ctx.ret_size = 0u64
+    ctx.ret_ty = if returns_value { Some(sig.ret) } else { null }
     if ret_agg {
         ctx.ret_size = lay_of(ctx, sig.ret).size as u64
     }
@@ -2011,7 +2017,7 @@ fn lower_function_body(
     if returns_value {
         implicit_ret = Some(sig.ret)
     }
-    let r = lower_block(ctx, &cur, &env, body, implicit_ret)
+    let r = lower_block(ctx, &cur, &env, body, implicit_ret, implicit_ret)
     if !r.terminated {
         if ctx.sret.is_some() {
             // The trailing expression is the return value; copy it into the caller's buffer. No
@@ -2041,6 +2047,7 @@ fn lower_function_body(
     }
     env.deinit()
     ctx.sret = null
+    ctx.ret_ty = null
 
     // TEMPORARY SCAFFOLD (see `unlowerable`): the body used something outside the subset. Emitting
     // it anyway would bake placeholder zeros into a function that still links and runs.
@@ -2086,6 +2093,7 @@ fn lower_block(
     env: &Env,
     block: &BlockExpr,
     implicit_ret: Ty? = null,
+    want: Ty? = null,
 ) BlockResult {
     let scope = env.mark()
     ctx.defer_marks.push(ctx.defers.len)
@@ -2123,7 +2131,7 @@ fn lower_block(
                 // last-statement `LowerExpression`.
                 es.expr match {
                     If(ife) => r.value = Some(lower_if(ctx, bb, env, &ife, implicit_ret))
-                    _ => r.value = Some(lower_expr(ctx, bb, env, es.expr))
+                    _ => r.value = Some(lower_to(ctx, bb, env, es.expr, want))
                 }
             }
             _ => {}
@@ -2134,7 +2142,7 @@ fn lower_block(
     }
     if block.trailing.is_some() {
         let e = block.trailing.unwrap()
-        let v = lower_expr(ctx, bb, env, e)
+        let v = lower_to(ctx, bb, env, e, want)
         // The scope's defers fire between the trailing value's computation and its use by the
         // enclosing code (spec 4.1: value first, then defers). A scalar is an SSA value and immune;
         // an aggregate is an address a defer could write through (`{ defer x.f = 9; x }`), so it is
@@ -2318,7 +2326,7 @@ fn lower_return(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, r: &ReturnStmt) {
     }
     if r.value.is_some() {
         let e = r.value.unwrap()
-        let v = lower_expr(ctx, bb, env, e)
+        let v = lower_to(ctx, bb, env, e, ctx.ret_ty)
         // An aggregate return value is an address; copy its bytes into the caller's sret buffer and
         // return void - the FIR signature has no return slot for it.
         if ctx.sret.is_some() {
@@ -2637,12 +2645,13 @@ fn lower_if(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ife: &IfExpr, want: Ty
     }
     bb.br_if(cond, then_bb.label(), else_bb.label())
 
+    const arm_ty = if yields { Some(ty) } else { null }
     bb.move_to(&then_bb)
-    let tr = lower_block(ctx, bb, env, ife.then_branch)
+    let tr = lower_block(ctx, bb, env, ife.then_branch, null, arm_ty)
     join_from(ctx, bb, join.label(), yields, &tr)
 
     bb.move_to(&else_bb)
-    let er = lower_else(ctx, bb, env, &ife.else_branch)
+    let er = lower_else(ctx, bb, env, &ife.else_branch, arm_ty)
     join_from(ctx, bb, join.label(), yields, &er)
 
     bb.move_to(&join)
@@ -2665,10 +2674,10 @@ fn join_from(ctx: &LowerCtx, bb: &BlockBuilder, label: String, yields: bool, r: 
     bb.br_arg(label, unwrap_or(r.value, Operand.IntConst(0)))
 }
 
-fn lower_else(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, eb: &ElseBranch) BlockResult {
+fn lower_else(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, eb: &ElseBranch, want: Ty?) BlockResult {
     return eb.* match {
-        Block(b) => lower_block(ctx, bb, env, b)
-        If(i) => BlockResult { terminated = false, value = Some(lower_if(ctx, bb, env, i)) }
+        Block(b) => lower_block(ctx, bb, env, b, null, want)
+        If(i) => BlockResult { terminated = false, value = Some(lower_if(ctx, bb, env, i, want)) }
         NoElse => BlockResult { terminated = false, value = null }
     }
 }
@@ -3261,6 +3270,14 @@ fn lower_adapted(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, e: &Expr, want: &
         return build_slice_view(ctx, bb, want, lower_expr(ctx, bb, env, e), arr.length)
     }
     return lower_expr(ctx, bb, env, e)
+}
+
+// `e` lowered for a slot of type `want`, or as written when no slot type is known.
+fn lower_to(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, e: &Expr, want: Ty?) Operand {
+    return want match {
+        Some(w) => lower_adapted(ctx, bb, env, e, &w)
+        None => lower_expr(ctx, bb, env, e)
+    }
 }
 
 // A resolved target's callable symbol: the specialization when the pick was generic (M10), the
@@ -4482,7 +4499,7 @@ fn lower_match(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, m: &MatchExpr) Oper
             None => {}
         }
 
-        let r = lower_arm_body(ctx, bb, env, arm.body)
+        let r = lower_arm_body(ctx, bb, env, arm.body, if yields { Some(ty) } else { null })
         env.release(scope)
         join_from(ctx, bb, join.label(), yields, &r)
 
@@ -4501,10 +4518,16 @@ fn lower_match(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, m: &MatchExpr) Oper
 // An arm body is an expression, but a block body may terminate (`return`), and the caller must not
 // then append its own branch to the join - the builder's `set_terminator` would overwrite the
 // `ret`.
-fn lower_arm_body(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, body: &Expr) BlockResult {
+fn lower_arm_body(
+    ctx: &LowerCtx,
+    bb: &BlockBuilder,
+    env: &Env,
+    body: &Expr,
+    want: Ty? = null,
+) BlockResult {
     return body.* match {
-        Block(b) => lower_block(ctx, bb, env, &b)
-        _ => BlockResult { terminated = false, value = Some(lower_expr(ctx, bb, env, body)) }
+        Block(b) => lower_block(ctx, bb, env, &b, null, want)
+        _ => BlockResult { terminated = false, value = Some(lower_to(ctx, bb, env, body, want)) }
     }
 }
 
@@ -5852,12 +5875,12 @@ fn lower_assignment(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, a: &Assignment
         }
     }
     let dst = lower_place(ctx, bb, env, a.lhs)
-    let v = lower_expr(ctx, bb, env, a.rhs)
+    let ty = node_ty(ctx, expr_span(a.lhs))
+    let v = lower_adapted(ctx, bb, env, a.rhs, &ty)
     if dst.is_none() {
         return unlowerable_why(ctx, "assignment target is not a place")
     }
 
-    let ty = node_ty(ctx, expr_span(a.lhs))
     if is_by_ref(ctx, &ty) {
         // Aggregates are addressed by pointer, so `v` is the source address and the assignment is a
         // byte copy.
