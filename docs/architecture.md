@@ -649,7 +649,7 @@ Survey of how other self-hosted compilers bootstrap, and the rationale for this 
 
 ## Instrumentation (`--stats`)
 
-Every readout the compiler has about its own run is behind one flag, accepted by `build`, `check` and `test`. There are no environment variables: a switch the compiler reads is a CLI option, and a knob the *produced binary* needs is baked in at build time by the generated entry point, which hands it to the runtime sidecar before anything else runs.
+Every readout the compiler has about its own run is behind one flag, accepted by `build`, `check` and `test`, except the re-check leak report below, which needs re-checks to measure. There are no environment variables: a switch the compiler reads is a CLI option, and a knob the *produced binary* needs is baked in at build time by the generated entry point, which hands it to the runtime sidecar before anything else runs.
 
 `--stats` prints, in this order:
 
@@ -665,6 +665,8 @@ Every readout the compiler has about its own run is behind one flag, accepted by
 Under `test` it also arms the ledger in `stdlib/std/test.c`, so a leaking test reports the allocation stack behind each group of leaked blocks (see §Testing).
 
 `live` in the allocator line counts everything still out when the readout runs, the readout's own structures included, so it is a floor on what leaked rather than the leak itself. Arena pages are counted twice across the two lines - once as bytes the arena took from the global allocator, once as arena capacity.
+
+**Re-check leaks (`check --recheck <n> --trace-alloc`).** `--recheck <n>` re-checks the project n more times on unchanged input, its first module dirty, as the language server does on each save (`main.f::recheck_rounds`). `--trace-alloc` wraps the global allocator in a `std.tracing_allocator.TracingAllocator` for the run, one generation per round. What a round keeps is replaced by the next, so the blocks born before the last round and still live are what re-checking leaks: printed per round, then grouped by allocation stack. That covers reachable growth too (a list a re-check appends to and nothing trims). The tracer stores block addresses inverted, so `MallocStackLogging=1 leaks --atExit -- flang check --recheck <n> --trace-alloc` gets the unreachable blocks, with stacks, from the same run.
 
 The profiler is separate (§Profiler): it changes codegen and costs runtime, so it stays its own flag rather than riding on a readout.
 
@@ -1002,7 +1004,7 @@ The runner is table-driven: one `setjmp` site over an array of function pointers
       flang_0lsp__workspace__canonical_0root__... +0x1a1
 ```
 
-Symbols come from dbghelp on MSVC and `backtrace_symbols` on glibc/macOS; elsewhere the frames print as bare addresses. Off by default — a stack per allocation costs both the capture and the memory to hold it.
+Capture and symbols are `stdlib/std/tracing_allocator.c`'s, shared with `TracingAllocator`: dbghelp on MSVC and `backtrace_symbols` on glibc/macOS; elsewhere the frames print as bare addresses. Off by default — a stack per allocation costs both the capture and the memory to hold it.
 
 **Driver model.** `dotnet test-all.cs` runs every project's blocks through `dist/<rid>/flang`, or `$FLANG` when set.
 

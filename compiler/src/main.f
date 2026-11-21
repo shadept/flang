@@ -14,6 +14,7 @@
 import std.allocator
 import std.collections.dict
 import std.collections.list
+import std.collections.set
 import std.conv
 import std.env
 import std.io.file
@@ -26,6 +27,7 @@ import std.result
 import std.string
 import std.string_builder
 import std.time
+import std.tracing_allocator
 
 import flang_analysis.analyze
 import flang_analysis.project
@@ -64,6 +66,10 @@ type Cli = struct {
     check: bool
     eager: bool
     warn_unused: bool
+    // `check --trace-alloc`: record every live block's allocation stack (`alloc_tracer`).
+    trace_alloc: bool
+    // `check --recheck <n>`: re-check the project n more times, as the LSP does on each save.
+    recheck: u32
     // `--color=auto|always|never`; `auto` asks stderr.
     color: ColorChoice
     subcommand: String
@@ -95,6 +101,7 @@ type BuildOpts = struct {
     profile_depth: u32
     eager: bool
     warn_unused: bool
+    recheck: u32
     color: ColorChoice
     // `flang test`: build the project's `test {}` blocks into a runner and execute it, instead of
     // building the program. `test_path` keeps only the blocks in files whose path contains it and
@@ -122,6 +129,11 @@ pub fn deinit(self: move BuildOpts) {
 const alloc_counter = counting_allocator(context.allocator)
 const counted_global = allocator(&alloc_counter)
 
+// Under `--trace-alloc`, the allocator outermost to everything the command does, for the same
+// reason: `--recheck` reads it after the last round.
+const alloc_tracer = tracing_allocator(context.allocator)
+const traced_global = allocator(&alloc_tracer)
+
 pub fn main() i32 {
     let args = get_args()
     defer args.deinit()
@@ -130,13 +142,21 @@ pub fn main() i32 {
     let cli = parse_cli(argv)
     // Everything the command does allocates through the ledger; argv and the parsed command line
     // are the only exceptions.
-    const code = if cli.stats {
-        context(allocator = &counted_global) { dispatch(argv, &cli) }
+    const code = if cli.trace_alloc {
+        context(allocator = &traced_global) { dispatch_counted(argv, &cli) }
     } else {
-        dispatch(argv, &cli)
+        dispatch_counted(argv, &cli)
     }
     cli.args.deinit()
     return code
+}
+
+fn dispatch_counted(argv: String[], cli: &Cli) i32 {
+    return if cli.stats {
+        context(allocator = &counted_global) { dispatch(argv, cli) }
+    } else {
+        dispatch(argv, cli)
+    }
 }
 
 fn dispatch(argv: String[], cli: &Cli) i32 {
@@ -215,7 +235,7 @@ fn command_opts(cmd: String) String {
     return cmd match {
         "build" => "c(check)g(emit-generated)k(keep-c)E(emit-c-only)S(stats)r(release)p(profile)P(profile-all)O(profile-out):N(profile-nodes):D(profile-depth):e(eager)W(warn-unused)"
         "test" => "n(name):r(release)k(keep-c)S(stats)e(eager)W(warn-unused)"
-        "check" => "e(eager)W(warn-unused)S(stats)"
+        "check" => "e(eager)W(warn-unused)S(stats)t(trace-alloc)R(recheck):"
         "fmt" => "c(check)"
         // LSP clients append `--stdio` to name the transport. The server speaks stdio and nothing
         // else, so the flag parses and is ignored.
@@ -267,6 +287,9 @@ fn apply_opts(cli: &Cli, spec: String, argv: String[]) {
                 if c == 'W' {
                     cli.warn_unused = true
                 }
+                if c == 't' {
+                    cli.trace_alloc = true
+                }
             }
             OptArg(c, val) => {
                 if c == 's' {
@@ -289,6 +312,9 @@ fn apply_opts(cli: &Cli, spec: String, argv: String[]) {
                 }
                 if c == 'D' {
                     cli.profile_depth = count_arg(val)
+                }
+                if c == 'R' {
+                    cli.recheck = count_arg(val)
                 }
                 if c == 'C' {
                     const choice = color_choice(val)
@@ -370,6 +396,10 @@ fn print_help() {
     println("  -e, --eager         type-check every loaded module's bodies, not just the")
     println("                      project's import closure")
     println("  -W, --warn-unused   report unreachable project functions (W1003)")
+    println("  -R, --recheck <n>   `check`: re-check the project n more times on unchanged input,")
+    println("                      as the language server does on each save")
+    println("  -t, --trace-alloc   `check`: with --recheck, print the allocation stacks of blocks")
+    println("                      born in a re-check and still live after the last one")
     println("  -T, --target-os     target OS for #if evaluation (windows|linux|macos)")
     println("  -A, --target-arch   target arch for #if evaluation (x86_64|arm64|x86)")
     println("  -s, --stdlib-path <dir>  stdlib root (default: <exe dir>/stdlib)")
@@ -481,6 +511,7 @@ fn build_opts(argv: String[], cli: &Cli, force_check: bool, testing: bool) Build
         profile_depth = if profiling { cli.profile_depth } else { 0 as u32 },
         eager = cli.eager,
         warn_unused = cli.warn_unused,
+        recheck = cli.recheck,
         color = cli.color,
         testing = testing,
         // `test`'s filters: the lone positional narrows by path, `--name` by label.
@@ -635,6 +666,9 @@ fn build_project(opts: &BuildOpts) i32 {
 
     let unit = analyze_project(&ctx, &sources)
     defer unit.deinit()
+    if opts.recheck > 0 {
+        recheck_rounds(&unit, &ctx, opts.recheck)
+    }
 
     // The runner gets its own artifact name so a `flang test` never overwrites the program, and so
     // the two keep separate build caches.
@@ -643,6 +677,65 @@ fn build_project(opts: &BuildOpts) i32 {
     defer out.deinit()
     const lib_root = proj.kind match { Lib => true, _ => false }
     return finish_build(&unit, proj.name.view(), out.view(), opts, &libs, &ldflags, lib_root)
+}
+
+// Re-check `unit` `rounds` times with its first module dirty, as a save does in the language
+// server. Under `--trace-alloc` each round is its own generation, and what a round keeps is
+// replaced by the next, so the blocks born before the last round and still live are reported as
+// leaked, per round and by allocation stack.
+fn recheck_rounds(unit: &AnalyzedProject, ctx: &ResolveCtx, rounds: u32) {
+    let dirty: Set(String) = set()
+    defer dirty.deinit()
+    dirty.add(unit.file_paths[0].view())
+    let first = 0 as u32
+    for r in 0..rounds {
+        const g = alloc_tracer.mark()
+        if r == 0 {
+            first = g
+        }
+        unit.reanalyze(ctx, &dirty)
+    }
+    if alloc_tracer.live_blocks() == 0 or rounds < 2 {
+        return
+    }
+    const last = first + rounds - 2
+    print_round_totals(first, last)
+    print_leak_sites(first, last)
+}
+
+fn print_round_totals(first: u32, last: u32) {
+    for g in first..last + 1 {
+        let sites = alloc_tracer.live_sites(g, g)
+        let blocks = 0usize
+        let bytes = 0usize
+        for &s in sites {
+            blocks = blocks + s.blocks
+            bytes = bytes + s.bytes
+        }
+        sites.deinit()
+        const line = $"recheck {g - first + 1}: {blocks} block(s), {bytes} byte(s) still live"
+        defer line.deinit()
+        println(line.view())
+    }
+}
+
+// ponytail: the 25 heaviest stacks; a flag if a leak hides below them.
+fn print_leak_sites(first: u32, last: u32) {
+    let sites = alloc_tracer.live_sites(first, last)
+    defer sites.deinit()
+    const shown = if sites.len < 25 { sites.len } else { 25 }
+    for i in 0..shown {
+        const head = $"  {sites[i].blocks} block(s), {sites[i].bytes} byte(s) allocated at:"
+        defer head.deinit()
+        println(head.view())
+        for addr in alloc_tracer.stack_frames(sites[i].stack) {
+            let name = frame_name(addr)
+            const line = $"      {name.view()}"
+            defer line.deinit()
+            println(line.view())
+            name.deinit()
+        }
+    }
 }
 
 // Generate `vendor/` modules for the manifest's headers, printing what was skipped. False when a

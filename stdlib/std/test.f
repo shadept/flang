@@ -5,6 +5,8 @@ import std.allocator
 import std.collections.list
 import std.mem
 import std.option
+// Its companion C holds the stack capture the ledger in `test.c` calls.
+import std.tracing_allocator
 
 // =============================================================================
 // TestAllocator - tracking allocator for leak detection in tests
