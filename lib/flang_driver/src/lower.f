@@ -51,6 +51,7 @@
 // `ast` and `fir` both export `BinaryOp`/`UnaryOp`; neither is named here (operators match AST
 // variants and emit through builder methods).
 
+import std.allocator
 import std.collections.dict
 import std.collections.list
 import std.collections.set
@@ -162,11 +163,14 @@ type LowerCtx = struct {
     // topo-sort when one does.
     const_inits: List(String)
     // Owned backing for const global/init symbol names; the IrModule and `consts` reference them as
-    // views. Leaks with the ctx, like `syms`.
+    // views. The module takes them when lowering ends.
     owned_syms: List(OwnedString)
     // Per-run layout memo (layout.f `LayoutCache`): valid for the life of `it`, which this ctx
     // never outlives.
     lay_cache: LayoutCache
+    // Memory for what serves one lowering run and nothing after it: query results such as struct
+    // and enum targets.
+    temp: &ArenaAllocator
     // Test mode: `test {}` blocks lower to nullary functions the generated runner drives, and the
     // project's `main` is left out - the runner is the entry point. Counts the blocks emitted so
     // far, which is what names them.
@@ -405,6 +409,8 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult) IrModule {
     let sb = symbol_builder(result)
     sb.add_module(ast_module, "")
     let syms = sb.finish()
+    let temp = arena_allocator(context.allocator)
+    defer temp.deinit()
     let loop_stack: List(LoopFrame) = list(0)
     let interner: Dict(String, StrData) = dict()
     let globals: List(Global) = list(0)
@@ -417,6 +423,7 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult) IrModule {
         it = &result.interner,
         overlay = null,
         syms = &syms,
+        temp = &temp,
         loops = move loop_stack,
         sret = null,
         ret_size = 0u64,
@@ -452,12 +459,26 @@ pub fn lower_module(ast_module: &Module, result: &TypeCheckResult) IrModule {
     ctx.globals.push(root)
     flush_globals(&m, &ctx)
     wire_const_inits(&m, &ctx)
-    ctx.globals.deinit()
-    ctx.strings.deinit()
-    // ponytail: the symbol table leaks - the IrModule's function names are views into its owned
-    // strings, so freeing it here would dangle every name the backend is about to print. Upgrade
-    // path: arena-own IrModule names.
+    m.keep_names(syms.take_names())
+    finish_lowering(&m, ctx)
     return m
+}
+
+// Ends a lowering run: the module takes the names and initializer buffers it borrows, and the rest
+// of the run's state is released.
+fn finish_lowering(m: &IrModule, ctx: move LowerCtx) {
+    m.keep_names(ctx.owned_syms)
+    m.keep_init_data(ctx.const_blobs, ctx.const_relocs)
+    ctx.loops.deinit()
+    ctx.strings.deinit()
+    ctx.globals.deinit()
+    ctx.defers.deinit()
+    ctx.defer_marks.deinit()
+    ctx.pending_lambdas.deinit()
+    ctx.consts.deinit()
+    ctx.const_inits.deinit()
+    ctx.lay_cache.deinit()
+    ctx.rtti_syms.deinit()
 }
 
 // Lower every supported module of a checked project into one `IrModule`, sharing the project-wide
@@ -488,6 +509,8 @@ pub fn lower_program(
         sb.add_module(&modules[i], fqns[i].view())
     }
     let syms = sb.finish()
+    let temp = arena_allocator(context.allocator)
+    defer temp.deinit()
     let loop_stack: List(LoopFrame) = list(0)
     let interner: Dict(String, StrData) = dict()
     let globals: List(Global) = list(0)
@@ -503,6 +526,7 @@ pub fn lower_program(
         it = &result.interner,
         overlay = null,
         syms = &syms,
+        temp = &temp,
         loops = move loop_stack,
         sret = null,
         ret_size = 0u64,
@@ -597,8 +621,8 @@ pub fn lower_program(
     }
     let no_displays = m.set_displays(syms.take_displays())
     no_displays.deinit()
-    ctx.globals.deinit()
-    ctx.strings.deinit()
+    m.keep_names(syms.take_names())
+    finish_lowering(&m, ctx)
     return m
 }
 
@@ -1060,7 +1084,7 @@ fn root_default(
         return
     }
     const i = idx.unwrap()
-    const fty = field_ty(tyit(ctx), st.def, i, &st.args, &ctx.result.nominals)
+    const fty = field_ty(tyit(ctx), st.def, i, st.args, &ctx.result.nominals)
     if !const_bytes(ctx, &fty, cd.value, blob, rel, st.layout.offsets[i]) {
         m.skip_notes.push($"{fqn.view()}: context default not encodable")
     }
@@ -1110,11 +1134,11 @@ fn lay_of(ctx: &LowerCtx, ty: Ty) Layout {
     return layout_of(tyit(ctx), ty, &ctx.result.nominals, Some(&ctx.lay_cache))
 }
 
-fn st_layout(ctx: &LowerCtx, def: &StructDef, args: &List(Ty)) StructLayout {
+fn st_layout(ctx: &LowerCtx, def: &StructDef, args: Ty[]) StructLayout {
     return struct_layout(tyit(ctx), def, args, &ctx.result.nominals, Some(&ctx.lay_cache))
 }
 
-fn en_layout(ctx: &LowerCtx, def: &EnumDef, args: &List(Ty)) EnumLayout {
+fn en_layout(ctx: &LowerCtx, def: &EnumDef, args: Ty[]) EnumLayout {
     return enum_layout(tyit(ctx), def, args, &ctx.result.nominals, Some(&ctx.lay_cache))
 }
 
@@ -1122,8 +1146,8 @@ fn tup_layout(ctx: &LowerCtx, tys: &List(Ty)) StructLayout {
     return tuple_layout(tyit(ctx), tys, &ctx.result.nominals, Some(&ctx.lay_cache))
 }
 
-fn vp_offsets(ctx: &LowerCtx, def: &EnumDef, vnum: usize, args: &List(Ty)) List(usize) {
-    return variant_payload_offsets(
+fn vp_offsets(ctx: &LowerCtx, def: &EnumDef, vnum: usize, args: Ty[]) usize[] {
+    const offs = variant_payload_offsets(
         tyit(ctx),
         def,
         vnum,
@@ -1131,6 +1155,9 @@ fn vp_offsets(ctx: &LowerCtx, def: &EnumDef, vnum: usize, args: &List(Ty)) List(
         &ctx.result.nominals,
         Some(&ctx.lay_cache),
     )
+    defer offs.deinit()
+    let a = ctx.temp.allocator()
+    return ctx.temp.freeze(unmanaged_list(offs.as_slice(), &a))
 }
 
 fn lower_const_decl(m: &IrModule, ctx: &LowerCtx, cd: &ConstDecl) {
@@ -1282,7 +1309,7 @@ fn const_variant(ctx: &LowerCtx, ty: &Ty, vnum: u32, buf: &List(u8), at: usize) 
         return false
     }
     let et = t.unwrap()
-    let el = en_layout(ctx, et.def, &et.args)
+    let el = en_layout(ctx, et.def, et.args)
     if el.is_niche {
         return true
     }
@@ -1412,7 +1439,7 @@ fn const_struct(
             return false
         }
         let didx = di as usize
-        let fty = field_ty(tyit(ctx), st.def, didx, &st.args, &ctx.result.nominals)
+        let fty = field_ty(tyit(ctx), st.def, didx, st.args, &ctx.result.nominals)
         if !const_bytes(ctx, &fty, fi.value.unwrap(), buf, rel, at + st.layout.offsets[didx]) {
             return false
         }
@@ -1604,14 +1631,16 @@ fn lower_decl(m: &IrModule, ctx: &LowerCtx, decl: &FunctionDecl, fqn: String) {
         // return can be spelled as a C struct. Only variadic foreign declarations are unregistered
         // (C varargs have no FLang signature to check against), and those are scalar-only, so the
         // syntactic path still covers them.
-        let fd = foreign_from_sig(m, ctx, decl)
-        if fd.is_some() {
-            m.add_foreign(fd.unwrap())
-            return
+        foreign_from_sig(m, ctx, decl) match {
+            Some(fd) => {
+                m.add_foreign(fd)
+                return
+            }
+            None => {}
         }
-        let syn = foreign_decl_of(decl)
-        if syn.is_some() {
-            m.add_foreign(syn.unwrap())
+        foreign_decl_of(decl) match {
+            Some(syn) => m.add_foreign(syn)
+            None => {}
         }
         return
     }
@@ -1863,6 +1892,7 @@ fn emit_lambda_fn(m: &IrModule, ctx: &LowerCtx, pl: &PendingLambda) {
     let sig_params: List(Ty) = list(pl.info.params.len)
     sig_params.push_all(pl.info.params.as_slice())
     let sig = FnSig { params = move sig_params, ret = pl.info.ret }
+    defer sig.deinit()
     if pl.info.captures.len == 0 {
         lower_function_body(m, ctx, &decl, pl.info.symbol.view(), &sig, pl.info.conv)
         return
@@ -2562,7 +2592,7 @@ fn store_context_field(
         return
     }
     const i = idx.unwrap()
-    const fty = field_ty(tyit(ctx), st.def, i, &st.args, &ctx.result.nominals)
+    const fty = field_ty(tyit(ctx), st.def, i, st.args, &ctx.result.nominals)
     const v = lower_adapted(ctx, bb, env, n.value, &fty)
     const at = bb.gep(slot, Operand.IntConst(st.layout.offsets[i] as i64))
     if is_by_ref(ctx, &fty) {
@@ -2818,7 +2848,7 @@ fn lower_for_iter(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, f: &ForStmt) {
         return
     }
     let ety = et.args[0]
-    let ol = en_layout(ctx, et.def, &et.args)
+    let ol = en_layout(ctx, et.def, et.args)
 
     // `iter(&xs)`: an aggregate iterable's value IS its address; a reference value is already the
     // pointer the parameter wants. A fixed array decays into the `{ptr, len}` view `iter(&T[])`
@@ -3810,7 +3840,7 @@ fn field_at(ctx: &LowerCtx, st: &StructTarget, name: String, at: usize) (usize, 
             tyit(ctx),
             st.def,
             idx,
-            &st.args,
+            st.args,
             &ctx.result.nominals,
         )),
     )
@@ -3990,7 +4020,7 @@ fn static_ti_fields(ctx: &LowerCtx, st: &StructTarget, blob: &List(u8), rel: &Li
         let at = fs.layout.size * i
         blob_string_field(ctx, &fs, &ablob, &arel, "name", ts.def.fields[i].name, at)
         blob_int_field(ctx, &fs, &ablob, "offset", ts.layout.offsets[i] as i64, at)
-        let fty = field_ty(tyit(ctx), ts.def, i, &ts.args, &ctx.result.nominals)
+        let fty = field_ty(tyit(ctx), ts.def, i, ts.args, &ctx.result.nominals)
         static_typeinfo(ctx, fty) match {
             Some(s) => blob_ptr_field(ctx, &fs, &arel, "type_info", s, at)
             None => {}
@@ -4274,6 +4304,7 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
         }
         let sig_params: List(Ty) = list(0)
         let sig = FnSig { params = move sig_params, ret = c.ret }
+        defer sig.deinit()
         return emit_call(ctx, bb, c.symbol.view(), &sig, args, false, closure_env)
     }
 
@@ -4373,8 +4404,15 @@ fn lower_callee_value_call(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, call: &
 // substituting generic field types - the raw definition stores them against the type parameters).
 type StructTarget = struct {
     def: &StructDef
-    layout: StructLayout
-    args: List(Ty)
+    layout: TargetLayout
+    args: Ty[]
+}
+
+// A struct layout whose offsets live in the lowering run's temp memory.
+type TargetLayout = struct {
+    size: usize
+    align: usize
+    offsets: usize[]
 }
 
 // `S { f = v, ... }` - allocate a slot the size of the struct and store each initializer at its
@@ -4404,7 +4442,7 @@ fn lower_struct_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, lit: &StructLi
         // Substituted through the instantiation's arguments - the raw definition stores a generic
         // field against the type parameter, and storing by the parameter's placeholder width
         // corrupts the neighbouring fields.
-        let fty = field_ty(tyit(ctx), st.def, didx, &st.args, &ctx.result.nominals)
+        let fty = field_ty(tyit(ctx), st.def, didx, st.args, &ctx.result.nominals)
         let v = lower_field_init(ctx, bb, env, fi, &fty)
         let fp = bb.gep(slot, Operand.IntConst(off as i64))
         if is_by_ref(ctx, &fty) {
@@ -4740,7 +4778,7 @@ fn struct_pattern_member(
         return null
     }
     let idx = di as usize
-    let fty = field_ty(tyit(ctx), t.def, idx, &t.args, &ctx.result.nominals)
+    let fty = field_ty(tyit(ctx), t.def, idx, t.args, &ctx.result.nominals)
     let addr = bb.gep(scrut, Operand.IntConst(t.layout.offsets[idx] as i64))
     if is_by_ref(ctx, &fty) {
         return Some((addr, fty))
@@ -4988,9 +5026,8 @@ fn variant_test(
         return unlowerable(ctx)
     }
     let et = t.unwrap()
-    let offs = vp_offsets(ctx, et.def, vnum.unwrap() as usize, &et.args)
+    let offs = vp_offsets(ctx, et.def, vnum.unwrap() as usize, et.args)
     if offs.len != ev.payloads.len {
-        offs.deinit()
         return unlowerable(ctx)
     }
     for j in 0..ev.payloads.len {
@@ -5009,7 +5046,7 @@ fn variant_test(
             et.def,
             vnum.unwrap() as usize,
             j,
-            &et.args,
+            et.args,
             &ctx.result.nominals,
         )
         if dty == TY_VOID {
@@ -5020,7 +5057,6 @@ fn variant_test(
         let tj = pattern_test(ctx, bb, env, sub, value, &dty)
         acc = bb.iand(IrType.I8, acc, tj)
     }
-    offs.deinit()
     return acc
 }
 
@@ -5158,9 +5194,8 @@ fn bind_variant_payload(
         return
     }
     let et = t.unwrap()
-    let offs = vp_offsets(ctx, et.def, vnum.unwrap() as usize, &et.args)
+    let offs = vp_offsets(ctx, et.def, vnum.unwrap() as usize, et.args)
     if offs.len != ev.payloads.len {
-        offs.deinit()
         let _u = unlowerable(ctx)
         return
     }
@@ -5172,7 +5207,7 @@ fn bind_variant_payload(
             et.def,
             vnum.unwrap() as usize,
             j,
-            &et.args,
+            et.args,
             &ctx.result.nominals,
         )
         if dty == TY_VOID {
@@ -5183,7 +5218,6 @@ fn bind_variant_payload(
         let value = if is_by_ref(ctx, &pty) { addr } else { bb.load(ir_of(ctx, pty), addr) }
         bind_pattern(ctx, bb, env, sub, value, &pty)
     }
-    offs.deinit()
 }
 
 // The variant index the checker resolved for the pattern node at `span`.
@@ -5205,17 +5239,15 @@ fn resolve_enum(ctx: &LowerCtx, ty: &Ty, reg: &NominalRegistry) EnumTarget? {
         NNominal(n) => n
         _ => return null
     }
-    let args: List(Ty) = list(nr.args.len)
-    for i in 0..nr.args.len { args.push(tyit(ctx).child_at(nr.args, i)) }
     return reg.get(nr.id).* match {
-        NomEnum(e) => Some(EnumTarget { def = &e, args = move args })
+        NomEnum(e) => Some(EnumTarget { def = &e, args = interned_args(ctx, nr.args) })
         _ => null
     }
 }
 
 type EnumTarget = struct {
     def: &EnumDef
-    args: List(Ty)
+    args: Ty[]
 }
 
 fn niche_optional(ctx: &LowerCtx, ty: &Ty) bool {
@@ -5224,7 +5256,7 @@ fn niche_optional(ctx: &LowerCtx, ty: &Ty) bool {
         return false
     }
     let et = t.unwrap()
-    return en_layout(ctx, et.def, &et.args).is_niche
+    return en_layout(ctx, et.def, et.args).is_niche
 }
 
 // Enum variant construction (M7)
@@ -5254,7 +5286,7 @@ fn lower_variant_call(
         return unlowerable(ctx)
     }
     let et = t.unwrap()
-    let el = en_layout(ctx, et.def, &et.args)
+    let el = en_layout(ctx, et.def, et.args)
 
     // Niche `Some(p)`: the payload pointer is the whole value.
     if el.is_niche {
@@ -5270,9 +5302,8 @@ fn lower_variant_call(
     // value - byte-wise consumers (the generic hash) read the whole slot. Each slot stores by the
     // variant's DECLARED payload type (substituted through the instantiation) - the memory's truth;
     // a coercion that rewrote an argument node's representation refuses - see `repr_compatible`.
-    let offs = vp_offsets(ctx, et.def, vnum as usize, &et.args)
+    let offs = vp_offsets(ctx, et.def, vnum as usize, et.args)
     if offs.len != call.args.len {
-        offs.deinit()
         return unlowerable(ctx)
     }
     let slot = bb.stack_slot(el.size as u64, el.align as u64)
@@ -5280,7 +5311,6 @@ fn lower_variant_call(
     bb.store(IrType.I32, Operand.IntConst(variant_tag(et.def, vnum as usize)), slot)
     for j in 0..call.args.len {
         // Named arguments never resolve to a variant - the checker leaves those calls unresolved.
-        // (The refusal path leaks `offs` - allocator-lifetime scratch, like the rest of lowering.)
         let pj = call.args[j] match {
             Positional(e) => e
             Named(_) => return unlowerable(ctx)
@@ -5290,7 +5320,7 @@ fn lower_variant_call(
             et.def,
             vnum as usize,
             j,
-            &et.args,
+            et.args,
             &ctx.result.nominals,
         )
         // A unit payload (`Ok(())`) stores nothing - the tag is the value.
@@ -5299,7 +5329,6 @@ fn lower_variant_call(
         }
         let aty = node_ty(ctx, expr_span(pj))
         if !repr_compatible(ctx, &aty, &pty) {
-            offs.deinit()
             return unlowerable(ctx)
         }
         let v = lower_expr(ctx, bb, env, pj)
@@ -5311,7 +5340,6 @@ fn lower_variant_call(
             bb.store(ir_of(ctx, pty), v, fp)
         }
     }
-    offs.deinit()
     return slot
 }
 
@@ -5326,7 +5354,7 @@ fn lower_variant_nullary(ctx: &LowerCtx, bb: &BlockBuilder, span: SourceSpan, vn
     }
 
     let et = t.unwrap()
-    let el = en_layout(ctx, et.def, &et.args)
+    let el = en_layout(ctx, et.def, et.args)
 
     // The only nullary variant of the niche form is `None` - the null pointer by definition.
     if el.is_niche {
@@ -5424,7 +5452,7 @@ fn lower_cast_impl(
             return unlowerable(ctx)
         }
         let et = t.unwrap()
-        let el = en_layout(ctx, et.def, &et.args)
+        let el = en_layout(ctx, et.def, et.args)
         if el.is_niche {
             return unlowerable(ctx)
         }
@@ -5542,7 +5570,7 @@ fn lower_coalesce(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, c: &CoalesceExpr
         return unlowerable(ctx)
     }
     let et = t.unwrap()
-    let el = en_layout(ctx, et.def, &et.args)
+    let el = en_layout(ctx, et.def, et.args)
 
     let result_ty = node_ty(ctx, c.span)
     let ir = ir_of(ctx, result_ty)
@@ -5670,7 +5698,7 @@ fn lower_null_propagation(
     if et.args.len != 1 {
         return unlowerable_why(ctx, "`?.` receiver shape")
     }
-    let el = en_layout(ctx, et.def, &et.args)
+    let el = en_layout(ctx, et.def, et.args)
     if el.is_niche {
         return unlowerable_why(ctx, "`?.` niche receiver")
     }
@@ -5687,7 +5715,7 @@ fn lower_null_propagation(
         return unlowerable_why(ctx, "`?.` member unresolved")
     }
     let off = st.layout.offsets[di as usize]
-    let fty = field_ty(tyit(ctx), st.def, di as usize, &st.args, &ctx.result.nominals)
+    let fty = field_ty(tyit(ctx), st.def, di as usize, st.args, &ctx.result.nominals)
 
     let res_ty = node_ty(ctx, np.span)
     let rt = resolve_enum(ctx, &res_ty, reg)
@@ -5695,7 +5723,7 @@ fn lower_null_propagation(
         return unlowerable_why(ctx, "`?.` result shape")
     }
     let ret2 = rt.unwrap()
-    let rel = en_layout(ctx, ret2.def, &ret2.args)
+    let rel = en_layout(ctx, ret2.def, ret2.args)
     let flattens = fty == res_ty
 
     let recv = lower_expr(ctx, bb, env, np.receiver)
@@ -5820,7 +5848,7 @@ fn try_shape(ctx: &LowerCtx, o: &ResolvedOperator, want: &Ty) TryShape? {
     return Some(.{
         sym = sym,
         sig = sig,
-        el = en_layout(ctx, et.def, &et.args),
+        el = en_layout(ctx, et.def, et.args),
         cont_ty = et.args[0],
         res_ty = et.args[1],
     })
@@ -6115,7 +6143,7 @@ fn member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
         return null
     }
     let off = st.layout.offsets[di as usize]
-    let fty = field_ty(tyit(ctx), st.def, di as usize, &st.args, &ctx.result.nominals)
+    let fty = field_ty(tyit(ctx), st.def, di as usize, st.args, &ctx.result.nominals)
 
     let base = lower_base_address(ctx, bb, env, ma.receiver)
     for _k in 1..depth {
@@ -6217,7 +6245,7 @@ fn deref_member_field(
     let off = st.layout.offsets[di as usize]
     return Some(MemberField {
         addr = bb.gep(cur, Operand.IntConst(off as i64)),
-        fty = field_ty(tyit(ctx), st.def, di as usize, &st.args, &ctx.result.nominals),
+        fty = field_ty(tyit(ctx), st.def, di as usize, st.args, &ctx.result.nominals),
     })
 }
 
@@ -6652,8 +6680,6 @@ fn resolve_struct(ctx: &LowerCtx, ty: &Ty, reg: &NominalRegistry) StructTarget? 
         NNominal(n) => n
         _ => return null
     }
-    let args: List(Ty) = list(nr.args.len)
-    for i in 0..nr.args.len { args.push(tyit(ctx).child_at(nr.args, i)) }
     return reg.get(nr.id).* match {
         NomStruct(s) => {
             // `Type(T)` values ARE TypeInfo (minimal RTTI, M11): field access and layout go through
@@ -6662,24 +6688,38 @@ fn resolve_struct(ctx: &LowerCtx, ty: &Ty, reg: &NominalRegistry) StructTarget? 
                 let ti = reg.by_fqn.get(FQN_TYPE_INFO)
                 if ti.is_some() {
                     reg.get(ti.unwrap()).* match {
-                        NomStruct(ts) => {
-                            args.clear()
-                            const ti_layout = st_layout(ctx, &ts, &args)
-                            return Some(StructTarget {
-                                def = &ts,
-                                layout = move ti_layout,
-                                args = move args,
-                            })
-                        }
+                        NomStruct(ts) => return Some(struct_target(ctx, &ts, []))
                         _ => {}
                     }
                 }
             }
-            const layout = st_layout(ctx, &s, &args)
-            Some(StructTarget { def = &s, layout = move layout, args = move args })
+            Some(struct_target(ctx, &s, interned_args(ctx, nr.args)))
         }
         _ => null
     }
+}
+
+fn struct_target(ctx: &LowerCtx, def: &StructDef, args: Ty[]) StructTarget {
+    const sl = st_layout(ctx, def, args)
+    defer sl.deinit()
+    let a = ctx.temp.allocator()
+    const offsets = ctx.temp.freeze(unmanaged_list(sl.offsets.as_slice(), &a))
+    return .{
+        def = def,
+        layout = .{ size = sl.size, align = sl.align, offsets = offsets },
+        args = args,
+    }
+}
+
+// An instantiation's type arguments, copied out of the interner's child window: lowering interns as
+// it goes, which may move the window's storage.
+fn interned_args(ctx: &LowerCtx, span: ChildSpan) Ty[] {
+    let a = ctx.temp.allocator()
+    let out: UnmanagedList(Ty) = unmanaged_list(span.len, &a)
+    for i in 0..span.len {
+        out.push(tyit(ctx).child_at(span, i), &a)
+    }
+    return ctx.temp.freeze(out)
 }
 
 // Declaration index of a named field, or -1 when absent (an already-reported checker error - the
@@ -6987,19 +7027,15 @@ fn build_string_view(ctx: &LowerCtx, bb: &BlockBuilder, ty: &Ty, s: &StringLiter
 // zero decode work, at the cost of duplicate globals for two spellings of the same bytes. Returns
 // null only when the text has a malformed escape.
 //
-// The decoded buffer, the null-terminated copy, and the global's name are deliberately leaked - the
-// IrModule references them for the rest of the build, same as `fresh_label`'s labels.
+// The null-terminated copy and the global's name are views the IrModule keeps, so they join the
+// names the module takes when lowering ends.
 fn intern_string(ctx: &LowerCtx, raw: String) StrData? {
     let hit = ctx.strings.get(raw)
     if hit.is_some() {
         return hit
     }
 
-    let decoded = decode_string_text(raw)
-    if decoded.is_none() {
-        return null
-    }
-    let d = decoded.unwrap()
+    let d = decode_string_text(raw) ?? return null
 
     // Data-segment bytes: decoded content plus a null terminator, so the `ptr` field satisfies
     // String's C-FFI contract (core/string.f).
@@ -7024,6 +7060,8 @@ fn intern_string(ctx: &LowerCtx, raw: String) StrData? {
     })
     let entry = StrData { name = name.view(), len = d.view().len }
     ctx.strings.set(raw, entry)
+    ctx.owned_syms.push(bytes)
+    ctx.owned_syms.push(name)
     d.deinit()
     return Some(entry)
 }

@@ -3666,11 +3666,10 @@ fn collect_one_signature(self: &Checker, decl: &Decl) {
 fn duplicate_overload(self: &Checker, name: String, sig: &Scheme) bool {
     let vis = current_visibility(self)
     defer vis.deinit()
-    let cands = self.functions.lookup(name, &vis) match {
+    let cands = self.functions.lookup(name, &vis, &self.temp) match {
         FnLookFound(c) => move c
         _ => return false
     }
-    defer cands.deinit()
     let here = self.current_module.unwrap_or("")
     for c in cands {
         let same_module = c.module match {
@@ -3957,7 +3956,7 @@ fn callable_arity(self: &Checker, t: Ty, atoms: &List(BoundAtom)) usize? {
     return null
 }
 
-fn any_trailing_slot(self: &Checker, candidates: &List(&FunctionScheme)) bool {
+fn any_trailing_slot(self: &Checker, candidates: Slice(&FunctionScheme)) bool {
     for c in candidates {
         const dp = self.fn_decl_params.get_ref(c.id)
         if dp.is_some() and dp.unwrap().trailing_slot.is_some() {
@@ -3980,7 +3979,7 @@ fn report_no_trailing_slot(self: &Checker, name: String, span: SourceSpan) Ty {
 // E2111: the first argument holding a FLang function where a candidate takes a `#foreign fn`.
 fn c_slot_misfit(
     self: &Checker,
-    candidates: &List(&FunctionScheme),
+    candidates: Slice(&FunctionScheme),
     pos_exprs: &List(&Expr),
     arg_tys: &List(Ty),
 ) &Expr? {
@@ -6028,7 +6027,6 @@ fn operator_verdict(self: &Checker, op: BinaryOp, l: Ty, r: Ty, ret: Ty, span: S
     }
     const found = operator_match(self, op, span, lr, rr, true) ?? return Verdict.Fails
     const result = found.ret
-    found.pick.deinit()
     return if self.engine.unify_exact(result, ret).is_ok() { Verdict.Holds } else {
         Verdict.Fails
     }
@@ -6053,7 +6051,6 @@ fn returns_exactly(self: &Checker, pick: move OverloadPick?, ret: Ty) Verdict {
     }
     const p = pick.unwrap()
     const ok = self.engine.unify_exact(p.ret, ret).is_ok()
-    p.deinit()
     return if ok { Verdict.Holds } else { Verdict.Fails }
 }
 
@@ -7120,11 +7117,10 @@ fn bind_rigid_params(self: &Checker, fid: u32) {
 fn template_id_of(self: &Checker, fd: &FunctionDecl) u32? {
     let vis = current_visibility(self)
     defer vis.deinit()
-    let cands = self.functions.lookup(fd.name, &vis) match {
+    let cands = self.functions.lookup(fd.name, &vis, &self.temp) match {
         FnLookFound(c) => move c
         _ => return null
     }
-    defer cands.deinit()
     for c in cands {
         const d = c.decl_span
         const same = d.start == fd.span.start and d.length == fd.span.length
@@ -9396,7 +9392,7 @@ fn index_operator(
 fn operator_pick(self: &Checker, name: String, args: &List(Ty), span: SourceSpan) OverloadPick? {
     let vis = fn_visibility(self)
     defer vis.deinit()
-    let candidates = self.functions.lookup(name, &vis) match {
+    let candidates = self.functions.lookup(name, &vis, &self.temp) match {
         FnLookFound(c) => move c
         _ => return null
     }
@@ -9410,9 +9406,8 @@ fn operator_pick(self: &Checker, name: String, args: &List(Ty), span: SourceSpan
             viable = true
         }
     }
-    let pick = if viable { resolve_overload(self, &candidates, args, span) } else { null }
+    let pick = if viable { resolve_overload(self, candidates, args, span) } else { null }
 
-    candidates.deinit()
     return pick
 }
 
@@ -9744,14 +9739,13 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
     }
 
     // Try function registry.
-    let look = self.functions.lookup(id.name, &vis)
-    let found: List(&FunctionScheme)? = look match {
+    let look = self.functions.lookup(id.name, &vis, &self.temp)
+    let found: Slice(&FunctionScheme)? = look match {
         FnLookFound(candidates) => Some(move candidates)
         _ => null
     }
     found match {
         Some(candidates) => {
-            defer candidates.deinit()
             if candidates.len == 1 {
                 let c = candidates[0]
                 self.results.record_target(self.node_of(id.span), ResolvedTarget.RtFunction(c.id))
@@ -10239,7 +10233,6 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         return self.engine.fresh_var()
     }
     let p = ip.unwrap()
-    defer p.deinit()
     check_consuming_receiver(self, &p, iter_name, Some(z), expr_span(fs.iterable))
     self.results.record_operator(self.node_of(fs.body.span), op_record(p.id))
     note_pending(self, fs.body.span, true, &p)
@@ -10263,7 +10256,6 @@ fn resolve_for_protocol(self: &Checker, fs: &ForStmt, it_ty: Ty) Ty {
         return self.engine.fresh_var()
     }
     let n = np.unwrap()
-    defer n.deinit()
     self.results.record_operator(self.node_of(fs.span), op_record(n.id))
     note_pending(self, fs.span, true, &n)
     const borrows = p.hops == 0 and p.params.len > 0 and is_ref_ty(self, p.params[0])
@@ -10327,7 +10319,6 @@ fn record_iter_release(self: &Checker, fs: &ForStmt, owned: Ty?) {
     let d = dp.unwrap()
     self.results.record_operator(self.node_of(fs.var_span), op_record(d.id))
     note_pending(self, fs.var_span, true, &d)
-    d.deinit()
 }
 
 fn check_range_bounds(self: &Checker, r: &RangeExpr) Ty {
@@ -10695,10 +10686,6 @@ type OpMatch = struct {
     ret: Ty
 }
 
-fn deinit(self: move OpMatch) {
-    self.pick.deinit()
-}
-
 // The ladder over one pair of operand types: for a comparison the direct function, then the negated
 // opposite for `==`/`!=`, then `op_cmp`; for arithmetic the one `op_*` function. One matched
 // operator: the pick moves in, and its return type is read on the way.
@@ -10763,7 +10750,6 @@ fn binary_dispatch(self: &Checker, bin: &BinaryExpr, l: Ty, r: Ty, is_cmp: bool)
     direct match {
         Some(found) => {
             const t = commit_binary(self, bin, &found, &lc, 0usize, &rc, 0usize)
-            found.deinit()
             return Some(t)
         }
         None => {}
@@ -10789,7 +10775,6 @@ fn binary_dispatch(self: &Checker, bin: &BinaryExpr, l: Ty, r: Ty, is_cmp: bool)
                 m match {
                     Some(found) => {
                         const t = commit_binary(self, bin, &found, &lc, li, &rc, ri)
-                        found.deinit()
                         return Some(t)
                     }
                     None => {}
@@ -10828,7 +10813,6 @@ fn operand_chain(
         return
     }
     let dc = dcands.unwrap()
-    defer dc.deinit()
     let current = t
     while picks.len < 10 {
         const is_nominal = ty_node(self, current) match { NNominal(_) => true, _ => false }
@@ -10837,7 +10821,7 @@ fn operand_chain(
         }
         let dargs: List(Ty) = list(1)
         dargs.push(self.engine.mk_ref(current))
-        const dpick = resolve_overload(self, &dc, &dargs, span)
+        const dpick = resolve_overload(self, dc, &dargs, span)
         dargs.deinit()
         if dpick.is_none() {
             return
@@ -11262,7 +11246,7 @@ fn resolve_direct_call(
 ) Ty? {
     let vis = fn_visibility(self)
     defer vis.deinit()
-    let cands = self.functions.lookup(ide.name, &vis) match {
+    let cands = self.functions.lookup(ide.name, &vis, &self.temp) match {
         FnLookFound(c) => Some(move c)
         _ => null
     }
@@ -11276,7 +11260,7 @@ fn resolve_direct_call(
             defer spans.deinit()
             let pick = resolve_overload(
                 self,
-                &candidates,
+                candidates,
                 arg_tys,
                 call.span,
                 null,
@@ -11288,12 +11272,11 @@ fn resolve_direct_call(
                 expected,
                 ends_trailing(pos_exprs),
             )
-            const no_slot = ends_trailing(pos_exprs) and !any_trailing_slot(self, &candidates)
+            const no_slot = ends_trailing(pos_exprs) and !any_trailing_slot(self, candidates)
             let misfit: &Expr? = null
             if pick.is_none() {
-                misfit = c_slot_misfit(self, &candidates, pos_exprs, arg_tys)
+                misfit = c_slot_misfit(self, candidates, pos_exprs, arg_tys)
             }
-            candidates.deinit()
             if pick.is_none() and self.overload_deferred {
                 self.overload_deferred = false
                 return Some(park_call(self, call, ide.name, arg_tys, pos_exprs, 0usize, null))
@@ -11365,7 +11348,7 @@ fn resolve_method_call(
 
     let vis = fn_visibility(self)
     defer vis.deinit()
-    let candidates = self.functions.lookup(ma.member, &vis) match {
+    let candidates = self.functions.lookup(ma.member, &vis, &self.temp) match {
         FnLookFound(c) => move c
         _ => {
             // `fba.allocator()` where `allocator` is a plain field: the name exists on the
@@ -11390,7 +11373,6 @@ fn resolve_method_call(
     // parameter's shape - `&Option($T)` for a value the call should auto-reference. Park the call:
     // it resolves after the body's drain, when the receiver is known.
     if self.engine.is_var(self.engine.resolve(recv_ty)) {
-        candidates.deinit()
         let full: List(Ty) = list(arg_tys.len + 1)
         defer full.deinit()
         full.push(recv_ty)
@@ -11423,7 +11405,7 @@ fn resolve_method_call(
     defer spans.deinit()
     let pick = receiver_overload(
         self,
-        &candidates,
+        candidates,
         recv_ty,
         arg_tys,
         call.span,
@@ -11436,8 +11418,7 @@ fn resolve_method_call(
     if pick.is_some() {
         commit_deref_chain(self, &chain, pick_hops(&pick), call.span)
     }
-    const no_slot = ends_trailing(pos_exprs) and !any_trailing_slot(self, &candidates)
-    candidates.deinit()
+    const no_slot = ends_trailing(pos_exprs) and !any_trailing_slot(self, candidates)
     if pick.is_none() and no_slot {
         return Some(report_no_trailing_slot(self, ma.member, call.span))
     }
@@ -11466,7 +11447,7 @@ fn resolve_method_call(
 // adapted value <-> &T shape, competing in the same ranked set.
 fn receiver_overload(
     self: &Checker,
-    candidates: &List(&FunctionScheme),
+    candidates: Slice(&FunctionScheme),
     recv: Ty,
     arg_tys: &List(Ty),
     span: SourceSpan,
@@ -11550,24 +11531,23 @@ fn receiver_pick_into(
 ) OverloadPick? {
     let vis = fn_visibility(self)
     defer vis.deinit()
-    let candidates = self.functions.lookup(name, &vis) match {
+    let candidates = self.functions.lookup(name, &vis, &self.temp) match {
         FnLookFound(c) => move c
         _ => return null
     }
-    defer candidates.deinit()
     let r = self.engine.resolve(recv)
     let adapted: Ty? = ty_node(self, r) match {
         NRef(inner) => Some(inner)
         _ => if take_address { Some(self.engine.mk_ref(r)) } else { null }
     }
     let ctx = PeelCtx { vis = &vis, chain = chain }
-    return receiver_overload(self, &candidates, recv, extra, span, adapted, null, Some(&ctx))
+    return receiver_overload(self, candidates, recv, extra, span, adapted, null, Some(&ctx))
 }
 
 // The `op_deref` overloads visible to the current function, for `PeelCtx`; null when there are
 // none, so `resolve_overload` skips the peel outright.
-fn deref_candidates(self: &Checker, vis: &Visibility) List(&FunctionScheme)? {
-    return self.functions.lookup("op_deref", vis) match {
+fn deref_candidates(self: &Checker, vis: &Visibility) Slice(&FunctionScheme)? {
+    return self.functions.lookup("op_deref", vis, &self.temp) match {
         FnLookFound(c) => Some(move c)
         _ => null
     }
@@ -11619,12 +11599,12 @@ fn note_pending(
     }
     // The pick is lent, so the pending copy takes its own tables.
     let inst = pick.inst.unwrap_ref()
-    let binds: Dict(VarId, Ty) = dict(inst.tp_binds.len())
+    let binds: Dict(VarId, Ty) = dict(inst.tp_binds.len)
     for e in inst.tp_binds {
         binds.set(e.key, e.value)
     }
     let inst_params: List(Ty) = list(inst.params.len)
-    inst_params.push_all(inst.params.as_slice())
+    inst_params.push_all(inst.params)
     let p = PendingSpec {
         span = span,
         is_operator = is_operator,
@@ -11681,7 +11661,6 @@ fn commit_pick(
                 materialize_default_args(self, &p, n_args + recv_extra, span)
             }
             const ret = p.ret
-            p.deinit()
             ret
         }
         None => {
@@ -11880,7 +11859,7 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
         self.current_module = pc.module
         let vis = fn_visibility(self)
         defer vis.deinit()
-        let cands = self.functions.lookup(pc.name, &vis) match {
+        let cands = self.functions.lookup(pc.name, &vis, &self.temp) match {
             FnLookFound(c) => Some(move c)
             _ => null
         }
@@ -11895,7 +11874,7 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
                 defer pspans.deinit()
                 let pick = resolve_overload(
                     self,
-                    &candidates,
+                    candidates,
                     &pc.arg_tys,
                     pc.span,
                     pc.alt_recv,
@@ -11907,7 +11886,6 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
                     null,
                     ends_trailing(&pc.pos_exprs),
                 )
-                candidates.deinit()
                 if pick.is_none() and self.overload_deferred {
                     self.overload_deferred = false
                     push_diag_e(
@@ -12404,11 +12382,10 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
     const adapted = if referent == recv { self.engine.mk_ref(recv) } else { referent }
     let vis = fn_visibility(self)
     defer vis.deinit()
-    let candidates = self.functions.lookup("op_call", &vis) match {
+    let candidates = self.functions.lookup("op_call", &vis, &self.temp) match {
         FnLookFound(c) => move c
         _ => return null
     }
-    defer candidates.deinit()
 
     // `op_call(&T, …)`, `op_call(T, …)` and the receiver's `op_deref` targets compete in one
     // ranked set.
@@ -12417,7 +12394,7 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
     let ctx = PeelCtx { vis = &vis, chain = &chain }
     let pick = receiver_overload(
         self,
-        &candidates,
+        candidates,
         recv,
         arg_tys,
         span,
@@ -12458,7 +12435,6 @@ fn deref_alternatives(
         return
     }
     let dc = dcands.unwrap()
-    defer dc.deinit()
     let current = self.engine.resolve(recv)
     let hops = 0usize
     while hops < 10 {
@@ -12473,7 +12449,7 @@ fn deref_alternatives(
 
         let dargs = list(1)
         dargs.push(self.engine.mk_ref(peeled))
-        let dpick = resolve_overload(self, &dc, &dargs, span)
+        let dpick = resolve_overload(self, dc, &dargs, span)
         dargs.deinit()
         if dpick.is_none() {
             return
@@ -12500,20 +12476,14 @@ fn deref_alternatives(
 type OverloadPick = struct {
     id: u32
     ret: Ty
-    // The winner's instantiated parameter types (engine-owned storage), for unifying materialized
-    // default arguments (M11).
-    params: List(Ty)
+    // The winner's instantiated parameter types, for unifying materialized default arguments (M11).
+    params: Ty[]
     inst: PickInst?
     // How many `op_deref` hops the receiver went through to match: the prefix of the caller's peel
     // chain to record for lowering. Zero for a receiver matched as written or adapted.
     hops: usize
     // The receiver matched adapted between value and reference; null as written or through hops.
     adapt: ReceiverAdapt?
-}
-
-pub fn deinit(self: move OverloadPick) {
-    self.params.deinit()
-    self.inst.deinit()
 }
 
 // One shape a receiver may take in overload resolution besides as written: adapted between value
@@ -12548,14 +12518,15 @@ type PeelCtx = struct {
 // mapping plus the fresh-var-bearing parameter and return types. All zonk to concrete types once
 // the surrounding inference settles.
 type PickInst = struct {
-    tp_binds: Dict(VarId, Ty)
-    params: List(Ty)
+    tp_binds: TpBind[]
+    params: Ty[]
     ret: Ty
 }
 
-pub fn deinit(self: move PickInst) {
-    self.tp_binds.deinit()
-    self.params.deinit()
+// One quantified id of a generic winner and the call-site fresh var it maps to.
+type TpBind = struct {
+    key: VarId
+    value: Ty
 }
 
 // Pick the best candidate for the argument types and commit its unification. Each candidate is
@@ -12570,7 +12541,7 @@ pub fn deinit(self: move PickInst) {
 // fills), then registration order.
 fn resolve_overload(
     self: &Checker,
-    candidates: &List(&FunctionScheme),
+    candidates: Slice(&FunctionScheme),
     arg_tys: &List(Ty),
     span: SourceSpan,
     alt_recv: Ty? = null,
@@ -12791,6 +12762,7 @@ fn resolve_overload(
     // A scratch copy of the instantiated parameter window: it rides on the pick for
     // default-argument unification and the pending spec.
     let fparams: List(Ty) = list(f.params.len)
+    defer fparams.deinit()
     for i in 0..f.params.len {
         fparams.push(self.engine.interner.child_at(f.params, i))
     }
@@ -12839,15 +12811,13 @@ fn resolve_overload(
     // The pick and its instantiation each carry their own copy of the parameter window.
     let inst: PickInst? = null
     if w.signature.quantified.len() > 0 {
-        let inst_params: List(Ty) = list(fparams.len)
-        inst_params.push_all(fparams.as_slice())
-        install(
-            &inst,
-            Some(PickInst { tp_binds = move binds, params = move inst_params, ret = f.ret }),
-        )
-    } else {
-        binds.deinit()
+        inst = Some(PickInst {
+            tp_binds = temp_binds(self, &binds),
+            params = temp_copy(self, fparams.as_slice()),
+            ret = f.ret,
+        })
     }
+    binds.deinit()
     let hops = if best_used > 0 { alts[best_used - 1].hops } else { 0usize }
     let adapt: ReceiverAdapt? = null
     if best_used > 0 and hops == 0 {
@@ -12859,11 +12829,27 @@ fn resolve_overload(
     return Some(OverloadPick {
         id = w.id,
         ret = f.ret,
-        params = move fparams,
-        inst = move inst,
+        params = temp_copy(self, fparams.as_slice()),
+        inst = inst,
         hops = hops,
         adapt = adapt,
     })
+}
+
+// `xs` copied into the check run's temp memory.
+fn temp_copy(self: &Checker, xs: $T[]) T[] where T: copyable {
+    let a = self.temp.allocator()
+    return self.temp.freeze(unmanaged_list(xs, &a))
+}
+
+// A generic winner's bindings, copied into the check run's temp memory.
+fn temp_binds(self: &Checker, binds: &Dict(VarId, Ty)) TpBind[] {
+    let a = self.temp.allocator()
+    let out: UnmanagedList(TpBind) = unmanaged_list(binds.len(), &a)
+    for e in binds {
+        out.push(TpBind { key = e.key, value = e.value }, &a)
+    }
+    return self.temp.freeze(out)
 }
 
 // Commits a winning argument's `op_deref` hops: unifies through the chain and records it on the
@@ -12974,7 +12960,7 @@ fn returns_into(self: &Checker, c: &FunctionScheme, expected: Ty) bool {
 
 fn tie_breaker(
     self: &Checker,
-    candidates: &List(&FunctionScheme),
+    candidates: Slice(&FunctionScheme),
     a: usize,
     b: usize,
     arg_tys: &List(Ty),
@@ -13120,7 +13106,6 @@ fn peel_arg(
         return null
     }
     let dc = dcands.unwrap()
-    defer dc.deinit()
     let current = self.engine.resolve(arg)
     let hops = 0usize
     while hops < 10 {
@@ -13134,7 +13119,7 @@ fn peel_arg(
         }
         let dargs = list(1)
         dargs.push(self.engine.mk_ref(peeled))
-        const dpick = resolve_overload(self, &dc, &dargs, span)
+        const dpick = resolve_overload(self, dc, &dargs, span)
         dargs.deinit()
         if dpick.is_none() {
             return null
@@ -13884,11 +13869,10 @@ fn member_deref_retry(self: &Checker, ma: &MemberAccessExpr, recv_ty: Ty) Ty? {
 fn member_deref_retry_at(self: &Checker, member: String, span: SourceSpan, recv_ty: Ty) Ty? {
     let vis = fn_visibility(self)
     defer vis.deinit()
-    let dc = self.functions.lookup("op_deref", &vis) match {
+    let dc = self.functions.lookup("op_deref", &vis, &self.temp) match {
         FnLookFound(c) => move c
         _ => return null
     }
-    defer dc.deinit()
 
     let chain: List(OverloadPick) = list(1)
     defer chain.deinit()
@@ -13912,7 +13896,7 @@ fn member_deref_retry_at(self: &Checker, member: String, span: SourceSpan, recv_
 
         let dargs = list(1)
         dargs.push(self.engine.mk_ref(peeled))
-        let dpick = resolve_overload(self, &dc, &dargs, span)
+        let dpick = resolve_overload(self, dc, &dargs, span)
         dargs.deinit()
         if dpick.is_none() {
             return null
@@ -14401,14 +14385,13 @@ fn resolve_fn_name_values(self: &Checker) {
         self.current_module = pn.module
         let vis = fn_visibility(self)
         defer vis.deinit()
-        let cands = self.functions.lookup(pn.name, &vis) match {
+        let cands = self.functions.lookup(pn.name, &vis, &self.temp) match {
             FnLookFound(c) => Some(move c)
             _ => null
         }
         cands match {
             Some(cl) => {
-                let pick = resolve_overload(self, &cl, &fparams, pn.span)
-                cl.deinit()
+                let pick = resolve_overload(self, cl, &fparams, pn.span)
                 pick match {
                     Some(w) => {
                         if decl_moves(self, w.id) != f.moves {

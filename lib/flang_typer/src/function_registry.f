@@ -69,12 +69,12 @@ pub fn clone(self: &FunctionScheme) FunctionScheme {
 // variant-payload separator. Wrapping the multi-payload case in its own struct keeps the variant
 // payload list unambiguous.
 pub type FnLookHiddenInfo = struct {
-    candidates: List(&FunctionScheme)
+    candidates: Slice(&FunctionScheme)
     module: String
 }
 
 pub type FnLookup = enum {
-    FnLookFound(List(&FunctionScheme))
+    FnLookFound(Slice(&FunctionScheme))
     FnLookHidden(FnLookHiddenInfo)
     FnLookMissing
 }
@@ -300,14 +300,20 @@ pub fn any_visible(self: &FunctionRegistry, name: String, vis: &Visibility) bool
     return false
 }
 
-pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup {
+pub fn lookup(
+    self: &FunctionRegistry,
+    name: String,
+    vis: &Visibility,
+    arena: &ArenaAllocator,
+) FnLookup {
     let overloads_opt = self.by_name.get_ref(name)
     if overloads_opt.is_none() {
         return FnLookup.FnLookMissing
     }
     let overloads = overloads_opt.unwrap()
 
-    let visible: List(&FunctionScheme) = list(0)
+    let a = arena.allocator()
+    let visible: UnmanagedList(&FunctionScheme) = unmanaged_list(0, &a)
     let hidden_module: String? = null
     let hidden_at: usize = 0
     for j in 0..overloads.len {
@@ -317,7 +323,7 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
             continue
         }
         if visibility_for(f, vis) {
-            visible.push(f)
+            visible.push(f, &a)
         } else {
             if hidden_module.is_none() {
                 f.module match {
@@ -331,17 +337,16 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
         }
     }
     if visible.len > 0 {
-        return FnLookup.FnLookFound(move visible)
+        return FnLookup.FnLookFound(arena.freeze(visible))
     }
-    visible.deinit()
     if hidden_module.is_some() {
-        let one: List(&FunctionScheme) = list(1)
-        one.push(&overloads[hidden_at])
+        visible.push(&overloads[hidden_at], &a)
         return FnLookup.FnLookHidden(FnLookHiddenInfo {
-            candidates = move one,
+            candidates = arena.freeze(visible),
             module = hidden_module.unwrap(),
         })
     }
+    visible.deinit(&a)
     return FnLookup.FnLookMissing
 }
 
@@ -394,7 +399,9 @@ test "a retired entry stops resolving until it is registered again" {
     let scope: Set(String) = set()
     let vis = visibility(Some("m"), scope)
     defer vis.deinit()
-    let missing = reg.lookup("f", &vis) match {
+    let arena = arena_allocator(context.allocator)
+    defer arena.deinit()
+    let missing = reg.lookup("f", &vis, &arena) match {
         FnLookMissing => true
         _ => false
     }
@@ -402,12 +409,8 @@ test "a retired entry stops resolving until it is registered again" {
 
     const again = reg.register(probe_scheme("f", "m"))
     assert_eq(again, a, "re-registration reclaims the retired slot's id")
-    let found = reg.lookup("f", &vis) match {
-        FnLookFound(c) => {
-            const n = c.len
-            c.deinit()
-            n
-        }
+    let found = reg.lookup("f", &vis, &arena) match {
+        FnLookFound(c) => c.len
         _ => 0 as usize
     }
     assert_eq(found, 1 as usize, "and the entry resolves again")
@@ -444,7 +447,9 @@ test "purge drops what stayed retired and reports the ids" {
     assert_eq(dropped[0], b, "and named by id")
     let vis = open()
     defer vis.deinit()
-    let gone = reg.lookup("g", &vis) match {
+    let arena = arena_allocator(context.allocator)
+    defer arena.deinit()
+    let gone = reg.lookup("g", &vis, &arena) match {
         FnLookMissing => true
         _ => false
     }

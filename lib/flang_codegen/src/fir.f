@@ -481,6 +481,11 @@ pub type IrModule = struct {
     // Keys are views into storage that outlives the module; values are owned here. Symbols without
     // an entry (`main`, foreigns, generated helpers) display as themselves.
     displays: Dict(String, OwnedString)
+    // The storage the module's names view: symbols and other names the front end built.
+    names: List(OwnedString)
+    // The encoded bytes and relocations of statically-initialized globals, which `globals` borrow.
+    init_blobs: List(List(u8))
+    init_relocs: List(List(Reloc))
     // Test mode: the backend emits the test runner as the C entry point instead of wrapping a FIR
     // `main`. Tracked apart from `tests` because a run whose filters matched nothing still needs a
     // binary that starts, reports that it found no tests, and exits successfully.
@@ -506,6 +511,9 @@ pub fn module() IrModule {
     let skip_notes: List(OwnedString) = list(0)
     let aggs: List(AggDef) = list(0)
     let displays: Dict(String, OwnedString) = dict()
+    let names: List(OwnedString) = list(0)
+    let init_blobs: List(List(u8)) = list(0)
+    let init_relocs: List(List(Reloc)) = list(0)
     let tests: List(TestCase) = list(0)
     return IrModule {
         globals = move globals,
@@ -515,6 +523,9 @@ pub fn module() IrModule {
         skip_notes = move skip_notes,
         aggs = move aggs,
         displays = move displays,
+        names = move names,
+        init_blobs = move init_blobs,
+        init_relocs = move init_relocs,
         testing = false,
         tests = move tests,
         run_test = null,
@@ -534,6 +545,29 @@ pub fn deinit(self: move IrModule) {
     self.skipped.deinit()
     self.skip_notes.deinit()
     self.displays.deinit()
+    self.names.deinit()
+    self.init_blobs.deinit()
+    self.init_relocs.deinit()
+}
+
+// Takes ownership of strings the module's names view, releasing them with the module.
+pub fn keep_names(self: &IrModule, names: move List(OwnedString)) {
+    for n in names.drain() {
+        self.names.push(n)
+    }
+    names.deinit()
+}
+
+// Takes ownership of the buffers the globals' initializers borrow, releasing them with the module.
+pub fn keep_init_data(self: &IrModule, blobs: move List(List(u8)), relocs: move List(List(Reloc))) {
+    for b in blobs.drain() {
+        self.init_blobs.push(b)
+    }
+    blobs.deinit()
+    for r in relocs.drain() {
+        self.init_relocs.push(r)
+    }
+    relocs.deinit()
 }
 
 // Replace the display-name map wholesale (scoped mutability keeps the field module-private).

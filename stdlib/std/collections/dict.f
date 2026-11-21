@@ -651,6 +651,8 @@ pub fn next(self: &DictDrain($K, $V)) (K, V)? {
 pub fn deinit(self: move DictDrain($K, $V)) {
     self.__dict.length = self.count - self.taken
     self.__dict.dead = self.__dict.dead + self.taken
+    // The dict has its untaken entries back: the drain's obligation is met.
+    leak(self)
 }
 
 // Iterator over a dict's keys, in unspecified order.

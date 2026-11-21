@@ -136,7 +136,7 @@ pub fn layout_of(
 pub fn struct_layout(
     it: &TypeInterner,
     def: &StructDef,
-    args: &List(Ty),
+    args: Ty[],
     reg: &NominalRegistry,
     cache: &LayoutCache? = null,
 ) StructLayout {
@@ -147,7 +147,7 @@ pub fn struct_layout(
 pub fn enum_layout(
     it: &TypeInterner,
     def: &EnumDef,
-    args: &List(Ty),
+    args: Ty[],
     reg: &NominalRegistry,
     cache: &LayoutCache? = null,
 ) EnumLayout {
@@ -160,7 +160,7 @@ pub fn field_ty(
     it: &TypeInterner,
     def: &StructDef,
     index: usize,
-    args: &List(Ty),
+    args: Ty[],
     reg: &NominalRegistry,
 ) Ty {
     return member_ty(
@@ -181,7 +181,7 @@ pub fn variant_payload_ty(
     def: &EnumDef,
     vnum: usize,
     index: usize,
-    args: &List(Ty),
+    args: Ty[],
     reg: &NominalRegistry,
 ) Ty {
     return member_ty(
@@ -203,7 +203,7 @@ fn member_ty(
     fqn: String,
     params: &List(VarId),
     assoc: &List(VarId),
-    args: &List(Ty),
+    args: Ty[],
     ty: Ty,
 ) Ty {
     if assoc.len == 0 {
@@ -213,7 +213,9 @@ fn member_ty(
     if id.is_none() {
         return subst(it, ty, params, args)
     }
-    const solved = reg.assoc_solved.get_ref(it.nominal_of(id.unwrap(), args))
+    let al: List(Ty) = list(args)
+    defer al.deinit()
+    const solved = reg.assoc_solved.get_ref(it.nominal_of(id.unwrap(), &al))
     if solved.is_none() or solved.unwrap().len != assoc.len {
         return subst(it, ty, params, args)
     }
@@ -223,9 +225,9 @@ fn member_ty(
     ps.push_all(assoc.as_slice())
     let xs: List(Ty) = list(args.len + assoc.len)
     defer xs.deinit()
-    xs.push_all(args.as_slice())
+    xs.push_all(args)
     xs.push_all(solved.unwrap().as_slice())
-    return subst(it, ty, &ps, &xs)
+    return subst(it, ty, &ps, xs.as_slice())
 }
 
 // Core walk
@@ -418,7 +420,7 @@ fn nominal_layout(
                     tdef.* match {
                         NomStruct(ts) => {
                             let none: List(Ty) = list(0)
-                            let r = struct_size(it, &ts, &none, reg, cache)
+                            let r = struct_size(it, &ts, none.as_slice(), reg, cache)
                             none.deinit()
                             return r
                         }
@@ -426,16 +428,16 @@ fn nominal_layout(
                     }
                 }
             }
-            struct_size(it, &s, &args, reg, cache)
+            struct_size(it, &s, args.as_slice(), reg, cache)
         }
-        NomEnum(e) => enum_size(it, &e, &args, reg, cache)
+        NomEnum(e) => enum_size(it, &e, args.as_slice(), reg, cache)
     }
 }
 
 fn struct_size(
     it: &TypeInterner,
     def: &StructDef,
-    args: &List(Ty),
+    args: Ty[],
     reg: &NominalRegistry,
     cache: &LayoutCache?,
 ) Layout {
@@ -448,7 +450,7 @@ fn struct_size(
 fn enum_size(
     it: &TypeInterner,
     def: &EnumDef,
-    args: &List(Ty),
+    args: Ty[],
     reg: &NominalRegistry,
     cache: &LayoutCache?,
 ) Layout {
@@ -461,7 +463,7 @@ fn enum_size(
 fn struct_layout_impl(
     it: &TypeInterner,
     def: &StructDef,
-    args: &List(Ty),
+    args: Ty[],
     reg: &NominalRegistry,
     cache: &LayoutCache?,
 ) StructLayout {
@@ -493,7 +495,7 @@ pub fn variant_payload_offsets(
     it: &TypeInterner,
     def: &EnumDef,
     vnum: usize,
-    args: &List(Ty),
+    args: Ty[],
     reg: &NominalRegistry,
     cache: &LayoutCache? = null,
 ) List(usize) {
@@ -530,7 +532,7 @@ fn simd_layout(sl: move StructLayout) StructLayout {
 fn enum_layout_impl(
     it: &TypeInterner,
     def: &EnumDef,
-    args: &List(Ty),
+    args: Ty[],
     reg: &NominalRegistry,
     cache: &LayoutCache?,
 ) EnumLayout {
@@ -593,7 +595,7 @@ fn enum_layout_impl(
     }
 }
 
-fn is_option_niche(it: &TypeInterner, def: &EnumDef, args: &List(Ty)) bool {
+fn is_option_niche(it: &TypeInterner, def: &EnumDef, args: Ty[]) bool {
     if def.fqn != FQN_OPTION {
         return false
     }
@@ -612,7 +614,7 @@ fn is_option_niche(it: &TypeInterner, def: &EnumDef, args: &List(Ty)) bool {
 // it replaces those variables with the concrete `args`. Results are interned handles like
 // everything else.
 
-fn subst(it: &TypeInterner, ty: Ty, params: &List(VarId), args: &List(Ty)) Ty {
+fn subst(it: &TypeInterner, ty: Ty, params: &List(VarId), args: Ty[]) Ty {
     if params.len == 0 {
         return ty
     }
@@ -631,7 +633,7 @@ fn subst(it: &TypeInterner, ty: Ty, params: &List(VarId), args: &List(Ty)) Ty {
     }
 }
 
-fn subst_var(v: TyVar, params: &List(VarId), args: &List(Ty), fallback: Ty) Ty {
+fn subst_var(v: TyVar, params: &List(VarId), args: Ty[], fallback: Ty) Ty {
     for i in 0..params.len {
         if params[i] == v.id {
             return args[i]
@@ -640,7 +642,7 @@ fn subst_var(v: TyVar, params: &List(VarId), args: &List(Ty), fallback: Ty) Ty {
     return fallback
 }
 
-fn subst_span(it: &TypeInterner, span: ChildSpan, params: &List(VarId), args: &List(Ty)) List(Ty) {
+fn subst_span(it: &TypeInterner, span: ChildSpan, params: &List(VarId), args: Ty[]) List(Ty) {
     let out: List(Ty) = list(span.len)
     for i in 0..span.len {
         out.push(subst(it, it.child_at(span, i), params, args))
@@ -648,13 +650,13 @@ fn subst_span(it: &TypeInterner, span: ChildSpan, params: &List(VarId), args: &L
     return out
 }
 
-fn subst_tuple(it: &TypeInterner, span: ChildSpan, params: &List(VarId), args: &List(Ty)) Ty {
+fn subst_tuple(it: &TypeInterner, span: ChildSpan, params: &List(VarId), args: Ty[]) Ty {
     let es = subst_span(it, span, params, args)
     defer es.deinit()
     return it.tuple_of(&es)
 }
 
-fn subst_record(it: &TypeInterner, rec: &NRecordNode, params: &List(VarId), args: &List(Ty)) Ty {
+fn subst_record(it: &TypeInterner, rec: &NRecordNode, params: &List(VarId), args: Ty[]) Ty {
     let fs: List(Field) = list(rec.tys.len)
     defer fs.deinit()
     for i in 0..rec.tys.len {
@@ -668,13 +670,13 @@ fn subst_record(it: &TypeInterner, rec: &NRecordNode, params: &List(VarId), args
     return it.record_of(&fs)
 }
 
-fn subst_nominal(it: &TypeInterner, nn: &NNominalNode, params: &List(VarId), args: &List(Ty)) Ty {
+fn subst_nominal(it: &TypeInterner, nn: &NNominalNode, params: &List(VarId), args: Ty[]) Ty {
     let as_ = subst_span(it, nn.args, params, args)
     defer as_.deinit()
     return it.nominal_of(nn.id, &as_)
 }
 
-fn subst_func(it: &TypeInterner, f: &NFuncNode, params: &List(VarId), args: &List(Ty)) Ty {
+fn subst_func(it: &TypeInterner, f: &NFuncNode, params: &List(VarId), args: Ty[]) Ty {
     let ps = subst_span(it, f.params, params, args)
     defer ps.deinit()
     return it.func_of(&ps, f.moves, subst(it, f.ret, params, args), f.conv)
@@ -793,7 +795,7 @@ test "auto layout reorders fields by alignment to minimise padding" {
     }
     let no_args: List(Ty) = list(0)
     defer no_args.deinit()
-    let sl = struct_layout(&it, &def, &no_args, &reg)
+    let sl = struct_layout(&it, &def, no_args.as_slice(), &reg)
     defer sl.deinit()
     // Physical order i64, i16, i8 - but offsets stay keyed by declaration index.
     assert_eq(sl.offsets[1], 0 as usize, "i64 placed first")
@@ -841,7 +843,7 @@ test "C repr keeps declaration order and C padding" {
     }
     let no_args: List(Ty) = list(0)
     defer no_args.deinit()
-    let sl = struct_layout(&it, &def, &no_args, &reg)
+    let sl = struct_layout(&it, &def, no_args.as_slice(), &reg)
     defer sl.deinit()
     assert_eq(sl.offsets[0], 0 as usize, "first field at offset 0")
     assert_eq(sl.offsets[1], 8 as usize, "i64 padded to offset 8")
@@ -881,7 +883,7 @@ test "C union overlaps members and rounds the widest to the strictest alignment"
     }
     let no_args: List(Ty) = list(0)
     defer no_args.deinit()
-    let sl = struct_layout(&it, &def, &no_args, &reg)
+    let sl = struct_layout(&it, &def, no_args.as_slice(), &reg)
     defer sl.deinit()
     assert_eq(sl.offsets[0], 0 as usize, "first member at offset 0")
     assert_eq(sl.offsets[1], 0 as usize, "second member overlaps the first")
@@ -926,7 +928,7 @@ test "generic struct substitutes type parameters" {
     defer args.deinit()
     args.push(prim_of(PrimitiveKind.I64))
     args.push(prim_of(PrimitiveKind.I64))
-    let sl = struct_layout(&it, &def, &args, &reg)
+    let sl = struct_layout(&it, &def, args.as_slice(), &reg)
     defer sl.deinit()
     // Both args are i64 (align 8) so order is identity; size proves the Var fields resolved to i64.
     assert_eq(sl.offsets[1], 8 as usize, "second field after the first")
@@ -959,7 +961,7 @@ test "tagged enum reserves a tag plus the largest payload" {
     }
     let no_args: List(Ty) = list(0)
     defer no_args.deinit()
-    let el = enum_layout(&it, &def, &no_args, &reg)
+    let el = enum_layout(&it, &def, no_args.as_slice(), &reg)
     assert_eq(el.tag_size, 4 as usize, "discriminant is 4 bytes")
     assert_eq(el.payload_offset, 8 as usize, "i64 payload forces 8-byte alignment")
     assert_eq(el.size, 16 as usize, "tag + largest payload, aligned")
@@ -986,7 +988,7 @@ test "payloadless enum is just the tag" {
     }
     let no_args: List(Ty) = list(0)
     defer no_args.deinit()
-    let el = enum_layout(&it, &def, &no_args, &reg)
+    let el = enum_layout(&it, &def, no_args.as_slice(), &reg)
     assert_eq(el.size, 4 as usize, "naked enum is a 4-byte tag")
 }
 
@@ -1037,14 +1039,14 @@ test "Option of a reference uses the pointer niche" {
     let niche_args: List(Ty) = list(1)
     defer niche_args.deinit()
     niche_args.push(it.ref_of(prim_of(PrimitiveKind.I32)))
-    let niche = enum_layout(&it, &def, &niche_args, &reg)
+    let niche = enum_layout(&it, &def, niche_args.as_slice(), &reg)
     assert_true(niche.is_niche, "Option(&i32) collapses to a nullable pointer")
     assert_eq(niche.size, 8, "the niche is pointer-sized")
 
     let val_args: List(Ty) = list(1)
     defer val_args.deinit()
     val_args.push(prim_of(PrimitiveKind.I32))
-    let val = enum_layout(&it, &def, &val_args, &reg)
+    let val = enum_layout(&it, &def, val_args.as_slice(), &reg)
     assert_true(!val.is_niche, "Option(i32) keeps a tag")
     assert_eq(val.size, 8, "tag + i32 payload")
 }

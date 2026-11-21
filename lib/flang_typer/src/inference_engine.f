@@ -775,9 +775,11 @@ fn try_closure_to_fn(self: &Engine, from: Ty, to: Ty) Coercion? {
     let ps: List(Ty) = list(sig.params.len)
     ps.push_all(sig.params.as_slice())
     const have = self.mk_func(ps, sig.ret, sig.moves, FnConv.ConvFlang)
-    let side: List(Constraint) = list(1)
-    side.push(Constraint { a = have, b = to })
-    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
+    return Some(Coercion {
+        result_ty = to,
+        cost = 1u32,
+        side = Some(Constraint { a = have, b = to }),
+    })
 }
 
 // A function value whose reading parameters sit where the slot says `move` converts when each such
@@ -808,9 +810,11 @@ fn try_fn_subsume(self: &Engine, from: Ty, to: Ty, reg: &NominalRegistry) Coerci
         ps.push(self.interner.child_at(have.params, i))
     }
     const relaxed_ty = self.mk_func(ps, have.ret, want.moves, have.conv)
-    let side: List(Constraint) = list(1)
-    side.push(Constraint { a = relaxed_ty, b = to })
-    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
+    return Some(Coercion {
+        result_ty = to,
+        cost = 1u32,
+        side = Some(Constraint { a = relaxed_ty, b = to }),
+    })
 }
 
 // Commit a coercion atomically: open a checkpoint, run every side- unification through the main
@@ -820,14 +824,17 @@ fn try_fn_subsume(self: &Engine, from: Ty, to: Ty, reg: &NominalRegistry) Coerci
 //
 // On rollback the original `fallback` outcome is returned so the reporter surfaces the leaf
 // mismatch the caller actually wrote, not some derived side-unification failure.
-fn apply_coercion(self: &Engine, c: move Coercion, fallback: UnifyOutcome) UnifyOutcome {
+fn apply_coercion(self: &Engine, c: Coercion, fallback: UnifyOutcome) UnifyOutcome {
     self.push_checkpoint()
-    for &con in c.side_unifications {
-        let out = self.unify(con.a, con.b)
-        if !out.is_ok() {
-            self.rollback()
-            return fallback
+    c.side match {
+        Some(con) => {
+            let out = self.unify(con.a, con.b)
+            if !out.is_ok() {
+                self.rollback()
+                return fallback
+            }
         }
+        None => {}
     }
     self.commit()
     return UnifyOutcome.Unified(UnifyOk { ty = c.result_ty, cost = c.cost })

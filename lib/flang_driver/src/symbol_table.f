@@ -125,6 +125,19 @@ pub fn deinit(self: move SymbolTable) {
     self.displays.deinit()
 }
 
+// Consumes the table and hands over the symbol strings, which the lowered module's names view.
+pub fn take_names(self: move SymbolTable) List(OwnedString) {
+    let out: List(OwnedString) = list(self.by_fn_id.len() + self.by_spec_id.len())
+    for e in self.by_fn_id.drain() {
+        out.push(e.1)
+    }
+    for e in self.by_spec_id.drain() {
+        out.push(e.1)
+    }
+    self.deinit()
+    return out
+}
+
 // Move the display map out, leaving the table with an empty one. The IrModule takes it so display
 // names survive lowering (the table's symbol strings outlive the module, so the viewed keys stay
 // valid).
@@ -325,12 +338,12 @@ fn c_layout_agrees(it: &TypeInterner, ty: Ty, sd: &StructDef, reg: &NominalRegis
     defer args.deinit()
     for i in 0..span.len { args.push(it.child_at(span, i)) }
     const whole = layout_of(it, ty, reg)
-    const sl = struct_layout(it, sd, &args, reg)
+    const sl = struct_layout(it, sd, args.as_slice(), reg)
     let ok = sd.fields.len == sl.offsets.len
     if ok {
         let off: usize = 0
         for i in 0..sd.fields.len {
-            const ft = field_ty(it, sd, i, &args, reg)
+            const ft = field_ty(it, sd, i, args.as_slice(), reg)
             const fl = layout_of(it, ft, reg)
             let al = fl.align
             if i == 0 and whole.align > al {

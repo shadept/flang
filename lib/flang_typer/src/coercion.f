@@ -5,11 +5,10 @@
 // *directional*:
 // `from → to`, mirroring `unify(actual, expected)`.
 //
-// A rule's `try_*` returns `Coercion { result_ty, cost, side_unifications }` or `null`. The engine
-// commits the side-unifications atomically (any failure rolls everything back) and replaces
-// `actual`'s entry in `InferenceResults.node_types` with `result_ty`. No coercion ever leaks past
-// the type checker: lowering reads the result type from the side-table and never inspects the
-// surrounding slot.
+// A rule's `try_*` returns `Coercion { result_ty, cost, side }` or `null`. The engine commits the
+// side unification atomically (any failure rolls everything back) and replaces `actual`'s entry in
+// `InferenceResults.node_types` with `result_ty`. No coercion ever leaks past the type checker:
+// lowering reads the result type from the side-table and never inspects the surrounding slot.
 //
 // Rules match shapes through the `TypeInterner` the engine passes in. Prim-on-prim rules need it
 // only for the node lookup; nominal-aware rules (option wrapping, string to byte-slice, array
@@ -32,19 +31,18 @@ pub type Constraint = struct {
 }
 
 // A successful coercion's payload. `result_ty` is what the engine will store as the unified type.
-// `cost` lets overload resolution score candidates that need fewer coercions higher.
-// `side_unifications` is usually empty for simple widening; option wrapping, slice decay, and the
-// nominal/anon-struct rules use it to communicate "also unify these inner types".
+// `cost` lets overload resolution score candidates that need fewer coercions higher. `side` is
+// absent for simple widening; slice decay and the nominal rules use it to communicate "also unify
+// these inner types". No rule needs more than one.
 pub type Coercion = struct {
     result_ty: Ty
     cost: u32
-    side_unifications: List(Constraint)
+    side: Constraint?
 }
 
 // Build a side-effect-free coercion. Most widening rules use this.
-#inline pub fn simple(result_ty: Ty, allocator: &Allocator = context.allocator) Coercion {
-    let empty = list(0)
-    return .{ result_ty = result_ty, cost = 1u32, side_unifications = move empty }
+#inline pub fn simple(result_ty: Ty) Coercion {
+    return .{ result_ty = result_ty, cost = 1u32, side = null }
 }
 
 fn prim_kind_of(it: &TypeInterner, t: Ty) PrimitiveKind? {
@@ -156,8 +154,7 @@ pub fn try_float_widening(it: &TypeInterner, from: Ty, to: Ty) Coercion? {
 // (`Option`, `String`, `Slice`).
 //
 // Each rule's `apply` either returns a `Coercion` whose `result_ty` is the target nominal and whose
-// `side_unifications` express the inner-arg constraint, or `null` to indicate "this rule does not
-// fire here".
+// `side` expresses the inner-arg constraint, or `null` to indicate "this rule does not fire here".
 // ─────────────────────────────────────────────────────────────────────
 
 fn lookup_well_known(reg: &NominalRegistry, fqn: String) NominalId? {
@@ -229,10 +226,7 @@ pub fn try_byte_slice_to_string(
 ) Coercion? {
     let c = try_string_to_byte_slice(it, to, from, reg)
     return c match {
-        Some(inner) => {
-            inner.side_unifications.deinit()
-            Some(simple(to))
-        }
+        Some(_) => Some(simple(to))
         None => null
     }
 }
@@ -292,15 +286,19 @@ fn decay_to_slice(
     if n.args.len != 1 {
         return null
     }
-    let side = list(1)
-    side.push(Constraint { a = elem, b = it.child_ids(n.args)[0] })
-    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
+    return Some(Coercion {
+        result_ty = to,
+        cost = 1u32,
+        side = Some(Constraint { a = elem, b = it.child_ids(n.args)[0] }),
+    })
 }
 
 fn decay_to_ref(to: Ty, target_inner: Ty, elem: Ty) Coercion? {
-    let side = list(1)
-    side.push(Constraint { a = elem, b = target_inner })
-    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
+    return Some(Coercion {
+        result_ty = to,
+        cost = 1u32,
+        side = Some(Constraint { a = elem, b = target_inner }),
+    })
 }
 
 // `T → Type(T)` for RTTI handles. The result wraps `from` in a
@@ -333,7 +331,9 @@ pub fn try_nominal_to_type(it: &TypeInterner, from: Ty, to: Ty, reg: &NominalReg
     if !valid_from {
         return null
     }
-    let side = list(1)
-    side.push(Constraint { a = from, b = it.child_ids(tn.args)[0] })
-    return Some(Coercion { result_ty = to, cost = 1u32, side_unifications = move side })
+    return Some(Coercion {
+        result_ty = to,
+        cost = 1u32,
+        side = Some(Constraint { a = from, b = it.child_ids(tn.args)[0] }),
+    })
 }
