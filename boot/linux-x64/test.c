@@ -34,17 +34,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#if defined(_WIN32)
-#include <windows.h>
-#if defined(_MSC_VER)
-#include <dbghelp.h>
-#pragma comment(lib, "dbghelp.lib")
-#define FLANG_LEAK_SYMBOLS 1
-#endif
-#elif defined(__GLIBC__) || defined(__APPLE__)
-#include <execinfo.h>
-#define FLANG_LEAK_SYMBOLS 1
-#endif
+/* Stack capture and symbol names, shared with std.tracing_allocator. */
+size_t __flang_trace_capture(size_t *frames, size_t max);
+size_t __flang_trace_symbol(size_t addr, unsigned char *buf, size_t cap);
 
 /* Deep enough to reach past the allocator and the container that grew, to
    the FLang function that owns the allocation. */
@@ -76,16 +68,7 @@ static int flang_leak_capture(void **frames) {
     if (!flang_leak_tracing()) {
         return 0;
     }
-#if defined(_WIN32)
-    /* Skips this function and its caller in the tracker. */
-    return (int)CaptureStackBackTrace(2, FLANG_LEAK_FRAMES, frames, NULL);
-#elif defined(FLANG_LEAK_SYMBOLS)
-    /* The tracker's own frames stay in, at the top where nobody reads. */
-    return backtrace(frames, FLANG_LEAK_FRAMES);
-#else
-    (void)frames;
-    return 0;
-#endif
+    return (int)__flang_trace_capture((size_t *)frames, FLANG_LEAK_FRAMES);
 }
 
 static struct flang_test_block *flang_test_head = NULL;
@@ -170,28 +153,10 @@ void __flang_test_reset(void) {
     flang_test_live_bytes = 0;
 }
 
-/* One frame, as "name + hex offset" or the bare address when nothing
-   resolves it. */
 static void flang_leak_print_frame(void *addr) {
-#if defined(_WIN32) && defined(FLANG_LEAK_SYMBOLS)
-    char buf[sizeof(SYMBOL_INFO) + 512];
-    SYMBOL_INFO *sym = (SYMBOL_INFO *)buf;
-    DWORD64 disp = 0;
-    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
-    sym->MaxNameLen = 511;
-    if (SymFromAddr(GetCurrentProcess(), (DWORD64)(uintptr_t)addr, &disp, sym)) {
-        printf("      %s +0x%llx\n", sym->Name, (unsigned long long)disp);
-        return;
-    }
-#elif defined(FLANG_LEAK_SYMBOLS)
-    char **names = backtrace_symbols(&addr, 1);
-    if (names != NULL) {
-        printf("      %s\n", names[0]);
-        free(names);
-        return;
-    }
-#endif
-    printf("      %p\n", addr);
+    unsigned char name[600];
+    size_t n = __flang_trace_symbol((size_t)addr, name, sizeof name);
+    printf("      %.*s\n", (int)n, (const char *)name);
 }
 
 static int flang_leak_same_stack(const struct flang_test_block *a,
@@ -220,10 +185,6 @@ void __flang_test_leak_sites(void) {
     if (!flang_leak_tracing()) {
         return;
     }
-#if defined(_WIN32) && defined(FLANG_LEAK_SYMBOLS)
-    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
-    SymInitialize(GetCurrentProcess(), NULL, TRUE);
-#endif
     for (b = flang_test_head; b != NULL; b = b->next) {
         struct flang_test_block *o;
         size_t blocks = 1;
@@ -247,9 +208,6 @@ void __flang_test_leak_sites(void) {
             flang_leak_print_frame(b->frames[i]);
         }
     }
-#if defined(_WIN32) && defined(FLANG_LEAK_SYMBOLS)
-    SymCleanup(GetCurrentProcess());
-#endif
 }
 
 /* Blocks still live, with their total size through `out_bytes`. Says
