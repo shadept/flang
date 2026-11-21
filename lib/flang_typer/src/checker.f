@@ -7682,7 +7682,11 @@ fn check_interp_owned(self: &Checker, interp: &InterpolatedStringExpr, given: Ex
     const done = synth_box(self, synth_method_call(self, name, "to_string", unmanaged_list(0, &a)))
     let block = box(
         &a,
-        BlockExpr { span = synth_span(self), stmts = frozen(stmts), trailing = Some(done) },
+        BlockExpr {
+            span = synth_span(self),
+            stmts = self.results.synth_arena.freeze(stmts),
+            trailing = Some(done),
+        },
     )
     const ty = check_block(self, block)
     self.results.record_desugar(self.node_of(interp.span), block)
@@ -7714,7 +7718,11 @@ fn check_interp_into(self: &Checker, interp: &InterpolatedStringExpr, target: &E
     push_append_stmts(self, &stmts, tname, interp)
     let block = box(
         &a,
-        BlockExpr { span = synth_span(self), stmts = frozen(stmts), trailing = null },
+        BlockExpr {
+            span = synth_span(self),
+            stmts = self.results.synth_arena.freeze(stmts),
+            trailing = null,
+        },
     )
     const ty = check_block(self, block)
     self.results.record_desugar(self.node_of(interp.span), block)
@@ -7791,7 +7799,7 @@ fn synth_hole_format(self: &Checker, name: String, place: &Expr, spec_lit: move 
     return Expr.Call(CallExpr {
         span = synth_span(self),
         callee = synth_box(self, ma),
-        args = frozen(args),
+        args = self.results.synth_arena.freeze(args),
     })
 }
 
@@ -7902,7 +7910,7 @@ fn synth_method_call(
     return Expr.Call(CallExpr {
         span = synth_span(self),
         callee = synth_box(self, ma),
-        args = frozen(args),
+        args = self.results.synth_arena.freeze(args),
     })
 }
 
@@ -7910,7 +7918,7 @@ fn synth_free_call(self: &Checker, name: String, args: move UnmanagedList(CallAr
     return Expr.Call(CallExpr {
         span = synth_span(self),
         callee = synth_box(self, synth_ident(self, name)),
-        args = frozen(args),
+        args = self.results.synth_arena.freeze(args),
     })
 }
 
@@ -12086,7 +12094,7 @@ fn synth_variadic_pack(
     }
     const arr = Expr.ArrayLit(ArrayLiteralExpr {
         span = synth_span(self),
-        kind = ArrayLiteralKind.Elements(frozen(elems)),
+        kind = ArrayLiteralKind.Elements(self.results.synth_arena.freeze(elems)),
     })
     const at = check_expr(self, &arr)
     // The parameter is `Slice(T)`; unify the literal's element type with `T` so the arguments

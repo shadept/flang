@@ -107,11 +107,53 @@ lose it. Both bump allocators align the address they hand out, not their offset 
 ## Open questions
 
 - Typed storage: a typed `Memory(T)` instead of casts at every element access.
-- `to_owned_slice` hands a block over as a raw slice (`leak` plus `free(items)`); return the
-  `Memory` instead?
+- ~~`to_owned_slice` hands a block over as a raw slice (`leak` plus `free(items)`); return the
+  `Memory` instead?~~ Neither: see the amendment below.
 - Restricting `from_raw` to allocator implementations and FFI modules.
 - Identical specializations (`as_slice` for types of one size) are not folded; emission could dedup
   them by body.
+
+## Amendment: region-owned storage
+
+Added 2026-11-21, tracked by P-SH-10.
+
+### Allocators follow lifetimes
+
+Every allocation belongs to a lifetime, and the allocator that serves it is the lifetime's: passed
+explicitly, or bound as the context allocator for the scope (§4.1). A missing allocator is
+prevented by construction, never repaired by a release that guesses.
+
+In the compiler that means two lifetimes. The session allocator holds only what a recheck reuses
+to be faster. Temp memory holds everything that serves one check, scoped as high as the work
+allows, and is released with its arena when the check ends. Data becomes permanent by being copied
+into the session allocator; nothing in temp memory is reachable after its check.
+
+### Data that stops changing is a slice in an arena
+
+A container is an owner and is released: `List`, `UnmanagedList`, `Dict` and the rest are
+deinited, and a `StringBuilder` is deinited after `to_string` too, since it still owns its (empty
+or newer) buffer. None of them is leaked.
+
+Data that stops changing once built is not kept in a container. It is a `T[]` whose block belongs
+to an arena of its lifetime, and the arena releases it with everything else. The handoff names the
+arena:
+
+```flang
+// std.collections.list
+pub fn freeze(arena: &ArenaAllocator, xs: move UnmanagedList($T)) T[]
+```
+
+`freeze` shrinks the buffer to its length and gives the block to `arena`; the slice is valid until
+the arena is reset or deinited. This is the region bottom of `leak`, now spelled against an arena
+so it cannot be written against any other allocator. Elements are not deinited: the arena frees
+bytes, so an element type that owns a resource is lost with it. The buffer is trusted to come from
+`arena`; nothing checks it at run time.
+
+`freeze` replaces `to_owned_slice`, both overloads, and the parser's `frozen`.
+
+A type whose storage an arena reclaims holds `T[]`, not a container, and has no `deinit`. An empty
+`deinit` over an owning field is a release that depends on which allocator happened to back the
+value, and is not written.
 
 ## Supersedes
 

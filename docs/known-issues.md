@@ -557,7 +557,7 @@ means `lookup` handing back a borrow of the stored list (or candidate ids) inste
 changes `FnLookup` and its seven call sites.
 
 The general shape: a copy of a record that owns heap is a copy of the ownership. `Diagnostic` had
-the same flaw and was fixed by routing its bulk moves through `List.to_owned_slice`, which hands the
+the same flaw and was fixed by routing its bulk moves through a buffer handoff, which hands the
 elements out in the backing buffer and leaves the source list empty, so exactly one list owns each
 message.
 

@@ -592,6 +592,12 @@ fn arena_realloc(impl: &u8, memory: &Memory, new_size: usize) bool {
         }
     }
 
+    // A block that shrinks keeps its place; the bytes it gives up stay in the page until a reset.
+    if new_size <= memory.len {
+        leak(replace(memory, from_raw(memory.ptr, new_size)))
+        return true
+    }
+
     // Anything else moves, onto the alignment the block was allocated with; the old block stays in
     // its page until a reset.
     const fresh = arena_alloc(impl, new_size, block_align(memory)) ?? return false

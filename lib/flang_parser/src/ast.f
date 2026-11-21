@@ -83,14 +83,6 @@ pub fn append_decls(self: &Module, decls: Decl[]) {
     self.decls.push_all(decls, &a)
 }
 
-// The elements of `xs` as the slice an AST node holds, handing the buffer to the region `xs` was
-// built in. The slice is valid for as long as that region, the module arena for a projected node.
-pub fn frozen(xs: move UnmanagedList($T)) T[] {
-    const out = xs.as_slice()
-    leak(xs)
-    return out
-}
-
 pub fn set_decls(self: &Module, decls: move UnmanagedList(Decl)) {
     let a = self.arena.allocator()
     replace(&self.decls, decls).deinit(&a)

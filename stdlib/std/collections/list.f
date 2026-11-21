@@ -288,23 +288,17 @@ pub fn deinit(s: move UnmanagedList($T), allocator: &Allocator) {
     allocator.dealloc(s.mem)
 }
 
-// Hands over the buffer, shrunk to `len`, and resets the list to empty. Elements are not deinited:
-// the caller owns them now, and frees the slice through the same allocator.
-pub fn to_owned_slice(s: &UnmanagedList($T), allocator: &Allocator) T[] {
-    if s.len == 0 {
-        allocator.dealloc(replace(&s.mem, unallocated()))
-        return slice_from_raw_parts(0usize as &T, 0)
+// Hands the buffer of `xs`, shrunk to its length, to `arena` and returns the elements as a slice,
+// valid until the arena is reset or deinited. Elements are not deinited: the arena frees bytes
+// only, so an element that owns a resource is lost with it. The buffer must come from `arena`.
+pub fn freeze(arena: &ArenaAllocator, xs: move UnmanagedList($T)) T[] {
+    if xs.capacity() > xs.len {
+        let a = arena.allocator()
+        const _shrunk = a.realloc(&xs.mem, xs.len * size_of(T))
     }
-
-    if s.capacity() > s.len {
-        const _shrunk = allocator.realloc(&s.mem, s.len * size_of(T))
-    }
-
-    const items = s.as_slice()
-    // The caller holds the block as a raw slice from here and frees it with `free(items)`.
-    leak(replace(&s.mem, unallocated()))
-    s.len = 0
-    return items
+    const out = xs.as_slice()
+    leak(xs)
+    return out
 }
 
 // =============================================================================
@@ -788,8 +782,8 @@ pub fn deinit(self: move Drain($T)) {
 // one implementation - by a generator, so a managed carrier is any type with a `__storage` reaching
 // an `UnmanagedList(T)` and an `allocator` beside it. A transformation takes an optional allocator
 // for its result and otherwise uses the receiver's; it returns a `List` either way, since a new
-// list needs storage of its own. Only what owns storage lives outside the template: `deinit`,
-// `to_owned_slice` and `flat_map` are `List`'s alone.
+// list needs storage of its own. Only what owns storage lives outside the template: `deinit` and
+// `flat_map` are `List`'s alone.
 // =============================================================================
 
 #define(managed_list, Name: Ident) {
@@ -894,14 +888,6 @@ pub fn deinit(self: move Drain($T)) {
 // Deinits every live element and frees the backing storage. Idempotent: a second call is a no-op.
 pub fn deinit(self: move List($T)) {
     self.__storage.deinit(self.allocator)
-}
-
-// Hands over the buffer as a `(T[], &Allocator)` pair and resets the list to empty, so a later
-// `deinit()` is a no-op; `let l = list(...); defer l.deinit(); ...; l.to_owned_slice()` is the
-// pattern. The slice is shrunk to fit. Elements are not deinited: the caller owns them now and
-// frees the slice with `alloc.free(s)`, deiniting the elements first when they own anything.
-pub fn to_owned_slice(self: &List($T)) (T[], &Allocator) {
-    return (self.__storage.to_owned_slice(self.allocator), self.allocator)
 }
 
 // Returns a new list of the results of `f` concatenated, in order. Each list `f` returns is
@@ -1414,4 +1400,22 @@ test "filled_list gives a list of length count, ready to index" {
     let empty: List(bool) = filled_list(0, true)
     defer empty.deinit()
     assert_eq(empty.len, 0 as usize, "a count of zero is an empty list")
+}
+
+test "freeze hands a list's buffer to its arena as a slice of its elements" {
+    let arena = arena_allocator(context.allocator)
+    defer arena.deinit()
+    let a = arena.allocator()
+    let xs: UnmanagedList(i32) = unmanaged_list(8, &a)
+    xs.push(1i32, &a)
+    xs.push(2i32, &a)
+    const used = arena.used_bytes()
+
+    const s = arena.freeze(xs)
+    assert_eq(s.len, 2 as usize, "the slice holds the elements")
+    assert_eq(s[1], 2i32, "in order")
+    assert_true(arena.used_bytes() < used, "the unused tail goes back to the arena")
+
+    let empty: UnmanagedList(i32) = unmanaged_list(0, &a)
+    assert_eq(arena.freeze(empty).len, 0 as usize, "an empty list freezes to an empty slice")
 }

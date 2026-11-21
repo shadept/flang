@@ -29,11 +29,12 @@ import flang_parser.token
 // Projector state
 // ─────────────────────────────────────────────────────────────────────────
 
-// Internal state threaded through every projector call. `alloc` is the arena-backed allocator the
-// Module owns; `file_id` is forwarded into every `SourceSpan` produced. Stored separately from
-// `Module` so the arena's value can be moved into the returned Module at the end without
-// invalidating in-flight allocations.
+// Internal state threaded through every projector call. `arena` is the arena the Module owns and
+// `alloc` the allocator over it; `file_id` is forwarded into every `SourceSpan` produced. Stored
+// separately from `Module` so the arena's value can be moved into the returned Module at the end
+// without invalidating in-flight allocations.
 type Projector = struct {
+    arena: &ArenaAllocator
     alloc: &Allocator
     file_id: i32
     // Where `error_pattern` reports. Null discards it, which is what a consumer that wants only the
@@ -77,6 +78,7 @@ pub fn project_module(cst: CstNode, file_id: i32, diags: &List(Diagnostic)? = nu
         path = [],
     }
     const p: Projector = .{
+        arena = &arena,
         alloc = &arena_a,
         file_id = file_id,
         diags = diags,
@@ -101,8 +103,8 @@ pub fn project_module(cst: CstNode, file_id: i32, diags: &List(Diagnostic)? = nu
         span = p.span_from(cst),
         decls = move decls,
         labels = p.project_labels(&cst.cst.labels),
-        local_types = frozen(sink.types),
-        scope_parents = frozen(sink.parents),
+        local_types = p.arena.freeze(sink.types),
+        scope_parents = p.arena.freeze(sink.parents),
         arena = move arena,
     }
 }
@@ -126,7 +128,7 @@ fn project_labels(self: &Projector, links: &List(LabelLink)) LabelRef[] {
             self.alloc,
         )
     }
-    return frozen(out)
+    return self.arena.freeze(out)
 }
 
 // A labeled loop's first two children are its `name:`.
@@ -315,7 +317,7 @@ fn project_import(self: &Projector, cst: CstNode) ImportDecl {
     return .{
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
-        path = frozen(path),
+        path = self.arena.freeze(path),
     }
 }
 
@@ -363,7 +365,7 @@ fn project_directive(self: &Projector, cst: CstNode) DeclAttribute {
             NodeChild(_) => {}
         }
     }
-    const idents = frozen(arg_idents)
+    const idents = self.arena.freeze(arg_idents)
     if name == "foreign" {
         return DeclAttribute.Foreign
     }
@@ -411,11 +413,11 @@ fn project_function(self: &Projector, cst: CstNode) FunctionDecl {
     return FunctionDecl {
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
-        directives = frozen(self.project_directives(cst)),
+        directives = self.arena.freeze(self.project_directives(cst)),
         name = self.function_name(cst),
-        params = frozen(params),
+        params = self.arena.freeze(params),
         return_type = self.boxed_opt(return_type),
-        bounds = frozen(bounds),
+        bounds = self.arena.freeze(bounds),
         body = self.boxed_opt(body),
     }
 }
@@ -439,7 +441,7 @@ fn enter_function(
     for &b in bounds {
         collect_generic_names(b.bound, &names, self.alloc)
     }
-    sink.generics = frozen(names)
+    sink.generics = self.arena.freeze(names)
 }
 
 fn leave_function(self: &Projector) {
@@ -506,8 +508,8 @@ fn project_where_bound(self: &Projector, cst: CstNode) TypeBound {
     return TypeBound {
         span = self.span_from(cst),
         param = param,
-        path = frozen(path),
-        subject_spans = frozen(spans),
+        path = self.arena.freeze(path),
+        subject_spans = self.arena.freeze(spans),
         bound = self.boxed(bound),
     }
 }
@@ -615,7 +617,7 @@ fn project_struct_decl(self: &Projector, cst: CstNode) TypeDecl {
     return TypeDecl {
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
-        directives = frozen(self.project_directives(cst)),
+        directives = self.arena.freeze(self.project_directives(cst)),
         name = self.type_decl_name(cst),
         generics = [],
         body = self.boxed(body),
@@ -627,7 +629,7 @@ fn project_enum_decl(self: &Projector, cst: CstNode) TypeDecl {
     return TypeDecl {
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
-        directives = frozen(self.project_directives(cst)),
+        directives = self.arena.freeze(self.project_directives(cst)),
         name = self.type_decl_name(cst),
         generics = [],
         body = self.boxed(body),
@@ -652,7 +654,7 @@ fn project_type_alias(self: &Projector, cst: CstNode) TypeDecl {
             TokenChild(_) => {}
         }
     }
-    const params = frozen(generics)
+    const params = self.arena.freeze(generics)
     const taken = contract_taking(&body, params)
     const own = taken.is_some()
     if own {
@@ -662,7 +664,7 @@ fn project_type_alias(self: &Projector, cst: CstNode) TypeDecl {
     return TypeDecl {
         span = self.span_from(cst),
         is_pub = has_token(cst, TokenKind.Pub),
-        directives = frozen(self.project_directives(cst)),
+        directives = self.arena.freeze(self.project_directives(cst)),
         name = self.type_decl_name(cst),
         generics = if own { none } else { params },
         body = self.boxed(body),
@@ -877,7 +879,7 @@ fn project_enum_variant(self: &Projector, cst: CstNode) EnumVariant {
     return .{
         span = self.span_from(cst),
         name = name,
-        payloads = frozen(payloads),
+        payloads = self.arena.freeze(payloads),
         explicit_tag = boxed_tag,
     }
 }
@@ -976,7 +978,7 @@ fn project_test_decl(self: &Projector, cst: CstNode) TestDecl {
     }
     return .{
         span = self.span_from(cst),
-        directives = frozen(self.project_directives(cst)),
+        directives = self.arena.freeze(self.project_directives(cst)),
         label = label,
         body = self.boxed(body),
     }
@@ -1083,7 +1085,7 @@ fn project_generator_def(self: &Projector, cst: CstNode) GenDef {
     return .{
         span = self.span_from(cst),
         name = name,
-        params = frozen(params),
+        params = self.arena.freeze(params),
         body_start = body_start,
         body_end = body_end,
     }
@@ -1123,7 +1125,7 @@ fn project_generator_invocation(self: &Projector, cst: CstNode) GenInvoke {
             }
         }
     }
-    return .{ span = self.span_from(cst), name = name, args = frozen(args) }
+    return .{ span = self.span_from(cst), name = name, args = self.arena.freeze(args) }
 }
 
 // The condition is the first expression child that is not a BlockExpr (the branch bodies are
@@ -1175,8 +1177,8 @@ fn project_if_directive_decl(self: &Projector, cst: CstNode) IfDirectiveDecl {
     return .{
         span = self.span_from(cst),
         condition = self.boxed(self.project_if_directive_condition(cst)),
-        then_decls = frozen(then_decls),
-        else_decls = frozen(else_decls),
+        then_decls = self.arena.freeze(then_decls),
+        else_decls = self.arena.freeze(else_decls),
     }
 }
 
@@ -1235,7 +1237,7 @@ fn path_with(self: &Projector, outer: String[], name: String) String[] {
     let out: UnmanagedList(String) = unmanaged_list(outer.len + 1, self.alloc)
     out.push_all(outer, self.alloc)
     out.push(name, self.alloc)
-    return frozen(out)
+    return self.arena.freeze(out)
 }
 
 // Open the scope of a struct or enum body: the type `name` names (empty when anonymous), whose own
@@ -1249,7 +1251,7 @@ fn enter_type_body(self: &Projector, name: String, generics: &UnmanagedList(Gene
     for &g in generics {
         names.push(g.name, self.alloc)
     }
-    sink.generics = frozen(names)
+    sink.generics = self.arena.freeze(names)
     let anonymous: String[]
     sink.path = if name.len == 0 { anonymous } else { self.path_with(saved.path, name) }
     return Some(saved)
@@ -1491,8 +1493,8 @@ fn project_if_directive_stmt(self: &Projector, cst: CstNode) IfDirectiveStmt {
     return .{
         span = self.span_from(cst),
         condition = self.boxed(self.project_if_directive_condition(cst)),
-        then_stmts = frozen(then_stmts),
-        else_stmts = frozen(else_stmts),
+        then_stmts = self.arena.freeze(then_stmts),
+        else_stmts = self.arena.freeze(else_stmts),
     }
 }
 
@@ -1572,10 +1574,17 @@ fn is_expr_kind(kind: NodeKind) bool {
     }
 }
 
-// Project one expression CST outside a module (template expressions). `allocator` must outlive the
-// returned Expr - callers pass the arena that owns the rest of their template state.
-pub fn project_expression(cst: CstNode, file_id: i32, allocator: &Allocator) Expr {
-    const p: Projector = .{ alloc = allocator, file_id = file_id, diags = null, locals = null }
+// Project one expression CST outside a module (template expressions). The returned Expr lives in
+// `arena`.
+pub fn project_expression(cst: CstNode, file_id: i32, arena: &ArenaAllocator) Expr {
+    let a = arena.allocator()
+    const p: Projector = .{
+        arena = arena,
+        alloc = &a,
+        file_id = file_id,
+        diags = null,
+        locals = null,
+    }
     return p.project_expr(cst)
 }
 
@@ -2033,7 +2042,7 @@ fn project_call(self: &Projector, cst: CstNode) Expr {
     return Expr.Call(CallExpr {
         span = self.span_from(cst),
         callee = box(self.alloc, callee),
-        args = frozen(args),
+        args = self.arena.freeze(args),
     })
 }
 
@@ -2077,7 +2086,7 @@ fn project_context_bind(self: &Projector, cst: CstNode) Expr {
     }
     return Expr.ContextBind(ContextBindExpr {
         span = self.span_from(cst),
-        args = frozen(args),
+        args = self.arena.freeze(args),
         body = self.boxed(body),
     })
 }
@@ -2160,7 +2169,7 @@ fn stmt_block(self: &Projector, cst: CstNode) Expr? {
     stmts.push(st, self.alloc)
     return Some(Expr.Block(BlockExpr {
         span = self.span_from(cst),
-        stmts = frozen(stmts),
+        stmts = self.arena.freeze(stmts),
         trailing = null,
     }))
 }
@@ -2300,7 +2309,7 @@ fn project_array_literal(self: &Projector, cst: CstNode) Expr {
     }
     return Expr.ArrayLit(ArrayLiteralExpr {
         span = self.span_from(cst),
-        kind = ArrayLiteralKind.Elements(frozen(exprs)),
+        kind = ArrayLiteralKind.Elements(self.arena.freeze(exprs)),
     })
 }
 
@@ -2356,7 +2365,7 @@ fn project_anon_struct_or_tuple(self: &Projector, cst: CstNode) Expr {
         }
         return Expr.TupleLit(TupleLiteralExpr {
             span = self.span_from(cst),
-            elements = frozen(elements),
+            elements = self.arena.freeze(elements),
         })
     }
     return self.project_struct_literal(cst, false)
@@ -2484,7 +2493,7 @@ fn project_struct_literal(self: &Projector, cst: CstNode, nominal: bool) Expr {
     return Expr.StructLit(StructLiteralExpr {
         span = self.span_from(cst),
         type_expr = type_ref,
-        fields = frozen(fields),
+        fields = self.arena.freeze(fields),
     })
 }
 
@@ -2567,7 +2576,7 @@ fn struct_construction_type(self: &Projector, cst: CstNode) TypeExpr? {
     return Some(TypeExpr.Named(NamedType {
         span = name_span,
         name = name,
-        generic_args = frozen(generic_args),
+        generic_args = self.arena.freeze(generic_args),
         assoc_args = [],
     }))
 }
@@ -2637,7 +2646,7 @@ fn type_expr_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
         return Some(TypeExpr.Named(NamedType {
             span = span,
             name = name,
-            generic_args = frozen(args),
+            generic_args = self.arena.freeze(args),
             assoc_args = [],
         }))
     }
@@ -2664,7 +2673,7 @@ fn projection_from_expr_cst(self: &Projector, cst: CstNode) TypeExpr? {
         span = self.span_from(cst),
         base = self.boxed(base),
         name = first_ident_text(cst),
-        generic_args = frozen(args),
+        generic_args = self.arena.freeze(args),
     }))
 }
 
@@ -2746,7 +2755,7 @@ fn project_block_node(self: &Projector, cst: CstNode) BlockExpr? {
     }
     return Some(BlockExpr {
         span = self.span_from(cst),
-        stmts = frozen(stmts),
+        stmts = self.arena.freeze(stmts),
         trailing = trailing_ref,
     })
 }
@@ -2846,7 +2855,11 @@ fn project_match_expr(self: &Projector, cst: CstNode) MatchExpr {
             TokenChild(_) => {}
         }
     }
-    return .{ span = self.span_from(cst), scrutinee = self.boxed(scrutinee), arms = frozen(arms) }
+    return .{
+        span = self.span_from(cst),
+        scrutinee = self.boxed(scrutinee),
+        arms = self.arena.freeze(arms),
+    }
 }
 
 // `pat (if guard)? => body`. The parser doesn't surface pattern sub-nodes - it consumes pattern
@@ -3019,7 +3032,7 @@ fn project_lambda_expr(self: &Projector, cst: CstNode) LambdaExpr {
     }
     return .{
         span = self.span_from(cst),
-        params = frozen(params),
+        params = self.arena.freeze(params),
         return_type = self.boxed_opt(return_type),
         body = self.boxed(body),
         arrowless = false,
@@ -3093,7 +3106,7 @@ fn project_brace_lambda(self: &Projector, cst: CstNode, trailing: bool) LambdaEx
     }
     return .{
         span = self.span_from(cst),
-        params = frozen(params),
+        params = self.arena.freeze(params),
         return_type = null,
         body = self.boxed(body),
         arrowless = arrowless,
@@ -3218,14 +3231,14 @@ fn project_interp_string(self: &Projector, cst: CstNode) InterpolatedStringExpr 
             }
         }
     }
-    let target: InterpolationTarget = InterpolationTarget.NewString(frozen(target_args))
+    let target: InterpolationTarget = InterpolationTarget.NewString(self.arena.freeze(target_args))
     into_builder match {
         Some(e) => {
             install(&target, InterpolationTarget.IntoBuilder(self.boxed(e)))
         }
         None => {}
     }
-    return .{ span = self.span_from(cst), target = target, parts = frozen(parts) }
+    return .{ span = self.span_from(cst), target = target, parts = self.arena.freeze(parts) }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -3293,8 +3306,8 @@ fn project_named_type(self: &Projector, cst: CstNode) TypeExpr {
     return TypeExpr.Named(NamedType {
         span = self.span_from(cst),
         name = name,
-        generic_args = frozen(generic_args),
-        assoc_args = frozen(assoc_args),
+        generic_args = self.arena.freeze(generic_args),
+        assoc_args = self.arena.freeze(assoc_args),
     })
 }
 
@@ -3334,7 +3347,7 @@ fn project_projection_type(self: &Projector, cst: CstNode) TypeExpr {
         span = self.span_from(cst),
         base = self.boxed(base),
         name = first_ident_text(cst),
-        generic_args = frozen(args),
+        generic_args = self.arena.freeze(args),
     })
 }
 
@@ -3410,7 +3423,10 @@ fn project_tuple_type(self: &Projector, cst: CstNode) TypeExpr {
             TokenChild(_) => {}
         }
     }
-    return TypeExpr.Tuple(TupleType { span = self.span_from(cst), elements = frozen(elements) })
+    return TypeExpr.Tuple(TupleType {
+        span = self.span_from(cst),
+        elements = self.arena.freeze(elements),
+    })
 }
 
 fn project_function_type(self: &Projector, cst: CstNode) TypeExpr {
@@ -3460,9 +3476,9 @@ fn project_contract_type(self: &Projector, cst: CstNode) TypeExpr {
     }
     return TypeExpr.Contract(ContractType {
         span = self.span_from(cst),
-        generics = frozen(generics),
-        requirements = frozen(requirements),
-        assoc_types = frozen(assoc_types),
+        generics = self.arena.freeze(generics),
+        requirements = self.arena.freeze(requirements),
+        assoc_types = self.arena.freeze(assoc_types),
     })
 }
 
@@ -3478,7 +3494,10 @@ fn project_combined_type(self: &Projector, cst: CstNode) TypeExpr {
             TokenChild(_) => {}
         }
     }
-    return TypeExpr.Combined(CombinedType { span = self.span_from(cst), parts = frozen(parts) })
+    return TypeExpr.Combined(CombinedType {
+        span = self.span_from(cst),
+        parts = self.arena.freeze(parts),
+    })
 }
 
 // The `(params) ret?` of a function type or a contract requirement.
@@ -3548,9 +3567,9 @@ fn project_function_signature(self: &Projector, cst: CstNode) FunctionType {
     }
     return FunctionType {
         span = self.span_from(cst),
-        params = frozen(params),
-        param_names = frozen(param_names),
-        param_moves = frozen(param_moves),
+        params = self.arena.freeze(params),
+        param_names = self.arena.freeze(param_names),
+        param_moves = self.arena.freeze(param_moves),
         return_type = ret_ref,
         foreign = foreign,
     }
@@ -3589,10 +3608,10 @@ fn project_struct_body(self: &Projector, cst: CstNode, name: String, is_union: b
     self.leave_type_body(saved)
     return AnonStructType {
         span = self.span_from(cst),
-        generics = frozen(generics),
-        fields = frozen(fields),
+        generics = self.arena.freeze(generics),
+        fields = self.arena.freeze(fields),
         is_union = is_union,
-        types = frozen(types),
+        types = self.arena.freeze(types),
     }
 }
 
@@ -3618,9 +3637,9 @@ fn project_enum_body(self: &Projector, cst: CstNode, name: String) AnonEnumType 
     self.leave_type_body(saved)
     return AnonEnumType {
         span = self.span_from(cst),
-        generics = frozen(generics),
-        variants = frozen(variants),
-        types = frozen(types),
+        generics = self.arena.freeze(generics),
+        variants = self.arena.freeze(variants),
+        types = self.arena.freeze(types),
     }
 }
 
@@ -3697,7 +3716,7 @@ fn project_pattern_from_tokens(
             }
         }
         alts.push(self.payload_pattern_slice(tokens, seg, tokens.len), self.alloc)
-        return Pattern.Or(OrPattern { span = span, alternatives = frozen(alts) })
+        return Pattern.Or(OrPattern { span = span, alternatives = self.arena.freeze(alts) })
     }
 
     // `a..b` / `a..=b` / `..b` / `a..` - a top-level range token makes a range pattern with
@@ -3789,7 +3808,7 @@ fn tuple_pattern_from_tokens(
         elements.deinit(self.alloc)
         return self.error_pattern(span)
     }
-    return Pattern.Tuple(TuplePattern { span = span, elements = frozen(elements) })
+    return Pattern.Tuple(TuplePattern { span = span, elements = self.arena.freeze(elements) })
 }
 
 // `Name { x = p, y, .. }`. A field with no `= pattern` is shorthand for binding the field's own
@@ -3839,7 +3858,7 @@ fn struct_pattern_from_tokens(
             generic_args = [],
             assoc_args = [],
         })),
-        fields = frozen(fields),
+        fields = self.arena.freeze(fields),
         has_rest = has_rest,
     })
 }
@@ -4058,7 +4077,7 @@ fn enum_variant_pattern_from_tokens(
             span = span,
             qualifier = qualifier,
             name = name,
-            payloads = frozen(payloads),
+            payloads = self.arena.freeze(payloads),
         })
     }
     // Expect `(` - anything else is a shape this projector cannot read.
@@ -4091,7 +4110,7 @@ fn enum_variant_pattern_from_tokens(
         span = span,
         qualifier = qualifier,
         name = name,
-        payloads = frozen(payloads),
+        payloads = self.arena.freeze(payloads),
     })
 }
 

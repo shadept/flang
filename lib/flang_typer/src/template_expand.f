@@ -349,7 +349,7 @@ fn expand_one(
 
     // Parse the body and expand.
     let parse_diags: List(Diagnostic) = list(0, &a)
-    const nodes = parse_template_body(def.body, def.base, def.file_id, &a, &parse_diags)
+    const nodes = parse_template_body(def.body, def.base, def.file_id, &arena, &parse_diags)
     if parse_diags.len > 0 {
         for d in parse_diags.drain() {
             chk.diagnostics.push(d)
@@ -357,7 +357,7 @@ fn expand_one(
         return Outcome.Failed
     }
     let raw = string_builder(def.body.len, Some(&a))
-    expand_template(&env, &nodes, &raw) match {
+    expand_template(&env, nodes, &raw) match {
         Ok(_) => {}
         Err(e) => {
             const sp: SourceSpan = .{

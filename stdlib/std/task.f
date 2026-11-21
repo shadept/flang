@@ -781,7 +781,7 @@ fn cancel_rest(tasks: move List(Task($T))) {
 
 // Frees an emptied list of tasks. `Task` declares no `deinit`, so the list's own cannot be called.
 fn free_tasks(tasks: move List(Task($T))) {
-    let _empty = tasks.to_owned_slice()
+    tasks.allocator.dealloc(replace(&tasks.__storage.mem, unallocated()))
     leak(tasks)
 }
 
