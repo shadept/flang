@@ -77,14 +77,14 @@ fn host_arch() String {
 // optional. The `Ns*` variants are the
 // intermediate namespace steps of `platform.…` / `runtime.…` /
 // `TypeKind.…` paths. Strings are views into the evaluator's arena (or
-// the source text).
+// the source text), and a `List`'s elements live in the same arena.
 pub type CtValue = enum {
     B(bool)
     I(i64)
     S(String)
     Ident(String)
     OptStr(String?)
-    List(List(CtValue))
+    List(CtValue[])
     TypeInfo(CtTypeInfo)
     // A run-time value named in a `#if` condition, carrying only its type: `type_of(v)` reads it.
     Value(CtTypeInfo)
@@ -97,11 +97,6 @@ pub type CtValue = enum {
     NsEnv
     NsTypeKind
 }
-
-// Nothing to release: the list a `List` value holds is `clone_ct`'s copy over the expansion's
-// allocator, which outlives every value built from it, and every other variant borrows the
-// template's own storage.
-pub fn deinit(self: move CtValue) {}
 
 // Compile-time `core.rtti.TypeInfo`: `kind` is the `TypeKind` discriminant or -1 when the spelled
 // type has none (`&T`, `T?`, an unknown name). Members are derived on access from `source`, so
@@ -185,11 +180,31 @@ pub type CtEnv = struct {
     ctx: &ComptimeCtx
     bindings: Dict(String, CtValue)
     lookup: CtLookup
-    alloc: &Allocator
+    // Where the values the evaluator builds live: list elements and built strings.
+    arena: &ArenaAllocator
 }
 
-pub fn ct_env(ctx: &ComptimeCtx, alloc: &Allocator, lookup: CtLookup) CtEnv {
-    return .{ ctx = ctx, bindings = dict(alloc), lookup = lookup, alloc = alloc }
+pub fn ct_env(ctx: &ComptimeCtx, arena: &ArenaAllocator, lookup: CtLookup) CtEnv {
+    return .{ ctx = ctx, bindings = dict(), lookup = lookup, arena = arena }
+}
+
+pub fn deinit(self: move CtEnv) {
+    self.bindings.deinit()
+}
+
+// `xs` as a list value, its elements copied into the environment's arena.
+pub fn ct_list(env: &CtEnv, xs: move List(CtValue)) CtValue {
+    let a = env.arena.allocator()
+    const out = env.arena.freeze(unmanaged_list(xs.as_slice(), &a))
+    xs.deinit()
+    return CtValue.List(out)
+}
+
+// `sb`'s text copied into the environment's arena; the builder is released.
+fn ct_text(env: &CtEnv, sb: move StringBuilder) String {
+    const out = env.arena.copy_string(sb.as_view())
+    sb.deinit()
+    return out
 }
 
 // Evaluates a #if condition to its branch decision, or the diagnostic to report. Never guesses: any
@@ -203,8 +218,10 @@ pub fn eval_condition(ctx: &ComptimeCtx, cond: &Expr) CtOutcome {
 // in scope of the specialization they are walking, so `type_info(T).copyable` decides per
 // instantiation.
 pub fn eval_condition_with(ctx: &ComptimeCtx, lookup: CtLookup, cond: &Expr) CtOutcome {
-    let env = ct_env(ctx, context.allocator, lookup)
-    defer env.bindings.deinit()
+    let arena = arena_allocator(context.allocator)
+    defer arena.deinit()
+    let env = ct_env(ctx, &arena, lookup)
+    defer env.deinit()
     return ct_eval_condition(&env, cond) match {
         Ok(b) => CtOutcome.Active(b)
         Err(e) => CtOutcome.Invalid(move e)
@@ -257,7 +274,7 @@ pub fn ct_eval(env: &CtEnv, e: &Expr) Result(CtValue, CtError) {
         Identifier(id) => {
             // The binding stays the environment's; the value handed back is a copy of it.
             env.bindings.get_ref(id.name) match {
-                Some(v) => return Ok(clone_ct(v, env.alloc))
+                Some(v) => return Ok(v.*)
                 None => {}
             }
             if id.name == "platform" {
@@ -277,7 +294,6 @@ pub fn ct_eval(env: &CtEnv, e: &Expr) Result(CtValue, CtError) {
         }
         MemberAccess(ma) => {
             const recv = ct_eval(env, ma.receiver)?
-            defer recv.deinit()
             ct_member(env, &recv, ma.member, ma.span)
         }
         Index(ix) => ct_index(env, &ix)
@@ -317,9 +333,7 @@ pub fn ct_eval(env: &CtEnv, e: &Expr) Result(CtValue, CtError) {
 
 fn ct_eval_binary(env: &CtEnv, b: &BinaryExpr) Result(CtValue, CtError) {
     const l = ct_eval(env, b.lhs)?
-    defer l.deinit()
     const r = ct_eval(env, b.rhs)?
-    defer r.deinit()
 
     if is_optional(&l) or is_optional(&r) {
         return ct_err("E2118", $"optional value must be unwrapped with `??` before use", b.span)
@@ -380,10 +394,10 @@ fn ct_eval_binary(env: &CtEnv, b: &BinaryExpr) Result(CtValue, CtError) {
             Eq => return Ok(CtValue.B(x == y))
             Ne => return Ok(CtValue.B(x != y))
             Add => {
-                let sb = string_builder(x.len + y.len, env.alloc)
+                let sb = string_builder(x.len + y.len)
                 sb.append(x)
                 sb.append(y)
-                return Ok(CtValue.S(sb.as_view()))
+                return Ok(CtValue.S(ct_text(env, sb)))
             }
             _ => {}
         }
@@ -425,7 +439,6 @@ fn binary_op_text(op: BinaryOp) String {
 
 fn ct_index(env: &CtEnv, ix: &IndexExpr) Result(CtValue, CtError) {
     const recv = ct_eval(env, ix.receiver)?
-    defer recv.deinit()
     // Slices: `list[a..b]`, `list[a..]`, `list[..b]`.
     ix.index.* match {
         Range(rg) => return ct_slice(env, &recv, &rg, ix.span)
@@ -442,7 +455,7 @@ fn ct_index(env: &CtEnv, ix: &IndexExpr) Result(CtValue, CtError) {
                 if i < 0 or (i as usize) >= items.len {
                     return ct_err("E2118", $"index {i} out of range (len {items.len})", ix.span)
                 }
-                Ok(clone_ct(&items[i as usize], env.alloc))
+                Ok(items[i as usize])
             }
             _ => ct_err("E2118", $"a list is indexed by an integer", ix.span)
         }
@@ -451,8 +464,8 @@ fn ct_index(env: &CtEnv, ix: &IndexExpr) Result(CtValue, CtError) {
 }
 
 fn ct_slice(env: &CtEnv, recv: &CtValue, rg: &RangeExpr, span: SourceSpan) Result(CtValue, CtError) {
-    const items: &List(CtValue) = recv.* match {
-        List(l) => &l
+    const items: CtValue[] = recv.* match {
+        List(l) => l
         _ => return ct_err("E2118", $"cannot slice {describe(recv)}", span)
     }
     let start: i64 = 0
@@ -473,11 +486,7 @@ fn ct_slice(env: &CtEnv, recv: &CtValue, rg: &RangeExpr, span: SourceSpan) Resul
     if start < 0 or end > (items.len as i64) or start > end {
         return ct_err("E2118", $"slice {start}..{end} out of range (len {items.len})", span)
     }
-    let out: List(CtValue) = list((end - start) as usize, env.alloc)
-    for i in (start as usize)..(end as usize) {
-        out.push(clone_ct(&items[i], env.alloc))
-    }
-    return Ok(CtValue.List(move out))
+    return Ok(CtValue.List(items[(start as usize)..(end as usize)]))
 }
 
 fn ct_expect_int(env: &CtEnv, e: &Expr) Result(i64, CtError) {
@@ -714,17 +723,17 @@ fn ct_type_member(
         )
     }
     if member == "type_params" or member == "type_args" {
-        let empty: List(CtValue) = list(0, env.alloc)
-        return Ok(CtValue.List(move empty))
+        let none: CtValue[]
+        return Ok(CtValue.List(none))
     }
     if member == "fields" {
-        return Ok(CtValue.List(type_fields(env, t)))
+        return Ok(ct_list(env, type_fields(env, t)))
     }
     if member == "variants" {
-        return Ok(CtValue.List(type_variants(env, t)))
+        return Ok(ct_list(env, type_variants(env, t)))
     }
     if member == "params" {
-        return Ok(CtValue.List(type_params(env, t)))
+        return Ok(ct_list(env, type_params(env, t)))
     }
     if member == "return_type" {
         const fn_te = type_function_syntax(t)
@@ -809,33 +818,6 @@ fn void_type_info() CtTypeInfo {
 
 // An independent copy. Only `List` owns anything, so every other variant copies as it is, and a
 // list's elements are cloned into fresh storage - comptime values are small and short-lived.
-fn clone_ct(v: &CtValue, alloc: &Allocator) CtValue {
-    return v.* match {
-        List(items) => {
-            let out: List(CtValue) = list(items.len, alloc)
-            for &it in items {
-                out.push(clone_ct(it, alloc))
-            }
-            CtValue.List(move out)
-        }
-        B(b) => CtValue.B(b)
-        I(i) => CtValue.I(i)
-        S(s) => CtValue.S(s)
-        Ident(s) => CtValue.Ident(s)
-        OptStr(o) => CtValue.OptStr(o)
-        TypeInfo(t) => CtValue.TypeInfo(t)
-        Value(t) => CtValue.Value(t)
-        Field(f) => CtValue.Field(f)
-        Variant(vr) => CtValue.Variant(vr)
-        Param(p) => CtValue.Param(p)
-        Kind(k) => CtValue.Kind(k)
-        NsPlatform => CtValue.NsPlatform
-        NsRuntime => CtValue.NsRuntime
-        NsEnv => CtValue.NsEnv
-        NsTypeKind => CtValue.NsTypeKind
-    }
-}
-
 fn type_syntax(t: &CtTypeInfo) &TypeExpr? {
     return t.source match {
         FromDecl(td) => Some(td.body)
@@ -858,7 +840,7 @@ fn type_function_syntax(t: &CtTypeInfo) &FunctionType? {
 }
 
 fn type_fields(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
-    let out: List(CtValue) = list(0, env.alloc)
+    let out: List(CtValue) = list(0)
     const te = type_syntax(t)
     te match {
         Some(x) => x.* match {
@@ -875,7 +857,7 @@ fn type_fields(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
 }
 
 fn type_variants(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
-    let out: List(CtValue) = list(0, env.alloc)
+    let out: List(CtValue) = list(0)
     const te = type_syntax(t)
     te match {
         Some(x) => x.* match {
@@ -892,7 +874,7 @@ fn type_variants(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
 }
 
 fn type_params(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
-    let out: List(CtValue) = list(0, env.alloc)
+    let out: List(CtValue) = list(0)
     const f = type_function_syntax(t)
     f match {
         Some(fnty) => {
@@ -902,10 +884,10 @@ fn type_params(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
                     pname = fnty.param_names[i]
                 }
                 if pname.len == 0 {
-                    let sb = string_builder(4, env.alloc)
+                    let sb = string_builder(4)
                     sb.append('_')
                     sb.append(i as i64)
-                    pname = sb.as_view()
+                    pname = ct_text(env, sb)
                 }
                 out.push(CtValue.Param(CtParam { name = pname, type_expr = &fnty.params[i] }))
             }
@@ -917,9 +899,9 @@ fn type_params(env: &CtEnv, t: &CtTypeInfo) List(CtValue) {
 
 // The spelled type, re-parseable as a type expression.
 pub fn spell_type(env: &CtEnv, te: &TypeExpr) String {
-    let sb = string_builder(16, env.alloc)
+    let sb = string_builder(16)
     spell_type_into(&sb, te)
-    return sb.as_view()
+    return ct_text(env, sb)
 }
 
 pub fn spell_type_into(sb: &StringBuilder, te: &TypeExpr) {
@@ -1170,15 +1152,15 @@ fn as_kind(v: &CtValue) i32? {
 }
 
 fn lower_case(env: &CtEnv, text: String) String {
-    let sb = string_builder(text.len, env.alloc)
+    let sb = string_builder(text.len)
     for c in text.as_raw_bytes() {
         sb.append_byte(if c >= 'A' as u8 and c <= 'Z' as u8 { c + 32 } else { c })
     }
-    return sb.as_view()
+    return ct_text(env, sb)
 }
 
 fn snake_case(env: &CtEnv, text: String) String {
-    let sb = string_builder(text.len + 4, env.alloc)
+    let sb = string_builder(text.len + 4)
     for c in text.as_raw_bytes() {
         if c >= 'A' as u8 and c <= 'Z' as u8 {
             if sb.len > 0 {
@@ -1189,11 +1171,11 @@ fn snake_case(env: &CtEnv, text: String) String {
             sb.append_byte(c)
         }
     }
-    return sb.as_view()
+    return ct_text(env, sb)
 }
 
 fn pascal_case(env: &CtEnv, text: String) String {
-    let sb = string_builder(text.len, env.alloc)
+    let sb = string_builder(text.len)
     let capitalize = true
     for c in text.as_raw_bytes() {
         if c == '_' as u8 {
@@ -1203,7 +1185,7 @@ fn pascal_case(env: &CtEnv, text: String) String {
         sb.append_byte(if capitalize and c >= 'a' as u8 and c <= 'z' as u8 { c - 32 } else { c })
         capitalize = false
     }
-    return sb.as_view()
+    return ct_text(env, sb)
 }
 
 // ─────────────────────────────────────────────────────────────────────────

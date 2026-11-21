@@ -89,7 +89,7 @@ fn copyable_struct(
             return false
         }
     }
-    let subst = reg.instance_subst(ty, &sd.type_params, &sd.assoc_params, nn.args, it)
+    let subst = reg.instance_subst(ty, sd.type_params, sd.assoc_params, nn.args, it)
     defer subst.deinit()
     for i in 0..sd.fields.len {
         const ft = it.substitute(sd.fields[i].ty, &subst)
@@ -108,7 +108,7 @@ fn copyable_enum(
     nn: &NNominalNode,
     rigid: &Dict(VarId, bool)?,
 ) bool {
-    let subst = reg.instance_subst(ty, &ed.type_params, &ed.assoc_params, nn.args, it)
+    let subst = reg.instance_subst(ty, ed.type_params, ed.assoc_params, nn.args, it)
     defer subst.deinit()
     for vi in 0..ed.variants.len {
         for pi in 0..ed.variants[vi].payloads.len {

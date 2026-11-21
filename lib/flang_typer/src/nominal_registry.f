@@ -27,13 +27,9 @@ import flang_typer.visibility
 // declaration inside the enum body, and is `none_span()` for synthesized variants.
 pub type VariantDef = struct {
     name: String
-    payloads: List(Ty)
+    payloads: Ty[]
     decl_span: SourceSpan
 }
-
-// The payloads go with the body, which `free_body` walks when the registry drops or replaces a
-// definition. A variant released on its own would free a list that walk still reaches.
-pub fn deinit(self: move VariantDef) {}
 
 // How a struct's storage is laid out. `Flang` is free to reorder; the rest follow the C ABI.
 // `CUnion` overlaps every field at offset 0; `COpaque` is an incomplete C type with no storage
@@ -44,11 +40,11 @@ pub type StructDef = struct {
     fqn: String
     module: String
     is_pub: bool
-    type_params: List(VarId)
+    type_params: VarId[]
     // The associated-type variables its fields name through a projection (`I.Item`, RFC-036),
     // solved per instantiation: see `instance_args`.
-    assoc_params: List(VarId)
-    fields: List(Field)
+    assoc_params: VarId[]
+    fields: Field[]
     decl_span: SourceSpan
     deprecation: String?
     is_simd: bool
@@ -59,26 +55,29 @@ pub type EnumDef = struct {
     fqn: String
     module: String
     is_pub: bool
-    type_params: List(VarId)
+    type_params: VarId[]
     // As `StructDef.assoc_params`, for the payloads.
-    assoc_params: List(VarId)
-    variants: List(VariantDef)
+    assoc_params: VarId[]
+    variants: VariantDef[]
     // Naked enums (every variant payload-less, explicit integer tags). `null` for standard
     // tagged-union enums.
-    tag_values: Dict(String, i64)?
+    tag_values: TagValue[]?
     decl_span: SourceSpan
     deprecation: String?
 }
 
+// A naked enum variant's explicit tag.
+pub type TagValue = struct {
+    name: String
+    value: i64
+}
+
+// A definition's lists live in the registry that holds it (`store`): the registry copies them in
+// when the definition is registered, and a caller keeps owning whatever it built them from.
 pub type NominalDef = enum {
     NomStruct(StructDef)
     NomEnum(EnumDef)
 }
-
-// Released through the registry, which owns every definition: `free_body` frees the lists and
-// `evict` / `replace_body` call it. Nothing else may free one - a carried snapshot shares the
-// definitions with the checker that made them.
-pub fn deinit(self: move NominalDef) {}
 
 // Result of looking up a name in the registry. `NomLookFound` returns the index; `NomLookHidden`
 // means the entry exists but its defining module is outside the caller's visibility scope - used to
@@ -106,6 +105,8 @@ pub type NominalRegistry = struct {
     // owned here. The buffers themselves are heap-allocated by `OwnedString` and do not move when
     // the list re-allocates, so the views stay valid for the registry's life.
     owned_fqns: List(OwnedString)
+    // The lists of every definition registered here. A replaced body stays until the registry goes.
+    store: ArenaAllocator
     // A ground instantiation of a definition with `assoc_params` -> the types they solve to there,
     // in `assoc_params` order. Filled by the checker, read by every field substitution.
     assoc_solved: Dict(Ty, List(Ty))
@@ -121,6 +122,7 @@ pub fn nominal_registry() NominalRegistry {
         next_id = 0 as NominalId,
         by_fqn = move by_fqn,
         owned_fqns = move owned_fqns,
+        store = arena_allocator(context.allocator),
         assoc_solved = move solved,
     }
 }
@@ -129,6 +131,7 @@ pub fn deinit(self: move NominalRegistry) {
     self.defs.deinit()
     self.by_fqn.deinit()
     self.owned_fqns.deinit()
+    self.store.deinit()
     self.assoc_solved.deinit()
 }
 
@@ -140,8 +143,8 @@ pub fn deinit(self: move NominalRegistry) {
 pub fn instance_subst(
     self: &NominalRegistry,
     inst: Ty,
-    params: &List(VarId),
-    assoc: &List(VarId),
+    params: VarId[],
+    assoc: VarId[],
     args: ChildSpan,
     it: &TypeInterner,
 ) Dict(VarId, Ty) {
@@ -183,49 +186,67 @@ pub fn register(self: &NominalRegistry, def: move NominalDef, fqn_owned: move Ow
     let idx = self.owned_fqns.len
     self.owned_fqns.push(fqn_owned)
     let stable: String = self.owned_fqns[idx].view()
-    let fixed = with_fqn(def, stable)
-    self.defs.set(id, fixed)
+    self.defs.set(id, self.own_def(&def, stable))
     self.by_fqn.set(stable, id)
     return id
 }
 
-// Replace the fqn field on a NominalDef with a stable view. Used by `register` to repoint def.fqn
-// from a caller-temporary view to the view owned by `self.owned_fqns`.
-fn with_fqn(def: move NominalDef, new_fqn: String) NominalDef {
-    return def match {
+// Re-register a definition under an id the registry handed out before, using the FQN view it
+// already owns. `next_id` is untouched, so an id retired by `evict` and put back here keeps naming
+// the same declaration.
+pub fn register_at(self: &NominalRegistry, id: NominalId, def: NominalDef, fqn_stable: String) {
+    self.defs.set(id, self.own_def(&def, fqn_stable))
+    self.by_fqn.set(fqn_stable, id)
+}
+
+// `def` with its FQN set to `fqn` and its lists copied into `store`: the one point a definition's
+// storage enters the registry.
+fn own_def(self: &NominalRegistry, def: &NominalDef, fqn: String) NominalDef {
+    return def.* match {
         NomStruct(s) => NominalDef.NomStruct(StructDef {
-            fqn = new_fqn,
+            fqn = fqn,
             module = s.module,
             is_pub = s.is_pub,
-            type_params = move s.type_params,
-            assoc_params = move s.assoc_params,
-            fields = move s.fields,
+            type_params = self.own(s.type_params),
+            assoc_params = self.own(s.assoc_params),
+            fields = self.own(s.fields),
             decl_span = s.decl_span,
             deprecation = s.deprecation,
             is_simd = s.is_simd,
             repr = s.repr,
         })
         NomEnum(e) => NominalDef.NomEnum(EnumDef {
-            fqn = new_fqn,
+            fqn = fqn,
             module = e.module,
             is_pub = e.is_pub,
-            type_params = move e.type_params,
-            assoc_params = move e.assoc_params,
-            variants = move e.variants,
-            tag_values = move e.tag_values,
+            type_params = self.own(e.type_params),
+            assoc_params = self.own(e.assoc_params),
+            variants = self.own_variants(e.variants),
+            tag_values = e.tag_values match {
+                Some(t) => Some(self.own(t))
+                None => null
+            },
             decl_span = e.decl_span,
             deprecation = e.deprecation,
         })
     }
 }
 
-// Re-register a definition under an id the registry handed out before, using the FQN view it
-// already owns. `next_id` is untouched, so an id retired by `evict` and put back here keeps naming
-// the same declaration.
-pub fn register_at(self: &NominalRegistry, id: NominalId, def: move NominalDef, fqn_stable: String) {
-    let fixed = with_fqn(def, fqn_stable)
-    self.defs.set(id, fixed)
-    self.by_fqn.set(fqn_stable, id)
+fn own(self: &NominalRegistry, xs: $T[]) T[] where T: copyable {
+    let a = self.store.allocator()
+    return self.store.freeze(unmanaged_list(xs, &a))
+}
+
+fn own_variants(self: &NominalRegistry, vs: VariantDef[]) VariantDef[] {
+    let a = self.store.allocator()
+    let out: UnmanagedList(VariantDef) = unmanaged_list(vs.len, &a)
+    for v in vs {
+        out.push(
+            VariantDef { name = v.name, payloads = self.own(v.payloads), decl_span = v.decl_span },
+            &a,
+        )
+    }
+    return self.store.freeze(out)
 }
 
 // A deep copy of every live definition, body included, at the id it holds. `next_id` carries, so
@@ -250,93 +271,9 @@ fn fill_carried(out: &NominalRegistry, src: &NominalRegistry) {
         const idx = out.owned_fqns.len
         out.owned_fqns.push(from_view(nominal_fqn(found.unwrap())))
         const __found_v = found.unwrap()
-        out.register_at(id, clone_def(__found_v), out.owned_fqns[idx].view())
+        out.register_at(id, __found_v.*, out.owned_fqns[idx].view())
     }
     out.next_id = src.next_id
-}
-
-fn clone_def(def: &NominalDef) NominalDef {
-    return def.* match {
-        NomStruct(s) => NominalDef.NomStruct(StructDef {
-            fqn = s.fqn,
-            module = s.module,
-            is_pub = s.is_pub,
-            type_params = clone_list(&s.type_params),
-            assoc_params = clone_list(&s.assoc_params),
-            fields = clone_list(&s.fields),
-            decl_span = s.decl_span,
-            deprecation = s.deprecation,
-            is_simd = s.is_simd,
-            repr = s.repr,
-        })
-        NomEnum(e) => NominalDef.NomEnum(EnumDef {
-            fqn = e.fqn,
-            module = e.module,
-            is_pub = e.is_pub,
-            type_params = clone_list(&e.type_params),
-            assoc_params = clone_list(&e.assoc_params),
-            variants = clone_variants(&e.variants),
-            tag_values = clone_tags(&e.tag_values),
-            decl_span = e.decl_span,
-            deprecation = e.deprecation,
-        })
-    }
-}
-
-fn clone_list(xs: &List($T)) List(T) where T: copyable {
-    let out: List(T) = list(xs.len)
-    out.push_all(xs.as_slice())
-    return out
-}
-
-fn clone_variants(xs: &List(VariantDef)) List(VariantDef) {
-    let out: List(VariantDef) = list(xs.len)
-    for &v in xs {
-        out.push(VariantDef {
-            name = v.name,
-            payloads = clone_list(&v.payloads),
-            decl_span = v.decl_span,
-        })
-    }
-    return out
-}
-
-fn clone_tags(tags: &Option(Dict(String, i64))) Dict(String, i64)? {
-    return tags.* match {
-        Some(t) => {
-            let out: Dict(String, i64) = dict()
-            for e in t {
-                out.set(e.key, e.value)
-            }
-            Some(move out)
-        }
-        None => null
-    }
-}
-
-// Free the lists a resolved body owns: type params, fields, variant payloads, tag values. The
-// definition struct itself stays in place with dangling list buffers - callers overwrite or evict
-// it right after.
-pub fn free_body(def: move NominalDef) {
-    def match {
-        NomStruct(s) => {
-            s.type_params.deinit()
-            s.assoc_params.deinit()
-            s.fields.deinit()
-        }
-        NomEnum(e) => {
-            e.type_params.deinit()
-            e.assoc_params.deinit()
-            for v in e.variants.drain() {
-                v.payloads.deinit()
-            }
-            e.variants.deinit()
-            e.tag_values match {
-                Some(t) => t.deinit()
-                None => {}
-            }
-        }
-    }
 }
 
 pub fn contains(self: &NominalRegistry, fqn: String) bool {
@@ -347,12 +284,8 @@ pub fn contains(self: &NominalRegistry, fqn: String) bool {
 // holding a possibly-stale id use `find`.
 // Puts `def` at `id`, freeing the definition that was there. Taking the old one out of the table is
 // this module's own storage right; an id with no entry yet simply gains one.
-pub fn replace_body(self: &NominalRegistry, id: NominalId, def: move NominalDef) {
-    const taken = self.defs.remove(id)
-    if taken.is_some() {
-        free_body(taken.unwrap())
-    }
-    self.defs.set(id, def)
+pub fn replace_body(self: &NominalRegistry, id: NominalId, def: NominalDef) {
+    self.defs.set(id, self.own_def(&def, nominal_fqn(&def)))
 }
 
 pub fn get(self: &NominalRegistry, id: NominalId) &NominalDef {
@@ -371,9 +304,8 @@ pub fn len(self: &NominalRegistry) usize {
 
 // Overwrite the definition at `id` in place. The replaced value is NOT deinited: callers rebuild a
 // def from the old one's field and type-param lists and keep owning them.
-pub fn put(self: &NominalRegistry, id: NominalId, def: move NominalDef) {
-    let slot = self.defs.get_ref(id).unwrap()
-    slot.* = move def
+pub fn put(self: &NominalRegistry, id: NominalId, def: NominalDef) {
+    self.defs.set(id, self.own_def(&def, nominal_fqn(&def)))
 }
 
 // Drop the definition at `id` and its FQN mapping. The id is retired, not recycled: `find` reports
@@ -384,8 +316,7 @@ pub fn evict(self: &NominalRegistry, id: NominalId) {
         return
     }
     let _fqn = self.by_fqn.remove(nominal_fqn(found.unwrap()))
-    const dropped = self.defs.remove(id)
-    free_body(dropped.unwrap())
+    const _dropped = self.defs.remove(id)
 }
 
 // FQN-only lookup, no visibility scope. Used by template expansion and downstream phases that have
@@ -547,7 +478,14 @@ pub fn is_pub(def: &NominalDef) bool {
 // Construction, discriminant tests, and `e as i32` all read the same value through here.
 pub fn variant_tag(def: &EnumDef, index: usize) i64 {
     return def.tag_values match {
-        Some(t) => t.get(def.variants[index].name).unwrap_or(index as i64)
+        Some(tags) => {
+            for t in tags {
+                if t.name == def.variants[index].name {
+                    return t.value
+                }
+            }
+            index as i64
+        }
         None => index as i64
     }
 }
@@ -619,8 +557,9 @@ test "a carried copy keeps ids, holes and bodies" {
     })
     let bd = probe_struct()
     bd.fqn = nominal_fqn(reg.get(b))
-    install(&bd.fields, fields)
-    reg.replace_body(b, NominalDef.NomStruct(move bd))
+    bd.fields = fields.as_slice()
+    reg.replace_body(b, NominalDef.NomStruct(bd))
+    fields.deinit()
 
     let next = reg.carried_copy()
     defer next.deinit()
@@ -646,15 +585,15 @@ test "a retired id goes back where it was" {
 }
 
 fn probe_struct() StructDef {
-    let no_params: List(VarId) = list(0)
     let no_fields: List(Field) = list(0)
+    defer no_fields.deinit()
     return StructDef {
         fqn = "",
         module = "m",
         is_pub = true,
-        type_params = move no_params,
-        assoc_params = list(0),
-        fields = move no_fields,
+        type_params = [],
+        assoc_params = [],
+        fields = no_fields.as_slice(),
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,

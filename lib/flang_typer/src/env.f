@@ -30,14 +30,14 @@ pub fn deinit(self: move Binding) {
     self.scheme.deinit()
 }
 
-// One lexical scope's bindings. Allocates through the owning `TypeEnv`'s allocator.
+// One lexical scope's bindings, allocated through the owning `TypeEnv`'s allocator.
 pub type Scope = struct {
-    bindings: UnmanagedDict(String, Binding)
+    bindings: Dict(String, Binding)
 }
 
-// The table needs the env's allocator to go, so `pop_scope` and `TypeEnv.deinit` free it before the
-// scope itself is dropped.
-pub fn deinit(self: move Scope) {}
+pub fn deinit(self: move Scope) {
+    self.bindings.deinit()
+}
 
 // The lexical environment of the function being checked: a stack of scopes, innermost on top, each
 // mapping a name to its binding. Lookup walks from the innermost scope outward. One allocator
@@ -53,36 +53,23 @@ pub type TypeEnv = struct {
 pub fn type_env() TypeEnv {
     let out: TypeEnv
     out.allocator = context.allocator
-    let initial: Scope
-    out.scopes.push(initial, out.allocator)
+    out.scopes.push(Scope { bindings = dict(out.allocator) }, out.allocator)
     return out
 }
 
 pub fn deinit(self: move TypeEnv) {
-    loop {
-        self.scopes.pop() match {
-            Some(scope) => {
-                let s = move scope
-                s.bindings.deinit(self.allocator)
-            }
-            None => break
-        }
-    }
     self.scopes.deinit(self.allocator)
 }
 
 pub fn push_scope(self: &TypeEnv) {
-    let fresh: Scope
-    self.scopes.push(fresh, self.allocator)
+    self.scopes.push(Scope { bindings = dict(self.allocator) }, self.allocator)
 }
 
 pub fn pop_scope(self: &TypeEnv) {
     if self.scopes.len() <= 1 {
         panic("pop_scope: cannot pop global scope")
     }
-    let s = self.scopes.pop().expect("pop_scope: no scope")
-    let scope = move s
-    scope.bindings.deinit(self.allocator)
+    self.scopes.pop().expect("pop_scope: no scope").deinit()
 }
 
 // Hides every open scope but the outermost from lookups, for an expression that belongs to another
@@ -105,7 +92,7 @@ fn is_visible(self: &TypeEnv, i: usize) bool {
 
 pub fn bind(self: &TypeEnv, name: String, binding: move Binding) {
     self.scopes.peek_ref() match {
-        Some(top) => top.bindings.set(name, binding, self.allocator)
+        Some(top) => top.bindings.set(name, binding)
         None => panic("bind: no open scope")
     }
 }

@@ -167,8 +167,8 @@ pub fn field_ty(
         it,
         reg,
         def.fqn,
-        &def.type_params,
-        &def.assoc_params,
+        def.type_params,
+        def.assoc_params,
         args,
         def.fields[index].ty,
     )
@@ -188,8 +188,8 @@ pub fn variant_payload_ty(
         it,
         reg,
         def.fqn,
-        &def.type_params,
-        &def.assoc_params,
+        def.type_params,
+        def.assoc_params,
         args,
         def.variants[vnum].payloads[index],
     )
@@ -201,8 +201,8 @@ fn member_ty(
     it: &TypeInterner,
     reg: &NominalRegistry,
     fqn: String,
-    params: &List(VarId),
-    assoc: &List(VarId),
+    params: VarId[],
+    assoc: VarId[],
     args: Ty[],
     ty: Ty,
 ) Ty {
@@ -221,13 +221,13 @@ fn member_ty(
     }
     let ps: List(VarId) = list(params.len + assoc.len)
     defer ps.deinit()
-    ps.push_all(params.as_slice())
-    ps.push_all(assoc.as_slice())
+    ps.push_all(params)
+    ps.push_all(assoc)
     let xs: List(Ty) = list(args.len + assoc.len)
     defer xs.deinit()
     xs.push_all(args)
     xs.push_all(solved.unwrap().as_slice())
-    return subst(it, ty, &ps, xs.as_slice())
+    return subst(it, ty, ps.as_slice(), xs.as_slice())
 }
 
 // Core walk
@@ -473,8 +473,8 @@ fn struct_layout_impl(
             it,
             reg,
             def.fqn,
-            &def.type_params,
-            &def.assoc_params,
+            def.type_params,
+            def.assoc_params,
             args,
             def.fields[i].ty,
         ))
@@ -507,8 +507,8 @@ pub fn variant_payload_offsets(
             it,
             reg,
             def.fqn,
-            &def.type_params,
-            &def.assoc_params,
+            def.type_params,
+            def.assoc_params,
             args,
             v.payloads[j],
         ))
@@ -556,8 +556,8 @@ fn enum_layout_impl(
                 it,
                 reg,
                 def.fqn,
-                &def.type_params,
-                &def.assoc_params,
+                def.type_params,
+                def.assoc_params,
                 args,
                 v.payloads[j],
             ))
@@ -614,7 +614,7 @@ fn is_option_niche(it: &TypeInterner, def: &EnumDef, args: Ty[]) bool {
 // it replaces those variables with the concrete `args`. Results are interned handles like
 // everything else.
 
-fn subst(it: &TypeInterner, ty: Ty, params: &List(VarId), args: Ty[]) Ty {
+fn subst(it: &TypeInterner, ty: Ty, params: VarId[], args: Ty[]) Ty {
     if params.len == 0 {
         return ty
     }
@@ -633,7 +633,7 @@ fn subst(it: &TypeInterner, ty: Ty, params: &List(VarId), args: Ty[]) Ty {
     }
 }
 
-fn subst_var(v: TyVar, params: &List(VarId), args: Ty[], fallback: Ty) Ty {
+fn subst_var(v: TyVar, params: VarId[], args: Ty[], fallback: Ty) Ty {
     for i in 0..params.len {
         if params[i] == v.id {
             return args[i]
@@ -642,7 +642,7 @@ fn subst_var(v: TyVar, params: &List(VarId), args: Ty[], fallback: Ty) Ty {
     return fallback
 }
 
-fn subst_span(it: &TypeInterner, span: ChildSpan, params: &List(VarId), args: Ty[]) List(Ty) {
+fn subst_span(it: &TypeInterner, span: ChildSpan, params: VarId[], args: Ty[]) List(Ty) {
     let out: List(Ty) = list(span.len)
     for i in 0..span.len {
         out.push(subst(it, it.child_at(span, i), params, args))
@@ -650,13 +650,13 @@ fn subst_span(it: &TypeInterner, span: ChildSpan, params: &List(VarId), args: Ty
     return out
 }
 
-fn subst_tuple(it: &TypeInterner, span: ChildSpan, params: &List(VarId), args: Ty[]) Ty {
+fn subst_tuple(it: &TypeInterner, span: ChildSpan, params: VarId[], args: Ty[]) Ty {
     let es = subst_span(it, span, params, args)
     defer es.deinit()
     return it.tuple_of(&es)
 }
 
-fn subst_record(it: &TypeInterner, rec: &NRecordNode, params: &List(VarId), args: Ty[]) Ty {
+fn subst_record(it: &TypeInterner, rec: &NRecordNode, params: VarId[], args: Ty[]) Ty {
     let fs: List(Field) = list(rec.tys.len)
     defer fs.deinit()
     for i in 0..rec.tys.len {
@@ -670,13 +670,13 @@ fn subst_record(it: &TypeInterner, rec: &NRecordNode, params: &List(VarId), args
     return it.record_of(&fs)
 }
 
-fn subst_nominal(it: &TypeInterner, nn: &NNominalNode, params: &List(VarId), args: Ty[]) Ty {
+fn subst_nominal(it: &TypeInterner, nn: &NNominalNode, params: VarId[], args: Ty[]) Ty {
     let as_ = subst_span(it, nn.args, params, args)
     defer as_.deinit()
     return it.nominal_of(nn.id, &as_)
 }
 
-fn subst_func(it: &TypeInterner, f: &NFuncNode, params: &List(VarId), args: Ty[]) Ty {
+fn subst_func(it: &TypeInterner, f: &NFuncNode, params: VarId[], args: Ty[]) Ty {
     let ps = subst_span(it, f.params, params, args)
     defer ps.deinit()
     return it.func_of(&ps, f.moves, subst(it, f.ret, params, args), f.conv)
@@ -763,6 +763,7 @@ test "auto layout reorders fields by alignment to minimise padding" {
     let reg = nominal_registry()
     defer reg.deinit()
     let fields: List(Field) = list(3)
+    defer fields.deinit()
     fields.push(Field {
         name = "a",
         ty = prim_of(PrimitiveKind.I8),
@@ -785,9 +786,9 @@ test "auto layout reorders fields by alignment to minimise padding" {
         fqn = "T",
         module = "",
         is_pub = true,
-        type_params = list(0),
-        assoc_params = list(0),
-        fields = move fields,
+        type_params = [],
+        assoc_params = [],
+        fields = fields.as_slice(),
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
@@ -811,6 +812,7 @@ test "C repr keeps declaration order and C padding" {
     let reg = nominal_registry()
     defer reg.deinit()
     let fields: List(Field) = list(3)
+    defer fields.deinit()
     fields.push(Field {
         name = "a",
         ty = prim_of(PrimitiveKind.I8),
@@ -833,9 +835,9 @@ test "C repr keeps declaration order and C padding" {
         fqn = "T",
         module = "",
         is_pub = true,
-        type_params = list(0),
-        assoc_params = list(0),
-        fields = move fields,
+        type_params = [],
+        assoc_params = [],
+        fields = fields.as_slice(),
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
@@ -857,6 +859,7 @@ test "C union overlaps members and rounds the widest to the strictest alignment"
     let reg = nominal_registry()
     defer reg.deinit()
     let fields: List(Field) = list(2)
+    defer fields.deinit()
     fields.push(Field {
         name = "bytes",
         ty = it.array_of(prim_of(PrimitiveKind.U8), 13),
@@ -873,9 +876,9 @@ test "C union overlaps members and rounds the widest to the strictest alignment"
         fqn = "U",
         module = "",
         is_pub = true,
-        type_params = list(0),
-        assoc_params = list(0),
-        fields = move fields,
+        type_params = [],
+        assoc_params = [],
+        fields = fields.as_slice(),
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
@@ -897,9 +900,11 @@ test "generic struct substitutes type parameters" {
     let reg = nominal_registry()
     defer reg.deinit()
     let params: List(VarId) = list(2)
+    defer params.deinit()
     params.push(0u32)
     params.push(1u32)
     let fields: List(Field) = list(2)
+    defer fields.deinit()
     fields.push(Field {
         name = "first",
         ty = it.var_of(.{ id = 0u32, level = 0u32 }),
@@ -916,9 +921,9 @@ test "generic struct substitutes type parameters" {
         fqn = "Pair",
         module = "",
         is_pub = true,
-        type_params = move params,
-        assoc_params = list(0),
-        fields = move fields,
+        type_params = params.as_slice(),
+        assoc_params = [],
+        fields = fields.as_slice(),
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
@@ -941,20 +946,23 @@ test "tagged enum reserves a tag plus the largest payload" {
     let reg = nominal_registry()
     defer reg.deinit()
     let variants: List(VariantDef) = list(3)
+    defer variants.deinit()
     let p_a: List(Ty) = list(1)
+    defer p_a.deinit()
     p_a.push(prim_of(PrimitiveKind.I32))
-    variants.push(VariantDef { name = "A", payloads = move p_a, decl_span = none_span() })
+    variants.push(VariantDef { name = "A", payloads = p_a.as_slice(), decl_span = none_span() })
     let p_b: List(Ty) = list(1)
+    defer p_b.deinit()
     p_b.push(prim_of(PrimitiveKind.I64))
-    variants.push(VariantDef { name = "B", payloads = move p_b, decl_span = none_span() })
-    variants.push(VariantDef { name = "C", payloads = list(0), decl_span = none_span() })
+    variants.push(VariantDef { name = "B", payloads = p_b.as_slice(), decl_span = none_span() })
+    variants.push(VariantDef { name = "C", payloads = [], decl_span = none_span() })
     let def = EnumDef {
         fqn = "E",
         module = "",
         is_pub = true,
-        type_params = list(0),
-        assoc_params = list(0),
-        variants = move variants,
+        type_params = [],
+        assoc_params = [],
+        variants = variants.as_slice(),
         tag_values = null,
         decl_span = none_span(),
         deprecation = null,
@@ -973,15 +981,16 @@ test "payloadless enum is just the tag" {
     let reg = nominal_registry()
     defer reg.deinit()
     let variants: List(VariantDef) = list(2)
-    variants.push(VariantDef { name = "A", payloads = list(0), decl_span = none_span() })
-    variants.push(VariantDef { name = "B", payloads = list(0), decl_span = none_span() })
+    defer variants.deinit()
+    variants.push(VariantDef { name = "A", payloads = [], decl_span = none_span() })
+    variants.push(VariantDef { name = "B", payloads = [], decl_span = none_span() })
     let def = EnumDef {
         fqn = "Flag",
         module = "",
         is_pub = true,
-        type_params = list(0),
-        assoc_params = list(0),
-        variants = move variants,
+        type_params = [],
+        assoc_params = [],
+        variants = variants.as_slice(),
         tag_values = null,
         decl_span = none_span(),
         deprecation = null,
@@ -1018,19 +1027,22 @@ test "Option of a reference uses the pointer niche" {
     defer reg.deinit()
 
     let some: List(Ty) = list(1)
+    defer some.deinit()
     some.push(it.var_of(.{ id = 0, level = 0 }))
     let variants: List(VariantDef) = list(2)
-    variants.push(VariantDef { name = "Some", payloads = move some, decl_span = none_span() })
-    variants.push(VariantDef { name = "None", payloads = list(0), decl_span = none_span() })
+    defer variants.deinit()
+    variants.push(VariantDef { name = "Some", payloads = some.as_slice(), decl_span = none_span() })
+    variants.push(VariantDef { name = "None", payloads = [], decl_span = none_span() })
     let params: List(VarId) = list(1)
+    defer params.deinit()
     params.push(0)
     let def = EnumDef {
         fqn = FQN_OPTION,
         module = "core.option",
         is_pub = true,
-        type_params = move params,
-        assoc_params = list(0),
-        variants = move variants,
+        type_params = params.as_slice(),
+        assoc_params = [],
+        variants = variants.as_slice(),
         tag_values = null,
         decl_span = none_span(),
         deprecation = null,

@@ -309,7 +309,7 @@ pub fn agg_abi_safe(it: &TypeInterner, ty: Ty, reg: &NominalRegistry) bool {
         }
         _ => return false
     }
-    if !fields_abi_safe(it, &sd.fields, reg) {
+    if !fields_abi_safe(it, sd.fields, reg) {
         return false
     }
     // A union's layout rule (every member at 0, size rounded to the strictest alignment) is C's
@@ -384,7 +384,7 @@ fn member_spellable(it: &TypeInterner, ty: Ty, reg: &NominalRegistry) bool {
     }
 }
 
-fn fields_abi_safe(it: &TypeInterner, fields: &List(Field), reg: &NominalRegistry) bool {
+fn fields_abi_safe(it: &TypeInterner, fields: Field[], reg: &NominalRegistry) bool {
     for i in 0..fields.len {
         if !member_spellable(it, fields[i].ty, reg) {
             return false

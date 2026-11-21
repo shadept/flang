@@ -327,25 +327,29 @@ fn expand_one(
     }
     defer ectx.vis.deinit()
     const lookup: CtLookup = .{ ctx = &ectx as &u8, resolve = resolve_type_decl, name = no_name }
-    let env = ct_env(&chk.comptime, &a, lookup)
+    let env = ct_env(&chk.comptime, &arena, lookup)
+    defer env.deinit()
 
     // Bind parameters. A `Type` argument whose nominal is not collected yet parks the invocation
     // (another expansion may produce it).
     for p in 0..def.params.len {
         const param = def.params[p]
         if param.variadic {
-            let rest: List(CtValue) = list(inv.args.len - p, &a)
+            let rest: List(CtValue) = list(inv.args.len - p)
             for i in p..inv.args.len {
                 bind_arg(chk, &env, &param, &inv.args[i], inv.name, &a) match {
                     Ok(v) => rest.push(v)
-                    Err(o) => return o
+                    Err(o) => {
+                        rest.deinit()
+                        return o
+                    }
                 }
             }
-            env.bindings[param.name] = CtValue.List(move rest)
+            env.bindings[param.name] = ct_list(&env, rest)
             break
         }
         bind_arg(chk, &env, &param, &inv.args[p], inv.name, &a) match {
-            Ok(v) => { env.bindings[param.name] = move v }
+            Ok(v) => { env.bindings[param.name] = v }
             Err(o) => return o
         }
     }

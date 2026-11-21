@@ -242,9 +242,10 @@ type PendingSpec = struct {
     from_parked: bool
 }
 
-// The drain owns `tp_binds` and `inst_params`: it frees them when a pick is processed and carries
-// them into the next pass when one is deferred, so dropping the queue must not touch them.
-pub fn deinit(self: move PendingSpec) {}
+pub fn deinit(self: move PendingSpec) {
+    self.tp_binds.deinit()
+    self.inst_params.deinit()
+}
 
 // One instantiation frame's reuse bookkeeping (RFC-022 5e), pushed alongside `spec_callers`. The
 // counters at frame start plus what nested work minted give the frame's OWN burns; `deps` collects
@@ -767,10 +768,6 @@ pub fn deinit(self: move ModuleBodyCache) {
     self.arg_derefs.deinit()
     self.adapts.deinit()
     self.picks.deinit()
-    for pc in self.calls.drain() {
-        pc.arg_tys.deinit()
-        pc.pos_exprs.deinit()
-    }
     self.calls.deinit()
 }
 
@@ -803,9 +800,10 @@ type PendingCall = struct {
     module: String?
 }
 
-// The two lists outlive the entry: `pending_calls` is drained into the specialization pass, which
-// reads the spans out of a copy taken before the drain. Freeing here is a use-after-free.
-pub fn deinit(self: move PendingCall) {}
+pub fn deinit(self: move PendingCall) {
+    self.arg_tys.deinit()
+    self.pos_exprs.deinit()
+}
 
 // One open lambda literal being checked. `boundary` is the scope index of the lambda's own
 // parameter scope: a name found at a shallower index is an outer local, i.e. a capture.
@@ -1415,9 +1413,9 @@ fn anon_struct_ty(self: &Checker, fields: move List(Field), span: SourceSpan) Ty
             fqn = "",
             module = "",
             is_pub = true,
-            type_params = move tps,
-            assoc_params = list(0),
-            fields = move fields,
+            type_params = tps.as_slice(),
+            assoc_params = [],
+            fields = fields.as_slice(),
             decl_span = span,
             deprecation = null,
             is_simd = false,
@@ -1425,6 +1423,8 @@ fn anon_struct_ty(self: &Checker, fields: move List(Field), span: SourceSpan) Ty
         }),
         $"__anon_{self.nominals.next_id}",
     )
+    tps.deinit()
+    fields.deinit()
     self.anon_structs.set(key, nid)
     return mk_nominal(self, nid, vars)
 }
@@ -3079,17 +3079,15 @@ fn note_decl_params(self: &Checker, id: NominalId, body: &TypeExpr) {
 }
 
 fn register_struct_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedString) NominalId {
-    let empty_params: List(VarId) = list(0)
-    let empty_fields: List(Field) = list(0)
     // `fqn` field is a placeholder - `register` overwrites it with the stable view it owns. The
     // OwnedString is transferred to the registry.
     let sd = StructDef {
         fqn = "",
         module = self.current_module.unwrap(),
         is_pub = td.is_pub,
-        type_params = move empty_params,
-        assoc_params = list(0),
-        fields = move empty_fields,
+        type_params = [],
+        assoc_params = [],
+        fields = [],
         decl_span = td.span,
         deprecation = deprecation_of(td.directives),
         // `#simd` over-aligns the type; `#foreign` locks its layout to the C ABI (spec 2.4 / 10).
@@ -3124,15 +3122,13 @@ fn struct_repr_of(td: &TypeDecl) StructRepr {
 }
 
 fn register_enum_placeholder(self: &Checker, td: &TypeDecl, fqn: move OwnedString) NominalId {
-    let empty_params: List(VarId) = list(0)
-    let empty_variants: List(VariantDef) = list(0)
     let ed = EnumDef {
         fqn = "",
         module = self.current_module.unwrap(),
         is_pub = td.is_pub,
-        type_params = move empty_params,
-        assoc_params = list(0),
-        variants = move empty_variants,
+        type_params = [],
+        assoc_params = [],
+        variants = [],
         tag_values = null,
         decl_span = td.span,
         deprecation = deprecation_of(td.directives),
@@ -3168,7 +3164,7 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, fqn: String, implicit: Str
         let ty = resolve_type_expr(self, f.type_expr)
         // A field name twice would make every later lookup ambiguous and silently pick the first -
         // reject at the declaration.
-        if field_named(&fields, f.name) {
+        if field_named(fields.as_slice(), f.name) {
             push_diag_e(
                 self,
                 f.span,
@@ -3204,9 +3200,9 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, fqn: String, implicit: Str
                 fqn = sd.fqn,
                 module = sd.module,
                 is_pub = sd.is_pub,
-                type_params = move type_params,
-                assoc_params = move assoc_params,
-                fields = move fields,
+                type_params = type_params.as_slice(),
+                assoc_params = assoc_params.as_slice(),
+                fields = fields.as_slice(),
                 decl_span = sd.decl_span,
                 deprecation = sd.deprecation,
                 is_simd = sd.is_simd,
@@ -3214,12 +3210,11 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, fqn: String, implicit: Str
             }
             self.nominals.replace_body(id, NominalDef.NomStruct(move updated))
         }
-        _ => {
-            type_params.deinit()
-            fields.deinit()
-            assoc_params.deinit()
-        }
+        _ => {}
     }
+    type_params.deinit()
+    fields.deinit()
+    assoc_params.deinit()
     check_recursive_nominal(self, id, td.name, td.span)
 }
 
@@ -3384,7 +3379,7 @@ fn nominal_contains(
         }
         NomEnum(ed) => {
             for i in 0..ed.variants.len {
-                let vd = &ed.variants[i]
+                let vd = ed.variants[i]
                 for k in 0..vd.payloads.len {
                     if !hit and ty_contains_nominal(self, vd.payloads[k], target, seen) {
                         hit = true
@@ -3449,7 +3444,7 @@ fn peel_refs(self: &Checker, ty: Ty) Ty {
     return peeled
 }
 
-fn field_named(fields: &List(Field), name: String) bool {
+fn field_named(fields: Field[], name: String) bool {
     for i in 0..fields.len {
         if fields[i].name == name {
             return true
@@ -3458,7 +3453,7 @@ fn field_named(fields: &List(Field), name: String) bool {
     return false
 }
 
-fn variant_named(variants: &List(VariantDef), name: String) bool {
+fn variant_named(variants: VariantDef[], name: String) bool {
     for i in 0..variants.len {
         if variants[i].name == name {
             return true
@@ -3570,7 +3565,7 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, fqn: String, implicit: Strin
         tags.push(next_tag)
         tag_by_name.set(v.name, next_tag)
         next_tag = next_tag + 1i64
-        if variant_named(&variants, v.name) {
+        if variant_named(variants.as_slice(), v.name) {
             push_diag_e(
                 self,
                 v.span,
@@ -3580,14 +3575,23 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, fqn: String, implicit: Strin
             payloads.deinit()
             continue
         }
-        variants.push(VariantDef { name = v.name, payloads = move payloads, decl_span = v.span })
+        variants.push(VariantDef {
+            name = v.name,
+            payloads = temp_copy(self, payloads.as_slice()),
+            decl_span = v.span,
+        })
+        payloads.deinit()
     }
-    let tag_values: Dict(String, i64)? = null
+    let tag_values: TagValue[]? = null
     if has_explicit_tag {
-        install(&tag_values, Some(move tag_by_name))
-    } else {
-        tag_by_name.deinit()
+        let tags: List(TagValue) = list(tag_by_name.len())
+        for e in tag_by_name {
+            tags.push(TagValue { name = e.key, value = e.value })
+        }
+        tag_values = Some(temp_copy(self, tags.as_slice()))
+        tags.deinit()
     }
+    tag_by_name.deinit()
     self.env.pop_scope()
     let assoc_params: List(VarId) = list(0)
     for &v in variants {
@@ -3603,22 +3607,20 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, fqn: String, implicit: Strin
                 fqn = ed.fqn,
                 module = ed.module,
                 is_pub = ed.is_pub,
-                type_params = move type_params,
-                assoc_params = move assoc_params,
-                variants = move variants,
-                tag_values = move tag_values,
+                type_params = type_params.as_slice(),
+                assoc_params = assoc_params.as_slice(),
+                variants = variants.as_slice(),
+                tag_values = tag_values,
                 decl_span = ed.decl_span,
                 deprecation = ed.deprecation,
             }
             self.nominals.replace_body(id, NominalDef.NomEnum(move updated))
         }
-        _ => {
-            type_params.deinit()
-            variants.deinit()
-            tag_values.deinit()
-            assoc_params.deinit()
-        }
+        _ => {}
     }
+    type_params.deinit()
+    variants.deinit()
+    assoc_params.deinit()
     check_recursive_nominal(self, id, td.name, td.span)
     // E2047: a NAKED enum - one that assigns integer tags - is a plain C-style enumeration; a
     // payload would have nowhere to live.
@@ -4513,10 +4515,7 @@ fn drain_pending_specs(self: &Checker, report: bool = true) {
         for p in queue.drain() {
             if pending_ready(self, &p) {
                 process_pending(self, &p)
-                // A processed pick's collections are done; a deferred one keeps its storage into
-                // the next pass, so the queue itself is never element-deinited.
-                p.tp_binds.deinit()
-                p.inst_params.deinit()
+                p.deinit()
                 progressed = true
             } else {
                 deferred.push(p)
@@ -4539,8 +4538,7 @@ fn drain_pending_specs(self: &Checker, report: bool = true) {
     for p in queue.drain() {
         if report {
             report_uninferable_spec(self, &p)
-            p.tp_binds.deinit()
-            p.inst_params.deinit()
+            p.deinit()
         } else {
             self.pending_specs.push(p)
         }
@@ -4903,7 +4901,7 @@ fn field_index(self: &Checker, recv: Ty, name: String) FieldIndex? {
         _ => return null
     }
     const idx = self.nominals.get(nom).* match {
-        NomStruct(sd) => field_position(&sd.fields, name)
+        NomStruct(sd) => field_position(sd.fields, name)
         NomEnum(_) => null
     }
     return idx match {
@@ -4912,7 +4910,7 @@ fn field_index(self: &Checker, recv: Ty, name: String) FieldIndex? {
     }
 }
 
-fn field_position(fields: &List(Field), name: String) u32? {
+fn field_position(fields: Field[], name: String) u32? {
     for i in 0..fields.len {
         if fields[i].name == name {
             return Some(i as u32)
@@ -5559,8 +5557,8 @@ fn collect_assoc_vars(self: &Checker, t: Ty, out: &List(VarId)) {
 fn member_subst(
     self: &Checker,
     inst: Ty,
-    params: &List(VarId),
-    assoc: &List(VarId),
+    params: VarId[],
+    assoc: VarId[],
     args: ChildSpan,
 ) Dict(VarId, Ty) {
     if assoc.len > 0 {
@@ -5666,10 +5664,10 @@ fn solve_instance(self: &Checker, inst: Ty) {
     self.nominals.assoc_solved.set(t, solved)
 }
 
-fn nominal_assoc(self: &Checker, id: NominalId) &List(VarId) {
+fn nominal_assoc(self: &Checker, id: NominalId) VarId[] {
     return self.nominals.get(id).* match {
-        NomStruct(sd) => &sd.assoc_params
-        NomEnum(ed) => &ed.assoc_params
+        NomStruct(sd) => sd.assoc_params
+        NomEnum(ed) => ed.assoc_params
     }
 }
 
@@ -5731,10 +5729,10 @@ fn apply_nominal_bounds(
     }
 }
 
-fn nominal_params(self: &Checker, id: NominalId) &List(VarId) {
+fn nominal_params(self: &Checker, id: NominalId) VarId[] {
     return self.nominals.get(id).* match {
-        NomStruct(sd) => &sd.type_params
-        NomEnum(ed) => &ed.type_params
+        NomStruct(sd) => sd.type_params
+        NomEnum(ed) => ed.type_params
     }
 }
 
@@ -6891,11 +6889,7 @@ fn check_template_rigid(self: &Checker, fd: &FunctionDecl) {
     replace(&self.pending_anons, saved_anons).deinit()
     replace(&self.pending_members, saved_members).deinit()
     replace(&self.pending_fn_names, saved_fn_names).deinit()
-    while self.pending_calls.len > calls0 {
-        const pc = self.pending_calls.pop().unwrap()
-        pc.arg_tys.deinit()
-        pc.pos_exprs.deinit()
-    }
+    self.pending_calls.truncate(calls0)
     self.engine.clear_rigid()
 }
 
@@ -7141,10 +7135,6 @@ fn rigid_var_name(self: &Checker, rigid: Ty, name: String) {
 
 // Picks a rigid check made and will never instantiate: their tables die with them.
 fn drop_pending_specs(specs: move List(PendingSpec)) {
-    for ps in specs.drain() {
-        ps.tp_binds.deinit()
-        ps.inst_params.deinit()
-    }
     specs.deinit()
 }
 
@@ -8073,7 +8063,7 @@ fn check_match_coverage(self: &Checker, m: &MatchExpr, scrutinee: Ty) {
 fn pattern_is_catch_all(self: &Checker, pat: &Pattern, e: &EnumDef) bool {
     return pat.* match {
         Wildcard(_) => true
-        Variable(v) => !variant_named(&e.variants, v.name)
+        Variable(v) => !variant_named(e.variants, v.name)
         Or(o) => any_catch_all(self, o.alternatives, e)
         _ => false
     }
@@ -8092,7 +8082,7 @@ fn collect_covered(self: &Checker, pat: &Pattern, e: &EnumDef, out: &List(String
     pat.* match {
         EnumVariant(ev) => out.push(ev.name)
         Variable(v) => {
-            if variant_named(&e.variants, v.name) {
+            if variant_named(e.variants, v.name) {
                 out.push(v.name)
             }
         }
@@ -8321,7 +8311,7 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
         record_nominal_ref(self, head_span(ev.span, ev.qualifier.unwrap().len), n.id)
     }
 
-    let payloads = &e.variants[vnum as usize].payloads
+    let payloads = e.variants[vnum as usize].payloads
     if payloads.len != ev.payloads.len {
         push_diag_e(
             self,
@@ -8335,7 +8325,7 @@ fn check_variant_pattern(self: &Checker, ev: &EnumVariantPattern, expected: Ty) 
 
     // Payload types are written against the enum's own type params; the scrutinee's type arguments
     // give them concrete meaning.
-    let sub = member_subst(self, self.engine.zonk(peeled), &e.type_params, &e.assoc_params, n.args)
+    let sub = member_subst(self, self.engine.zonk(peeled), e.type_params, e.assoc_params, n.args)
     for i in 0..payloads.len {
         let pty = self.engine.substitute_shared(payloads[i], &sub)
         check_pattern(self, &ev.payloads[i], pty, true)
@@ -8376,7 +8366,7 @@ fn check_variable_pattern(self: &Checker, v: &VariablePattern, expected: Ty, is_
             }
             if ed.is_some() {
                 const def = ed.unwrap()
-                if !variant_named(&def.variants, v.name) {
+                if !variant_named(def.variants, v.name) {
                     push_diag_e(
                         self,
                         v.span,
@@ -8403,7 +8393,7 @@ fn nullary_variant_index(self: &Checker, id: NominalId, name: String) u32? {
     }
     let e = ed.unwrap()
     for i in 0..e.variants.len {
-        let vd = &e.variants[i]
+        let vd = e.variants[i]
         if vd.name == name and vd.payloads.len == 0 {
             return Some(i as u32)
         }
@@ -10015,14 +10005,13 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
             owned = false,
         })
     }
-    let empty_tps: List(VarId) = list(0)
     let sd = StructDef {
         fqn = "",
         module = module_name,
         is_pub = true,
-        type_params = move empty_tps,
-        assoc_params = list(0),
-        fields = move fields,
+        type_params = [],
+        assoc_params = [],
+        fields = fields.as_slice(),
         decl_span = lam.span,
         deprecation = null,
         is_simd = false,
@@ -10035,6 +10024,7 @@ fn check_lambda(self: &Checker, lam: &LambdaExpr, arity: usize = 1, expected: NF
         NominalDef.NomStruct(move sd),
         $"{module_name}.__Closure_{lid}",
     )
+    fields.deinit()
 
     let sym = $"__flang_closure_call_{lid}"
     let sig_params: List(Ty) = list(params.len)
@@ -11924,8 +11914,7 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
             None => {}
         }
         self.current_module = saved
-        pc.arg_tys.deinit()
-        pc.pos_exprs.deinit()
+        pc.deinit()
     }
     parked.deinit()
 }
@@ -13669,7 +13658,7 @@ fn report_missing_fields(self: &Checker, ty: Ty, present: &List(String), span: S
 fn report_union_members(self: &Checker, sd: &StructDef, present: &List(String), span: SourceSpan) {
     let written: usize = 0
     for n in present.as_slice() {
-        if field_named(&sd.fields, n) {
+        if field_named(sd.fields, n) {
             written = written + 1
         }
     }
@@ -13852,7 +13841,7 @@ fn struct_without_field(self: &Checker, recv: Ty, name: String) bool {
         return false
     }
     const __sd_v = sd.unwrap()
-    return !field_named(&__sd_v.fields, name)
+    return !field_named(__sd_v.fields, name)
 }
 
 // `w.x` where `w: Wrapper(Point)` declares `op_deref(&Wrapper($T)) &T`: field access peels the same
@@ -14134,7 +14123,7 @@ fn construct_variant(
     if !found {
         return null
     }
-    let payloads = &e.variants[vnum as usize].payloads
+    let payloads = e.variants[vnum as usize].payloads
     if payloads.len != arg_tys.len {
         return null
     }
@@ -14211,7 +14200,7 @@ fn struct_field_lookup(self: &Checker, recv: Ty, name: String) Ty? {
             if sd.type_params.len == 0 or sd.type_params.len != nr.args.len {
                 return Some(sd.fields[i].ty)
             }
-            let subst = member_subst(self, peeled, &sd.type_params, &sd.assoc_params, nr.args)
+            let subst = member_subst(self, peeled, sd.type_params, sd.assoc_params, nr.args)
             let out = self.engine.substitute_shared(sd.fields[i].ty, &subst)
             subst.deinit()
             return Some(out)
@@ -14335,23 +14324,20 @@ fn zonk_closures(self: &Checker) {
                         owned = sd.fields[i].owned,
                     })
                 }
-                let tps: List(VarId) = list(sd.type_params.len)
-                tps.push_all(sd.type_params.as_slice())
-                let aps: List(VarId) = list(sd.assoc_params.len)
-                aps.push_all(sd.assoc_params.as_slice())
                 let updated = StructDef {
                     fqn = sd.fqn,
                     module = sd.module,
                     is_pub = sd.is_pub,
-                    type_params = move tps,
-                    assoc_params = move aps,
-                    fields = move zfields,
+                    type_params = sd.type_params,
+                    assoc_params = sd.assoc_params,
+                    fields = zfields.as_slice(),
                     decl_span = sd.decl_span,
                     deprecation = sd.deprecation,
                     is_simd = sd.is_simd,
                     repr = sd.repr,
                 }
                 self.nominals.put(key, NominalDef.NomStruct(move updated))
+                zfields.deinit()
             }
             _ => {}
         }
@@ -14543,14 +14529,14 @@ fn push_member_types(self: &Checker, t: Ty, nn: &NNominalNode, work: &List(Ty)) 
     }
     self.nominals.get(nn.id).* match {
         NomStruct(sd) => {
-            let subst = member_subst(self, t, &sd.type_params, &sd.assoc_params, nn.args)
+            let subst = member_subst(self, t, sd.type_params, sd.assoc_params, nn.args)
             for &f in sd.fields {
                 work.push(self.engine.substitute_shared(f.ty, &subst))
             }
             subst.deinit()
         }
         NomEnum(ed) => {
-            let subst = member_subst(self, t, &ed.type_params, &ed.assoc_params, nn.args)
+            let subst = member_subst(self, t, ed.type_params, ed.assoc_params, nn.args)
             for &v in ed.variants {
                 for p in v.payloads {
                     work.push(self.engine.substitute_shared(p, &subst))
@@ -17464,13 +17450,7 @@ fn own_rest_carries_nothing(self: &Checker, scrut: Ty, m: &MatchExpr, upto: usiz
             own_variant_names(self, m.arms[i].pattern, &seen)
         }
     }
-    let sub = member_subst(
-        self,
-        self.engine.zonk(peeled),
-        &ed.type_params,
-        &ed.assoc_params,
-        nn.args,
-    )
+    let sub = member_subst(self, self.engine.zonk(peeled), ed.type_params, ed.assoc_params, nn.args)
     defer sub.deinit()
     for &v in ed.variants {
         if contains_view(&seen, v.name) {
@@ -18573,6 +18553,7 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
         process_pending(self, &p)
         swap(&p.tp_binds, &cp.tp_binds)
         swap(&p.inst_params, &cp.inst_params)
+        p.deinit()
     }
     for k in 0..c.calls.len {
         self.pending_calls.push(copy_pending_call(self, &c.calls[k], false))
@@ -18630,12 +18611,7 @@ fn seal_slot(self: &Checker, lit_floor: usize) {
     self.pending_members.clear()
     let names = replace(&self.pending_fn_names, list(0))
     names.deinit()
-    let calls = replace(&self.pending_calls, list(0))
-    for pc in calls.drain() {
-        pc.arg_tys.deinit()
-        pc.pos_exprs.deinit()
-    }
-    calls.deinit()
+    self.pending_calls.clear()
     self.pending_literals.truncate(lit_floor)
 }
 
@@ -18701,16 +18677,13 @@ fn copy_pending_call(self: &Checker, pc: &PendingCall, zonk_args: bool) PendingC
 // Register a cached closure environment again at the id it held (its retirement is in `recycled`,
 // keyed by the synthesized FQN) and restore its dispatch record.
 fn replay_closure(self: &Checker, f: &ClosureFact) {
-    let fields: List(Field) = list(f.fields.len)
-    fields.push_all(f.fields.as_slice())
-    let empty_tps: List(VarId) = list(0)
     let sd = StructDef {
         fqn = "",
         module = f.module,
         is_pub = true,
-        type_params = move empty_tps,
-        assoc_params = list(0),
-        fields = move fields,
+        type_params = [],
+        assoc_params = [],
+        fields = f.fields.as_slice(),
         decl_span = f.decl_span,
         deprecation = null,
         is_simd = false,
@@ -18912,7 +18885,7 @@ fn closure_fact_of(self: &Checker, nid: NominalId) ClosureFact? {
         _ => return null
     }
     let fields: List(Field) = list(sd.fields.len)
-    fields.push_all(sd.fields.as_slice())
+    fields.push_all(sd.fields)
     return Some(ClosureFact {
         id = nid,
         fqn = from_view(nominal_fqn(def)),
@@ -19057,23 +19030,21 @@ fn assemble_context(self: &Checker) List(OwnedString) {
             fqn = sd.fqn,
             module = sd.module,
             is_pub = sd.is_pub,
-            type_params = list(0),
-            assoc_params = list(0),
-            fields = move fields,
+            type_params = [],
+            assoc_params = [],
+            fields = fields.as_slice(),
             decl_span = sd.decl_span,
             deprecation = sd.deprecation,
             is_simd = false,
             repr = StructRepr.Flang,
         })
-        NomEnum(_) => {
-            fields.deinit()
-            null
-        }
+        NomEnum(_) => null
     }
     def match {
         Some(d) => self.nominals.replace_body(id.unwrap(), NominalDef.NomStruct(move d))
         None => {}
     }
+    fields.deinit()
     return fqns
 }
 

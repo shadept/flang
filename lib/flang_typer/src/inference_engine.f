@@ -502,8 +502,8 @@ fn blame_nominal(self: &Engine, ty: Ty, nn: &NNominalNode, out: &List(CopyBlame)
 fn blame_struct(self: &Engine, ty: Ty, sd: &StructDef, nn: &NNominalNode, out: &List(CopyBlame)) {
     let subst = self.nominals.unwrap().instance_subst(
         ty,
-        &sd.type_params,
-        &sd.assoc_params,
+        sd.type_params,
+        sd.assoc_params,
         nn.args,
         &self.interner,
     )
@@ -537,8 +537,8 @@ fn blame_struct(self: &Engine, ty: Ty, sd: &StructDef, nn: &NNominalNode, out: &
 fn blame_enum(self: &Engine, ty: Ty, ed: &EnumDef, nn: &NNominalNode, out: &List(CopyBlame)) {
     let subst = self.nominals.unwrap().instance_subst(
         ty,
-        &ed.type_params,
-        &ed.assoc_params,
+        ed.type_params,
+        ed.assoc_params,
         nn.args,
         &self.interner,
     )
@@ -1413,14 +1413,14 @@ test "zonk is the identity on ground types and collapses bound vars" {
 // Tests - copyability (RFC-028)
 // ─────────────────────────────────────────────────────────────────────
 
-fn cp_struct(params: move List(VarId), fields: move List(Field)) StructDef {
+fn cp_struct(params: VarId[], fields: Field[]) StructDef {
     return StructDef {
         fqn = "",
         module = "m",
         is_pub = true,
-        type_params = move params,
-        assoc_params = list(0),
-        fields = move fields,
+        type_params = params,
+        assoc_params = [],
+        fields = fields,
         decl_span = none_span(),
         deprecation = null,
         is_simd = false,
@@ -1441,8 +1441,9 @@ fn cp_nominal(eng: &Engine, id: NominalId, args: move List(Ty)) Ty {
 // `type Handle = struct { owned fd: i32 }` - the leaf resource every case below is built from.
 fn cp_handle(reg: &NominalRegistry) NominalId {
     let fs: List(Field) = list(1)
+    defer fs.deinit()
     fs.push(cp_field("fd", prim_of(PrimitiveKind.I32), true))
-    return reg.register(NominalDef.NomStruct(cp_struct(list(0), fs)), $"m.Handle")
+    return reg.register(NominalDef.NomStruct(cp_struct([], fs.as_slice())), $"m.Handle")
 }
 
 test "an owned field clears the bit, and nothing else does" {
@@ -1453,8 +1454,9 @@ test "an owned field clears the bit, and nothing else does" {
     eng.set_nominal_registry(&reg)
 
     let plain: List(Field) = list(1)
+    defer plain.deinit()
     plain.push(cp_field("fd", prim_of(PrimitiveKind.I32), false))
-    const p = reg.register(NominalDef.NomStruct(cp_struct(list(0), plain)), $"m.Plain")
+    const p = reg.register(NominalDef.NomStruct(cp_struct([], plain.as_slice())), $"m.Plain")
     const h = cp_handle(&reg)
 
     assert_true(
@@ -1479,12 +1481,14 @@ test "the bit is transitive through by-value fields, and stops at a reference" {
 
     // `struct { h: Handle }` holds the resource; `struct { h: &Handle }` only views it.
     let by_value: List(Field) = list(1)
+    defer by_value.deinit()
     by_value.push(cp_field("h", handle, false))
-    const owner = reg.register(NominalDef.NomStruct(cp_struct(list(0), by_value)), $"m.Owner")
+    const owner = reg.register(NominalDef.NomStruct(cp_struct([], by_value.as_slice())), $"m.Owner")
 
     let by_ref: List(Field) = list(1)
+    defer by_ref.deinit()
     by_ref.push(cp_field("h", eng.mk_ref(handle), false))
-    const viewer = reg.register(NominalDef.NomStruct(cp_struct(list(0), by_ref)), $"m.Viewer")
+    const viewer = reg.register(NominalDef.NomStruct(cp_struct([], by_ref.as_slice())), $"m.Viewer")
 
     assert_true(
         !eng.is_copyable(cp_nominal(&eng, owner, list(0))),
@@ -1512,10 +1516,15 @@ test "the bit follows the instantiation, not the declaration" {
     // come from substituting the instantiation's argument in.
     const tv: VarId = 1u32
     let params: List(VarId) = list(1)
+    defer params.deinit()
     params.push(tv)
     let fs: List(Field) = list(1)
+    defer fs.deinit()
     fs.push(cp_field("v", eng.interner.var_of(TyVar { id = tv, level = 0u32 }), false))
-    const box = reg.register(NominalDef.NomStruct(cp_struct(params, fs)), $"m.Box")
+    const box = reg.register(
+        NominalDef.NomStruct(cp_struct(params.as_slice(), fs.as_slice())),
+        $"m.Box",
+    )
 
     let with_handle: List(Ty) = list(1)
     with_handle.push(handle)
@@ -1540,15 +1549,20 @@ test "a view over a non-copyable element stays copyable" {
     // reference and stops, which is the same reason a slice is a view.
     const tv: VarId = 2u32
     let params: List(VarId) = list(1)
+    defer params.deinit()
     params.push(tv)
     let fs: List(Field) = list(2)
+    defer fs.deinit()
     fs.push(cp_field(
         "ptr",
         eng.mk_ref(eng.interner.var_of(TyVar { id = tv, level = 0u32 })),
         false,
     ))
     fs.push(cp_field("len", prim_of(PrimitiveKind.USize), false))
-    const view = reg.register(NominalDef.NomStruct(cp_struct(params, fs)), $"m.View")
+    const view = reg.register(
+        NominalDef.NomStruct(cp_struct(params.as_slice(), fs.as_slice())),
+        $"m.View",
+    )
 
     let args: List(Ty) = list(1)
     args.push(handle)
@@ -1566,18 +1580,24 @@ test "an enum variant payload propagates the bit" {
     const handle = cp_nominal(&eng, h, list(0))
 
     let payload: List(Ty) = list(1)
+    defer payload.deinit()
     payload.push(handle)
     let variants: List(VariantDef) = list(2)
-    variants.push(VariantDef { name = "None", payloads = list(0), decl_span = none_span() })
-    variants.push(VariantDef { name = "Some", payloads = move payload, decl_span = none_span() })
+    defer variants.deinit()
+    variants.push(VariantDef { name = "None", payloads = [], decl_span = none_span() })
+    variants.push(VariantDef {
+        name = "Some",
+        payloads = payload.as_slice(),
+        decl_span = none_span(),
+    })
     const maybe = reg.register(
         NominalDef.NomEnum(EnumDef {
             fqn = "",
             module = "m",
             is_pub = true,
-            type_params = list(0),
-            assoc_params = list(0),
-            variants = move variants,
+            type_params = [],
+            assoc_params = [],
+            variants = variants.as_slice(),
             tag_values = null,
             decl_span = none_span(),
             deprecation = null,

@@ -368,9 +368,8 @@ fn expand_node(env: &CtEnv, node: &TemplateNode, sb: &StringBuilder) Result((), 
         Verbatim(text) => { sb.append(text) }
         Interp(it) => {
             const v = ct_eval(env, &it.expr)?
-            defer v.deinit()
             if it.in_string {
-                let tmp = string_builder(16, env.alloc)
+                let tmp = string_builder(16)
                 defer tmp.deinit()
                 ct_stringify(&v, &tmp)
                 append_string_escaped(sb, tmp.as_view())
@@ -380,23 +379,22 @@ fn expand_node(env: &CtEnv, node: &TemplateNode, sb: &StringBuilder) Result((), 
         }
         Loop(lp) => {
             const iterable = ct_eval(env, &lp.iterable)?
-            const items: List(CtValue) = iterable match {
-                List(l) => move l
+            const items: CtValue[] = iterable match {
+                List(l) => l
                 _ => return Err(CtError {
                     code = "E2118",
                     message = $"`#for` requires a list to iterate",
                     span = expr_span(&lp.iterable),
                 })
             }
-            defer items.deinit()
             const shadowed = env.bindings.remove(lp.var_name)
-            for item in items.drain() {
-                env.bindings[lp.var_name] = move item
+            for item in items {
+                env.bindings[lp.var_name] = item
                 expand_template(env, lp.body, sb)?
             }
             shadowed match {
-                Some(prev) => { env.bindings[lp.var_name] = move prev }
-                None => { let _dropped = env.bindings.remove(lp.var_name) }
+                Some(prev) => { env.bindings[lp.var_name] = prev }
+                None => { const _dropped = env.bindings.remove(lp.var_name) }
             }
         }
         Cond(cd) => {
@@ -432,9 +430,10 @@ fn append_string_escaped(sb: &StringBuilder, text: String) {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────
 
-fn test_env(arena: &Allocator) CtEnv {
+fn test_env(arena: &ArenaAllocator) CtEnv {
     const ctx: ComptimeCtx = .{ os = "testos", arch = "testarch", testing = false, release = false }
-    const boxed = box(arena, ctx)
+    let a = arena.allocator()
+    const boxed = box(&a, ctx)
     const lookup: CtLookup = .{ ctx = 0usize as &u8, resolve = test_no_lookup, name = no_name }
     return ct_env(boxed, arena, lookup)
 }
@@ -464,13 +463,13 @@ fn expand_for_test(body: String, env: &CtEnv, arena: &ArenaAllocator) OwnedStrin
 test "template: #for over a bound list with #(x) and \"#(x)\"" {
     let backing = arena_allocator(context.allocator)
     defer backing.deinit()
-    let a = backing.allocator()
-    let env = test_env(&a)
-    let names: List(CtValue) = list(3, &a)
+    let env = test_env(&backing)
+    defer env.deinit()
+    let names: List(CtValue) = list(3)
     names.push(CtValue.S("x"))
     names.push(CtValue.S("y"))
     names.push(CtValue.S("z"))
-    env.bindings["names"] = CtValue.List(move names)
+    env.bindings["names"] = ct_list(&env, names)
     env.bindings["fType"] = CtValue.Ident("f32")
     const out = expand_for_test(
         "type P = struct {\n#for f in names {\n  #(f): #(fType), \"#(f)\"\n}\n}",
@@ -487,8 +486,8 @@ test "template: #for over a bound list with #(x) and \"#(x)\"" {
 test "template: #if / #elif / #else on the closed context and bindings" {
     let backing = arena_allocator(context.allocator)
     defer backing.deinit()
-    let a = backing.allocator()
-    let env = test_env(&a)
+    let env = test_env(&backing)
+    defer env.deinit()
     env.bindings["n"] = CtValue.I(2)
     const out = expand_for_test(
         "#if platform.os == \"windows\" {A} #elif n == 2 {B} #else {C}",
@@ -502,8 +501,8 @@ test "template: #if / #elif / #else on the closed context and bindings" {
 test "template: string-literal hole escapes its value" {
     let backing = arena_allocator(context.allocator)
     defer backing.deinit()
-    let a = backing.allocator()
-    let env = test_env(&a)
+    let env = test_env(&backing)
+    defer env.deinit()
     env.bindings["q"] = CtValue.S("say \"hi\"")
     const out = expand_for_test("let s = \"#(q)!\"", &env, &backing)
     defer out.deinit()
