@@ -948,33 +948,33 @@ pub fn checker() Checker {
 // The carry list is the fields moved onto the replacement below; `checker` and `deinit` enumerate
 // the rest.
 pub fn begin_demand(self: &Checker) {
-    let noms = replace(&self.nominals, nominal_registry())
+    let noms = self.nominals.carried_copy()
     let aliases = replace(&self.aliases, fqn_map())
     let consts = replace(&self.constants, fqn_map())
     let ctx_fields = replace(&self.ctx_fields, fqn_map())
-    let fns = replace(&self.functions, function_registry())
-    let tmpls = replace(&self.templates, dict())
-    let bounds = replace(&self.fn_bounds, dict())
-    let nbounds = replace(&self.nom_bounds, dict())
-    let paths = replace(&self.paths, dict())
-    let btexts = replace(&self.bound_texts, dict())
-    let sdecls = replace(&self.self_decls, dict())
+    let fns = self.functions.carried_copy()
+    let tmpls = fresh_table(replace(&self.templates, dict()))
+    let bounds = fresh_table(replace(&self.fn_bounds, dict()))
+    let nbounds = fresh_table(replace(&self.nom_bounds, dict()))
+    let paths = fresh_table(replace(&self.paths, dict()))
+    let btexts = fresh_table(replace(&self.bound_texts, dict()))
+    let sdecls = fresh_table(replace(&self.self_decls, dict()))
     let path_bufs = replace(&self.path_bufs, list(0))
-    let decl_params = replace(&self.fn_decl_params, dict())
-    let deprecations = replace(&self.fn_deprecations, dict())
-    let anons = replace(&self.anon_structs, dict())
-    let recycled = replace(&self.recycled, dict())
-    let nom_diags = replace(&self.nominal_diags, dict())
+    let decl_params = fresh_table(replace(&self.fn_decl_params, dict()))
+    let deprecations = fresh_table(replace(&self.fn_deprecations, dict()))
+    let anons = fresh_table(replace(&self.anon_structs, dict()))
+    let recycled = fresh_table(replace(&self.recycled, dict()))
+    let nom_diags = fresh_table(replace(&self.nominal_diags, dict()))
     let nom_diag_keys = replace(&self.nominal_diag_keys, list(0))
-    let sig_caches = replace(&self.sig_caches, dict())
+    let sig_caches = fresh_table(replace(&self.sig_caches, dict()))
     let sig_cache_keys = replace(&self.sig_cache_keys, list(0))
-    let body_caches = replace(&self.body_caches, dict())
+    let body_caches = fresh_table(replace(&self.body_caches, dict()))
     let body_cache_keys = replace(&self.body_cache_keys, list(0))
-    let ttypes = replace(&self.template_types, dict())
+    let ttypes = fresh_table(replace(&self.template_types, dict()))
     let ttype_keys = replace(&self.template_type_keys, list(0))
-    let locals = replace(&self.local_types, dict())
-    let local_generics = replace(&self.local_generics, dict())
-    let nested = replace(&self.nested, dict())
+    let locals = fresh_table(replace(&self.local_types, dict()))
+    let local_generics = fresh_table(replace(&self.local_generics, dict()))
+    let nested = fresh_table(replace(&self.nested, dict()))
     const ct = self.comptime
 
     let next = checker()
@@ -1010,6 +1010,17 @@ pub fn begin_demand(self: &Checker) {
     // Replaces the checker and releases what it still owns: the tables carried above already left,
     // so what goes is this demand's own.
     install(self, next)
+}
+
+// `d`'s entries moved into a table allocated now, so a carried table is never older than the demand
+// that holds it.
+fn fresh_table(d: move Dict($K, $V)) Dict(K, V) {
+    let out: Dict(K, V) = dict(d.len())
+    for e in d.drain() {
+        out.set(e.0, e.1)
+    }
+    d.deinit()
+    return out
 }
 
 // Start this demand's result tables at the previous demand's final sizes - a re-demand rewrites
@@ -14342,7 +14353,7 @@ fn zonk_closures(self: &Checker) {
             _ => {}
         }
     }
-    self.closures = move zc
+    install(&self.closures, zc)
 }
 
 // Drain the parked overloaded-name-as-value sites of the scope that

@@ -171,32 +171,6 @@ pub fn deinit(self: move TypeCheckResult) {
     self.context_fields.deinit()
 }
 
-// Free the tables a retired snapshot's readers no longer need, keeping the struct valid for a later
-// `deinit`. What survives is `synth_strings` and `synth_arena`: `RtConst` targets and desugared AST
-// in later results and module caches point into them. The interner is a stand-in by retirement time
-// (`take_interner`) and `phases` is plain data, so neither is touched.
-pub fn slim_retire(self: &TypeCheckResult) {
-    // Each table is swapped for a fresh empty one and the old one released: the struct stays valid
-    // for a later `deinit`.
-    install(&self.node_types, dict())
-    install(&self.resolved_ops, dict())
-    install(&self.resolved_targets, dict())
-    install(&self.instantiated_types, list(0))
-    install(&self.specializations, specialization_registry())
-    install(&self.desugars, dict())
-    install(&self.default_args, dict())
-    install(&self.arg_lists, dict())
-    install(&self.receiver_derefs, dict())
-    install(&self.receiver_adapts, dict())
-    install(&self.arg_derefs, dict())
-    install(&self.nominals, nominal_registry())
-    install(&self.functions, function_registry())
-    install(&self.lambdas, dict())
-    install(&self.closures, dict())
-    install(&self.spans, dict())
-    install(&self.file_paths, list(0))
-}
-
 // Move the type table out of the snapshot, leaving a zero-capacity stand-in. The next demand adopts
 // the table so the handles its carried registry holds stay resolvable; this snapshot's own handles
 // remain valid in the table wherever it now lives, but no longer resolve through this struct.

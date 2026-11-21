@@ -1074,30 +1074,6 @@ Fix: consts resolve before function-as-value in `check_identifier`
 still prefer registry overloads. Regression test:
 `tests/harness/imports/const_shadows_fn_value.f`.
 
-### Checker leaks ~129 MB per cold check, ~24 MB per re-demand
-
-**Status:** Open - reduced from 250 MB / 60 MB, residual unattributed. The figures below came from
-instrumentation since removed from the CLI and cannot be reproduced as written; they are also a
-live-at-exit accounting, which is not the working set a running server holds. For the LSP path the
-measured numbers are in "The LSP Retains ~9.5 KB Per Keystroke" above - 60 MB after opening a
-stdlib file, not 129 MB, and the figure that matters is the per-edit growth rather than the open
-**Affected:** `lib/flang_typer/src/checker.f` and the demand path generally
-
-Measured with the `FLANG_REDEMAND` probe and `--mem`, both since removed
-from the CLI along with the RFC-022 gates (2026-08-28): `FLANG_REDEMAND=<n>`
-re-demanded the analyzed project n times and `FLANG_REDEMAND_EXIT` tore the
-unit down and reported before exiting, so live-at-exit was memory nothing
-owns. The numbers below are from that instrumentation; reproducing them
-means re-adding it. On the compiler corpus a
-cold check leaves 129 MB unreachable and each re-demand adds ~24 MB. The
-big one is fixed - the per-lookup visibility-set copies
-(`current_visibility` / `fn_visibility`) were ~120 MB cold - along with
-processed drain picks, resolved parked calls and overwritten generic
-templates. The residual is spread across many small per-work-unit
-allocations; attribution wants a counting-allocator variant that tags
-allocations by call site. Irrelevant to one-shot builds (the process
-exits); relevant to the LSP, where the per-re-demand share accumulates.
-
 ### Member access on a primitive type-checks, then dies in lowering
 
 **Status:** Open
@@ -3826,9 +3802,9 @@ payload variant, and a naked variant under two different stack fills).
 
 Running several `analyze_project` calls in one process - a fresh `AnalyzedProject` each time, full
 stdlib module set, unit deinited between runs - slows down sharply per round: inside a `flang test`
-runner process the fourth such analysis took minutes where a fresh process takes ~1-2 s. The known
-per-cold-check leak (~129 MB, see the retirement/leak entry above) explains the retention but not a
->100x slowdown; candidate mechanisms are allocator behavior over a very large live heap and paging.
+runner process the fourth such analysis took minutes where a fresh process takes ~1-2 s. The
+per-cold-check leak measured then (~129 MB; the per-recheck retention is gone since SH-11) explains the
+retention but not a >100x slowdown; candidate mechanisms are allocator behavior over a very large live heap and paging.
 The `FLANG_REDEMAND` probe (since removed) was a different path - it reused one `AnalyzedProject` -
 and did not degrade this way. Matters for RFC-023: an LSP process runs many analyses over its lifetime. Observed 2026-08-27
 while writing the W1004 tests in `lib/flang_analysis/src/unused.f`; those tests now analyse a

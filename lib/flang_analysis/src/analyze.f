@@ -265,16 +265,10 @@ pub type AnalyzedProject = struct {
     // modules this leaves out: their bodies have no node types to lower, and nothing demanded can
     // reach them (identifier and operator resolution are import-scoped).
     demanded: List(bool)
-    // Sources and ASTs that a re-parse replaced, held until the unit is dropped. A
-    // `TypeCheckResult` holds string views into the source it was checked from (nominal FQNs, field
-    // names) and AST pointers into the module, so a result outlives the buffers it was built over.
+    // Sources and ASTs that a re-parse replaced. The previous result holds views into them, so they
+    // are released at the end of the check that replaces that result.
     retired_sources: List(OwnedString)
     retired_modules: List(Module)
-    // Results a later demand replaced. A replayed body slot (RFC-022 5d) views an earlier result's
-    // `synth_strings` buffers, so a retired result is slimmed (`slim_retire`) rather than freed:
-    // the tables go, the viewed buffers stay until unit teardown. Each entry is pushed after its
-    // type table was adopted by the next demand.
-    retired_results: List(TypeCheckResult)
     result: TypeCheckResult
     checked: bool
     // Everything the parse tier produced: a module's own parse errors, plus the load failures that
@@ -383,7 +377,6 @@ pub fn analyze_project(
         demanded = list(0),
         retired_sources = list(0),
         retired_modules = list(0),
-        retired_results = list(0),
         result = empty_result(),
         checked = false,
         parse_diags = move parse_diags,
@@ -433,6 +426,8 @@ fn check_project(
     if !self.checked {
         return
     }
+    defer install(&self.retired_sources, list(0))
+    defer install(&self.retired_modules, list(0))
 
     let path_views = self.fqns.map { it.view() }
     defer path_views.deinit()
@@ -457,9 +452,8 @@ fn check_project(
     let chk = &self.checker
     chk.begin_demand()
     // The type table is one per project: adopt it out of the previous result so the carried nominal
-    // bodies' handles stay resolvable, and retire what is left of that result - a caller-held copy
-    // (gate A) may still read its tables, so the storage lives until unit teardown. The previous
-    // result's table sizes presize the demand's fresh tables, since a re-demand rewrites nearly
+    // bodies' handles stay resolvable. What is left of that result is released when this check
+    // ends. Its table sizes presize the demand's fresh tables, since a re-demand rewrites nearly
     // every entry.
     chk.adopt_interner(take_interner(&self.result))
     // The specialization registry carries the same way (RFC-022 5e): entries the demand can
@@ -467,11 +461,8 @@ fn check_project(
     chk.adopt_specs(take_specs(&self.result))
     const sizes = table_caps(&self.result)
     chk.presize_results(&sizes)
-    slim_retire(&self.result)
-    // The retired snapshot moves into the list; a fresh empty one takes its place until the demand
-    // installs the new result below.
-    const retired = replace(&self.result, empty_result())
-    self.retired_results.push(retired)
+    let retired = replace(&self.result, empty_result())
+    defer retired.deinit()
     let gens = template_state()
     chk.set_comptime_ctx(ctx.comptime)
     // Set once per context, not per demand: a carried body slot (RFC-022 5d) replays what the
@@ -479,19 +470,22 @@ fn check_project(
     // reused slots disagreeing with the fresh ones.
     chk.set_check_tests(ctx.check_tests)
     chk.set_project_globals(&ctx.global_imports, &self.project_origin)
-    self.result = check_all(
-        chk,
-        &self.modules,
-        &path_views,
-        &self.sources,
-        &self.file_paths,
-        &gens,
-        Some(&order),
-        recollect,
-        dm,
+    install(
+        &self.result,
+        check_all(
+            chk,
+            &self.modules,
+            &path_views,
+            &self.sources,
+            &self.file_paths,
+            &gens,
+            Some(&order),
+            recollect,
+            dm,
+        ),
     )
     drain_diagnostics(&self.diagnostics, &chk.diagnostics)
-    self.generated = gens.take_output()
+    install(&self.generated, gens.take_output())
     gens.deinit()
 
     // W1003 unused functions, over the resolution edges the check just recorded. Opt-in per
@@ -525,7 +519,7 @@ fn check_project(
     }
 
     // Last, so a code is silenced whichever phase raised it, the unused warnings included.
-    self.diagnostics = filter_allowed_project(&self.diagnostics, &self.modules)
+    install(&self.diagnostics, filter_allowed_project(&self.diagnostics, &self.modules))
 }
 
 // The demand set for a lazy check (RFC-022 §6): the project's own modules, the auto-imported
@@ -745,7 +739,6 @@ pub fn analyze_source_set(srcs: move List(OwnedString), fqns: &List(String)) Ana
         demanded = list(0),
         retired_sources = list(0),
         retired_modules = list(0),
-        retired_results = list(0),
         result = move result,
         checked = checked,
         parse_diags = move parse_diags,
@@ -758,7 +751,6 @@ pub fn analyze_source_set(srcs: move List(OwnedString), fqns: &List(String)) Ana
 }
 
 pub fn deinit(self: move AnalyzedProject) {
-    self.retired_results.deinit()
     self.retired_modules.deinit()
     self.retired_sources.deinit()
     self.demanded.deinit()
