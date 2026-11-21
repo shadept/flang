@@ -60,12 +60,10 @@ pub fn generate_vendor(headers: &List(OwnedString), vendor_dir: String) Bindings
     if stale.len == 0 {
         return report
     }
-    const found = discover_compiler()
-    if found.is_err() {
+    const cc = discover_compiler() ?? {
         report.errors.push($"FFI: {stale[0]}: no C compiler found to read the header")
         return report
     }
-    const cc = found.unwrap()
     defer cc.deinit()
     for h in stale.as_slice() {
         bind_header(&cc, h, vendor_dir, &report)
@@ -163,16 +161,17 @@ fn library_probe(header: String, root: String) OwnedString {
     defer texts.deinit()
     const pattern = $"{root}/**/*.h"
     defer pattern.deinit()
-    const it = glob(pattern.view())
-    if it.is_ok() {
-        const paths = it.unwrap()
-        defer paths.deinit()
-        for p in paths {
-            read_text(p) match {
-                Some(t) => texts.push(t)
-                None => {}
+    glob(pattern.view()) match {
+        Ok(paths) => {
+            defer paths.deinit()
+            for p in paths {
+                read_text(p) match {
+                    Some(t) => texts.push(t)
+                    None => {}
+                }
             }
         }
+        Err(_) => {}
     }
     let views: List(String) = list(texts.len)
     defer views.deinit()
@@ -197,6 +196,7 @@ fn folds_case() bool {
 // `flang-bindgen 1`, the header, then one `<hash> <path>` line per library header read.
 fn stamp_text(header: String, files: &List(OwnedString)) OwnedString {
     let sb = string_builder(256)
+    defer sb.deinit()
     sb.append(STAMP_VERSION)
     sb.append("\nheader ")
     sb.append(header)
@@ -218,11 +218,7 @@ fn stamp_fresh(stamp_path: String, module_path: String, header: String) bool {
     if !is_file(module_path) {
         return false
     }
-    const text = read_text(stamp_path)
-    if text.is_none() {
-        return false
-    }
-    const s = text.unwrap()
+    const s = read_text(stamp_path) ?? return false
     defer s.deinit()
     const lines = s.view().split('\n')
     defer lines.deinit()
@@ -269,11 +265,10 @@ fn file_hash(path: String) usize? {
 fn write_atomic(path: String, contents: String) bool {
     const tmp = $"{path}.tmp"
     defer tmp.deinit()
-    const opened = open_file(tmp.view(), FileMode.Write)
-    if opened.is_err() {
-        return false
+    let f = open_file(tmp.view(), FileMode.Write) match {
+        Ok(v) => move v
+        Err(_) => return false
     }
-    let f = opened.unwrap()
     const w = write(&f, contents)
     close_file(f)
     if w.is_err() {

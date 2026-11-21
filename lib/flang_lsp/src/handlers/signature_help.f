@@ -130,8 +130,10 @@ test "call_site_at finds the callee and counts top-level commas" {
 test "call_site_at outside any call answers null" {
     const src = "let r = done()"
     const balanced = call_site_at(src, src.len)
+    defer balanced.deinit()
     assert_true(balanced.is_none(), "balanced text, no open call")
     const no_parens = call_site_at("x + y", 3)
+    defer no_parens.deinit()
     assert_true(no_parens.is_none(), "no parentheses at all")
 }
 

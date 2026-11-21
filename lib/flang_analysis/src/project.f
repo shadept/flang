@@ -135,11 +135,7 @@ pub fn current_platform(self: &Project) &PlatformConfig {
 // module.
 pub fn glob_sources(pattern: String) List(OwnedString) {
     let out: List(OwnedString) = list(0)
-    let r = glob(pattern)
-    if r.is_err() {
-        return out
-    }
-    let it = r.unwrap()
+    let it = glob(pattern).ok() ?? return out
     defer it.deinit()
     for path in it {
         if ends_with(path, ".generated.f") {
@@ -265,12 +261,14 @@ fn read_deps(self: &ManifestReader, proj: &Project, t: &Value) {
 
 fn read_fmt(self: &ManifestReader, proj: &Project, t: &Value) {
     for e in t.as_map().unwrap() {
-        const text = scalar_text(&e.value)
-        if text.is_none() {
-            self.mismatch("fmt")
-            return
+        const text = scalar_text(&e.value) match {
+            Some(t) => move t
+            None => {
+                self.mismatch("fmt")
+                return
+            }
         }
-        proj.fmt.push(FmtEntry { key = from_view(e.key.view()), value = text.unwrap() })
+        proj.fmt.push(FmtEntry { key = from_view(e.key.view()), value = move text })
     }
 }
 
@@ -433,5 +431,6 @@ test "invalid TOML and wrongly typed keys are errors" {
     assert_eq(field, "project.name", "wrong type names the key")
 
     const dep = parse_project("[dependencies]\nx = \"../x\"\n")
+    defer dep.deinit()
     assert_true(dep.is_err(), "a dependency must be a table with a path")
 }

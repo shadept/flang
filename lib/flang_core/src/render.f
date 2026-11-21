@@ -54,6 +54,7 @@ pub fn render_diagnostic(
     style: &RenderStyle,
 ) OwnedString {
     let sb = string_builder(256)
+    defer sb.deinit()
     write_header(&sb, d, style)
     if is_none(d.span) {
         return sb.to_string()
@@ -312,6 +313,7 @@ fn digits(n: usize) usize {
 
 fn uint_text(n: usize) OwnedString {
     let sb = string_builder(8)
+    defer sb.deinit()
     sb.append(n)
     return sb.to_string()
 }
@@ -389,6 +391,7 @@ test "a spanless diagnostic is the header alone" {
 
 test "the gutter widens with the line number" {
     let src = string_builder(256)
+    defer src.deinit()
     for _i in 0usize..11usize {
         src.append("x\n")
     }

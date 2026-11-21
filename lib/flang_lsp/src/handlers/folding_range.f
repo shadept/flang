@@ -20,6 +20,7 @@ pub type FoldRange = struct {
 pub fn folding_ranges(text: String) List(FoldRange) {
     let out: List(FoldRange) = list(0)
     let lx = lexer(text)
+    defer lx.deinit()
     let tokens = lx.tokenize()
     defer tokens.deinit()
 

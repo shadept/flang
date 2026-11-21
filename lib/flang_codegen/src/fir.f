@@ -522,15 +522,6 @@ pub fn module() IrModule {
 }
 
 pub fn deinit(self: move IrModule) {
-    loop {
-        const next = self.tests.pop()
-        if next.is_none() {
-            break
-        }
-        const t = next.unwrap()
-        t.label.deinit()
-        t.symbol.deinit()
-    }
     self.tests.deinit()
     self.run_test match {
         Some(s) => s.deinit()
@@ -540,6 +531,7 @@ pub fn deinit(self: move IrModule) {
     self.functions.deinit()
     self.foreigns.deinit()
     self.globals.deinit()
+    self.skipped.deinit()
     self.skip_notes.deinit()
     self.displays.deinit()
 }
@@ -597,28 +589,38 @@ pub fn deinit(self: move Block) {
 
 pub fn deinit(self: move Instr) {
     self match {
-        Call(c) => {
-            c.args.deinit()
-            c.variadic_arg_types.deinit()
-        }
-        CallIndirect(c) => {
-            c.args.deinit()
-            c.param_types.deinit()
-            c.variadic_arg_types.deinit()
-        }
+        Call(c) => c.deinit()
+        CallIndirect(c) => c.deinit()
         _ => {}
     }
 }
 
+pub fn deinit(self: move CallInstr) {
+    self.args.deinit()
+    self.variadic_arg_types.deinit()
+}
+
+pub fn deinit(self: move CallIndirectInstr) {
+    self.args.deinit()
+    self.param_types.deinit()
+    self.variadic_arg_types.deinit()
+}
+
 pub fn deinit(self: move Terminator) {
     self match {
-        Br(t) => t.args.deinit()
-        BrIf(b) => {
-            b.then_target.args.deinit()
-            b.else_target.args.deinit()
-        }
+        Br(t) => t.deinit()
+        BrIf(b) => b.deinit()
         _ => {}
     }
+}
+
+pub fn deinit(self: move BlockTarget) {
+    self.args.deinit()
+}
+
+pub fn deinit(self: move BrIfTerm) {
+    self.then_target.deinit()
+    self.else_target.deinit()
 }
 
 pub fn deinit(self: move ForeignDecl) {
@@ -698,6 +700,7 @@ pub fn add_foreign(self: &IrModule, f: move ForeignDecl) {
 pub fn add_agg(self: &IrModule, a: move AggDef) {
     for i in 0..self.aggs.len {
         if self.aggs[i].name == a.name {
+            a.deinit()
             return
         }
     }

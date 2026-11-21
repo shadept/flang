@@ -426,11 +426,7 @@ fn unknown_subcommand(name: String) i32 {
 // project mode, so its imports and the stdlib resolve; with no argument, load `flang.toml` from the
 // current directory and build the project.
 fn run_build(argv: String[], cli: &Cli) i32 {
-    let opts_opt = build_opts(argv, cli, false, false)
-    if opts_opt.is_none() {
-        return 1
-    }
-    const opts = opts_opt.unwrap()
+    const opts = build_opts(argv, cli, false, false) ?? return 1
     defer opts.deinit()
     if cli.args.len > 0 {
         const path = cli.args[0]
@@ -449,11 +445,7 @@ fn run_build(argv: String[], cli: &Cli) i32 {
 // check: type-check the project, `test {}` bodies included, and stop. `--eager` widens the check
 // from the project's import closure to every module that loaded.
 fn run_check(argv: String[], cli: &Cli) i32 {
-    let opts_opt = build_opts(argv, cli, true, true)
-    if opts_opt.is_none() {
-        return 1
-    }
-    const opts = opts_opt.unwrap()
+    const opts = build_opts(argv, cli, true, true) ?? return 1
     defer opts.deinit()
     if cli.args.len > 0 {
         const path = cli.args[0]
@@ -476,11 +468,7 @@ fn run_test(argv: String[], cli: &Cli) i32 {
         println(msg.view())
         return 1
     }
-    let opts_opt = build_opts(argv, cli, false, true)
-    if opts_opt.is_none() {
-        return 1
-    }
-    const opts = opts_opt.unwrap()
+    const opts = build_opts(argv, cli, false, true) ?? return 1
     defer opts.deinit()
     return build_project(&opts)
 }
@@ -798,6 +786,7 @@ fn expand_all(items: &List(OwnedString), missing: &List(OwnedString)) List(Owned
     for &item in items {
         const s = item.view()
         let sb = string_builder(s.len)
+        defer sb.deinit()
         let ok = true
         let i: usize = 0
         while i < s.len {
@@ -826,8 +815,6 @@ fn expand_all(items: &List(OwnedString), missing: &List(OwnedString)) List(Owned
         }
         if ok {
             out.push(sb.to_string())
-        } else {
-            sb.deinit()
         }
     }
     return out
@@ -974,28 +961,24 @@ fn run_test_binary(built: String) i32 {
     // no explicit application name, so a relative path spelled with `/` is not reliably resolved.
     let rel = path(built)
     defer rel.deinit()
-    const abs_r = to_absolute(&rel)
-    if abs_r.is_err() {
+    let abs = to_absolute(&rel) ?? {
         const msg = $"flang: cannot resolve the test runner's path `{built}`"
         defer msg.deinit()
         println(msg.view())
         return 1
     }
-    let abs = abs_r.unwrap()
     defer abs.deinit()
     const path = abs.as_view()
 
     let cmd = command(path)
     defer cmd.deinit()
     let _e = cmd.inherit_env()
-    const child = cmd.spawn()
-    if child.is_err() {
+    let proc = cmd.spawn() ?? {
         const msg = $"flang: could not run the test runner `{path}`"
         defer msg.deinit()
         println(msg.view())
         return 1
     }
-    let proc = child.unwrap()
     defer proc.deinit()
     const code = proc.wait()
     if code.is_err() {
@@ -1330,14 +1313,12 @@ fn spawn_tool(tool: String, cli: &Cli) i32 {
         cmd.arg(a)
     }
 
-    const spawn_result = cmd.spawn()
-    if spawn_result.is_err() {
+    let child = cmd.spawn() ?? {
         const msg = $"flang: failed to spawn `{tool}` - is it on PATH?"
         defer msg.deinit()
         println(msg.view())
         return 1
     }
-    let child = spawn_result.unwrap()
     defer child.deinit()
 
     const wait_result = child.wait()

@@ -277,6 +277,7 @@ pub fn ct_eval(env: &CtEnv, e: &Expr) Result(CtValue, CtError) {
         }
         MemberAccess(ma) => {
             const recv = ct_eval(env, ma.receiver)?
+            defer recv.deinit()
             ct_member(env, &recv, ma.member, ma.span)
         }
         Index(ix) => ct_index(env, &ix)
@@ -316,7 +317,9 @@ pub fn ct_eval(env: &CtEnv, e: &Expr) Result(CtValue, CtError) {
 
 fn ct_eval_binary(env: &CtEnv, b: &BinaryExpr) Result(CtValue, CtError) {
     const l = ct_eval(env, b.lhs)?
+    defer l.deinit()
     const r = ct_eval(env, b.rhs)?
+    defer r.deinit()
 
     if is_optional(&l) or is_optional(&r) {
         return ct_err("E2118", $"optional value must be unwrapped with `??` before use", b.span)
@@ -422,6 +425,7 @@ fn binary_op_text(op: BinaryOp) String {
 
 fn ct_index(env: &CtEnv, ix: &IndexExpr) Result(CtValue, CtError) {
     const recv = ct_eval(env, ix.receiver)?
+    defer recv.deinit()
     // Slices: `list[a..b]`, `list[a..]`, `list[..b]`.
     ix.index.* match {
         Range(rg) => return ct_slice(env, &recv, &rg, ix.span)

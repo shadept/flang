@@ -80,11 +80,7 @@ fn canonical_root(p: String) OwnedString {
     if is_abs(rel) {
         return normalize_fs_path(rel)
     }
-    const wd = cwd()
-    if wd.is_err() {
-        return normalize_fs_path(rel)
-    }
-    let base = wd.unwrap()
+    let base = cwd().ok() ?? return normalize_fs_path(rel)
     const joined = $"{base.as_view()}/{rel}"
     base.deinit()
     const norm = normalize_fs_path(joined.view())
@@ -176,11 +172,8 @@ fn overrides_from(docs: &DocumentStore) Dict(String, String) {
 // Analyze the project rooted at `dir` and add it to the workspace. Null when the manifest is
 // unreadable or its source glob matches nothing.
 pub fn open_project(self: &Workspace, dir: String, docs: &DocumentStore) ProjectId? {
-    const loaded = self.load_project(dir, docs)
-    if loaded.is_none() {
-        return null
-    }
-    self.projects.push(loaded.unwrap())
+    const loaded = self.load_project(dir, docs) ?? return null
+    self.projects.push(loaded)
     return Some(self.projects.len - 1)
 }
 
@@ -205,10 +198,8 @@ pub fn reopen_project(self: &Workspace, idx: ProjectId, docs: &DocumentStore) bo
     let dir = from_view(self.projects[idx].dir.view())
     const fresh = self.load_project(dir.view(), docs)
     dir.deinit()
-    if fresh.is_none() {
-        return false
-    }
-    install(&self.projects[idx], fresh.unwrap())
+    const p = fresh ?? return false
+    install(&self.projects[idx], p)
     return true
 }
 
@@ -216,16 +207,14 @@ fn load_project(self: &Workspace, dir: String, docs: &DocumentStore) OpenProject
     const manifest = $"{dir}/flang.toml"
     const text = read_text(manifest.view())
     manifest.deinit()
-    if text.is_none() {
-        return null
+    let toml = text ?? return null
+    let proj = parse_project(toml.view()).ok() match {
+        Some(v) => move v
+        None => {
+            toml.deinit()
+            return null
+        }
     }
-    let toml = text.unwrap()
-    const parsed = parse_project(toml.view())
-    if parsed.is_err() {
-        toml.deinit()
-        return null
-    }
-    let proj = parsed.unwrap()
     defer proj.deinit()
 
     let ctx = resolve_ctx_at(&proj, dir, self.stdlib_path.view())
@@ -274,19 +263,12 @@ pub fn set_changed(self: &Workspace, idx: ProjectId) bool {
     const manifest = $"{p.dir.view()}/flang.toml"
     const text = read_text(manifest.view())
     manifest.deinit()
-    if text.is_none() {
-        return false
-    }
-    let toml = text.unwrap()
+    let toml = text ?? return false
     defer toml.deinit()
     if toml.view() != p.manifest.view() {
         return true
     }
-    const parsed = parse_project(toml.view())
-    if parsed.is_err() {
-        return false
-    }
-    let proj = parsed.unwrap()
+    let proj = parse_project(toml.view()).ok() ?? return false
     defer proj.deinit()
     const pattern = $"{p.dir.view()}/{proj.source.view()}"
     let raw = glob_sources(pattern.view())
@@ -326,12 +308,13 @@ pub fn disk_changes(unit: &AnalyzedProject, docs: &DocumentStore) Set(String) {
         if docs.has_path(path) {
             continue
         }
-        const disk = read_text(path)
-        if disk.is_none() {
-            dirty.add(path)
-            continue
+        let text = read_text(path) match {
+            Some(v) => move v
+            None => {
+                dirty.add(path)
+                continue
+            }
         }
-        let text = disk.unwrap()
         if text.view() != unit.sources[i].view() {
             dirty.add(path)
         }
@@ -358,6 +341,7 @@ pub fn build_indexes(unit: &AnalyzedProject) List(ModuleIndex) {
 
 test "project_dir_for walks up and misses cleanly" {
     const missing = project_dir_for("no/such/dir/deep/x.f")
+    defer missing.deinit()
     assert_true(missing.is_none(), "no manifest anywhere above a made-up path")
 }
 

@@ -84,6 +84,7 @@ pub fn parse_template_body(
     let a = arena.allocator()
     const alloc = &a
     let lx = lexer(body, alloc)
+    defer lx.deinit()
     const tokens = lx.tokenize()
     // The parser takes the token list; this one keeps a copy of its own for the template scan.
     let own_tokens: List(Token) = list(tokens.len, alloc)
@@ -101,6 +102,7 @@ pub fn parse_template_body(
         diags = diags,
         cursor = 0,
     }
+    defer tp.deinit()
     let out: UnmanagedList(TemplateNode) = unmanaged_list(0, alloc)
     const stop = tp.parse_nodes(0, &out)
     if stop < tp.tokens.len and tp.tokens[stop].kind == TokenKind.CloseBrace {
@@ -109,6 +111,11 @@ pub fn parse_template_body(
     tp.flush_verbatim(body.len, &out)
     tp.shift_diags()
     return arena.freeze(out)
+}
+
+fn deinit(self: move TemplateParser) {
+    self.tokens.deinit()
+    self.parser.deinit()
 }
 
 fn error_at(self: &TemplateParser, index: usize, code: String, message: move OwnedString) {
@@ -312,11 +319,14 @@ fn parse_string_holes(self: &TemplateParser, tok: Token, out: &UnmanagedList(Tem
             out.push(TemplateNode.Verbatim(text[local..hole]), self.alloc)
         }
         let lx = lexer(self.body, self.alloc, tok.offset + hole + 2)
+        defer lx.deinit()
         const toks = lx.tokenize()
         // The parser takes the list; the bounds check below reads a copy of its own.
         let scan: List(Token) = list(toks.len, self.alloc)
+        defer scan.deinit()
         scan.push_all(toks.as_slice())
         let p = parser(toks, self.body, self.alloc)
+        defer p.deinit()
         p.set_file_id(self.file_id)
         const cst = p.tree.node_at(p.parse_expression())
         const e = project_expression(cst, self.file_id, self.arena)
@@ -358,8 +368,10 @@ fn expand_node(env: &CtEnv, node: &TemplateNode, sb: &StringBuilder) Result((), 
         Verbatim(text) => { sb.append(text) }
         Interp(it) => {
             const v = ct_eval(env, &it.expr)?
+            defer v.deinit()
             if it.in_string {
                 let tmp = string_builder(16, env.alloc)
+                defer tmp.deinit()
                 ct_stringify(&v, &tmp)
                 append_string_escaped(sb, tmp.as_view())
             } else {
@@ -376,6 +388,7 @@ fn expand_node(env: &CtEnv, node: &TemplateNode, sb: &StringBuilder) Result((), 
                     span = expr_span(&lp.iterable),
                 })
             }
+            defer items.deinit()
             const shadowed = env.bindings.remove(lp.var_name)
             for item in items.drain() {
                 env.bindings[lp.var_name] = move item
@@ -433,18 +446,24 @@ fn test_no_lookup(ctx: &u8, name: String) &TypeDecl? {
 fn expand_for_test(body: String, env: &CtEnv, arena: &ArenaAllocator) OwnedString {
     let alloc = arena.allocator()
     let diags: List(Diagnostic) = list(0, &alloc)
+    defer diags.deinit()
     const nodes = parse_template_body(body, 0, 0, arena, &diags)
     assert_true(diags.len == 0, "template parse error")
     let sb = string_builder(64)
+    defer sb.deinit()
     expand_template(env, nodes, &sb) match {
         Ok(_) => {}
-        Err(e) => assert_true(false, e.code)
+        Err(e) => {
+            assert_true(false, e.code)
+            e.take_message().deinit()
+        }
     }
     return sb.to_string()
 }
 
 test "template: #for over a bound list with #(x) and \"#(x)\"" {
     let backing = arena_allocator(context.allocator)
+    defer backing.deinit()
     let a = backing.allocator()
     let env = test_env(&a)
     let names: List(CtValue) = list(3, &a)
@@ -467,6 +486,7 @@ test "template: #for over a bound list with #(x) and \"#(x)\"" {
 
 test "template: #if / #elif / #else on the closed context and bindings" {
     let backing = arena_allocator(context.allocator)
+    defer backing.deinit()
     let a = backing.allocator()
     let env = test_env(&a)
     env.bindings["n"] = CtValue.I(2)
@@ -481,6 +501,7 @@ test "template: #if / #elif / #else on the closed context and bindings" {
 
 test "template: string-literal hole escapes its value" {
     let backing = arena_allocator(context.allocator)
+    defer backing.deinit()
     let a = backing.allocator()
     let env = test_env(&a)
     env.bindings["q"] = CtValue.S("say \"hi\"")

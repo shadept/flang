@@ -1838,11 +1838,7 @@ fn can_spawn(prog: String) bool {
     cmd.stdout_mode(Stdio.Null)
     cmd.stderr_mode(Stdio.Null)
     cmd.inherit_env()
-    let r = cmd.spawn()
-    if r.is_err() {
-        return false
-    }
-    let child = r.unwrap()
+    let child = cmd.spawn() ?? return false
     defer child.deinit()
     const w = child.wait()
     if w.is_err() {
@@ -1888,11 +1884,7 @@ fn discover_msvc() CompilerInfo? {
     }
 
     // Capture vswhere output to find the latest VS install dir.
-    let install_opt = run_vswhere(vswhere)
-    if install_opt.is_none() {
-        return null
-    }
-    let install = install_opt.unwrap()
+    let install = run_vswhere(vswhere) ?? return null
     defer install.deinit()
 
     let tools = string_builder(install.view().len + 32)
@@ -1905,11 +1897,7 @@ fn discover_msvc() CompilerInfo? {
     }
 
     // Latest toolset version = dir name with the largest lexicographic value.
-    let toolset_opt = newest_subdir(tools.as_view())
-    if toolset_opt.is_none() {
-        return null
-    }
-    let toolset = toolset_opt.unwrap()
+    let toolset = newest_subdir(tools.as_view()) ?? return null
     defer toolset.deinit()
 
     let toolset_dir = string_builder(tools.len + toolset.view().len + 2)
@@ -2048,17 +2036,10 @@ fn run_vswhere(vswhere_path: String) OwnedString? {
     cmd.stdout_mode(Stdio.Pipe)
     cmd.stderr_mode(Stdio.Null)
     cmd.inherit_env()
-    let r = cmd.spawn()
-    if r.is_err() {
-        return null
-    }
-    let child = r.unwrap()
+    let child = cmd.spawn() ?? return null
     defer child.deinit()
-    let stdout_opt = child.stdout()
-    if stdout_opt.is_none() {
-        return null
-    }
-    let s = stdout_opt.unwrap()
+    let s = child.stdout() ?? return null
+    defer s.close()
     let raw = read_all(s.reader())
     const w = child.wait()
     if w.is_err() {
@@ -2102,11 +2083,7 @@ fn newest_subdir(parent: String) OwnedString? {
     defer pbuf.deinit()
     pbuf.append(parent)
     nul_term(&pbuf)
-    let it_r = open_dir(pbuf.as_view())
-    if it_r.is_err() {
-        return null
-    }
-    let it = it_r.unwrap()
+    let it = open_dir(pbuf.as_view()) ?? return null
     defer it.deinit()
 
     let best: OwnedString? = null
@@ -2238,6 +2215,7 @@ fn build_compiler_argv(
         }
         for i in 0..options.include_paths.len {
             let sb = string_builder(2 + options.include_paths[i].len)
+            defer sb.deinit()
             sb.append("/I")
             sb.append(options.include_paths[i])
             argv.push(sb.to_string())
@@ -2247,6 +2225,7 @@ fn build_compiler_argv(
         // into the process working directory - littering the source tree and colliding when two
         // builds share a cwd.
         let fe = string_builder(4 + options.output_path.len)
+        defer fe.deinit()
         fe.append("/Fe:")
         fe.append(options.output_path)
         argv.push(fe.to_string())
@@ -2254,6 +2233,7 @@ fn build_compiler_argv(
         defer objs.deinit()
         const od = objs.view()
         let fo = string_builder(4 + od.len)
+        defer fo.deinit()
         fo.append("/Fo")
         for i in 0..od.len {
             fo.append_byte(if od[i] == '/' { '\\' as u8 } else { od[i] })
@@ -2294,6 +2274,7 @@ fn build_compiler_argv(
     }
     for i in 0..options.include_paths.len {
         let sb = string_builder(3 + options.include_paths[i].len)
+        defer sb.deinit()
         sb.append("-I")
         sb.append(options.include_paths[i])
         argv.push(sb.to_string())
@@ -2316,6 +2297,7 @@ fn build_compiler_argv(
                 argv.push(from_view(lib))
             } else {
                 let sb = string_builder(3 + lib.len)
+                defer sb.deinit()
                 sb.append("-l")
                 sb.append(lib)
                 argv.push(sb.to_string())
@@ -2431,15 +2413,16 @@ pub fn preprocess(
     }
     argv.push(from_view(path))
     let out = string_builder(1 << 20)
+    defer out.deinit()
     let err = string_builder(256)
     defer err.deinit()
-    const r = run_compiler(info, &argv, &out, &err)
-    if r.is_err() {
-        out.deinit()
-        return Err($"could not run `{info.path.view()}`")
-    }
-    if r.unwrap() != 0 {
-        out.deinit()
+    const code = run_compiler(
+        info,
+        &argv,
+        &out,
+        &err,
+    ) ?? return Err($"could not run `{info.path.view()}`")
+    if code != 0 {
         return Err(err.to_string())
     }
     return Ok(out.to_string())
@@ -2463,26 +2446,24 @@ fn run_compiler(
     cmd.stdin_mode(Stdio.Null)
     cmd.stdout_mode(Stdio.Pipe)
     cmd.stderr_mode(Stdio.Pipe)
-    let r = cmd.spawn()
-    if r.is_err() {
-        return Err(BuildError.SpawnFailed)
-    }
-    let child = r.unwrap()
+    let child = cmd.spawn() ?? return Err(BuildError.SpawnFailed)
     defer child.deinit()
     // Drain both pipes BEFORE waiting - a child blocked on a full pipe never exits. Sequential
     // reads carry a theoretical stdout-vs-stderr deadlock the reference accepts too; cc stderr
     // stays far below the pipe buffer in practice.
-    let so = child.stdout()
-    if so.is_some() {
-        let s = so.unwrap()
-        out.append(read_all(s.reader()))
-        s.close()
+    child.stdout() match {
+        Some(s) => {
+            out.append(read_all(s.reader()))
+            s.close()
+        }
+        None => {}
     }
-    let se = child.stderr()
-    if se.is_some() {
-        let s = se.unwrap()
-        err.append(read_all(s.reader()))
-        s.close()
+    child.stderr() match {
+        Some(s) => {
+            err.append(read_all(s.reader()))
+            s.close()
+        }
+        None => {}
     }
     const w = child.wait()
     if w.is_err() {

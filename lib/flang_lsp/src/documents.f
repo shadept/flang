@@ -67,11 +67,7 @@ pub fn change(self: &DocumentStore, uri: String, version: i64, text: String) {
 
 // didClose: drop the entry. Closing an unknown URI is a no-op.
 pub fn close(self: &DocumentStore, uri: String) {
-    const removed = self.docs.remove(uri)
-    if removed.is_some() {
-        let doc = removed.unwrap()
-        doc.deinit()
-    }
+    self.docs.remove(uri).deinit()
 }
 
 pub fn get(self: &DocumentStore, uri: String) &Document? {

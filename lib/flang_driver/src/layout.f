@@ -792,7 +792,9 @@ test "auto layout reorders fields by alignment to minimise padding" {
         repr = StructRepr.Flang,
     }
     let no_args: List(Ty) = list(0)
+    defer no_args.deinit()
     let sl = struct_layout(&it, &def, &no_args, &reg)
+    defer sl.deinit()
     // Physical order i64, i16, i8 - but offsets stay keyed by declaration index.
     assert_eq(sl.offsets[1], 0 as usize, "i64 placed first")
     assert_eq(sl.offsets[2], 8 as usize, "i16 packed after the i64")
@@ -838,7 +840,9 @@ test "C repr keeps declaration order and C padding" {
         repr = StructRepr.C,
     }
     let no_args: List(Ty) = list(0)
+    defer no_args.deinit()
     let sl = struct_layout(&it, &def, &no_args, &reg)
+    defer sl.deinit()
     assert_eq(sl.offsets[0], 0 as usize, "first field at offset 0")
     assert_eq(sl.offsets[1], 8 as usize, "i64 padded to offset 8")
     assert_eq(sl.offsets[2], 16 as usize, "i16 follows the i64")
@@ -876,7 +880,9 @@ test "C union overlaps members and rounds the widest to the strictest alignment"
         repr = StructRepr.CUnion,
     }
     let no_args: List(Ty) = list(0)
+    defer no_args.deinit()
     let sl = struct_layout(&it, &def, &no_args, &reg)
+    defer sl.deinit()
     assert_eq(sl.offsets[0], 0 as usize, "first member at offset 0")
     assert_eq(sl.offsets[1], 0 as usize, "second member overlaps the first")
     assert_eq(sl.align, 8 as usize, "strictest member alignment")
@@ -917,9 +923,11 @@ test "generic struct substitutes type parameters" {
         repr = StructRepr.Flang,
     }
     let args: List(Ty) = list(2)
+    defer args.deinit()
     args.push(prim_of(PrimitiveKind.I64))
     args.push(prim_of(PrimitiveKind.I64))
     let sl = struct_layout(&it, &def, &args, &reg)
+    defer sl.deinit()
     // Both args are i64 (align 8) so order is identity; size proves the Var fields resolved to i64.
     assert_eq(sl.offsets[1], 8 as usize, "second field after the first")
     assert_eq(sl.size, 16 as usize, "Pair(i64, i64) is two 8-byte words")
@@ -950,6 +958,7 @@ test "tagged enum reserves a tag plus the largest payload" {
         deprecation = null,
     }
     let no_args: List(Ty) = list(0)
+    defer no_args.deinit()
     let el = enum_layout(&it, &def, &no_args, &reg)
     assert_eq(el.tag_size, 4 as usize, "discriminant is 4 bytes")
     assert_eq(el.payload_offset, 8 as usize, "i64 payload forces 8-byte alignment")
@@ -976,6 +985,7 @@ test "payloadless enum is just the tag" {
         deprecation = null,
     }
     let no_args: List(Ty) = list(0)
+    defer no_args.deinit()
     let el = enum_layout(&it, &def, &no_args, &reg)
     assert_eq(el.size, 4 as usize, "naked enum is a 4-byte tag")
 }
@@ -1025,12 +1035,14 @@ test "Option of a reference uses the pointer niche" {
     }
 
     let niche_args: List(Ty) = list(1)
+    defer niche_args.deinit()
     niche_args.push(it.ref_of(prim_of(PrimitiveKind.I32)))
     let niche = enum_layout(&it, &def, &niche_args, &reg)
     assert_true(niche.is_niche, "Option(&i32) collapses to a nullable pointer")
     assert_eq(niche.size, 8, "the niche is pointer-sized")
 
     let val_args: List(Ty) = list(1)
+    defer val_args.deinit()
     val_args.push(prim_of(PrimitiveKind.I32))
     let val = enum_layout(&it, &def, &val_args, &reg)
     assert_true(!val.is_niche, "Option(i32) keeps a tag")

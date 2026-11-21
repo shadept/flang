@@ -19,6 +19,7 @@ pub fn probe_source(header: String, texts: String[]) OwnedString {
     let seen: Set(String) = set()
     defer seen.deinit()
     let sb = string_builder(4096)
+    defer sb.deinit()
     sb.append("#include \"")
     for i in 0..header.len {
         sb.append_byte(if header[i] == '\\' { '/' as u8 } else { header[i] })

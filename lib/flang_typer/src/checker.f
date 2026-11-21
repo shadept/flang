@@ -1122,6 +1122,7 @@ pub fn deinit(self: move Checker) {
     self.constants.deinit()
     self.ctx_fields.deinit()
     self.functions.deinit()
+    self.templates.deinit()
     self.specs.deinit()
     self.results.deinit()
     self.diagnostics.deinit()
@@ -2204,6 +2205,7 @@ pub fn push_diag_i(self: &Checker, span: SourceSpan, code: String, message: move
 // nothing; every mismatch produces one diagnostic on the checker's list.
 fn report_unify(self: &Checker, outcome: &UnifyOutcome, code: String, span: SourceSpan) {
     let ctx = report_ctx(code, span, Some(&self.nominals))
+    defer ctx.deinit()
     report(outcome, &ctx, &self.engine.interner, &self.diagnostics)
 }
 
@@ -3037,6 +3039,7 @@ fn note_decl_params(self: &Checker, id: NominalId, body: &TypeExpr) {
     }
     self.declared_arity.set(id, generics.len)
     let sb = string_builder(32)
+    defer sb.deinit()
     let spelled = true
     for &g in generics {
         if g.bound.is_none() {
@@ -3060,7 +3063,6 @@ fn note_decl_params(self: &Checker, id: NominalId, body: &TypeExpr) {
         None => {}
     }
     if sb.len == 0 {
-        sb.deinit()
         return
     }
     self.bound_texts.set(id, sb.to_string())
@@ -3202,7 +3204,11 @@ fn resolve_struct_body(self: &Checker, td: &TypeDecl, fqn: String, implicit: Str
             }
             self.nominals.replace_body(id, NominalDef.NomStruct(move updated))
         }
-        _ => {}
+        _ => {
+            type_params.deinit()
+            fields.deinit()
+            assoc_params.deinit()
+        }
     }
     check_recursive_nominal(self, id, td.name, td.span)
 }
@@ -3596,7 +3602,12 @@ fn resolve_enum_body(self: &Checker, td: &TypeDecl, fqn: String, implicit: Strin
             }
             self.nominals.replace_body(id, NominalDef.NomEnum(move updated))
         }
-        _ => {}
+        _ => {
+            type_params.deinit()
+            variants.deinit()
+            tag_values.deinit()
+            assoc_params.deinit()
+        }
     }
     check_recursive_nominal(self, id, td.name, td.span)
     // E2047: a NAKED enum - one that assigns integer tags - is a plain C-style enumeration; a
@@ -3645,14 +3656,10 @@ fn collect_one_signature(self: &Checker, decl: &Decl) {
 fn duplicate_overload(self: &Checker, name: String, sig: &Scheme) bool {
     let vis = current_visibility(self)
     defer vis.deinit()
-    let found = self.functions.lookup(name, &vis) match {
-        FnLookFound(c) => Some(move c)
-        _ => null
+    let cands = self.functions.lookup(name, &vis) match {
+        FnLookFound(c) => move c
+        _ => return false
     }
-    if found.is_none() {
-        return false
-    }
-    let cands = found.unwrap()
     defer cands.deinit()
     let here = self.current_module.unwrap_or("")
     for c in cands {
@@ -4247,6 +4254,7 @@ fn check_function_body(self: &Checker, fd: &FunctionDecl) {
         self.check_apps = false
     }
     let params: List(Ty) = list(fd.params.len)
+    defer params.deinit()
     for &p in fd.params {
         self.sugar_ok = true
         let ty = param_ty(self, p)
@@ -6008,11 +6016,7 @@ fn operator_verdict(self: &Checker, op: BinaryOp, l: Ty, r: Ty, ret: Ty, span: S
             and self.engine.unify_exact(prim_of(PrimitiveKind.Bool), ret).is_ok()
         return if ok { Verdict.Holds } else { Verdict.Fails }
     }
-    const m = operator_match(self, op, span, lr, rr, true)
-    if m.is_none() {
-        return Verdict.Fails
-    }
-    const found = m.unwrap()
+    const found = operator_match(self, op, span, lr, rr, true) ?? return Verdict.Fails
     const result = found.ret
     found.pick.deinit()
     return if self.engine.unify_exact(result, ret).is_ok() { Verdict.Holds } else {
@@ -6294,6 +6298,7 @@ fn report_bound(self: &Checker, p: &PendingSpec, a: &BoundAtom) {
     const fname = if template.is_some() { template.unwrap().decl.name } else { "" }
     const subject = atom_inst(self, a.subject, Some(&p.tp_binds))
     let sb = string_builder(160)
+    defer sb.deinit()
     sb.append($"`{fname}` requires `{a.param}: {a.bound_name}`")
     if a.owner.len > 0 {
         sb.append($" (a bound of `{a.owner}`)")
@@ -6673,6 +6678,7 @@ fn validate_literals(self: &Checker, from: usize, to: usize) {
             _ => {
                 if z != TY_ERROR and z != TY_NEVER {
                     let sb = string_builder(64)
+                    defer sb.deinit()
                     sb.append("type mismatch: expected one of the numeric types, got `")
                     format_with_names(&self.engine.interner, z, &sb, Some(&self.nominals))
                     sb.append($"` for literal `{pl.text}`")
@@ -6991,8 +6997,8 @@ fn keep_template_types(self: &Checker, fd: &FunctionDecl, fid: u32) {
             continue
         }
         let sb = string_builder(32)
+        defer sb.deinit()
         if !render_alias_body(b.bound, &sb) {
-            sb.deinit()
             continue
         }
         const prior = tt.bounds.remove(v.unwrap())
@@ -7000,7 +7006,6 @@ fn keep_template_types(self: &Checker, fd: &FunctionDecl, fid: u32) {
             Some(text) => {
                 let joined = $"{text.view()} + {sb.as_view()}"
                 text.deinit()
-                sb.deinit()
                 tt.bounds.set(v.unwrap(), joined)
             }
             None => tt.bounds.set(v.unwrap(), sb.to_string())
@@ -7105,14 +7110,10 @@ fn bind_rigid_params(self: &Checker, fid: u32) {
 fn template_id_of(self: &Checker, fd: &FunctionDecl) u32? {
     let vis = current_visibility(self)
     defer vis.deinit()
-    let found = self.functions.lookup(fd.name, &vis) match {
-        FnLookFound(c) => Some(move c)
-        _ => null
+    let cands = self.functions.lookup(fd.name, &vis) match {
+        FnLookFound(c) => move c
+        _ => return null
     }
-    if found.is_none() {
-        return null
-    }
-    let cands = found.unwrap()
     defer cands.deinit()
     for c in cands {
         const d = c.decl_span
@@ -7946,12 +7947,8 @@ fn segment_literal_text(self: &Checker, raw: String) String {
     if !has_brace {
         return raw
     }
-    const decoded_opt = decode_interp_segment(raw)
     // Malformed escape - the lexer already reported it; keep the raw text.
-    if decoded_opt.is_none() {
-        return raw
-    }
-    let decoded = decoded_opt.unwrap()
+    let decoded = decode_interp_segment(raw) ?? return raw
     const out = self.results.add_synth_string(escape_backslashes(self, decoded.view()))
     decoded.deinit()
     return out
@@ -9389,14 +9386,10 @@ fn index_operator(
 fn operator_pick(self: &Checker, name: String, args: &List(Ty), span: SourceSpan) OverloadPick? {
     let vis = fn_visibility(self)
     defer vis.deinit()
-    let cands = self.functions.lookup(name, &vis) match {
-        FnLookFound(c) => Some(move c)
-        _ => null
+    let candidates = self.functions.lookup(name, &vis) match {
+        FnLookFound(c) => move c
+        _ => return null
     }
-    if cands.is_none() {
-        return null
-    }
-    let candidates = cands.unwrap()
 
     // Probe first: `resolve_overload` commits its unifications and reports mismatches, so a losing
     // shape would both pollute the substitution and emit a diagnostic the caller is about to
@@ -9746,26 +9739,28 @@ fn check_identifier(self: &Checker, id: &IdentifierExpr) Ty {
         FnLookFound(candidates) => Some(move candidates)
         _ => null
     }
-    if found.is_some() {
-        let candidates = found.unwrap()
-        defer candidates.deinit()
-        if candidates.len == 1 {
-            let c = candidates[0]
-            self.results.record_target(self.node_of(id.span), ResolvedTarget.RtFunction(c.id))
-            gate_context_address(self, c.id, id.span)
-            return self.engine.specialize(&c.signature)
+    found match {
+        Some(candidates) => {
+            defer candidates.deinit()
+            if candidates.len == 1 {
+                let c = candidates[0]
+                self.results.record_target(self.node_of(id.span), ResolvedTarget.RtFunction(c.id))
+                gate_context_address(self, c.id, id.span)
+                return self.engine.specialize(&c.signature)
+            }
+            // Multiple overloads as a value: mint a var the context pins, and park the site -
+            // `resolve_fn_name_values` picks the
+            // overload once the slot's Func shape settles (ticket 019 §4).
+            let slot = self.engine.fresh_var()
+            self.pending_fn_names.push(PendingFnName {
+                span = id.span,
+                ty = slot,
+                name = id.name,
+                module = self.current_module,
+            })
+            return slot
         }
-        // Multiple overloads as a value: mint a var the context pins, and park the site -
-        // `resolve_fn_name_values` picks the
-        // overload once the slot's Func shape settles (ticket 019 §4).
-        let slot = self.engine.fresh_var()
-        self.pending_fn_names.push(PendingFnName {
-            span = id.span,
-            ty = slot,
-            name = id.name,
-            module = self.current_module,
-        })
-        return slot
+        None => {}
     }
 
     // Bare payload-less variant (`None`) - locals and functions win first.
@@ -10690,6 +10685,10 @@ type OpMatch = struct {
     ret: Ty
 }
 
+fn deinit(self: move OpMatch) {
+    self.pick.deinit()
+}
+
 // The ladder over one pair of operand types: for a comparison the direct function, then the negated
 // opposite for `==`/`!=`, then `op_cmp`; for arithmetic the one `op_*` function. One matched
 // operator: the pick moves in, and its return type is read on the way.
@@ -10751,9 +10750,13 @@ fn binary_dispatch(self: &Checker, bin: &BinaryExpr, l: Ty, r: Ty, is_cmp: bool)
     defer lc.deinit()
     let rc: List(OverloadPick) = list(0)
     defer rc.deinit()
-    if direct.is_some() {
-        const __direct_v = direct.unwrap()
-        return Some(commit_binary(self, bin, &__direct_v, &lc, 0usize, &rc, 0usize))
+    direct match {
+        Some(found) => {
+            const t = commit_binary(self, bin, &found, &lc, 0usize, &rc, 0usize)
+            found.deinit()
+            return Some(t)
+        }
+        None => {}
     }
     let lt: List(Ty) = list(0)
     defer lt.deinit()
@@ -10773,9 +10776,13 @@ fn binary_dispatch(self: &Checker, bin: &BinaryExpr, l: Ty, r: Ty, is_cmp: bool)
                 } else {
                     null
                 }
-                if m.is_some() {
-                    const __m_v = m.unwrap()
-                    return Some(commit_binary(self, bin, &__m_v, &lc, li, &rc, ri))
+                m match {
+                    Some(found) => {
+                        const t = commit_binary(self, bin, &found, &lc, li, &rc, ri)
+                        found.deinit()
+                        return Some(t)
+                    }
+                    None => {}
                 }
             }
             if li == 0 {
@@ -11249,54 +11256,56 @@ fn resolve_direct_call(
         FnLookFound(c) => Some(move c)
         _ => null
     }
-    if cands.is_some() {
-        let candidates = cands.unwrap()
-        self.overload_deferred = false
-        let chain: List(OverloadPick) = list(0)
-        defer chain.deinit()
-        let ctx = PeelCtx { vis = &vis, chain = &chain }
-        let spans = arg_span_list(self, pos_exprs, null)
-        defer spans.deinit()
-        let pick = resolve_overload(
-            self,
-            &candidates,
-            arg_tys,
-            call.span,
-            null,
-            named,
-            0usize,
-            true,
-            Some(&ctx),
-            Some(&spans),
-            expected,
-            ends_trailing(pos_exprs),
-        )
-        const no_slot = ends_trailing(pos_exprs) and !any_trailing_slot(self, &candidates)
-        let misfit: &Expr? = null
-        if pick.is_none() {
-            misfit = c_slot_misfit(self, &candidates, pos_exprs, arg_tys)
-        }
-        candidates.deinit()
-        if pick.is_none() and self.overload_deferred {
+    cands match {
+        Some(candidates) => {
             self.overload_deferred = false
-            return Some(park_call(self, call, ide.name, arg_tys, pos_exprs, 0usize, null))
+            let chain: List(OverloadPick) = list(0)
+            defer chain.deinit()
+            let ctx = PeelCtx { vis = &vis, chain = &chain }
+            let spans = arg_span_list(self, pos_exprs, null)
+            defer spans.deinit()
+            let pick = resolve_overload(
+                self,
+                &candidates,
+                arg_tys,
+                call.span,
+                null,
+                named,
+                0usize,
+                true,
+                Some(&ctx),
+                Some(&spans),
+                expected,
+                ends_trailing(pos_exprs),
+            )
+            const no_slot = ends_trailing(pos_exprs) and !any_trailing_slot(self, &candidates)
+            let misfit: &Expr? = null
+            if pick.is_none() {
+                misfit = c_slot_misfit(self, &candidates, pos_exprs, arg_tys)
+            }
+            candidates.deinit()
+            if pick.is_none() and self.overload_deferred {
+                self.overload_deferred = false
+                return Some(park_call(self, call, ide.name, arg_tys, pos_exprs, 0usize, null))
+            }
+            if misfit.is_some() {
+                return Some(report_c_slot_misfit(self, misfit.unwrap()))
+            }
+            if pick.is_none() and no_slot {
+                return Some(report_no_trailing_slot(self, ide.name, call.span))
+            }
+            return Some(commit_pick(
+                self,
+                pick,
+                ide.name,
+                arg_tys.len,
+                call.span,
+                0usize,
+                pos_exprs,
+                named,
+            ))
         }
-        if misfit.is_some() {
-            return Some(report_c_slot_misfit(self, misfit.unwrap()))
-        }
-        if pick.is_none() and no_slot {
-            return Some(report_no_trailing_slot(self, ide.name, call.span))
-        }
-        return Some(commit_pick(
-            self,
-            pick,
-            ide.name,
-            arg_tys.len,
-            call.span,
-            0usize,
-            pos_exprs,
-            named,
-        ))
+        None => {}
     }
     // A named argument cannot address a parameter of a function VALUE (no declaration, so no
     // parameter names) - leave the call for the caller's fallback rather than dropping the names
@@ -11346,26 +11355,25 @@ fn resolve_method_call(
 
     let vis = fn_visibility(self)
     defer vis.deinit()
-    let cands = self.functions.lookup(ma.member, &vis) match {
-        FnLookFound(c) => Some(move c)
-        _ => null
-    }
-    if cands.is_none() {
-        // `fba.allocator()` where `allocator` is a plain field: the name exists on the receiver, it
-        // is just not callable (E2011). Only a name that is nowhere at all is "unresolved" (E2004).
-        if struct_field_lookup(self, recv_ty, ma.member).is_some() {
-            push_diag_e(
-                self,
-                call.span,
-                E_NO_OVERLOAD,
-                $"`{ma.member}` is a field of this type, not a callable method",
-            )
-        } else {
-            push_diag_e(self, call.span, E_UNKNOWN_IDENT, $"unresolved function `{ma.member}`")
+    let candidates = self.functions.lookup(ma.member, &vis) match {
+        FnLookFound(c) => move c
+        _ => {
+            // `fba.allocator()` where `allocator` is a plain field: the name exists on the
+            // receiver, it is just not callable (E2011). Only a name that is nowhere at all is
+            // "unresolved" (E2004).
+            if struct_field_lookup(self, recv_ty, ma.member).is_some() {
+                push_diag_e(
+                    self,
+                    call.span,
+                    E_NO_OVERLOAD,
+                    $"`{ma.member}` is a field of this type, not a callable method",
+                )
+            } else {
+                push_diag_e(self, call.span, E_UNKNOWN_IDENT, $"unresolved function `{ma.member}`")
+            }
+            return Some(self.engine.fresh_var())
         }
-        return Some(self.engine.fresh_var())
     }
-    let candidates = cands.unwrap()
 
     // A still-unbound receiver (a lambda parameter the callee's instantiation pins, a parked member
     // access) cannot arbitrate an overload set, and even a lone candidate would bind it to the
@@ -11374,6 +11382,7 @@ fn resolve_method_call(
     if self.engine.is_var(self.engine.resolve(recv_ty)) {
         candidates.deinit()
         let full: List(Ty) = list(arg_tys.len + 1)
+        defer full.deinit()
         full.push(recv_ty)
         full.push_all(arg_tys.as_slice())
         return Some(park_call(
@@ -11425,6 +11434,7 @@ fn resolve_method_call(
     if pick.is_none() and self.overload_deferred {
         self.overload_deferred = false
         let full: List(Ty) = list(arg_tys.len + 1)
+        defer full.deinit()
         full.push(recv_ty)
         full.push_all(arg_tys.as_slice())
         return Some(park_call(self, call, ma.member, &full, pos_exprs, 1usize, Some(adapted)))
@@ -11530,14 +11540,10 @@ fn receiver_pick_into(
 ) OverloadPick? {
     let vis = fn_visibility(self)
     defer vis.deinit()
-    let cands = self.functions.lookup(name, &vis) match {
-        FnLookFound(c) => Some(move c)
-        _ => null
+    let candidates = self.functions.lookup(name, &vis) match {
+        FnLookFound(c) => move c
+        _ => return null
     }
-    if cands.is_none() {
-        return null
-    }
-    let candidates = cands.unwrap()
     defer candidates.deinit()
     let r = self.engine.resolve(recv)
     let adapted: Ty? = ty_node(self, r) match {
@@ -11670,6 +11676,7 @@ fn commit_pick(
         }
         None => {
             let sb = string_builder(96)
+            defer sb.deinit()
             sb.append($"no matching overload for `{name}` with {n_args} argument(s)")
             recv match {
                 Some(r) => {
@@ -11783,6 +11790,7 @@ fn check_consuming_receiver(
         return
     }
     let sb = string_builder(128)
+    defer sb.deinit()
     sb.append(
         $"`{name}` takes ownership of its receiver, which is reached through a reference here - the value stays with its owner",
     )
@@ -11866,62 +11874,66 @@ fn resolve_pending_calls(self: &Checker, from: usize = 0usize) {
             FnLookFound(c) => Some(move c)
             _ => null
         }
-        if cands.is_some() {
-            let candidates = cands.unwrap()
-            self.overload_deferred = false
-            let pchain: List(OverloadPick) = list(0)
-            defer pchain.deinit()
-            const pctx = PeelCtx { vis = &vis, chain = &pchain }
-            const recv_span: SourceSpan? = if pc.recv_extra > 0 { Some(pc.span) } else { null }
-            let pspans = arg_span_list(self, &pc.pos_exprs, recv_span)
-            defer pspans.deinit()
-            let pick = resolve_overload(
-                self,
-                &candidates,
-                &pc.arg_tys,
-                pc.span,
-                pc.alt_recv,
-                null,
-                pc.recv_extra,
-                true,
-                Some(&pctx),
-                Some(&pspans),
-                null,
-                ends_trailing(&pc.pos_exprs),
-            )
-            candidates.deinit()
-            if pick.is_none() and self.overload_deferred {
+        cands match {
+            Some(candidates) => {
                 self.overload_deferred = false
-                push_diag_e(
+                let pchain: List(OverloadPick) = list(0)
+                defer pchain.deinit()
+                const pctx = PeelCtx { vis = &vis, chain = &pchain }
+                const recv_span: SourceSpan? = if pc.recv_extra > 0 { Some(pc.span) } else { null }
+                let pspans = arg_span_list(self, &pc.pos_exprs, recv_span)
+                defer pspans.deinit()
+                let pick = resolve_overload(
                     self,
+                    &candidates,
+                    &pc.arg_tys,
                     pc.span,
-                    E_NO_OVERLOAD,
-                    $"ambiguous call to `{pc.name}`: several overloads match and the argument type never settled - annotate it",
-                )
-            } else {
-                const n_args = if pc.recv_extra > 0 { pc.arg_tys.len - 1 } else { pc.arg_tys.len }
-                const pc_recv: Ty? = if pc.recv_extra > 0 { Some(pc.arg_tys[0]) } else { null }
-                let t = commit_pick(
-                    self,
-                    pick,
-                    pc.name,
-                    n_args,
-                    pc.span,
-                    pc.recv_extra,
-                    &pc.pos_exprs,
+                    pc.alt_recv,
                     null,
-                    pc_recv,
+                    pc.recv_extra,
+                    true,
+                    Some(&pctx),
+                    Some(&pspans),
+                    null,
+                    ends_trailing(&pc.pos_exprs),
                 )
-                // The placeholder `park_call` handed the call site flowed into the enclosing
-                // inference; the resolved type has to reach those uses, not just the node.
-                const node = self.node_of(pc.span)
-                const held = self.results.node_types.get(node)
-                if held.is_some() {
-                    const o = self.engine.unify(held.unwrap(), t)
-                    report_unify(self, &o, E_TYPE_MISMATCH, pc.span)
+                candidates.deinit()
+                if pick.is_none() and self.overload_deferred {
+                    self.overload_deferred = false
+                    push_diag_e(
+                        self,
+                        pc.span,
+                        E_NO_OVERLOAD,
+                        $"ambiguous call to `{pc.name}`: several overloads match and the argument type never settled - annotate it",
+                    )
+                } else {
+                    const n_args = if pc.recv_extra > 0 { pc.arg_tys.len - 1 } else {
+                        pc.arg_tys.len
+                    }
+                    const pc_recv: Ty? = if pc.recv_extra > 0 { Some(pc.arg_tys[0]) } else { null }
+                    let t = commit_pick(
+                        self,
+                        pick,
+                        pc.name,
+                        n_args,
+                        pc.span,
+                        pc.recv_extra,
+                        &pc.pos_exprs,
+                        null,
+                        pc_recv,
+                    )
+                    // The placeholder `park_call` handed the call site flowed into the enclosing
+                    // inference; the resolved type has to reach those uses, not just the node.
+                    const node = self.node_of(pc.span)
+                    const held = self.results.node_types.get(node)
+                    if held.is_some() {
+                        const o = self.engine.unify(held.unwrap(), t)
+                        report_unify(self, &o, E_TYPE_MISMATCH, pc.span)
+                    }
+                    self.results.record_type(node, t)
                 }
-                self.results.record_type(node, t)
             }
+            None => {}
         }
         self.current_module = saved
         pc.arg_tys.deinit()
@@ -12382,14 +12394,10 @@ fn op_call_dispatch(self: &Checker, recv: Ty, arg_tys: &List(Ty), span: SourceSp
     const adapted = if referent == recv { self.engine.mk_ref(recv) } else { referent }
     let vis = fn_visibility(self)
     defer vis.deinit()
-    let cands = self.functions.lookup("op_call", &vis) match {
-        FnLookFound(c) => Some(move c)
-        _ => null
+    let candidates = self.functions.lookup("op_call", &vis) match {
+        FnLookFound(c) => move c
+        _ => return null
     }
-    if cands.is_none() {
-        return null
-    }
-    let candidates = cands.unwrap()
     defer candidates.deinit()
 
     // `op_call(&T, …)`, `op_call(T, …)` and the receiver's `op_deref` targets compete in one
@@ -12802,16 +12810,17 @@ fn resolve_overload(
     // Named arguments commit against the parameter their name selected.
     if named.is_some() {
         let na = named.unwrap()
-        let slots = named_param_slots(self, w, na, ufcs_offset)
-        if slots.is_some() {
-            let sl = slots.unwrap()
-            for i in 0..sl.len {
-                if sl[i] < fparams.len {
-                    const on = self.engine.unify(na.tys[i], fparams[sl[i]])
-                    report_unify(self, &on, E_TYPE_MISMATCH, span)
+        named_param_slots(self, w, na, ufcs_offset) match {
+            Some(sl) => {
+                for i in 0..sl.len {
+                    if sl[i] < fparams.len {
+                        const on = self.engine.unify(na.tys[i], fparams[sl[i]])
+                        report_unify(self, &on, E_TYPE_MISMATCH, span)
+                    }
                 }
+                sl.deinit()
             }
-            sl.deinit()
+            None => {}
         }
     }
     // What the winner's bounds solve - `$T` from `Iterator($T)`, a lambda's parameter types from
@@ -13192,10 +13201,8 @@ fn probe_candidate(
     if named.is_some() {
         let na = named.unwrap()
         n_named = na.names.len
-        install(&slots, named_param_slots(self, c, na, ufcs_offset))
-        if slots.is_none() {
-            return null
-        }
+        let found = named_param_slots(self, c, na, ufcs_offset) ?? return null
+        install(&slots, Some(move found))
     }
     let supplied = arg_tys.len + n_named
     let no_slots: usize[]
@@ -13204,10 +13211,7 @@ fn probe_candidate(
         arity_accepts(c, n_params, supplied)
     }
     if !fits {
-        if slots.is_some() {
-            let dead = slots.unwrap()
-            dead.deinit()
-        }
+        slots.deinit()
         return null
     }
 
@@ -13263,22 +13267,27 @@ fn probe_candidate(
             k = k + 1
         }
     }
-    if slots.is_some() {
-        let sl = slots.unwrap()
-        let na = named.unwrap()
-        let j = 0usize
-        while ok and j < sl.len {
-            if sl[j] >= n_params {
-                ok = false
-            } else {
-                self.engine.unify(na.tys[j], self.engine.interner.child_at(f.params, sl[j])) match {
-                    Unified(u) => cost = cost + u.cost
-                    _ => ok = false
+    slots match {
+        Some(sl) => {
+            let na = named.unwrap()
+            let j = 0usize
+            while ok and j < sl.len {
+                if sl[j] >= n_params {
+                    ok = false
+                } else {
+                    self.engine.unify(
+                        na.tys[j],
+                        self.engine.interner.child_at(f.params, sl[j]),
+                    ) match {
+                        Unified(u) => cost = cost + u.cost
+                        _ => ok = false
+                    }
                 }
+                j = j + 1
             }
-            j = j + 1
+            sl.deinit()
         }
-        sl.deinit()
+        None => {}
     }
     let held = 0u32
     if ok and bounded {
@@ -13865,14 +13874,10 @@ fn member_deref_retry(self: &Checker, ma: &MemberAccessExpr, recv_ty: Ty) Ty? {
 fn member_deref_retry_at(self: &Checker, member: String, span: SourceSpan, recv_ty: Ty) Ty? {
     let vis = fn_visibility(self)
     defer vis.deinit()
-    let dcands = self.functions.lookup("op_deref", &vis) match {
-        FnLookFound(c) => Some(move c)
-        _ => null
+    let dc = self.functions.lookup("op_deref", &vis) match {
+        FnLookFound(c) => move c
+        _ => return null
     }
-    if dcands.is_none() {
-        return null
-    }
-    let dc = dcands.unwrap()
     defer dc.deinit()
 
     let chain: List(OverloadPick) = list(1)
@@ -14390,39 +14395,41 @@ fn resolve_fn_name_values(self: &Checker) {
             FnLookFound(c) => Some(move c)
             _ => null
         }
-        if cands.is_some() {
-            let cl = cands.unwrap()
-            let pick = resolve_overload(self, &cl, &fparams, pn.span)
-            cl.deinit()
-            pick match {
-                Some(w) => {
-                    if decl_moves(self, w.id) != f.moves {
-                        push_diag_e(
-                            self,
-                            pn.span,
-                            E_TYPE_MISMATCH,
-                            $"`{pn.name}` does not have the function type this slot requires: its parameters differ in `move`",
+        cands match {
+            Some(cl) => {
+                let pick = resolve_overload(self, &cl, &fparams, pn.span)
+                cl.deinit()
+                pick match {
+                    Some(w) => {
+                        if decl_moves(self, w.id) != f.moves {
+                            push_diag_e(
+                                self,
+                                pn.span,
+                                E_TYPE_MISMATCH,
+                                $"`{pn.name}` does not have the function type this slot requires: its parameters differ in `move`",
+                            )
+                        }
+                        self.results.record_target(
+                            self.node_of(pn.span),
+                            ResolvedTarget.RtFunction(w.id),
                         )
+                        gate_context_address(self, w.id, pn.span)
+                        note_pending(self, pn.span, false, &w)
+                        const o = self.engine.unify(f.ret, w.ret)
+                        report_unify(self, &o, E_TYPE_MISMATCH, pn.span)
                     }
-                    self.results.record_target(
-                        self.node_of(pn.span),
-                        ResolvedTarget.RtFunction(w.id),
+                    // Function types match EXACTLY - there is no coercion between `fn(i32) i32` and
+                    // `fn(i64) i64` (E2011). Left silent, the name would reach lowering with no
+                    // target and refuse the whole function instead.
+                    None => push_diag_e(
+                        self,
+                        pn.span,
+                        E_NO_OVERLOAD,
+                        $"no overload of `{pn.name}` has the function type this slot requires",
                     )
-                    gate_context_address(self, w.id, pn.span)
-                    note_pending(self, pn.span, false, &w)
-                    const o = self.engine.unify(f.ret, w.ret)
-                    report_unify(self, &o, E_TYPE_MISMATCH, pn.span)
                 }
-                // Function types match EXACTLY - there is no coercion between `fn(i32) i32` and
-                // `fn(i64) i64` (E2011). Left silent, the name would reach lowering with no target
-                // and refuse the whole function instead.
-                None => push_diag_e(
-                    self,
-                    pn.span,
-                    E_NO_OVERLOAD,
-                    $"no overload of `{pn.name}` has the function type this slot requires",
-                )
             }
+            None => {}
         }
         self.current_module = saved
     }
@@ -15362,6 +15369,7 @@ fn own_copy_site(self: &Checker, p: &OwnPass, span: SourceSpan, name: String) {
         return
     }
     let sb = string_builder(160)
+    defer sb.deinit()
     if name.len > 0 {
         sb.append($"`{name}` cannot be copied here - write `move {name}`")
     } else {
@@ -15384,6 +15392,7 @@ fn own_lent_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr, what: String
         return
     }
     let sb = string_builder(160)
+    defer sb.deinit()
     sb.append($"`{id.name}` is not owned here: {what}; declare `{id.name}: move ")
     own_type(self, id.span) match {
         Some(ty) => format_with_names(
@@ -15408,6 +15417,7 @@ fn own_borrowed_error(
     what: String,
 ) {
     let sb = string_builder(160)
+    defer sb.deinit()
     if b.from.len > 0 {
         sb.append($"`{id.name}` names part of `{b.from}`, which is not owned here")
     } else {
@@ -15424,6 +15434,7 @@ fn own_captured_error(self: &Checker, p: &OwnPass, id: &IdentifierExpr) {
         return
     }
     let sb = string_builder(160)
+    defer sb.deinit()
     sb.append(
         $"`{id.name}` is captured by reference: the closure cannot take its value out of the enclosing binding",
     )
@@ -15446,6 +15457,7 @@ fn own_temporary(self: &Checker, p: &OwnPass, span: SourceSpan) {
         return
     }
     let sb = string_builder(160)
+    defer sb.deinit()
     sb.append("this value reaches no owner and is never released - bind it to a variable")
     own_blame(self, span, &sb)
     own_report(self, span, E_RVALUE_NO_OWNER, sb.to_string())
@@ -15457,6 +15469,7 @@ fn own_refuse_copy(self: &Checker, p: &OwnPass, span: SourceSpan) {
         return
     }
     let sb = string_builder(160)
+    defer sb.deinit()
     sb.append("this value is copied here, which `move` cannot avoid")
     own_blame(self, span, &sb)
     own_report(self, span, E_COPY_ONLY, sb.to_string())
@@ -15869,6 +15882,7 @@ fn own_no_place(self: &Checker, p: &OwnPass, span: SourceSpan, why: String) bool
         return false
     }
     let sb = string_builder(160)
+    defer sb.deinit()
     sb.append($"cannot take ownership of this value: {why}")
     own_taker_note(p, &sb)
     own_report(self, span, E_MOVE_NOT_LVALUE, sb.to_string())
@@ -15905,6 +15919,7 @@ fn own_field_move(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr, e: &Expr) 
         return false
     }
     let sb = string_builder(160)
+    defer sb.deinit()
     sb.append(
         $"field `{ma.member}` cannot be moved out: its base is not owned here - a value reached through a reference, or a parameter without `move`, keeps its fields",
     )
@@ -16768,6 +16783,7 @@ fn own_assign_field(self: &Checker, p: &OwnPass, ma: &MemberAccessExpr, span: So
     const shown = place_text(root.unwrap().name, path.view())
     defer shown.deinit()
     let sb = string_builder(160)
+    defer sb.deinit()
     sb.append($"`{shown.view()}` is live - assigning over it leaks the value it holds")
     own_blame(self, ma.span, &sb)
     own_report(self, span, E_ASSIGN_OVER_LIVE, sb.to_string())
@@ -16866,6 +16882,7 @@ fn own_assign_binding(self: &Checker, p: &OwnPass, id: &IdentifierExpr, span: So
         return
     }
     let sb = string_builder(160)
+    defer sb.deinit()
     sb.append($"`{id.name}` is live - assigning over it leaks the value it holds")
     own_blame(self, id.span, &sb)
     own_report(self, span, E_ASSIGN_OVER_LIVE, sb.to_string())
@@ -16926,6 +16943,7 @@ fn own_unreleased(self: &Checker, p: &OwnPass, o: &OwnedRec, exit: OwnExit?) {
         return
     }
     let sb = string_builder(200)
+    defer sb.deinit()
     if own_moved_on(p, o.decl, "", false) {
         sb.append(
             $"`{o.name}` is not released on every path: some paths move it, and on the others it ",
@@ -17745,6 +17763,7 @@ pub fn check_all(
             None => {}
         }
         const _p = self.fn_decl_params.remove(id)
+        defer _p.deinit()
         const _d = self.fn_deprecations.remove(id)
     }
     const removed_fns = dead_fns.len > 0
@@ -18871,9 +18890,9 @@ fn fill_body_cache(self: &Checker, c: &ModuleBodyCache, zonked: &Dict(NodeId, Ty
 // One closure environment's registry definition and dispatch record, copied for the cache. Runs
 // after `zonk_closures`, so both hold final types.
 fn harvest_closure(self: &Checker, c: &ModuleBodyCache, nid: NominalId) {
-    const f = closure_fact_of(self, nid)
-    if f.is_some() {
-        c.closures.push(f.unwrap())
+    closure_fact_of(self, nid) match {
+        Some(f) => c.closures.push(f)
+        None => {}
     }
 }
 
@@ -18937,11 +18956,9 @@ fn harvest_spec_caches(self: &Checker) {
         let facts: List(ClosureFact) = list(0)
         for e in sp.overlay.lambdas {
             e.value.closure_id match {
-                Some(nid) => {
-                    const f = closure_fact_of(self, nid)
-                    if f.is_some() {
-                        facts.push(f.unwrap())
-                    }
+                Some(nid) => closure_fact_of(self, nid) match {
+                    Some(f) => facts.push(f)
+                    None => {}
                 }
                 None => {}
             }
@@ -19049,7 +19066,10 @@ fn assemble_context(self: &Checker) List(OwnedString) {
             is_simd = false,
             repr = StructRepr.Flang,
         })
-        NomEnum(_) => null
+        NomEnum(_) => {
+            fields.deinit()
+            null
+        }
     }
     def match {
         Some(d) => self.nominals.replace_body(id.unwrap(), NominalDef.NomStruct(move d))
@@ -19085,6 +19105,7 @@ fn snapshot_nominal_defs(self: &Checker, retiring: &Set(String)) Dict(String, Ow
             continue
         }
         let sb = string_builder(64)
+        defer sb.deinit()
         render_def_fingerprint(def, &sb)
         out.set(nominal_fqn(def), sb.to_string())
     }
@@ -19233,8 +19254,8 @@ fn snapshot_aliases(self: &Checker, retiring: &Set(String)) Dict(StrId, OwnedStr
             continue
         }
         let sb = string_builder(32)
+        defer sb.deinit()
         if !render_alias_def(&entry.value, &sb) {
-            sb.deinit()
             continue
         }
         out.set(entry.key, sb.to_string())
@@ -19456,6 +19477,7 @@ fn visit_sequence(self: &Checker, n: usize, order: &List(usize)?) List(usize) {
 
 fn parse_src(src: String, fid: i32) Module {
     let lx = lexer(src)
+    defer lx.deinit()
     let tokens = lx.tokenize()
     let p = parser(tokens, src)
     let cst = p.tree.node_at(p.parse_module())
@@ -19482,8 +19504,11 @@ fn redemand_errors(b_first: String, b_again: String, a_src: String) RedemandErro
 
     let chk = checker()
     let gen_srcs: List(OwnedString) = list(0)
+    defer gen_srcs.deinit()
     let gen_fps: List(OwnedString) = list(0)
+    defer gen_fps.deinit()
     let gens = template_state()
+    defer gens.deinit()
     let res1 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
     const first = count_error_diags(&chk.diagnostics)
 
@@ -19497,6 +19522,7 @@ fn redemand_errors(b_first: String, b_again: String, a_src: String) RedemandErro
     recollect.push(true)
     recollect.push(false)
     let gens2 = template_state()
+    defer gens2.deinit()
     let res2 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens2, null, Some(&recollect))
     const second = count_error_diags(&chk.diagnostics)
 
@@ -19732,6 +19758,7 @@ test "a changed default value invalidates the carried slots" {
 
     let chk = checker()
     let gens = template_state()
+    defer gens.deinit()
     let res1 = check_all(&chk, &mods, &ps, &srcs, &fps, &gens)
     assert_eq(count_error_diags(&chk.diagnostics), 0 as usize, "the defaulted call type-checks")
     assert_true(!chk.defaults_changed, "a first demand flags nothing")
@@ -19749,6 +19776,7 @@ test "a changed default value invalidates the carried slots" {
     recollect.push(true)
     recollect.push(false)
     let gens2 = template_state()
+    defer gens2.deinit()
     let res2 = check_all(&chk, &mods, &ps, &srcs, &fps, &gens2, null, Some(&recollect))
     assert_eq(count_error_diags(&chk.diagnostics), 0 as usize, "the new value type-checks")
     assert_true(chk.defaults_changed, "the text comparison flags the changed default")
@@ -19829,8 +19857,11 @@ test "a carried specialization keeps its id across a clean re-demand" {
 
     let chk = checker()
     let gen_srcs: List(OwnedString) = list(0)
+    defer gen_srcs.deinit()
     let gen_fps: List(OwnedString) = list(0)
+    defer gen_fps.deinit()
     let gens = template_state()
+    defer gens.deinit()
     let res1 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
     assert_eq(res1.specializations.len(), 1 as usize, "the call forces one specialization")
     const next1 = res1.specializations.next_id
@@ -19844,6 +19875,7 @@ test "a carried specialization keeps its id across a clean re-demand" {
     recollect.push(true)
     recollect.push(false)
     let gens2 = template_state()
+    defer gens2.deinit()
     let res2 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens2, null, Some(&recollect))
     assert_eq(count_error_diags(&chk.diagnostics), 0 as usize, "the re-demand stays clean")
     assert_eq(res2.specializations.len(), 1 as usize, "still exactly one specialization")
@@ -19871,8 +19903,11 @@ test "a removed call site sweeps its specialization" {
 
     let chk = checker()
     let gen_srcs: List(OwnedString) = list(0)
+    defer gen_srcs.deinit()
     let gen_fps: List(OwnedString) = list(0)
+    defer gen_fps.deinit()
     let gens = template_state()
+    defer gens.deinit()
     let res1 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
     assert_eq(res1.specializations.len(), 1 as usize, "the call forces one specialization")
 
@@ -19885,6 +19920,7 @@ test "a removed call site sweeps its specialization" {
     recollect.push(false)
     recollect.push(true)
     let gens2 = template_state()
+    defer gens2.deinit()
     let res2 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens2, null, Some(&recollect))
     assert_eq(count_error_diags(&chk.diagnostics), 0 as usize, "the edited caller type-checks")
     assert_eq(
@@ -19913,11 +19949,15 @@ fn count_check_errors(srcs: String[], paths: String[]) usize {
 
     let chk = checker()
     let gen_srcs: List(OwnedString) = list(0)
+    defer gen_srcs.deinit()
     let gen_fps: List(OwnedString) = list(0)
+    defer gen_fps.deinit()
     let gens = template_state()
-    let _res = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
+    defer gens.deinit()
+    let res = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
     let errors = count_error_diags(&chk.diagnostics)
 
+    res.deinit()
     chk.deinit()
     mods.deinit()
     ps.deinit()
@@ -20332,6 +20372,7 @@ fn check_result_of(srcs: String[], paths: String[]) TypeCheckResult {
         mods.push(parse_src(srcs[i], i as i32))
     }
     let ps = list(paths.len)
+    defer ps.deinit()
     ps.push_all(paths)
     let chk = checker()
     let gen_srcs: List(OwnedString) = list(0)
@@ -20340,7 +20381,13 @@ fn check_result_of(srcs: String[], paths: String[]) TypeCheckResult {
         gen_fps.push(from_view(paths[i]))
     }
     let gens = template_state()
-    return check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
+    const res = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens)
+    leak(mods)
+    leak(chk)
+    leak(gen_srcs)
+    leak(gen_fps)
+    leak(gens)
+    return res
 }
 
 test "every node id in the result names the span it came from" {
@@ -20422,6 +20469,7 @@ test "a generic call instantiates once per concrete signature" {
         ],
         ["m"],
     )
+    defer res.deinit()
     // Two i32 calls share one specialization; the bool call adds one.
     assert_eq(res.specializations.len(), 2 as usize, "two concrete signatures, two specializations")
     let s0 = res.specializations.get(0 as u32)
@@ -20465,6 +20513,7 @@ fn resolved_call(src: String, callee: String) ResolvedCall {
     let res = check_result_of([src], ["m"])
     defer res.deinit()
     let sb = string_builder(64)
+    defer sb.deinit()
     let hops = 0usize
     for e in res.resolved_targets {
         let fid: u32? = e.value match {
@@ -20510,6 +20559,7 @@ fn note_resolved(
 // `Inner`, and `Wrap` reaching it through `op_deref`, in front of `rest`.
 fn with_wrap(rest: String) OwnedString {
     let sb = string_builder(256)
+    defer sb.deinit()
     sb.append("pub type Inner = struct { value: i64 }\n")
     sb.append("pub type Wrap = struct { pad: i64 inner: Inner }\n")
     sb.append("pub fn op_deref(w: &Wrap) &Inner { return &w.inner }\n")
@@ -20662,6 +20712,7 @@ test "a nested generic call specializes transitively" {
         ],
         ["m"],
     )
+    defer res.deinit()
     // outer(i32) instantiates, and its body's inner(x) pick drains into inner(i32).
     assert_eq(res.specializations.len(), 2 as usize, "outer and inner both specialize")
 }
@@ -20673,6 +20724,7 @@ test "a self-recursive generic reuses its own specialization" {
         ],
         ["m"],
     )
+    defer res.deinit()
     assert_eq(
         res.specializations.len(),
         1 as usize,

@@ -94,13 +94,6 @@ pub fn set_comptime(self: &ResolveCtx, c: ComptimeCtx) {
 pub fn deinit(self: move ResolveCtx) {
     self.project_name.deinit()
     self.project_source_root.deinit()
-    loop {
-        const next = self.deps.pop()
-        if next.is_none() {
-            break
-        }
-        release(next.unwrap())
-    }
     self.deps.deinit()
     self.stdlib_root.deinit()
     self.cwd.deinit()
@@ -280,17 +273,9 @@ pub fn single_file_ctx(stdlib_root: String) ResolveCtx {
 fn dep_source_root(dep_dir: String) OwnedString {
     let manifest = $"{dep_dir}/flang.toml"
     defer manifest.deinit()
-    let text = read_text(manifest.view())
-    if text.is_none() {
-        return source_root(dep_dir, "src/**/*.f")
-    }
-    let t = text.unwrap()
+    let t = read_text(manifest.view()) ?? return source_root(dep_dir, "src/**/*.f")
     defer t.deinit()
-    const parsed = parse_project(t.view())
-    if parsed.is_err() {
-        return source_root(dep_dir, "src/**/*.f")
-    }
-    let dp = parsed.unwrap()
+    let dp = parse_project(t.view()).ok() ?? return source_root(dep_dir, "src/**/*.f")
     defer dp.deinit()
     return source_root(dep_dir, dp.source.view())
 }
@@ -335,12 +320,9 @@ pub fn read_text(path: String) OwnedString? {
         Ok(v) => move v
         Err(_) => return null
     }
-    let rd = read_all(&f)
+    const rd = read_all(&f)
     close_file(f)
-    if rd.is_err() {
-        return null
-    }
-    return Some(rd.unwrap())
+    return rd.ok()
 }
 
 // Internal helpers
@@ -370,13 +352,14 @@ fn normalized_owned(s: move OwnedString) OwnedString {
 pub fn canon_path(p: String) OwnedString {
     let norm = normalize_sep(p)
     if !is_absolute(norm.view()) {
-        const wd = cwd()
-        if wd.is_ok() {
-            let base = wd.unwrap()
-            const joined = $"{base.as_view()}/{norm.view()}"
-            base.deinit()
-            install(&norm, normalize_sep(joined.view()))
-            joined.deinit()
+        cwd() match {
+            Ok(base) => {
+                const joined = $"{base.as_view()}/{norm.view()}"
+                base.deinit()
+                install(&norm, normalize_sep(joined.view()))
+                joined.deinit()
+            }
+            Err(_) => {}
         }
     }
     return fold_dots(norm)

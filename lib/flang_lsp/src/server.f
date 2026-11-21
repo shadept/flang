@@ -129,6 +129,7 @@ pub fn run(self: &LspServer) i32 {
             got.unwrap_err() match {
                 BadJson | BadEnvelope => {
                     const nul = Value.Null
+                    defer nul.deinit()
                     self.out.respond_error(&nul, PARSE_ERROR, "invalid message")
                 }
                 else => {
@@ -565,11 +566,7 @@ fn collect_folders(self: &LspServer, params: &Value?) {
     if root.is_none() {
         return
     }
-    const path = uri_to_path(root.unwrap())
-    if path.is_none() {
-        return
-    }
-    const p = path.unwrap()
+    const p = uri_to_path(root.unwrap()) ?? return
     const cut = rfind(p.view(), '/')
     const name = cut match {
         Some(i) => p.view()[(i + 1)..p.view().len]
@@ -627,6 +624,7 @@ fn on_shutdown(self: &LspServer, msg: &RpcMessage) {
     self.shutdown_requested = true
     if msg.id().is_some() {
         const nul = Value.Null
+        defer nul.deinit()
         self.out.respond(msg.id().unwrap(), &nul)
     }
 }
@@ -774,11 +772,7 @@ fn ensure_project(self: &LspServer, path: String) {
     if self.ws.project_of_path(path).is_some() {
         return
     }
-    const dir = project_dir_for(path)
-    if dir.is_none() {
-        return
-    }
-    const d = dir.unwrap()
+    const d = project_dir_for(path) ?? return
 
     const base = rfind(d.view(), '/') match {
         Some(i) => d.view()[(i + 1)..d.view().len]
@@ -1038,12 +1032,13 @@ fn on_code_lens(self: &LspServer, msg: &RpcMessage) {
     const dir = if doc.is_some() { self.test_dir(doc.unwrap().path.view()) } else { null }
     let lenses: List(CodeLens) = list(0)
     defer lenses.deinit()
-    if dir.is_none() {
-        self.out.respond(msg.id().unwrap(), &lenses)
-        return
+    let dv = dir match {
+        Some(v) => move v
+        None => {
+            self.out.respond(msg.id().unwrap(), &lenses)
+            return
+        }
     }
-
-    let dv = dir.unwrap()
     defer dv.deinit()
     const d = doc.unwrap()
     let parsed = parse_doc(d.text.view())
@@ -1223,6 +1218,7 @@ fn cursor_at(self: &LspServer, msg: &RpcMessage) Cursor? {
 
 fn respond_null(self: &LspServer, msg: &RpcMessage) {
     const nul = Value.Null
+    defer nul.deinit()
     self.out.respond(msg.id().unwrap(), &nul)
 }
 
@@ -1396,17 +1392,19 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
     // An import names one file: its path, with that module's docstring. Never falls through - a
     // path segment like `list` would otherwise hover as every declaration of that name.
     const imp = import_at(&unit.modules[fid as usize], offset)
-    if imp.is_some() {
-        let ref = imp.unwrap()
-        defer ref.deinit()
-        const target = file_id_of_fqn(unit, ref.path.view())
-        const doc: OwnedString? = if target.is_some() {
-            module_doc(unit.sources[target.unwrap() as usize].view())
-        } else {
-            null
+    imp match {
+        Some(ref) => {
+            defer ref.deinit()
+            const target = file_id_of_fqn(unit, ref.path.view())
+            const doc: OwnedString? = if target.is_some() {
+                module_doc(unit.sources[target.unwrap() as usize].view())
+            } else {
+                null
+            }
+            self.respond_hover(msg, $"import {ref.path.view()}", doc, text, ref.span)
+            return
         }
-        self.respond_hover(msg, $"import {ref.path.view()}", doc, text, ref.span)
-        return
+        None => {}
     }
 
     // The compile-time context in a `#if` head hovers as the `core.comptime` declaration it reads
@@ -1430,13 +1428,15 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         None => false
     }
     const extra = if hashed { generator_hover(unit, fid, offset) } else { null }
-    if extra.is_some() {
-        const x = extra.unwrap()
-        const span = x.span
-        const md = x.markdown()
-        x.deinit()
-        self.respond_markdown(msg, md, text, span)
-        return
+    extra match {
+        Some(x) => {
+            const span = x.span
+            const md = x.markdown()
+            x.deinit()
+            self.respond_markdown(msg, md, text, span)
+            return
+        }
+        None => {}
     }
 
     const word = identifier_at(text, offset)
@@ -1601,21 +1601,25 @@ fn on_hover(self: &LspServer, msg: &RpcMessage) {
         const wend = wstart + wname.len
         const call_shaped = wend < text.len and text[wend] == '('
         if !is_member or call_shaped {
-            let rh = self.registry_hover(pi, wname)
-            if rh.is_some() {
-                let hover = rh.unwrap()
-                doc_span = hover.sole
-                set_hover_label(&label, hover.label)
+            self.registry_hover(pi, wname) match {
+                Some(hover) => {
+                    doc_span = hover.sole
+                    set_hover_label(&label, hover.label)
+                }
+                None => {}
             }
         }
     }
 
-    if label.is_none() {
-        self.respond_null(msg)
-        return
+    const shown = label match {
+        Some(l) => move l
+        None => {
+            self.respond_null(msg)
+            return
+        }
     }
     const doc = if doc_span.is_some() { self.doc_for(pi, doc_span.unwrap()) } else { null }
-    self.respond_hover(msg, label.unwrap(), doc, text, span)
+    self.respond_hover(msg, shown, doc, text, span)
 }
 
 // `context: Context`, then every field of the program's context with its type and declaring module.
@@ -1681,11 +1685,10 @@ fn respond_hover(
     span: SourceSpan,
 ) {
     const none: OwnedString? = null
+    defer none.deinit()
     const md = hover_markdown(label.view(), &doc, &none)
     label.deinit()
-    if doc.is_some() {
-        doc.unwrap().deinit()
-    }
+    doc.deinit()
     self.respond_markdown(msg, md, text, span)
 }
 
@@ -1813,23 +1816,25 @@ fn on_definition(self: &LspServer, msg: &RpcMessage) {
     // path segment like `list` would otherwise match every declaration of that name. As a
     // LocationLink when the client takes one, so the whole dotted path highlights as the origin.
     const imp = import_at(&unit.modules[fid as usize], offset)
-    if imp.is_some() {
-        let ref = imp.unwrap()
-        defer ref.deinit()
-        const target = file_id_of_fqn(unit, ref.path.view())
-        if target.is_some() {
-            const start = SourceSpan { file_id = target.unwrap(), start = 0, length = 0 }
-            if self.definition_links {
-                let links: List(LocationLink) = list(1)
-                defer links.deinit()
-                links.push(self.span_link(pi, ref.span, start))
-                self.out.respond(msg.id().unwrap(), &links)
-                return
+    imp match {
+        Some(ref) => {
+            defer ref.deinit()
+            const target = file_id_of_fqn(unit, ref.path.view())
+            if target.is_some() {
+                const start = SourceSpan { file_id = target.unwrap(), start = 0, length = 0 }
+                if self.definition_links {
+                    let links: List(LocationLink) = list(1)
+                    defer links.deinit()
+                    links.push(self.span_link(pi, ref.span, start))
+                    self.out.respond(msg.id().unwrap(), &links)
+                    return
+                }
+                locs.push(self.span_location(pi, start))
             }
-            locs.push(self.span_location(pi, start))
+            self.out.respond(msg.id().unwrap(), &locs)
+            return
         }
-        self.out.respond(msg.id().unwrap(), &locs)
-        return
+        None => {}
     }
 
     // The compile-time context in a `#if` head goes to the `core.comptime` declaration.
@@ -2287,12 +2292,13 @@ fn on_signature_help(self: &LspServer, msg: &RpcMessage) {
     const text = doc.unwrap().text.view()
     const offset = doc.unwrap().index.to_offset(text, pos.unwrap(), self.encoding)
 
-    const site = call_site_at(text, offset)
-    if site.is_none() {
-        self.respond_null(msg)
-        return
+    let cs = call_site_at(text, offset) match {
+        Some(v) => move v
+        None => {
+            self.respond_null(msg)
+            return
+        }
     }
-    let cs = site.unwrap()
     const result = &self.ws.projects[pi].unit.result
     const overloads = result.functions.by_name.get_ref(cs.name.view())
     if overloads.is_none() or overloads.unwrap().len == 0 {
@@ -2363,12 +2369,13 @@ fn on_formatting(self: &LspServer, msg: &RpcMessage) {
     defer project.deinit()
     set_project(&cfg, project.view())
 
-    const res = format_source(text, &cfg)
-    if res.is_err() {
-        self.respond_null(msg)
-        return
+    let formatted = format_source(text, &cfg).ok() match {
+        Some(v) => move v
+        None => {
+            self.respond_null(msg)
+            return
+        }
     }
-    let formatted = res.unwrap()
     defer formatted.deinit()
 
     let edits: List(TextEdit) = list(1)
@@ -2387,25 +2394,14 @@ fn on_formatting(self: &LspServer, msg: &RpcMessage) {
 // ignored - `flang fmt` already warns about them on the command line. Returns the project's name,
 // for `set_project`; empty without a manifest.
 fn apply_project_fmt(path: String, cfg: &FmtConfig) OwnedString {
-    const dir = project_dir_for(path)
-    if dir.is_none() {
-        return from_view("")
-    }
-    let d = dir.unwrap()
+    let d = project_dir_for(path) ?? return from_view("")
     const manifest = $"{d.view()}/flang.toml"
     d.deinit()
     const got = read_text(manifest.view())
     manifest.deinit()
-    if got.is_none() {
-        return from_view("")
-    }
-    let toml = got.unwrap()
+    let toml = got ?? return from_view("")
     defer toml.deinit()
-    const parsed = parse_project(toml.view())
-    if parsed.is_err() {
-        return from_view("")
-    }
-    let proj = parsed.unwrap()
+    let proj = parse_project(toml.view()).ok() ?? return from_view("")
     defer proj.deinit()
     for &e in proj.fmt {
         const _ok = set_option(cfg, e.key.view(), e.value.view())

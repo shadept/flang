@@ -210,6 +210,7 @@ pub fn module_doc(source: String) OwnedString? {
 // trailing whitespace trimmed, joined with newlines.
 fn comment_prose(block: String) OwnedString {
     let sb = string_builder(block.len)
+    defer sb.deinit()
     let p: usize = 0
     let first = true
     while p < block.len {
@@ -330,10 +331,13 @@ test "doc_above collects the comment run glued to a declaration" {
 test "doc_above stops at a blank line, a code line and a trailing comment" {
     const src = "// far\n\nfn a() {}\nlet x = 1 // near\nfn b() {}\n"
     const blank = doc_above(src, 8)
+    defer blank.deinit()
     assert_true(blank.is_none(), "blank line breaks the run")
     const trailing = doc_above(src, 36)
+    defer trailing.deinit()
     assert_true(trailing.is_none(), "a trailing comment is not a docstring")
     const midline = doc_above(src, 3)
+    defer midline.deinit()
     assert_true(midline.is_none(), "an offset mid-line has no run above")
 }
 
@@ -353,8 +357,10 @@ test "module_doc takes the opening run only when a blank line follows it" {
     assert_true(text.view() == "Trivia.\nMore.", "and it is the opening run")
     text.deinit()
     const glued = module_doc("// see\nfn f() {}\n")
+    defer glued.deinit()
     assert_true(glued.is_none(), "glued to the first decl")
     const bare = module_doc("import std.option\n")
+    defer bare.deinit()
     assert_true(bare.is_none(), "no opening comment")
     const eof = module_doc("// only\n")
     assert_true(eof.is_some(), "end of file closes the run")

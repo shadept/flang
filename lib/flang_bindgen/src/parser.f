@@ -937,11 +937,8 @@ fn macro_value(self: &Parser, body: CTok[]) CConst? {
         return null
     }
     if all_strings(body) {
-        const s = concat_strings(body)
-        if s.is_none() {
-            return null
-        }
-        self.m.strings.push(s.unwrap())
+        const s = concat_strings(body) ?? return null
+        self.m.strings.push(s)
         return Some(CConst.StrConst((self.m.strings.len - 1) as u32))
     }
     const f = float_literal(body)
@@ -967,6 +964,7 @@ fn all_strings(body: CTok[]) bool {
 // an escape a FLang literal could not round-trip.
 fn concat_strings(body: CTok[]) OwnedString? {
     let sb = string_builder(32)
+    defer sb.deinit()
     for t in body {
         const raw = t.text[1..t.text.len - 1]
         let i: usize = 0
@@ -978,7 +976,6 @@ fn concat_strings(body: CTok[]) OwnedString? {
                 continue
             }
             if i + 1 >= raw.len {
-                sb.deinit()
                 return null
             }
             const e = raw[i + 1]
@@ -992,7 +989,6 @@ fn concat_strings(body: CTok[]) OwnedString? {
                 _ => null
             }
             if decoded.is_none() {
-                sb.deinit()
                 return null
             }
             sb.append_byte(decoded.unwrap())

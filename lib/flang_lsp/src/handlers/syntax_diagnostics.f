@@ -40,6 +40,7 @@ pub fn parse_doc(text: String) ParsedDoc {
 pub fn parse_raw(text: String) ParsedDoc {
     let diagnostics: List(Diagnostic) = list(0)
     let lx = lexer(text)
+    defer lx.deinit()
     let tokens = lx.tokenize()
     let p = parser(tokens, text)
     let cst = p.tree.node_at(p.parse_module())

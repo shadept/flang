@@ -284,6 +284,7 @@ fn root_at(fns: &List(FnNode), start: usize, reached: &Dict(u32, bool), work: &L
 // included.
 fn directive_names(source: String, out: &Set(String)) {
     let lx = lexer(source)
+    defer lx.deinit()
     let tokens = lx.tokenize()
     defer tokens.deinit()
     let i: usize = 0

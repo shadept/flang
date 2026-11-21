@@ -320,6 +320,7 @@ pub fn lookup(self: &FunctionRegistry, name: String, vis: &Visibility) FnLookup 
     if visible.len > 0 {
         return FnLookup.FnLookFound(move visible)
     }
+    visible.deinit()
     if hidden_module.is_some() {
         let one: List(&FunctionScheme) = list(1)
         one.push(&overloads[hidden_at])

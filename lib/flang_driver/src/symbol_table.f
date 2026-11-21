@@ -168,12 +168,9 @@ pub fn symbol_builder(result: &TypeCheckResult) SymbolBuilder {
             if f.has_variadic and f.is_foreign {
                 continue
             }
-            let sig = scheme_sig(&result.interner, &f.signature)
-            if sig.is_none() {
-                continue
-            }
-            let s = sig.unwrap()
+            let s = scheme_sig(&result.interner, &f.signature) ?? continue
             if !sig_lowerable(&result.interner, &s, f.is_foreign, &result.nominals) {
+                s.deinit()
                 continue
             }
             by_decl.set(node_id_of(f.decl_span), f.id)
@@ -197,6 +194,7 @@ pub fn symbol_builder(result: &TypeCheckResult) SymbolBuilder {
         params.push_all(sp.concrete_params.as_slice())
         let s = FnSig { params = move params, ret = sp.concrete_return }
         if !sig_lowerable(&result.interner, &s, false, &result.nominals) {
+            s.deinit()
             continue
         }
         let sym = mangle_spec_symbol(&result.interner, sp.module, sp.name, &s, &result.nominals)
@@ -765,10 +763,12 @@ fn mangle_spec_symbol(
 
 test "assigns one symbol per callable function, keyed by registry id" {
     let unit = analyze(from_view("fn add(a: i32, b: i32) i32 { return a + b }"), "test.f")
+    defer unit.deinit()
     let sb = symbol_builder(&unit.result)
     assert_eq(sb.by_decl.length, 1 as usize, "the decl span keys back to a registry id")
     sb.add_module(&unit.module, "")
     assert_eq(sb.by_fn_id.length, 1 as usize, "one symbol assigned")
+    sb.finish().deinit()
 }
 
 test "mangles symbols by module fqn, keeping main and foreigns bare" {

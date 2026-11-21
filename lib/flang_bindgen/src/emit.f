@@ -145,6 +145,7 @@ fn classify_files(self: &Emitter, files: &List(String)) {
 /// trailing slash.
 pub fn normalize_path(raw: String, fold_case: bool, dir: bool) OwnedString {
     let sb = string_builder(raw.len + 1)
+    defer sb.deinit()
     let i: usize = 0
     while i < raw.len {
         let c = raw[i]
@@ -208,6 +209,7 @@ fn name_records(self: &Emitter) {
 
 fn synth_name(self: &Emitter, outer: String, field: String) String {
     let sb = string_builder(outer.len + field.len + 1)
+    defer sb.deinit()
     sb.append(outer)
     sb.append("_")
     sb.append(field)
@@ -252,6 +254,7 @@ fn type_name(self: &Emitter, cname: String) String {
         return ""
     }
     let sb = string_builder(cname.len)
+    defer sb.deinit()
     const c = cname[i]
     sb.append_byte(if c >= 'a' and c <= 'z' { c - 32 } else { c })
     sb.append(cname[i + 1..cname.len])
@@ -794,11 +797,13 @@ fn write_macros(self: &Emitter) {
             FloatConst(text, neg, is_f32) => float_const(mac.name, text, neg, is_f32)
             StrConst(i) => str_const(mac.name, self.m.strings[i as usize].view())
         }
-        if line.is_some() {
-            self.names.add(mac.name)
-            const text = line.unwrap()
-            self.out.append(text.view())
-            text.deinit()
+        line match {
+            Some(text) => {
+                self.names.add(mac.name)
+                self.out.append(text.view())
+                text.deinit()
+            }
+            None => {}
         }
     }
 }
@@ -817,6 +822,7 @@ fn int_const(self: &Emitter, name: String, v: CInt) OwnedString? {
 // A float constant from its C literal: FLang wants a digit on each side of the point.
 fn float_const(name: String, text: String, neg: bool, is_f32: bool) OwnedString? {
     let sb = string_builder(48)
+    defer sb.deinit()
     sb.append("pub const ")
     sb.append(name)
     sb.append(if is_f32 { ": f32 = " } else { ": f64 = " })
@@ -852,6 +858,7 @@ fn float_const(name: String, text: String, neg: bool, is_f32: bool) OwnedString?
 // A string constant, when every byte has a FLang literal spelling.
 fn str_const(name: String, s: String) OwnedString? {
     let sb = string_builder(s.len + 32)
+    defer sb.deinit()
     sb.append("pub const ")
     sb.append(name)
     sb.append(" = \"")
@@ -867,7 +874,6 @@ fn str_const(name: String, s: String) OwnedString? {
         } else if c == 13u8 {
             sb.append("\\r")
         } else if c < 32u8 or c == 127u8 {
-            sb.deinit()
             return null
         } else {
             sb.append_byte(c)

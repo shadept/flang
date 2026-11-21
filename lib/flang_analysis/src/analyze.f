@@ -60,6 +60,7 @@ pub fn analyze(source: move OwnedString, path: String) AnalyzedUnit {
     const src = source.view()
 
     let lx = lexer(src)
+    defer lx.deinit()
     let tokens = lx.tokenize()
     let p = parser(tokens, src)
     const cst = p.tree.node_at(p.parse_module())
@@ -341,13 +342,14 @@ pub fn analyze_project(
         let path = queue[qi].view()
         let is_project = qi < project_count
         qi = qi + 1
-        let src_opt = read_source(path, overrides)
-        if src_opt.is_none() {
-            const msg = $"cannot read source `{path}`"
-            parse_diags.push(error("E0001", msg, none_span()))
-            continue
+        let src = read_source(path, overrides) match {
+            Some(s) => move s
+            None => {
+                const msg = $"cannot read source `{path}`"
+                parse_diags.push(error("E0001", msg, none_span()))
+                continue
+            }
         }
-        let src = src_opt.unwrap()
         let fid = modules.len as i32
         let module = parse_to_module(src.view(), fid, &ctx.comptime, &parse_diags)
         let fqn = module_fqn(ctx, path)
@@ -414,10 +416,7 @@ fn check_project(
     // from a previous check holds string views into them; the matching `file_paths` entries are
     // freed, because `TypeCheckResult` keeps its own copies of paths.
     while self.sources.len > self.modules.len {
-        const gone = self.sources.pop()
-        if gone.is_some() {
-            self.retired_sources.push(gone.unwrap())
-        }
+        self.retired_sources.push(self.sources.pop().unwrap())
     }
     trim_owned(&self.file_paths, self.modules.len)
 
@@ -593,12 +592,7 @@ fn demand_root(fqn: String, i: usize, project_origin: &List(bool), globals: &Lis
 
 // Drop trailing entries until `xs` holds `n`, freeing each one.
 fn trim_owned(xs: &List(OwnedString), n: usize) {
-    while xs.len > n {
-        const gone = xs.pop()
-        if gone.is_some() {
-            gone.unwrap().deinit()
-        }
-    }
+    xs.truncate(n)
 }
 
 // Check the project again, re-parsing only what is stale and reusing every other module's AST.
@@ -640,15 +634,16 @@ pub fn reanalyze(
         if !reparse_all and !dirty.contains(path) and !stale.contains(path) {
             continue
         }
-        const fresh = read_source(path, overrides)
-        if fresh.is_none() {
-            const msg = $"cannot read source `{path}`"
-            self.parse_diags.push(error("E0001", msg, none_span()))
-            continue
-        }
         // Exchanged in place: the slot keeps a valid source at every point, and the old one leaves
         // as a value this owns.
-        let incoming = fresh.unwrap()
+        let incoming = read_source(path, overrides) match {
+            Some(s) => move s
+            None => {
+                const msg = $"cannot read source `{path}`"
+                self.parse_diags.push(error("E0001", msg, none_span()))
+                continue
+            }
+        }
         swap(&srcs[i], &incoming)
         self.retired_sources.push(incoming)
         // The module is exchanged the same way: the retired one leaves as a value this owns.
@@ -692,10 +687,12 @@ fn collect_edges(
         for &d in modules[i].decls {
             d match {
                 Import(id) => {
-                    const r = resolve_import(ctx, id.path)
-                    if r.is_some() {
-                        edge_from.push(i)
-                        edge_to.push(r.unwrap())
+                    resolve_import(ctx, id.path) match {
+                        Some(p) => {
+                            edge_from.push(i)
+                            edge_to.push(p)
+                        }
+                        None => {}
                     }
                 }
                 _ => {}
@@ -805,6 +802,7 @@ pub fn project_error_count(self: &AnalyzedProject) usize {
 
 fn parse_to_module(src: String, file_id: i32, target: &ComptimeCtx, diags: &List(Diagnostic)) Module {
     let lx = lexer(src)
+    defer lx.deinit()
     let tokens = lx.tokenize()
     let p = parser(tokens, src)
     let cst = p.tree.node_at(p.parse_module())
@@ -918,11 +916,7 @@ fn shadowed_by_project(ctx: &ResolveCtx, stdlib_file: String) bool {
     }
     let segs = split(rel.unwrap(), '/')
     defer segs.deinit()
-    const r = resolve_import(ctx, segs.as_slice())
-    if r.is_none() {
-        return false
-    }
-    const p = r.unwrap()
+    const p = resolve_import(ctx, segs.as_slice()) ?? return false
     const shadowed = p.view() != stdlib_file
     p.deinit()
     return shadowed
@@ -1248,7 +1242,9 @@ test "a path no override names falls through to the file on disk" {
     defer ov.deinit()
     ov.set("other.f", "fn other() i32 { return 1 }\n")
     const missing = read_source("no/such/file.f", Some(&ov))
+    defer missing.deinit()
     assert_true(missing.is_none(), "an unnamed path reads from disk, and misses")
     const no_map = read_source("no/such/file.f", null)
+    defer no_map.deinit()
     assert_true(no_map.is_none(), "so does no override map at all")
 }

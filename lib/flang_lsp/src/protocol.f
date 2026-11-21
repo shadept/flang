@@ -318,6 +318,7 @@ pub type TextDocumentEdit = struct {
 
 pub fn deinit(self: move TextDocumentEdit) {
     self.text_document.uri.deinit()
+    self.text_document.version.deinit()
     self.edits.deinit()
 }
 

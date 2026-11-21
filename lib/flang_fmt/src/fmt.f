@@ -250,6 +250,7 @@ pub fn format_source(source: String, cfg: &FmtConfig) Result(OwnedString, FmtErr
 
 fn format_once(source: String, cfg: &FmtConfig) Result(OwnedString, FmtError) {
     let lx = lexer(source)
+    defer lx.deinit()
     let tokens = lx.tokenize()
     // `parser` takes the token list into its `Cst`; `p.deinit()` frees both.
     let p = parser(tokens, source)
@@ -446,10 +447,7 @@ fn render_module(cst: &CstNode, cfg: &FmtConfig, eol: String) OwnedString {
     defer chain_dots.deinit()
     mark_chains(cst, NodeKind.Module, &cst.cst.tokens, &chain_dots)
     loop {
-        let pass = render_pass(cst, cfg, eol, &breaks, &hugs, &chain_dots)
-        if pass.is_some() {
-            return pass.unwrap()
-        }
+        return render_pass(cst, cfg, eol, &breaks, &hugs, &chain_dots) ?? continue
     }
 }
 
@@ -504,7 +502,9 @@ fn render_pass(
         r.out.deinit()
         return null
     }
-    return Some(r.out.to_string())
+    const text = r.out.to_string()
+    r.out.deinit()
+    return Some(move text)
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -2101,6 +2101,7 @@ fn is_binary_op(kind: TokenKind) bool {
 // the code means can never survive.
 fn verify_output(tokens: &List(Token), cst: &CstNode, output: String) bool {
     let lx = lexer(output)
+    defer lx.deinit()
     // `parser` takes the list into its `Cst`; `p.deinit()` frees it.
     let p = parser(lx.tokenize(), output)
     defer p.deinit()
@@ -2224,6 +2225,7 @@ fn reflow_comments(text: String, width: usize, eol: String) OwnedString {
     }
     const threshold = width / 2
     let sb = string_builder(text.len + 64)
+    defer sb.deinit()
     let words: List(String) = list(0)
     defer words.deinit()
     let para_indent: usize = 0
@@ -2417,6 +2419,7 @@ fn ensure_single_trailing_newline(source: String, eol: String) OwnedString {
             end = end - 1
         }
     let sb = string_builder(end + 2)
+    defer sb.deinit()
     sb.append(source[0..end])
     if end > 0 {
         sb.append(eol)
@@ -3138,6 +3141,7 @@ test "array types keep their semicolon" {
 test "parse errors refuse to format" {
     const cfg = default_config()
     const r = format_source("fn main( {", &cfg)
+    defer r.deinit()
     assert_true(r.is_err(), "broken input rejected")
 }
 

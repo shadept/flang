@@ -149,8 +149,10 @@ test "posix uri keeps its leading slash" {
 
 test "non-file schemes are rejected" {
     const untitled = uri_to_path("untitled:Untitled-1")
+    defer untitled.deinit()
     assert_true(untitled.is_none(), "untitled")
     const generated = uri_to_path("flang-generated:///x.f")
+    defer generated.deinit()
     assert_true(generated.is_none(), "custom scheme")
 }
 

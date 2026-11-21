@@ -621,6 +621,7 @@ fn drop_callers_of_refused(m: &IrModule, ctx: &LowerCtx) {
     // Const global -> its init function: a function READING a const whose init died would see
     // zeros, so it must go too (M11 globals).
     let init_of: Dict(String, String) = dict()
+    defer init_of.deinit()
     for entry in ctx.consts {
         let ci: ConstInfo = entry.value
         ci.init_sym match {
@@ -3465,6 +3466,7 @@ fn lower_tuple_lit(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, tl: &TupleLiter
         return unlowerable(ctx)
     }
     let sl = tup_layout(ctx, &tys)
+    defer sl.deinit()
     // Zero-fill so element padding reads deterministically - see `lower_variant_call`.
     let slot = bb.stack_slot(sl.size as u64, sl.align as u64)
     bb.memset(slot, Operand.IntConst(0), Operand.IntConst(sl.size as i64))
@@ -4795,6 +4797,7 @@ fn tuple_pattern_member(
     defer es.deinit()
     for k in 0..espan.len { es.push(tyit(ctx).child_at(espan, k)) }
     let sl = tup_layout(ctx, &es)
+    defer sl.deinit()
     let addr = bb.gep(scrut, Operand.IntConst(sl.offsets[i] as i64))
     let ety = es[i]
     if is_by_ref(ctx, &ety) {
@@ -6065,6 +6068,7 @@ fn member_field(ctx: &LowerCtx, bb: &BlockBuilder, env: &Env, ma: &MemberAccessE
         defer tys.deinit()
         for k in 0..espan.len { tys.push(tyit(ctx).child_at(espan, k)) }
         let sl = tup_layout(ctx, &tys)
+        defer sl.deinit()
         let base = lower_base_address(ctx, bb, env, ma.receiver)
         return Some(MemberField {
             addr = bb.gep(base, Operand.IntConst(sl.offsets[i] as i64)),
@@ -6805,6 +6809,7 @@ fn register_agg(m: &IrModule, ctx: &LowerCtx, ty: &Ty) AggType? {
 // the companion C writes (see `stdlib/std/simd.c`).
 fn agg_c_name(ctx: &LowerCtx, fqn: String) String {
     let sb = string_builder(fqn.len)
+    defer sb.deinit()
     for i in 0..fqn.len {
         // `.` -> `_` keeps the common case spelling the companion C already uses (`std.simd.Vec128`
         // -> `std_simd_Vec128`, see stdlib/std/simd.c). `_` -> `_0` is what makes that INJECTIVE:
@@ -6999,6 +7004,7 @@ fn intern_string(ctx: &LowerCtx, raw: String) StrData? {
     // Data-segment bytes: decoded content plus a null terminator, so the `ptr` field satisfies
     // String's C-FFI contract (core/string.f).
     let buf = string_builder(d.view().len + 1)
+    defer buf.deinit()
     buf.append(d.view())
     buf.append_byte(0u8)
     let bytes = buf.to_string()
@@ -8053,7 +8059,9 @@ test "lowers a direct call to the callee's mangled symbol" {
         from_view("fn callee(a: i32) i32 { return a }\nfn main() i32 { return callee(7) }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_eq(m.functions.len, 2 as usize, "both functions lowered")
     let mi = find_fn(&m, "main")
     assert_true(mi < m.functions.len, "main was lowered")
@@ -8075,7 +8083,9 @@ test "a UFCS call passes the receiver as the first argument" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let mi = find_fn(&m, "main")
     assert_true(mi < m.functions.len, "main was lowered")
     assert_true(
@@ -8096,7 +8106,9 @@ test "a call site names the resolved overload's symbol, not the other one" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let mi = find_fn(&m, "main")
     let callee = first_callee(&m.functions[mi])
     // The call resolved to the two-parameter overload, so it must name that overload's symbol - and
@@ -8117,7 +8129,9 @@ test "a caller of an out-of-subset callee is refused, not emitted with a stub" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     // The callee's signature never lowered, so there is no definition to link against. Emitting
     // `main` with a placeholder in place of the call would produce a binary that runs and returns
     // the wrong number.
@@ -8130,14 +8144,18 @@ test "a body-less declaration becomes a foreign decl calls can name" {
         from_view("#foreign fn puts(s: &u8) i32\nfn main() i32 { return 0 }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_eq(m.foreigns.len, 1 as usize, "the foreign declaration reached the module")
     assert_true(m.foreigns[0].name == "puts", "foreign keeps its bare C name")
 }
 
 test "lowers a function over parameters into an add and a return" {
     let unit = analyze(from_view("fn add(a: i32, b: i32) i32 { return a + b }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_eq(m.functions.len, 1 as usize, "one function lowered")
     let f = &m.functions[0]
     assert_true(f.name == "add__i32__i32__r_i32", "definition carries its signature symbol")
@@ -8160,7 +8178,9 @@ test "lowers a function over parameters into an add and a return" {
 
 test "lowers a constant-returning main" {
     let unit = analyze(from_view("fn main() i32 { return 40 + 2 }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_eq(m.functions.len, 1 as usize, "one function lowered")
     let f = &m.functions[0]
     assert_true(f.name == "main", "function name preserved")
@@ -8184,7 +8204,9 @@ test "lowers a constant-returning main" {
 
 test "binds an immutable let and reuses it" {
     let unit = analyze(from_view("fn f(a: i32) i32 { let b = a + 1; return b + b }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_eq(m.functions.len, 1 as usize, "one function lowered")
     let f = &m.functions[0]
 
@@ -8204,7 +8226,9 @@ test "skips a function with an unsupported signature type" {
         from_view("fn takes_slice(xs: i32[]) i32 { return 0 }\nfn ok() i32 { return 1 }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_eq(m.functions.len, 1 as usize, "only the scalar function is lowered")
     let f = &m.functions[0]
     assert_true(f.name == "ok__r_i32", "the slice-taking function was skipped")
@@ -8240,7 +8264,9 @@ test "a nominal parameter mangles to a valid C identifier" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(m.functions.len >= 2 as usize, "both functions lowered")
     for i in 0..m.functions.len {
         assert_true(
@@ -8260,7 +8286,9 @@ test "lower_place addresses a nested path; lower_expr loads the scalar" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_eq(m.functions.len, 1 as usize, "one function lowered")
     let f = &m.functions[0]
 
@@ -8287,7 +8315,9 @@ test "lowers a struct field read to a slot store and an offset load" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_eq(m.functions.len, 1 as usize, "one function lowered")
     let f = &m.functions[0]
 
@@ -8412,7 +8442,9 @@ test "an if expression joins its arms through a block parameter" {
         from_view("fn pick(a: i32) i32 { return if a > 0 { 1 } else { 2 } }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "pick__i32__r_i32")]
     assert_eq(f.blocks.len, 4 as usize, "entry, then, else and join")
     assert_true(ends_in_br_if(f, 0), "entry ends in a conditional branch")
@@ -8427,7 +8459,9 @@ test "an if expression joins its arms through a block parameter" {
 
 test "an if with no else yields nothing and needs no join parameter" {
     let unit = analyze(from_view("fn f(a: i32) i32 { if a > 0 { return 1 } return 0 }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let join = block_starting(f, "join")
     assert_true(join < f.blocks.len, "a join block exists")
@@ -8439,7 +8473,9 @@ test "an arm that returns contributes no edge to the join" {
         from_view("fn f(a: i32) i32 { if a > 0 { return 1 } else { return 2 } }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let then_b = block_starting(f, "then")
     let else_b = block_starting(f, "else")
@@ -8454,7 +8490,9 @@ test "a while loop branches back to its head" {
         from_view("fn f(n: i32) i32 { while n > 0 { let x = n } return n }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let head = block_starting(f, "while_head")
     let body = block_starting(f, "while_body")
@@ -8468,7 +8506,9 @@ test "a for over a range carries the induction variable as a block parameter" {
         from_view("fn f(n: i32) i32 { for i in 0..n { let x = i } return n }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let head = block_starting(f, "for_head")
     let latch = block_starting(f, "for_latch")
@@ -8486,7 +8526,9 @@ test "a range bound is half-open" {
         from_view("fn f(n: i32) i32 { for i in 0..n { let x = i } return n }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let head = block_starting(f, "for_head")
     let instrs = &f.blocks[head].instrs
@@ -8507,7 +8549,9 @@ test "break exits the loop and continue re-enters the latch" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let exit = f.blocks[block_starting(f, "for_exit")].label
     let latch = f.blocks[block_starting(f, "for_latch")].label
@@ -8523,7 +8567,9 @@ test "a for over a non-range iterable refuses the function" {
         from_view("fn f(xs: &i32) i32 { for x in xs { let y = 1 } return 0 }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     // Silently dropping the loop would compile a function that skips work the source asked for.
     assert_true(
         find_fn_starting(&m, "f__ref_i32") == m.functions.len,
@@ -8534,7 +8580,9 @@ test "a for over a non-range iterable refuses the function" {
 
 test "and evaluates its right operand in its own block" {
     let unit = analyze(from_view("fn f(a: i32, b: i32) bool { return a > 0 and b > 0 }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__i32__r_bool")]
     let rhs = block_starting(f, "sc_rhs")
     let join = block_starting(f, "sc_join")
@@ -8555,7 +8603,9 @@ test "and evaluates its right operand in its own block" {
 
 test "a comparison is typed by its operands, not by its bool result" {
     let unit = analyze(from_view("fn f(a: i64, b: i64) bool { return a < b }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i64__i64__r_bool")]
     let ty = compare_operand_ty(f)
     let is_i64 = ty match { I64 => true, _ => false }
@@ -8569,7 +8619,9 @@ test "a binding made inside a branch does not leak past it" {
         from_view("fn f(a: i32) i32 { let x = 1 if a > 0 { let x = 2i32 } return x }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     // Slots in emission order: the parameter, the outer `x`, then the shadowing `x` inside the
     // branch.
@@ -8698,7 +8750,9 @@ fn memcpy_count(f: &Function) usize {
 
 test "every local and parameter gets a slot it can be assigned through" {
     let unit = analyze(from_view("fn f(a: i32) i32 { let b = a return b }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let slots: List(u32) = list(4)
     collect_slots(f, &slots)
@@ -8709,7 +8763,9 @@ test "every local and parameter gets a slot it can be assigned through" {
 
 test "assigning a local stores through its slot" {
     let unit = analyze(from_view("fn f(a: i32) i32 { let x = 1 x = a return x }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let slots: List(u32) = list(4)
     collect_slots(f, &slots)
@@ -8724,7 +8780,9 @@ test "a local mutated across a loop back edge keeps one slot" {
         from_view("fn f(n: i32) i32 { let t = 0 for i in 0..n { t = t + i } return t }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let slots: List(u32) = list(4)
     collect_slots(f, &slots)
@@ -8740,7 +8798,9 @@ test "a local mutated across a loop back edge keeps one slot" {
 
 test "taking a local's address hands back its slot, with no load" {
     let unit = analyze(from_view("fn f(a: i32) i32 { let x = a let p = &x return p.* }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let slots: List(u32) = list(4)
     collect_slots(f, &slots)
@@ -8751,7 +8811,9 @@ test "taking a local's address hands back its slot, with no load" {
 
 test "assigning through a dereference stores to the pointee" {
     let unit = analyze(from_view("fn f(p: &i32) i32 { p.* = 9 return p.* }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__ref_i32__r_i32")]
     let slots: List(u32) = list(4)
     collect_slots(f, &slots)
@@ -8768,7 +8830,9 @@ test "assigning a struct field writes through a gep, not a copy" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__r_i32")]
     assert_eq(memcpy_count(f), 0 as usize, "a scalar field assignment is a store, not a byte copy")
     // The struct literal also geps to initialize its fields, so counting geps proves nothing; what
@@ -8784,7 +8848,9 @@ test "assigning an aggregate copies its bytes" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__r_i32")]
     assert_eq(memcpy_count(f), 1 as usize, "the aggregate assignment is a byte copy")
 }
@@ -8850,7 +8916,9 @@ test "match on a scalar chains one test block per arm" {
         from_view("fn f(a: i32) i32 { return a match { 0 => 10, 1 => 20, _ => 30 } }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     assert_eq(block_count_starting(f, "m_arm"), 3 as usize, "one body block per arm")
     assert_eq(
@@ -8869,7 +8937,9 @@ test "the scrutinee is evaluated once, not per arm" {
         from_view("fn f(a: i32) i32 { return a match { 0 => 1, 1 => 2, _ => 3 } }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     // One load for the parameter's slot; the arms reuse that value.
     assert_eq(load_count(f), 1 as usize, "the scrutinee is loaded once for the whole match")
@@ -8880,7 +8950,9 @@ test "a match used as a statement carries no join parameter" {
         from_view("fn f(a: i32) i32 { a match { 0 => {}, _ => {} } return a }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let join = block_starting(f, "m_join")
     assert_true(join < f.blocks.len, "a join block exists")
@@ -8892,7 +8964,9 @@ test "a guard gets its own block and falls through to the next arm" {
         from_view("fn f(a: i32) i32 { return a match { x if x > 5 => 1, _ => 2 } }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     assert_eq(
         block_count_starting(f, "m_body"),
@@ -8914,7 +8988,9 @@ test "an or-pattern tests every alternative and combines them with ior" {
         from_view("fn f(a: i32) i32 { return a match { 1 | 2 => 10, _ => 20 } }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     assert_eq(compare_count(f), 2 as usize, "one compare per alternative; the wildcard needs none")
     assert_true(has_ior_in(f, 0), "the alternatives' tests are or-ed, not branched between")
@@ -8926,7 +9002,9 @@ test "a range pattern tests both bounds and combines them with iand" {
         from_view("fn f(a: i32) i32 { return a match { 1..5 => 10, _ => 20 } }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     assert_eq(compare_count(f), 2 as usize, "one compare per bound")
     assert_true(has_iand_in(f, 0), "the bounds are and-ed into a single test")
@@ -8937,7 +9015,9 @@ test "an arm that returns keeps its return, with no branch over it" {
         from_view("fn f(a: i32) i32 { a match { 0 => { return 7 }, _ => {} } return 0 }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn(&m, "f__i32__r_i32")]
     let arm = block_starting(f, "m_arm")
     let kept = f.blocks[arm].terminator match { Ret(_) => true, _ => false }
@@ -8951,7 +9031,9 @@ test "matching an enum variant tests the discriminant" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__ref_")
     assert_true(fi < m.functions.len, "the &Color function lowered")
     let f = &m.functions[fi]
@@ -8970,7 +9052,9 @@ test "an unsupported pattern gates the whole match, not just its arm" {
         from_view("fn f(a: (i32, i32)) i32 { return a match { (0, 0) | (1, 1) => 1, _ => 2 } }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(m.functions.len == 0 as usize, "no half-emitted function survives the refusal")
     assert_true(was_skipped(&m, "f__tup_i32_i32"), "the whole function is recorded as skipped")
 
@@ -8980,7 +9064,9 @@ test "an unsupported pattern gates the whole match, not just its arm" {
         from_view("fn f(a: (i32, i32)) i32 { return a match { (0, 0) => 1, _ => 2 } }"),
         "test.f",
     )
+    defer ok.deinit()
     let m2 = lower_module(&ok.module, &ok.result)
+    defer m2.deinit()
     assert_true(
         find_fn(&m2, "f__tup_i32_i32__r_i32") < m2.functions.len,
         "a tuple pattern in a tuple parameter lowers",
@@ -9001,7 +9087,9 @@ test "a ref-form index operator is called, and its result is the address to load
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__ref")]
     assert_eq(call_count(f), 1 as usize, "the operator is called once")
     assert_eq(first_call_argc(f), 4 as usize, "receiver and index, then the context and env")
@@ -9015,7 +9103,9 @@ test "a ref-form index is a place: assignment stores through the operator's resu
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__ref")]
     assert_true(
         is_call_result(f, last_store_ptr(f)),
@@ -9030,7 +9120,9 @@ test "a value-form index operator yields its call result with nothing loaded thr
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__ref")]
     assert_eq(call_count(f), 1 as usize, "the operator is called once")
     assert_true(is_call_result(f, returned_local(f)), "the call result IS the value")
@@ -9046,7 +9138,9 @@ test "a value-form index is not a place: assigning through it refuses the functi
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(was_skipped(&m, "f__ref"), "the assignment has no place to store to")
 }
 
@@ -9060,7 +9154,9 @@ test "an index whose operator has an unlowerable signature refuses rather than g
         ),
         "test.f",
     )
+    defer unit.deinit()
     let with_op = lower_module(&unit.module, &unit.result)
+    defer with_op.deinit()
     assert_true(
         find_fn_starting(&with_op, "g__ref") < with_op.functions.len,
         "a by-value receiver is lowerable now",
@@ -9074,7 +9170,9 @@ test "an index whose operator has an unlowerable signature refuses rather than g
         ),
         "test.f",
     )
+    defer unit2.deinit()
     let m = lower_module(&unit2.module, &unit2.result)
+    defer m.deinit()
     assert_true(
         find_fn_starting(&m, "g__ref") < m.functions.len,
         "the caller lowers against the specialization",
@@ -9133,7 +9231,9 @@ test "an aggregate parameter arrives by pointer, and a read-only body copies not
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let ci = find_fn_starting(&m, "get_0x__")
     assert_true(ci < m.functions.len, "the by-value struct signature is lowerable now")
     let callee = &m.functions[ci]
@@ -9163,7 +9263,9 @@ test "an aggregate return travels through a trailing sret parameter" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let ci = find_fn_starting(&m, "make__i32")
     assert_true(ci < m.functions.len, "the aggregate-returning signature is lowerable now")
     let callee = &m.functions[ci]
@@ -9192,7 +9294,9 @@ test "binding an existing aggregate copies it - mutating the copy leaves the sou
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__")]
     // The `let` is what protects `p`: `q` gets its own bytes, so `q.x = 9` cannot write through.
     // The parameter itself is only read, so it keeps the caller's pointer.
@@ -9204,7 +9308,9 @@ test "writing to an aggregate parameter brings its copy back (RFC-026)" {
         from_view("type Pt = struct { x: i32, y: i32 }\nfn f(p: Pt) i32 { p.x = 9 return p.x }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__")]
     assert_eq(
         memcpy_count(f),
@@ -9220,7 +9326,9 @@ test "handing an aggregate parameter's address to a callee brings its copy back 
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "outer__")]
     // The callee is free to retain the pointer; its body is never consulted.
     assert_eq(memcpy_count(f), 1 as usize, "an address reaching a call escapes")
@@ -9233,7 +9341,9 @@ test "the shadow is emitted once, however many times the parameter escapes (RFC-
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "outer__")]
     // Two escapes and a write, all covered by the one prologue copy: the parameter has a single
     // storage location for the whole body.
@@ -9247,7 +9357,9 @@ test "an escape through an alias chain still brings the copy back (RFC-026)" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "outer__")]
     assert_eq(
         memcpy_count(f),
@@ -9261,7 +9373,9 @@ test "returning an aggregate parameter copies out, not in (RFC-026)" {
         from_view("type Pt = struct { x: i32, y: i32 }\nfn f(p: Pt) Pt { return p }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__")]
     // One copy, into the caller's sret buffer. Reading the parameter's bytes is not an escape.
     assert_eq(memcpy_count(f), 1 as usize, "the sret copy, and no prologue spill")
@@ -9274,7 +9388,9 @@ test "operators over scalars read out of an aggregate parameter copy nothing (RF
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__")]
     assert_eq(memcpy_count(f), 0 as usize, "a cast, arithmetic and negation of payload bindings")
     let g = &m.functions[find_fn_starting(&m, "g__")]
@@ -9288,7 +9404,9 @@ test "an address inside an operator's operand still copies (RFC-026)" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__")]
     assert_eq(memcpy_count(f), 1 as usize, "the cast reads an address into the parameter")
 }
@@ -9300,7 +9418,9 @@ test "a non-copyable `move` parameter is never shadowed: it owns the caller's st
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__")]
     assert_eq(memcpy_count(f), 0 as usize, "a write and an escape, and still no copy")
 }
@@ -9312,7 +9432,9 @@ test "a non-copyable parameter passed on is never shadowed (RFC-033)" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__")]
     assert_eq(
         memcpy_count(f),
@@ -9328,7 +9450,9 @@ test "a copyable `move` parameter lowers as a by-value one (RFC-033)" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__")]
     assert_eq(memcpy_count(f), 1 as usize, "the write still copies: the caller keeps its value")
 }
@@ -9340,7 +9464,9 @@ test "a call omitting a defaulted argument materializes the default (M11)" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(find_fn_starting(&m, "add__") < m.functions.len, "the callee itself lowers")
     let mi = find_fn(&m, "main")
     assert_true(mi < m.functions.len, "the short call lowers - the default is appended")
@@ -9352,7 +9478,9 @@ test "a call omitting a defaulted argument materializes the default (M11)" {
         ),
         "test.f",
     )
+    defer unit2.deinit()
     let m2 = lower_module(&unit2.module, &unit2.result)
+    defer m2.deinit()
     assert_true(find_fn(&m2, "main") < m2.functions.len, "the full-arity call lowers")
 }
 
@@ -9365,7 +9493,9 @@ test "a UFCS call omitting a defaulted argument materializes the default" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let mi = find_fn(&m, "main")
     assert_true(mi < m.functions.len, "the receiver-only call lowers at full arity")
     assert_eq(call_count(&m.functions[mi]), 1 as usize, "one call emitted")
@@ -9381,7 +9511,9 @@ test "an omitted `null` default on a tagged Option parameter lowers" {
         ),
         "core.option",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let mi = find_fn(&m, "main")
     assert_true(mi < m.functions.len, "the short call lowers with a zeroed Option argument")
 }
@@ -9395,7 +9527,9 @@ test "a specialized generic call omitting a defaulted argument lowers" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let mi = find_fn(&m, "main")
     assert_true(mi < m.functions.len, "the short generic call lowers via its specialization")
     assert_eq(call_count(&m.functions[mi]), 1 as usize, "one call emitted")
@@ -9403,7 +9537,9 @@ test "a specialized generic call omitting a defaulted argument lowers" {
 
 test "a scalar module const encodes into its global, with no init function" {
     let unit = analyze(from_view("const K: i32 = 7\nfn main() i32 { return K }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let mi = find_fn(&m, "main")
     assert_true(mi < m.functions.len, "the const-reading main lowers")
     assert_true(
@@ -9430,7 +9566,9 @@ test "an aggregate const encodes at its field offsets and supports member reads"
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(
         find_fn(&m, "main") < m.functions.len,
         "member read + address-of on a const global lower",
@@ -9452,7 +9590,9 @@ test "a const vtable of function pointers becomes a relocation" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(
         find_fn(&m, "main") < m.functions.len,
         "reading a fn field from a const global lowers",
@@ -9481,7 +9621,9 @@ test "a const whose initializer cannot lower has no global, and its readers refu
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(
         find_fn(&m, "__finit_test__f__B2") >= m.functions.len,
         "no init function for the unlowerable const",
@@ -9501,7 +9643,9 @@ test "integer casts widen and narrow through convert instructions (M11)" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__i32")
     assert_true(fi < m.functions.len, "the widening cast lowers")
     assert_eq(convert_count(&m.functions[fi]), 1 as usize, "one convert for i32 -> i64")
@@ -9518,7 +9662,9 @@ test "int/float and ptr/int casts lower; same-width sign casts are no-ops" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(find_fn_starting(&m, "f__i32") < m.functions.len, "int -> float lowers")
     assert_true(find_fn_starting(&m, "g__f64") < m.functions.len, "float -> int lowers")
     assert_true(find_fn_starting(&m, "p__usize") < m.functions.len, "int -> ptr lowers")
@@ -9535,7 +9681,9 @@ test "a tagged enum casts to and from an integer through its discriminant" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "enum -> int lowers via a tag load")
     let gi = find_fn_starting(&m, "g__i32")
@@ -9548,13 +9696,17 @@ test "a tagged enum casts to and from an integer through its discriminant" {
 
 test "a cast to bool refuses - truncation is not C's != 0 semantics" {
     let unit = analyze(from_view("fn f(x: i32) bool { return x as bool }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(was_skipped(&m, "f__"), "`as bool` needs a comparison, not a trunc")
 }
 
 test "a char literal lowers to its codepoint, not a placeholder zero" {
     let unit = analyze(from_view("fn f(c: char) bool { return c == 'A' }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__char")]
     assert_true(compares_against(f, 65), "the comparison tests against 65, not 0")
 }
@@ -9566,7 +9718,9 @@ test "String == dispatches to op_eq, and != negates it" {
         ),
         "core.string",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "== over Strings lowers via op_eq")
     assert_eq(call_count(&m.functions[fi]), 1 as usize, "one dispatch call")
@@ -9582,7 +9736,9 @@ test "a string match arm calls op_eq against the literal" {
         ),
         "core.string",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "string patterns lower via op_eq dispatch")
     assert_true(call_count(&m.functions[fi]) >= 2 as usize, "one call per string arm")
@@ -9595,7 +9751,9 @@ test "== and != on a payload-less enum compare tags with no dispatch" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "enum == lowers as a tag compare")
     assert_eq(call_count(&m.functions[fi]), 0 as usize, "no call - builtin tag compare")
@@ -9612,7 +9770,9 @@ test "an ordering comparison derives from op_cmp through Ord's tags" {
         ),
         "core.cmp",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "< over a user type lowers via op_cmp")
     assert_eq(call_count(&m.functions[fi]), 1 as usize, "one op_cmp call, then a tag test")
@@ -9625,7 +9785,9 @@ test "a binary operator over aggregates refuses - its operator fn is not recorde
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(
         was_skipped(&m, "f__"),
         "emitting FIR arithmetic over addresses would be silently wrong",
@@ -9639,7 +9801,9 @@ test "an enum parameter passes by value and its payload binds in a match" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "a by-value enum signature is lowerable now")
     let f = &m.functions[fi]
@@ -9656,7 +9820,9 @@ test "a generic field reads at its substituted width" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "a concrete instantiation of a generic struct lowers")
     let f = &m.functions[fi]
@@ -9686,8 +9852,10 @@ test "a generic struct literal named without its arguments is a checker error, n
         ),
         "test.f",
     )
+    defer unit.deinit()
     assert_true(unit.error_count() > 0 as usize, "the checker rejects the literal")
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(was_skipped(&m, "main"), "the Error-typed literal refuses the function")
 }
 
@@ -9748,7 +9916,9 @@ test "constructing a payload variant stores the tag, then the payload past it" {
         from_view("type E = enum { A, B(i32) }\nfn f(x: i32) E { return B(x) }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "payload construction lowers")
     let f = &m.functions[fi]
@@ -9763,7 +9933,9 @@ test "a bare payload-less variant builds a zeroed slot with its tag" {
         from_view("type Color = enum { Red, Green, Blue }\nfn f() Color { return Green }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn(&m, "f__r_test__f__Color")
     assert_true(fi < m.functions.len, "bare variant construction lowers")
     let f = &m.functions[fi]
@@ -9776,7 +9948,9 @@ test "a qualified variant constructs - the receiver is a type, not a value" {
         from_view("type Color = enum { Red, Green, Blue }\nfn f() Color { return Color.Blue }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn(&m, "f__r_test__f__Color")
     assert_true(fi < m.functions.len, "Color.Blue lowers as construction, not member access")
     assert_eq(store_const_count(&m.functions[fi], 2), 1 as usize, "Blue's tag is stored")
@@ -9789,7 +9963,9 @@ test "a generic variant payload stores at its substituted width" {
         from_view("type Opt(T) = enum { N, S(T) }\nfn f(x: i64) Opt(i64) { return S(x) }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "generic instantiation construction lowers")
     let f = &m.functions[fi]
@@ -9803,7 +9979,9 @@ test "an aggregate payload copies its bytes into the slot" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "aggregate payload construction lowers")
     // Param copy, payload copy, sret copy - at least the payload's own memcpy must be there.
@@ -9820,7 +9998,9 @@ test "niche Some is a retype: the payload pointer IS the value" {
         ),
         "core.option",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "niche Some lowers")
     let f = &m.functions[fi]
@@ -9834,7 +10014,9 @@ test "niche None is the null pointer" {
         from_view("pub type Option(T) = enum { None, Some(T) }\nfn f() &i32? { return None }"),
         "core.option",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn(&m, "f__r_core__option__Option_ref_i32")
     assert_true(fi < m.functions.len, "niche None lowers")
     let f = &m.functions[fi]
@@ -9855,7 +10037,9 @@ test "a multi-payload variant constructs and its pattern binds both payloads (M1
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(
         find_fn_starting(&m, "f__") < m.functions.len,
         "construction stores tag + both payloads",
@@ -9873,7 +10057,9 @@ test "a constructed variant round-trips through a match in the same function" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "construct-then-match lowers end to end")
 }
@@ -9888,7 +10074,9 @@ test "an anonymous literal follows its coerced nominal type" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn(&m, "f__r_test__f__Pt")
     assert_true(fi < m.functions.len, "an anonymous literal in return position lowers")
     assert_eq(store_const_count(&m.functions[fi], 2), 1 as usize, "both fields store their values")
@@ -9910,7 +10098,9 @@ test "coalesce unwraps the payload or falls through to the right side" {
         ),
         "core.option",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "the unwrap form lowers")
     let f = &m.functions[fi]
@@ -9926,7 +10116,9 @@ test "coalesce chains keep the whole option" {
         ),
         "core.option",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "g__")
     assert_true(fi < m.functions.len, "the chain form lowers")
     // The kept value is the option's own address - no payload gep on the taken path (parameter
@@ -9945,7 +10137,9 @@ test "coalesce over the niche form tests the pointer against null" {
         ),
         "core.option",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "h__")
     assert_true(fi < m.functions.len, "the niche form lowers")
     let f = &m.functions[fi]
@@ -9960,7 +10154,9 @@ test "postfix ? on a monomorphic op_try lowers the call, the branch, and the ear
         ),
         "core.try",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "construct, op_try, ? and re-construct all lower end to end")
     let f = &m.functions[fi]
@@ -9979,7 +10175,9 @@ test "postfix ? through a generic op_try lowers via its specialization" {
         ),
         "core.try",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "the ? caller lowers against the op_try specialization")
     assert_true(
@@ -10034,7 +10232,9 @@ test "a string literal builds a {ptr,len} view over a data-segment global" {
         ),
         "core.string",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn(&m, "f__r_core__string__String")
     assert_true(fi < m.functions.len, "a function returning a string literal lowers")
     assert_eq(m.globals.len, 2 as usize, "one global holds the bytes, beside the root context")
@@ -10054,7 +10254,9 @@ test "identical string literals share one global; distinct ones do not" {
         ),
         "core.string",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_eq(
         m.globals.len,
         3 as usize,
@@ -10069,7 +10271,9 @@ test "string escapes decode before reaching the data segment" {
         ),
         "core.string",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_eq(m.globals.len, 2 as usize, "one global, beside the root context")
     assert_true(m.globals[0].size == 4u64, "three decoded bytes plus the terminator")
     let bytes = m.globals[0].init_bytes.unwrap()
@@ -10085,7 +10289,9 @@ test "a float literal lowers to its parsed constant" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let rf = ret_float_const(&m.functions[find_fn(&m, "f__r_f64")])
     assert_true(rf.is_some() and rf.unwrap() == 1.5, "1.5 parses exactly")
     let rg = ret_float_const(&m.functions[find_fn(&m, "g__r_f64")])
@@ -10099,6 +10305,7 @@ test "a float literal whose type never resolves is a checker error" {
     // reports E2001 (as the reference does), so an unresolved literal never reaches lowering at
     // all.
     let unit = analyze(from_view("fn f() i32 { let x = 1.5 return 0 }"), "test.f")
+    defer unit.deinit()
     assert_true(error_count(&unit) > 0, "the unpinned literal is E2001 at check time")
 }
 
@@ -10107,7 +10314,9 @@ test "a float literal pattern compares with the scrutinee" {
         from_view("fn f(x: f64) i32 { return x match { 1.5 => 1, _ => 0 } }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "a float literal pattern lowers")
     assert_true(compare_count(&m.functions[fi]) >= 1 as usize, "the arm tests the scrutinee")
@@ -10173,7 +10382,9 @@ fn call_count_in(f: &Function) usize {
 
 test "a defer fires on return, after the return value is read" {
     let unit = analyze(from_view("fn f(p: &i32) i32 { defer p.* = 2 return p.* }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "a function with defer lowers")
     let f = &m.functions[fi]
@@ -10185,14 +10396,18 @@ test "a defer fires on return, after the return value is read" {
 
 test "sibling defers fire in LIFO order at scope exit" {
     let unit = analyze(from_view("fn f(p: &i32) { defer p.* = 1 defer p.* = 2 }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__")]
     assert_true(store_const_pos(f, 2) < store_const_pos(f, 1), "the later defer fires first")
 }
 
 test "a defer in an inner block fires at that block's exit, not the function's" {
     let unit = analyze(from_view("fn f(p: &i32) { { defer p.* = 1 } p.* = 3 }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let f = &m.functions[find_fn_starting(&m, "f__")]
     assert_true(
         store_const_pos(f, 1) < store_const_pos(f, 3),
@@ -10205,7 +10420,9 @@ test "break fires the defers of the scopes it escapes" {
         from_view("fn f(p: &i32, c: bool) { while c { defer p.* = 1 break } }"),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "defer + break lowers")
     assert_eq(
@@ -10222,7 +10439,9 @@ test "the ? early return fires active defers on both paths" {
         ),
         "core.try",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__")
     assert_true(fi < m.functions.len, "defer + ? lowers")
     assert_eq(
@@ -10236,7 +10455,9 @@ test "an escape from inside a deferred expression refuses" {
     // `return` inside a defer would re-enter the flush emitting it - the reference rejects the `?`
     // flavor as E2091; lowering refuses both rather than loop or emit a wrong schedule.
     let unit = analyze(from_view("fn f() i32 { defer { return 1 } return 0 }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(was_skipped(&m, "f"), "return-inside-defer refuses the function")
 }
 
@@ -10253,14 +10474,17 @@ test "an interpolated string lowers through its recorded desugar" {
         "import core.string\nimport builder\nfn f(x: i64) String { return $\"v={x}!\" }",
     ))
     let fqns: List(String) = list(4)
+    defer fqns.deinit()
     fqns.push("core.option")
     fqns.push("core.string")
     fqns.push("builder")
     fqns.push("app")
     let unit = analyze_source_set(srcs, &fqns)
+    defer unit.deinit()
     assert_eq(project_error_count(&unit), 0 as usize, "the desugar checks clean")
 
     let m = lower_program(&unit.modules, &unit.fqns, &unit.result, host_ctx())
+    defer m.deinit()
     assert_true(!was_skipped(&m, "app__f__"), "the interpolating function is not refused")
     let fi = find_fn_starting(&m, "app__f__")
     assert_true(fi < m.functions.len, "the interpolating function is emitted")
@@ -10284,9 +10508,11 @@ test "a generic call lowers against a per-signature specialization" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     // Three call sites, two concrete signatures.
     assert_eq(unit.result.specializations.len(), 2 as usize, "i32 twice dedups; i64 adds one")
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let i32_spec = find_fn(&m, "test__f__id__i32__ret_i32")
     let i64_spec = find_fn(&m, "test__f__id__i64__ret_i64")
     assert_true(i32_spec < m.functions.len, "the i32 instantiation is emitted")
@@ -10307,7 +10533,9 @@ test "a specialization's body reads its own overlay, not another instantiation's
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let s32 = find_fn(&m, "test__f__pick__i32__i32__ret_i32")
     let s64 = find_fn(&m, "test__f__pick__i64__i64__ret_i64")
     assert_true(s32 < m.functions.len, "the i32 instantiation is emitted")
@@ -10329,7 +10557,9 @@ test "a nested generic call lowers through both specializations" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let oi = find_fn(&m, "test__f__outer__i32__ret_i32")
     assert_true(oi < m.functions.len, "outer's instantiation is emitted")
     assert_true(
@@ -10349,7 +10579,9 @@ test "a generic aggregate parameter lowers at its substituted layout" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let si = find_fn_starting(&m, "test__f__second__")
     assert_true(si < m.functions.len, "the Pair(i64) instantiation is emitted")
     // `p.b` sits at offset 8 in Pair(i64) - the load's gep proves the field type substituted before
@@ -10393,7 +10625,9 @@ test "a non-capturing lambda emits a module-level function and a FuncRef" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(!was_skipped(&m, "main"), "main lowered")
     assert_true(!was_skipped(&m, "apply"), "apply lowered")
     let li = find_fn_starting(&m, "__flang_lambda_")
@@ -10407,7 +10641,9 @@ test "a fn-typed parameter call lowers to CallIndirect" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let ai = find_fn(&m, "apply__ptr_i32")
     if ai >= m.functions.len {
         ai = find_fn_starting(&m, "apply")
@@ -10437,7 +10673,9 @@ test "a capturing closure through $F lowers env struct, op_call, and dispatch" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(!was_skipped(&m, "main"), "main lowered")
     let ci = find_fn_starting(&m, "__flang_closure_call_")
     assert_true(ci < m.functions.len, "the closure op_call was emitted")
@@ -10455,7 +10693,9 @@ test "a named function through $F lowers via FuncRef + CallIndirect" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(!was_skipped(&m, "main"), "main lowered")
     let ai = find_fn_starting(&m, "test__f__apply")
     assert_true(ai < m.functions.len, "specialization emitted")
@@ -10471,7 +10711,9 @@ test "two unannotated lambdas settling to one signature dedup the spec symbol" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(!was_skipped(&m, "main"), "main lowered")
     let seen: usize = 0
     for i in 0..m.functions.len {
@@ -10497,7 +10739,9 @@ test "a closure stored in a generic struct field dispatches on h.f(x)" {
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     assert_true(!was_skipped(&m, "main"), "main lowered")
     let ii = find_fn_starting(&m, "test__f__invoke")
     assert_true(ii < m.functions.len, "invoke specialization emitted")
@@ -10515,7 +10759,9 @@ test "a UFCS receiver behind op_deref calls the hop, not the wrapper's address" 
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__ref")
     assert_true(fi < m.functions.len, "the call lowers")
     assert_eq(call_count(&m.functions[fi]), 2 as usize, "op_deref first, then the method")
@@ -10528,7 +10774,9 @@ test "a generic op_deref wrapper instantiates and the method call routes through
         ),
         "test.f",
     )
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let fi = find_fn_starting(&m, "f__ref")
     assert_true(fi < m.functions.len, "the call lowers")
     assert_eq(call_count(&m.functions[fi]), 2 as usize, "the deref hop is a real call")
@@ -10548,11 +10796,14 @@ test "a let-bound array argument decays into a slice view at the call" {
         "fn takes(s: u8[]) i64 { return 7 }\nfn f() i64 { const buf = [0u8; 4]\n return takes(buf) }",
     ))
     let fqns: List(String) = list(2)
+    defer fqns.deinit()
     fqns.push("core.slice")
     fqns.push("app")
     let unit = analyze_source_set(srcs, &fqns)
+    defer unit.deinit()
     assert_eq(project_error_count(&unit), 0 as usize, "the decay checks clean")
     let m = lower_program(&unit.modules, &unit.fqns, &unit.result, host_ctx())
+    defer m.deinit()
     assert_true(!was_skipped(&m, "app__f"), "the call lowers")
     let fi = find_fn_starting(&m, "app__f")
     assert_true(fi < m.functions.len, "f emitted")
@@ -10564,7 +10815,9 @@ test "a let-bound array argument decays into a slice view at the call" {
 
 test "a DBL_MAX-magnitude literal parses finite, not infinite" {
     let unit = analyze(from_view("fn f() f64 { return 1.7976931348623157e308 }"), "test.f")
+    defer unit.deinit()
     let m = lower_module(&unit.module, &unit.result)
+    defer m.deinit()
     let rv = ret_float_const(&m.functions[find_fn(&m, "f__r_f64")])
     assert_true(rv.is_some(), "the literal lowers")
     const v = rv.unwrap()

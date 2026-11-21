@@ -109,18 +109,18 @@ pub fn deinit(self: move TemplateOutput) {
 // Deliberately leak the output (single-unit analysis has no slot to keep it alive; the appended
 // decls reference the chunk arenas). The modules are popped out before the list is freed.
 pub fn forget(self: move TemplateState) {
-    let out = self.take_output()
     // The modules are dropped without release: their decls live in the chunk arenas.
-    out.chunk_modules.deinit()
+    self.chunk_modules.deinit()
+    self.emitted.deinit()
     self.defs.deinit()
     self.syntax.deinit()
 }
 
 pub fn deinit(self: move TemplateState) {
-    let rest = self.take_output()
     self.defs.deinit()
     self.syntax.deinit()
-    rest.deinit()
+    self.chunk_modules.deinit()
+    self.emitted.deinit()
 }
 
 type WorkItem = struct {
@@ -189,6 +189,7 @@ pub fn expand_templates(
         return
     }
     let work: List(WorkItem) = list(0)
+    defer work.deinit()
     for m in 0..modules.len {
         index_module(state, &modules[m], m, 0, paths[m], sources[m].view(), &work, 0)
     }
@@ -227,6 +228,7 @@ pub fn expand_templates(
         }
         if !progress {
             for &item in parked { report_unknown_types(chk, state, paths, item) }
+            parked.deinit()
             break
         }
         install(&work, parked)
@@ -300,6 +302,7 @@ fn expand_one(
     const arity_ok = if has_variadic { inv.args.len >= required } else { inv.args.len == def.params.len }
     if !arity_ok {
         const expect: OwnedString = if has_variadic { $"at least {required}" } else { $"{def.params.len}" }
+        defer expect.deinit()
         push_diag_e(
             chk,
             inv.span,
@@ -349,6 +352,7 @@ fn expand_one(
 
     // Parse the body and expand.
     let parse_diags: List(Diagnostic) = list(0, &a)
+    defer parse_diags.deinit()
     const nodes = parse_template_body(def.body, def.base, def.file_id, &arena, &parse_diags)
     if parse_diags.len > 0 {
         for d in parse_diags.drain() {
@@ -357,6 +361,7 @@ fn expand_one(
         return Outcome.Failed
     }
     let raw = string_builder(def.body.len, Some(&a))
+    defer raw.deinit()
     expand_template(&env, nodes, &raw) match {
         Ok(_) => {}
         Err(e) => {
@@ -366,12 +371,14 @@ fn expand_one(
                 length = e.span.length,
             }
             push_diag_e(chk, sp, e.code, $"{e.message} (while expanding `#{inv.name}`)")
+            e.take_message().deinit()
             return Outcome.Failed
         }
     }
 
     // Readable output (§7), then the chunk header.
     let chunk = string_builder(raw.len + 64, Some(&a))
+    defer chunk.deinit()
     chunk.append("// #")
     chunk.append(inv.name)
     chunk.append('(')
@@ -395,6 +402,7 @@ fn expand_one(
     const emitted = emitted_for(state, context.allocator, file_paths[item.module].view())
     const lines_before = emitted.lines
     let padded = string_builder(chunk.len + lines_before)
+    defer padded.deinit()
     for _i in 0..lines_before { padded.append('\n') }
     padded.append(chunk.as_view())
     emitted.text.append(chunk.as_view())
@@ -525,6 +533,7 @@ fn report_unknown_types(chk: &Checker, state: &TemplateState, paths: &List(Strin
 
 fn parse_chunk(chk: &Checker, text: String, file_id: i32) Module {
     let lx = lexer(text)
+    defer lx.deinit()
     let tokens = lx.tokenize()
     let p = parser(tokens, text)
     p.set_file_id(file_id)

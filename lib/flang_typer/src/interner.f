@@ -626,6 +626,7 @@ pub fn format(self: &TypeInterner, id: Ty, sb: &StringBuilder) {
 // Test helper: `format` into a fresh buffer.
 fn render(it: &TypeInterner, id: Ty) OwnedString {
     let sb = string_builder(16)
+    defer sb.deinit()
     it.format(id, &sb)
     return sb.to_string()
 }

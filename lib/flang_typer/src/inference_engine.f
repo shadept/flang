@@ -1383,6 +1383,7 @@ test "generalize then specialize yields a fresh quantified var" {
     let inner = eng.fresh_var()
     eng.exit_level()
     let scheme = eng.generalize(inner)
+    defer scheme.deinit()
     assert_true(scheme.quantified.len() == 1, "one quantified var")
     let inst = eng.specialize(&scheme)
     assert_true(eng.is_var(inst), "the instantiation is a var")

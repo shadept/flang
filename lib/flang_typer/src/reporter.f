@@ -44,6 +44,10 @@ pub fn report_ctx(code: String, span: SourceSpan, nominals: &NominalRegistry? = 
     return .{ code = code, span = span, message_override = move empty, nominals = nominals }
 }
 
+pub fn deinit(self: move ReportCtx) {
+    self.message_override.deinit()
+}
+
 // Emit zero or one diagnostic depending on the outcome. `Unified` produces nothing. Every other
 // variant produces exactly one diagnostic on `out`. Caller owns the message strings appended to the
 // diagnostic - they aren't reclaimed by anything in this file.
@@ -75,6 +79,7 @@ fn report_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner, out: &List(
 
 fn report_occurs(o: &OccursDetails, ctx: &ReportCtx, it: &TypeInterner, out: &List(Diagnostic)) {
     let sb = string_builder(64)
+    defer sb.deinit()
     sb.append("recursive type: variable ?")
     sb.append(o.var_id)
     sb.append(" occurs inside ")
@@ -92,6 +97,7 @@ fn report_occurs(o: &OccursDetails, ctx: &ReportCtx, it: &TypeInterner, out: &Li
 
 fn report_arity(a: &ArityDetails, ctx: &ReportCtx, out: &List(Diagnostic)) {
     let sb = string_builder(64)
+    defer sb.deinit()
     sb.append(arity_label(a.what))
     sb.append(" mismatch: expected ")
     sb.append(a.expected)
@@ -118,6 +124,7 @@ fn report_prim_constraint(
     out: &List(Diagnostic),
 ) {
     let sb = string_builder(64)
+    defer sb.deinit()
     sb.append("type mismatch: expected one of ")
     let written = 0usize
     for i in 0..14u32 {
@@ -150,6 +157,7 @@ fn report_prim_constraint(
 
 fn format_mismatch(m: &Mismatch, ctx: &ReportCtx, it: &TypeInterner) OwnedString {
     let sb = string_builder(64)
+    defer sb.deinit()
     sb.append("type mismatch: expected `")
     format_with_names(it, m.expected, &sb, ctx.nominals)
     sb.append("`, got `")

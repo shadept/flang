@@ -227,11 +227,12 @@ pub fn register(self: &SpecializationRegistry, spec: move Specialization) SpecId
 // Re-register `id` in place with a fresh record - same id, new key, new overlay. The old entry's
 // contents are freed; the ids other caches carry keep pointing at the same entry.
 pub fn replace_at(self: &SpecializationRegistry, id: SpecId, spec: move Specialization) {
-    let old = self.specs.remove(id)
-    if old.is_some() {
-        let d = old.unwrap()
-        let _k = self.by_key.remove(d.key.view())
-        d.deinit()
+    self.specs.remove(id) match {
+        Some(d) => {
+            let _k = self.by_key.remove(d.key.view())
+            d.deinit()
+        }
+        None => {}
     }
     let with_id = move spec
     with_id.id = id
@@ -271,12 +272,10 @@ pub fn evict(self: &SpecializationRegistry, id: SpecId) {
     }
     let live = found.unwrap()
     let _k = self.by_key.remove(live.key.view())
-    let dropped = self.specs.remove(id)
-    if dropped.is_none() {
-        return
+    self.specs.remove(id) match {
+        Some(d) => d.deinit()
+        None => {}
     }
-    let d = dropped.unwrap()
-    d.deinit()
 }
 
 // Start a new demand generation: entries the demand never touches are `sweep`'s victims.
