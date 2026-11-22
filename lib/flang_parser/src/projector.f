@@ -35,12 +35,10 @@ import flang_parser.token
 // without invalidating in-flight allocations.
 type Projector = struct {
     arena: &ArenaAllocator
-    // Where diagnostic text is allocated: diagnostics outlive the module.
-    session: &Allocator
     file_id: i32
-    // Where `error_pattern` reports. Null discards it, which is what a consumer that wants only the
-    // shape passes - a CST dump, an editor query that never checks.
-    diags: &List(Diagnostic)?
+    // The spans of shapes that are not a pattern. Null discards them. Allocated outside the module
+    // arena, so the diagnostics they become are made there too.
+    rejected: &List(SourceSpan)?
     // Where block-scoped `type` declarations are recorded. Null outside a module projection.
     locals: &LocalSink?
 }
@@ -68,10 +66,11 @@ type BodySave = struct {
 // context allocator. `file_id` is forwarded into every produced `SourceSpan` - pass the
 // workspace-stable id, or `-1` for "none".
 pub fn project_module(cst: CstNode, file_id: i32, diags: &List(Diagnostic)? = null) Module {
-    const session = context.allocator
-    let arena = arena_allocator(session)
+    let rejected: List(SourceSpan) = list(0)
+    defer rejected.deinit()
+    let arena = arena_allocator(context.allocator)
     const arena_a = arena.allocator()
-    return context(allocator = &arena_a) {
+    const module = context(allocator = &arena_a) {
         let sink: LocalSink = .{
             types = list(0),
             parents = list(0),
@@ -81,9 +80,8 @@ pub fn project_module(cst: CstNode, file_id: i32, diags: &List(Diagnostic)? = nu
         }
         const p: Projector = .{
             arena = &arena,
-            session = session,
             file_id = file_id,
-            diags = diags,
+            rejected = Some(&rejected),
             locals = Some(&sink),
         }
         let decls: UnmanagedList(Decl) = unmanaged_list(0, context.allocator)
@@ -108,6 +106,16 @@ pub fn project_module(cst: CstNode, file_id: i32, diags: &List(Diagnostic)? = nu
             arena = move arena,
         }
     }
+    if diags.is_some() {
+        for span in rejected {
+            diags.unwrap().push(error(
+                "E2115",
+                from_view("unsupported pattern form: this shape is not a pattern"),
+                span,
+            ))
+        }
+    }
+    return module
 }
 
 fn project_labels(self: &Projector, links: &List(LabelLink)) LabelRef[] {
@@ -248,14 +256,8 @@ fn first_ident_text(cst: CstNode) String {
 // a fact about the tokens, and a body that is never checked - an uninstantiated generic template -
 // would otherwise carry it silently.
 fn error_pattern(self: &Projector, span: SourceSpan) Pattern {
-    self.diags match {
-        Some(d) => context(allocator = self.session) {
-            d.push(error(
-                "E2115",
-                from_view("unsupported pattern form: this shape is not a pattern"),
-                span,
-            ))
-        }
+    self.rejected match {
+        Some(r) => r.push(span)
         None => {}
     }
     return Pattern.Error(ErrorPattern { span = span })
@@ -1566,13 +1568,7 @@ fn is_expr_kind(kind: NodeKind) bool {
 // `arena`.
 pub fn project_expression(cst: CstNode, file_id: i32, arena: &ArenaAllocator) Expr {
     const a = arena.allocator()
-    const p: Projector = .{
-        arena = arena,
-        session = context.allocator,
-        file_id = file_id,
-        diags = null,
-        locals = null,
-    }
+    const p: Projector = .{ arena = arena, file_id = file_id, rejected = null, locals = null }
     return context(allocator = &a) { p.project_expr(cst) }
 }
 
