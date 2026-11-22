@@ -35,6 +35,7 @@ import std.test
 import std.time
 
 import flang_analysis.analyze
+import flang_analysis.diag_table
 import flang_analysis.project
 import flang_analysis.resolver
 import flang_core.diagnostic
@@ -368,15 +369,17 @@ fn analyzed_diags(
     if pi.is_none() {
         return
     }
-    const unit = &self.ws.projects[pi.unwrap()].unit
-    const fid = file_id_of(unit, path)
+    const p = &self.ws.projects[pi.unwrap()]
+    const fid = file_id_of(&p.unit, path)
     if fid.is_none() {
         return
     }
-    const text = unit.sources[fid.unwrap() as usize].view()
+    const text = p.unit.sources[fid.unwrap() as usize].view()
     let idx = line_index(text)
     defer idx.deinit()
-    for &x in unit.diagnostics {
+    let standing = p.diags.all()
+    defer standing.deinit()
+    for x in standing {
         const in_file = x.span.file_id == fid.unwrap()
         if !in_file or starts_with(x.code, "E1") or reported(live, x) {
             continue
@@ -410,13 +413,14 @@ fn uri_for_path(self: &LspServer, path: String) OwnedString {
 // fixed error on the client.
 fn publish_project(self: &LspServer, pi: ProjectId) {
     const unit = &self.ws.projects[pi].unit
+    let standing = self.ws.projects[pi].diags.all()
+    defer standing.deinit()
     for fid in 0..unit.modules.len {
         if fid >= unit.project_origin.len or !unit.project_origin[fid] {
             continue
         }
-        // Lent for the publish: the unit keeps every diagnostic it holds.
         let file_diags: List(&Diagnostic) = list(0)
-        for &d in unit.diagnostics {
+        for d in standing {
             if d.span.file_id == fid as i32 {
                 file_diags.push(d)
             }
@@ -463,7 +467,7 @@ fn send_status(self: &LspServer) {
         projects.push(ProjectStatus {
             name = p.name.view(),
             dir = p.dir.view(),
-            errors = project_error_count(&p.unit),
+            errors = p.diags.error_count(),
         })
     }
     let status = ServerStatus {
@@ -2989,6 +2993,7 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
     let origin = &unit.project_origin
     origin.push(true)
     let index = build_indexes(&unit)
+    let diags = diag_table_of(&unit)
     let proj = parse_project("[project]\nname = \"t\"\n").unwrap()
     let ctx = resolve_ctx(&proj, "")
     proj.deinit()
@@ -2999,6 +3004,7 @@ test "workspace/symbol answers matches with kinds, containers and locations" {
         unit = move unit,
         manifest = from_view(""),
         index = move index,
+        diags = move diags,
     })
     srv.run()
 
@@ -3042,6 +3048,7 @@ fn project_into(srv: &LspServer, src: String) {
     origin.push(true)
     origin.push(false)
     let index = build_indexes(&unit)
+    let diags = diag_table_of(&unit)
     let proj = parse_project("[project]\nname = \"t\"\n").unwrap()
     let ctx = resolve_ctx(&proj, "")
     proj.deinit()
@@ -3052,6 +3059,7 @@ fn project_into(srv: &LspServer, src: String) {
         unit = move unit,
         manifest = from_view(""),
         index = move index,
+        diags = move diags,
     })
 }
 
@@ -3108,7 +3116,7 @@ test "opening and editing a file keep the last analysis's warnings" {
     let srv = lsp_server(mr.reader(), out.writer())
     defer srv.deinit()
     demo_project_into(&srv)
-    let diags = &srv.ws.projects[0].unit.diagnostics
+    let diags = &srv.ws.projects[0].diags.live
     diags.push(Diagnostic {
         severity = Severity.Warning,
         code = "W1003",
@@ -3200,6 +3208,7 @@ fn demo_import_run(request: String, out: &StringBuilder, links: bool = false) {
     origin.push(true)
     origin.push(false)
     let index = build_indexes(&unit)
+    let diags = diag_table_of(&unit)
     let proj = parse_project("[project]\nname = \"t\"\n").unwrap()
     let ctx = resolve_ctx(&proj, "")
     proj.deinit()
@@ -3210,6 +3219,7 @@ fn demo_import_run(request: String, out: &StringBuilder, links: bool = false) {
         unit = move unit,
         manifest = from_view(""),
         index = move index,
+        diags = move diags,
     })
     srv.run()
 }
@@ -3882,6 +3892,7 @@ fn open_test_project(
         flags.push(o)
     }
     let index = build_indexes(&unit)
+    let diags = diag_table_of(&unit)
     let manifest = $"[project]\nname = \"{name}\"\n"
     let proj = parse_project(manifest.view()).unwrap()
     manifest.deinit()
@@ -3894,6 +3905,7 @@ fn open_test_project(
         unit = move unit,
         manifest = from_view(""),
         index = move index,
+        diags = move diags,
     })
     return &srv.ws.projects[srv.ws.projects.len - 1].unit
 }

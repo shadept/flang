@@ -140,25 +140,53 @@ pub fn filter_allowed(diags: &List(Diagnostic), module: &Module) List(Diagnostic
     return kept
 }
 
-// The project-wide form: a diagnostic is matched against the declarations of the module its span's
-// file id selects.
-pub fn filter_allowed_project(diags: &List(Diagnostic), modules: &List(Module)) List(Diagnostic) {
+// The project-wide form, in place: a diagnostic is matched against the declarations of the module
+// its span's file id selects, and `slots` keep covering the survivors of the runs they covered.
+fn drop_allowed(diags: &List(Diagnostic), slots: &List(DiagSlot), modules: &List(Module)) {
     let kept: List(Diagnostic) = list(diags.len)
+    let cursor = SlotCursor { starts = 0, ends = 0 }
+    let k = 0usize
     for d in diags.drain() {
-        let dropped = false
-        for &m in modules {
-            if is_allowed(&d, m) {
-                dropped = true
-                break
-            }
-        }
-        if dropped {
+        remap_slots(slots, &cursor, k, kept.len)
+        k = k + 1
+        if allowed_in_any(&d, modules) {
             d.deinit()
             continue
         }
         kept.push(d)
     }
-    return kept
+    remap_slots(slots, &cursor, k, kept.len)
+    install(diags, kept)
+}
+
+fn allowed_in_any(d: &Diagnostic, modules: &List(Module)) bool {
+    for &m in modules {
+        if is_allowed(d, m) {
+            return true
+        }
+    }
+    return false
+}
+
+// The next slot whose start, and the next whose end, is still an old index.
+type SlotCursor = struct {
+    starts: usize
+    ends: usize
+}
+
+// Move every slot bound at old index `k` to new index `at`. The slots are ordered and disjoint, so
+// their starts and their ends each rise, and a bound is visited exactly once.
+fn remap_slots(slots: &List(DiagSlot), c: &SlotCursor, k: usize, at: usize) {
+    while c.starts < slots.len and slots[c.starts].start == k {
+        const s = slots[c.starts]
+        slots[c.starts] = DiagSlot { file_id = s.file_id, pass = s.pass, start = at, end = s.end }
+        c.starts = c.starts + 1
+    }
+    while c.ends < slots.len and slots[c.ends].end == k {
+        const s = slots[c.ends]
+        slots[c.ends] = DiagSlot { file_id = s.file_id, pass = s.pass, start = s.start, end = at }
+        c.ends = c.ends + 1
+    }
 }
 
 fn is_allowed(d: &Diagnostic, module: &Module) bool {
@@ -271,13 +299,15 @@ pub type AnalyzedProject = struct {
     retired_modules: List(Module)
     result: TypeCheckResult
     checked: bool
-    // Everything the parse tier produced: a module's own parse errors, plus the load failures that
-    // have no module (an unreadable file, an unresolved global import). Held apart because
-    // `diagnostics` is rebuilt on every check and the parse tier outlives the check that replays
-    // it.
-    parse_diags: List(Diagnostic)
-    // The published list: `parse_diags` replayed, then the current check's.
+    // Whether the last run's parse tier reported anything. The next run then re-parses every
+    // module, so each run's parse tier is complete.
+    parse_failed: bool
+    // This run's output: its parse tier (a module's own parse errors, plus the load failures that
+    // have no module), then the check's. A pass the run carried has no output here.
     diagnostics: List(Diagnostic)
+    // The carried-pass slots over `diagnostics`. A caller that re-checks keeps the last output of
+    // each slot.
+    diag_slots: List(DiagSlot)
     // The checker every demand on this project runs through. It outlives one check so the declared
     // type names can: `begin_demand` keeps them and drops the rest, and `check_project` collects
     // only the modules that were re-parsed.
@@ -379,8 +409,9 @@ pub fn analyze_project(
         retired_modules = list(0),
         result = empty_result(),
         checked = false,
-        parse_diags = move parse_diags,
-        diagnostics = list(0),
+        parse_failed = false,
+        diagnostics = move parse_diags,
+        diag_slots = list(0),
         checker = checker(),
         generated = empty_template_output(),
         parse_ns = parse_ns,
@@ -397,7 +428,7 @@ pub fn analyze_project(
 //
 // Safe to call more than once on the same unit: expansion leaves one padded `sources`/`file_paths`
 // entry per generated chunk, and those are trimmed off first so a second run starts from the state
-// the first one saw, and the published diagnostics are rebuilt from `parse_diags` up.
+// the first one saw. `diagnostics` holds this run's parse tier on entry.
 fn check_project(
     self: &AnalyzedProject,
     ctx: &ResolveCtx,
@@ -413,17 +444,10 @@ fn check_project(
     }
     trim_owned(&self.file_paths, self.modules.len)
 
-    // The check tier is regenerated whole on every demand, so the previous run's copy goes and the
-    // parse tier is replayed underneath it.
-    // An owning element is lent to the copy, not handed to it: the replay clones each diagnostic.
-    let replayed: List(Diagnostic) = list(self.parse_diags.len)
-    for &d in self.parse_diags {
-        replayed.push(clone_diag(d))
-    }
-    install(&self.diagnostics, replayed)
-
+    self.parse_failed = self.diagnostics.len > 0
     self.checked = count_errors(self.diagnostics.as_slice()) == 0
     if !self.checked {
+        report_unchecked(self)
         return
     }
     defer install(&self.retired_sources, list(0))
@@ -484,7 +508,7 @@ fn check_project(
             dm,
         ),
     )
-    drain_diagnostics(&self.diagnostics, &chk.diagnostics)
+    take_check_output(&self.diagnostics, &self.diag_slots, chk)
     install(&self.generated, gens.take_output())
     gens.deinit()
 
@@ -493,8 +517,8 @@ fn check_project(
     // the edges and need no allowance, and when they were not, every non-`pub` function of a
     // test-bearing module is rooted conservatively. Only on a clean check: with errors present the
     // tables are partial and reachability would be noise on top of the real problem.
-    if ctx.warn_unused and self.project_origin.len > 0
-        and count_errors(self.diagnostics.as_slice()) == 0 {
+    const errors = count_errors(self.diagnostics.as_slice()) + chk.carried_errors
+    if ctx.warn_unused and self.project_origin.len > 0 and errors == 0 {
         let w = unused_functions(
             &self.result,
             &self.modules,
@@ -519,7 +543,34 @@ fn check_project(
     }
 
     // Last, so a code is silenced whichever phase raised it, the unused warnings included.
-    install(&self.diagnostics, filter_allowed_project(&self.diagnostics, &self.modules))
+    drop_allowed(&self.diagnostics, &self.diag_slots, &self.modules)
+}
+
+// A run that skips the check reports every checker pass of every module empty: nothing the check
+// said holds over sources that no longer parse. The next run re-parses everything, so it runs every
+// pass again.
+fn report_unchecked(self: &AnalyzedProject) {
+    const at = self.diagnostics.len
+    for i in 0..self.modules.len {
+        for pass in [DiagPass.Collect, DiagPass.Resolve, DiagPass.Signatures, DiagPass.Bodies] {
+            self.diag_slots.push(DiagSlot { file_id = i as i32, pass = pass, start = at, end = at })
+        }
+    }
+}
+
+// Move the checker's output after `diags`, its slots shifted to match.
+fn take_check_output(diags: &List(Diagnostic), slots: &List(DiagSlot), chk: &Checker) {
+    const at = diags.len
+    for &s in chk.diag_slots {
+        slots.push(DiagSlot {
+            file_id = s.file_id,
+            pass = s.pass,
+            start = at + s.start,
+            end = at + s.end,
+        })
+    }
+    chk.diag_slots.clear()
+    drain_diagnostics(diags, &chk.diagnostics)
 }
 
 // The demand set for a lazy check (RFC-022 §6): the project's own modules, the auto-imported
@@ -606,10 +657,9 @@ pub fn reanalyze(
     dirty: &Set(String),
     overrides: &Dict(String, String)? = null,
 ) {
-    const reparse_all = self.parse_diags.len > 0
-    if reparse_all {
-        install(&self.parse_diags, list(0))
-    }
+    const reparse_all = self.parse_failed
+    install(&self.diagnostics, list(0))
+    install(&self.diag_slots, list(0))
     let stale: Set(String) = set()
     defer stale.deinit()
     for &e in self.generated.emitted {
@@ -634,7 +684,7 @@ pub fn reanalyze(
             Some(s) => move s
             None => {
                 const msg = $"cannot read source `{path}`"
-                self.parse_diags.push(error("E0001", msg, none_span()))
+                self.diagnostics.push(error("E0001", msg, none_span()))
                 continue
             }
         }
@@ -645,7 +695,7 @@ pub fn reanalyze(
             srcs[i].view(),
             i as i32,
             &ctx.comptime,
-            &self.parse_diags,
+            &self.diagnostics,
         )
         swap(&mods[i], &incoming_module)
         self.retired_modules.push(incoming_module)
@@ -711,10 +761,9 @@ pub fn analyze_source_set(srcs: move List(OwnedString), fqns: &List(String)) Ana
         file_paths.push(from_view(fqns[i]))
     }
 
-    let diagnostics: List(Diagnostic) = list(parse_diags.len)
-    for &d in parse_diags {
-        diagnostics.push(clone_diag(d))
-    }
+    let diagnostics = move parse_diags
+    let slots: List(DiagSlot) = list(0)
+    const parse_failed = diagnostics.len > 0
     let checked = count_errors(diagnostics.as_slice()) == 0
     let result = empty_result()
     let generated = empty_template_output()
@@ -724,7 +773,7 @@ pub fn analyze_source_set(srcs: move List(OwnedString), fqns: &List(String)) Ana
     if checked {
         let gens = template_state()
         install(&result, check_all(&chk, &modules, fqns, &srcs, &file_paths, &gens))
-        drain_diagnostics(&diagnostics, &chk.diagnostics)
+        take_check_output(&diagnostics, &slots, &chk)
         install(&generated, gens.take_output())
         gens.deinit()
     }
@@ -741,8 +790,9 @@ pub fn analyze_source_set(srcs: move List(OwnedString), fqns: &List(String)) Ana
         retired_modules = list(0),
         result = move result,
         checked = checked,
-        parse_diags = move parse_diags,
+        parse_failed = parse_failed,
         diagnostics = move diagnostics,
+        diag_slots = move slots,
         checker = move chk,
         generated = move generated,
         parse_ns = 0,
@@ -756,7 +806,7 @@ pub fn deinit(self: move AnalyzedProject) {
     self.demanded.deinit()
     self.project_origin.deinit()
     self.diagnostics.deinit()
-    self.parse_diags.deinit()
+    self.diag_slots.deinit()
     self.checker.deinit()
     self.generated.deinit()
     self.modules.deinit()
@@ -787,7 +837,7 @@ pub fn write_generated(self: &AnalyzedProject) usize {
     return written
 }
 
-// Total error-severity diagnostics across every module.
+// Error-severity diagnostics in this run's output.
 pub fn project_error_count(self: &AnalyzedProject) usize {
     return count_errors(self.diagnostics.as_slice())
 }
@@ -1092,38 +1142,6 @@ test "one file reached under two spellings loads once" {
     defer unit.deinit()
     assert_eq(unit.modules.len, 1 as usize, "the spellings dedup to one module")
     assert_eq(unit.diagnostics.len, 0 as usize, "and nothing is declared twice")
-}
-
-test "re-analysis republishes diagnostics rather than appending to them" {
-    // One warning stays one warning across a re-demand of the same sources. An empty stdlib root
-    // leaves `core.prelude` unresolved and `seed_stdlib` a no-op, so the module set is exactly what
-    // the override supplies.
-    let proj = parse_project(
-        "[project]\nname = \"p\"\nkind = \"exe\"\nsource = \"src/**/*.f\"\n",
-    ).unwrap()
-    defer proj.deinit()
-    let ctx = resolve_ctx(&proj, "")
-    defer ctx.deinit()
-    let entries: List(OwnedString) = list(1)
-    defer entries.deinit()
-    entries.push(from_view("src/main.f"))
-    let ov: Dict(String, String) = dict()
-    defer ov.deinit()
-    ov.set(
-        "src/main.f",
-        "fn main() i32 {\n    const v: i32 = 1\n    const v: i32 = 2\n    return v\n}\n",
-    )
-
-    let unit = analyze_project(&ctx, &entries, Some(&ov))
-    defer unit.deinit()
-    assert_true(unit.checked, "the module type-checks")
-    const cold = unit.diagnostics.len
-    assert_eq(cold, 1 as usize, "one shadowing warning")
-
-    let dirty: Set(String) = set()
-    defer dirty.deinit()
-    reanalyze(&unit, &ctx, &dirty, Some(&ov))
-    assert_eq(unit.diagnostics.len, cold, "the same one warning, not two")
 }
 
 test "an edit adds, removes and leaves declarations alone" {

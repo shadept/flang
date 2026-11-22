@@ -30,6 +30,7 @@ import std.time
 import std.tracing_allocator
 
 import flang_analysis.analyze
+import flang_analysis.diag_table
 import flang_analysis.project
 import flang_analysis.resolver
 import flang_codegen.backend
@@ -670,11 +671,13 @@ fn build_project(opts: &BuildOpts) i32 {
 // Re-check `unit` `rounds` times with its first module dirty, as a save does in the language
 // server. Under `--trace-alloc` each round is its own generation, and what a round keeps is
 // replaced by the next, so the blocks born before the last round and still live are reported as
-// leaked, per round and by allocation stack.
+// leaked, per round and by allocation stack. `unit` is left holding every diagnostic the last round
+// stands on, carried passes' included.
 fn recheck_rounds(unit: &AnalyzedProject, ctx: &ResolveCtx, rounds: u32) {
     let dirty: Set(String) = set()
     defer dirty.deinit()
     dirty.add(unit.file_paths[0].view())
+    let diags = diag_table_of(unit)
     let first = 0 as u32
     for r in 0..rounds {
         const g = alloc_tracer.mark()
@@ -685,7 +688,10 @@ fn recheck_rounds(unit: &AnalyzedProject, ctx: &ResolveCtx, rounds: u32) {
         let temp = arena_allocator(context.allocator)
         context(temp_allocator = &temp.allocator()) { unit.reanalyze(ctx, &dirty) }
         temp.deinit()
+        diags.record(unit)
     }
+    install(&unit.diagnostics, diags.take())
+    diags.deinit()
     if alloc_tracer.live_blocks() == 0 or rounds < 2 {
         return
     }

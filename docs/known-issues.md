@@ -213,7 +213,8 @@ application check are in. Not yet:
   written.** In a body, `Set(Point)` is checked at the type expression; in a signature its bounds
   are implied and checked at each call; a field's `Set(Point)` is checked nowhere until a function
   using it is called. Checking at the declaration needs every function registered first, and the
-  signature and resolve tiers' cached diagnostics (RFC-022) to carry the deferred result.
+  deferred result reported in the declaring module's signature or resolve slot, so a re-check that
+  carries the pass keeps it (RFC-022).
 - **A literal is checked only through the type it lands in.** `.{ it = x, f = g }` against no
   written type (a `let` without annotation of a `FilterIter` literal) checks nothing.
 - **A generic body does not check its own uses of bounded types against its bounds**: inside

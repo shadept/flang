@@ -92,3 +92,23 @@ pub fn clone_diag(d: &Diagnostic) Diagnostic {
         span = d.span,
     }
 }
+
+// A checker pass whose diagnostics a re-check can carry: a module the demand did not re-parse skips
+// the pass when nothing it depends on changed, and its last output still stands.
+pub type DiagPass = enum {
+    Collect = 0
+    Resolve = 1
+    Signatures = 2
+    Bodies = 3
+}
+
+// `diagnostics[start..end]` of a run is the complete output of `pass` over module `file_id`. A
+// carried pass reports no slot: its output is the one the last run reporting the slot produced. A
+// diagnostic outside every slot is regenerated whole by every run. A run's slots are ordered by
+// `start` and do not overlap.
+pub type DiagSlot = struct {
+    file_id: i32
+    pass: DiagPass
+    start: usize
+    end: usize
+}

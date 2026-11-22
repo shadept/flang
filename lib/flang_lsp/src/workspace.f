@@ -23,6 +23,7 @@ import std.string_builder
 import std.test
 
 import flang_analysis.analyze
+import flang_analysis.diag_table
 import flang_analysis.project
 import flang_analysis.resolver
 
@@ -41,9 +42,13 @@ pub type OpenProject = struct {
     // analysis; dependency and stdlib slots stay empty so workspace/symbol reports project code
     // only.
     index: List(ModuleIndex)
+    // What the project stands on across re-checks, merged after every analysis: a re-check emits
+    // only the passes it ran.
+    diags: DiagTable
 }
 
 pub fn deinit(self: move OpenProject) {
+    self.diags.deinit()
     self.index.deinit()
     self.unit.deinit()
     self.ctx.deinit()
@@ -189,6 +194,7 @@ pub fn reanalyze_project(
     let ov = overrides_from(docs)
     reanalyze(&p.unit, &p.ctx, dirty, Some(&ov))
     ov.deinit()
+    p.diags.record(&p.unit)
     install(&p.index, build_indexes(&p.unit))
 }
 
@@ -244,6 +250,7 @@ fn load_project(self: &Workspace, dir: String, docs: &DocumentStore) OpenProject
     ov.deinit()
     entries.deinit()
     let index = build_indexes(&unit)
+    let diags = diag_table_of(&unit)
 
     return Some(OpenProject {
         dir = from_view(dir),
@@ -252,6 +259,7 @@ fn load_project(self: &Workspace, dir: String, docs: &DocumentStore) OpenProject
         unit = move unit,
         manifest = move toml,
         index = move index,
+        diags = move diags,
     })
 }
 
@@ -391,6 +399,7 @@ test "catch-up sees edited sources, a new project file and a changed manifest" {
     let unit = analyze_source_set(srcs, &paths)
     paths.deinit()
     unit.project_origin.push(true)
+    let diags = diag_table_of(&unit)
     let proj = parse_project(manifest).unwrap()
     let ctx = resolve_ctx(&proj, "")
     proj.deinit()
@@ -403,6 +412,7 @@ test "catch-up sees edited sources, a new project file and a changed manifest" {
         unit = move unit,
         manifest = from_view(manifest),
         index = list(0),
+        diags = move diags,
     })
     let docs = document_store()
     defer docs.deinit()

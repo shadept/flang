@@ -133,7 +133,7 @@ pub fn implied_bounds(self: &Checker, fid: u32) List(ImpliedBound) {
 
 // What module `module`'s generic aliases carry onto their parameters, from its last resolve.
 pub fn alias_bounds(self: &Checker, module: String) &List(AliasBound)? {
-    return self.nominal_diags.get_ref(module) match {
+    return self.carry.get_ref(module) match {
         Some(e) => Some(&e.alias_bounds)
         None => null
     }
@@ -314,6 +314,11 @@ pub type Checker = struct {
     specs: SpecializationRegistry
     results: InferenceResults
     diagnostics: List(Diagnostic)
+    // The carried-pass slots this demand ran, over `diagnostics`.
+    diag_slots: List(DiagSlot)
+    // Errors the passes this demand carried reported when they last ran, whose diagnostics it does
+    // not re-emit.
+    carried_errors: usize
     // Compile-time context for #if condition evaluation. Host by default; a cross-target build
     // installs the target's via `set_comptime_ctx`.
     comptime: ComptimeCtx
@@ -511,12 +516,10 @@ pub type Checker = struct {
     // valid.
     saw_new_name: bool
 
-    // Module path -> the diagnostics its name-collection, body-resolution and signature passes
-    // produced, replayed verbatim on a demand that reuses the module (RFC-022 section 5: a cache
-    // hit replays its cached diagnostics). `nominal_diag_keys` owns the path buffers the dict's
-    // keys view.
-    nominal_diags: Dict(String, ModuleNomDiags)
-    nominal_diag_keys: List(OwnedString)
+    // Module path -> what its carried passes leave behind besides the registries. `carry_keys` owns
+    // the path buffers the dict's keys view.
+    carry: Dict(String, ModuleCarry)
+    carry_keys: List(OwnedString)
 
     // Module path -> what its signature pass produced beyond the carried registries, for demands
     // that skip the pass (RFC-022 5c). `sig_cache_keys` owns the path buffers. `sig_capture` is on
@@ -558,14 +561,12 @@ pub type Checker = struct {
 
 }
 
-// One module's cached diagnostics from the carried tiers. `bodies` covers the slot's capture window
-// (the body pass through the fn-name resolution); what the slot's drains and parked-call resolution
-// emit is regenerated live by a replay and is not cached.
-pub type ModuleNomDiags = struct {
-    collect: List(Diagnostic)
-    resolve: List(Diagnostic)
-    signatures: List(Diagnostic)
-    bodies: List(Diagnostic)
+// One module's carried-pass leftovers. `errors` counts, per `DiagPass`, the errors the pass
+// reported when it last ran. `Bodies` covers the slot's capture window (the body pass through the
+// fn-name resolution); what the slot's drains and parked-call resolution emit is regenerated live
+// by a replay.
+pub type ModuleCarry = struct {
+    errors: [u32; 4]
     // Variables the resolve pass minted, when bounds or contract declarations made it mint more
     // than one per type parameter; a demand carrying the bodies burns as many.
     resolve_burn: u32?
@@ -574,13 +575,9 @@ pub type ModuleNomDiags = struct {
     alias_bounds: List(AliasBound)
 }
 
-pub fn deinit(self: move ModuleNomDiags) {
+pub fn deinit(self: move ModuleCarry) {
     self.resolve_refs.deinit()
     self.alias_bounds.deinit()
-    self.collect.deinit()
-    self.resolve.deinit()
-    self.signatures.deinit()
-    self.bodies.deinit()
 }
 
 // One captured node from a module's signature pass: the id, the span it was minted from, and -
@@ -839,6 +836,8 @@ pub fn checker() Checker {
         specs = specialization_registry(),
         results = inference_results(),
         diagnostics = list(0),
+        diag_slots = list(0),
+        carried_errors = 0,
         comptime = host_ctx(),
         check_tests = false,
         current_module = null,
@@ -909,8 +908,8 @@ pub fn checker() Checker {
         declared_arity = dict(),
         recycled = dict(),
         saw_new_name = false,
-        nominal_diags = dict(),
-        nominal_diag_keys = list(0),
+        carry = dict(),
+        carry_keys = list(0),
         sig_caches = dict(),
         sig_cache_keys = list(0),
         sig_capture = false,
@@ -964,8 +963,8 @@ pub fn begin_demand(self: &Checker) {
     let deprecations = fresh_table(replace(&self.fn_deprecations, dict()))
     let anons = fresh_table(replace(&self.anon_structs, dict()))
     let recycled = fresh_table(replace(&self.recycled, dict()))
-    let nom_diags = fresh_table(replace(&self.nominal_diags, dict()))
-    let nom_diag_keys = replace(&self.nominal_diag_keys, list(0))
+    let carry = fresh_table(replace(&self.carry, dict()))
+    let carry_keys = replace(&self.carry_keys, list(0))
     let sig_caches = fresh_table(replace(&self.sig_caches, dict()))
     let sig_cache_keys = replace(&self.sig_cache_keys, list(0))
     let body_caches = fresh_table(replace(&self.body_caches, dict()))
@@ -995,8 +994,8 @@ pub fn begin_demand(self: &Checker) {
     install(&next.fn_deprecations, deprecations)
     install(&next.anon_structs, anons)
     install(&next.recycled, recycled)
-    install(&next.nominal_diags, nom_diags)
-    install(&next.nominal_diag_keys, nom_diag_keys)
+    install(&next.carry, carry)
+    install(&next.carry_keys, carry_keys)
     install(&next.sig_caches, sig_caches)
     install(&next.sig_cache_keys, sig_cache_keys)
     install(&next.body_caches, body_caches)
@@ -1145,6 +1144,7 @@ pub fn deinit(self: move Checker) {
     self.specs.deinit()
     self.results.deinit()
     self.diagnostics.deinit()
+    self.diag_slots.deinit()
     self.fn_stack.deinit()
     self.alias_stack.deinit()
     self.pending_calls.deinit()
@@ -1191,8 +1191,8 @@ pub fn deinit(self: move Checker) {
     self.nested.deinit()
     self.declared_arity.deinit()
     self.recycled.deinit()
-    self.nominal_diags.deinit()
-    self.nominal_diag_keys.deinit()
+    self.carry.deinit()
+    self.carry_keys.deinit()
     self.sig_caches.deinit()
     self.sig_cache_keys.deinit()
     self.sig_nodes.deinit()
@@ -6288,6 +6288,9 @@ fn check_call_bounds(self: &Checker, p: &PendingSpec) bool {
 }
 
 fn has_errors(self: &Checker) bool {
+    if self.carried_errors > 0 {
+        return true
+    }
     for &d in self.diagnostics {
         const is_error = d.severity match {
             Error => true
@@ -17649,12 +17652,12 @@ pub fn check_all(
     retire_names(self, &retiring)
     for i in seq {
         if !needs_collect(recollect, i) {
-            replay_nominal_diags(self, paths[i], true)
+            carry_slot(self, paths[i], DiagPass.Collect)
             continue
         }
         const diags_from = self.diagnostics.len
         collect_nominal_names(self, &modules[i], paths[i])
-        stash_nominal_diags(self, paths[i], diags_from, true)
+        close_slot(self, &modules[i], paths[i], DiagPass.Collect, diags_from)
     }
     const aliases_changed = aliases_differ(self, &old_aliases, &retiring)
     old_aliases.deinit()
@@ -17675,7 +17678,7 @@ pub fn check_all(
     const nominals_start = monotonic_ns()
     for i in seq {
         if bodies_carry and !needs_collect(recollect, i) {
-            replay_nominal_diags(self, paths[i], false)
+            carry_slot(self, paths[i], DiagPass.Resolve)
             burn_type_param_vars(self, &modules[i], paths[i])
             continue
         }
@@ -17686,7 +17689,7 @@ pub fn check_all(
         self.ref_logging = true
         resolve_nominal_bodies(self, &modules[i], paths[i])
         self.ref_logging = false
-        stash_nominal_diags(self, paths[i], diags_from, false)
+        close_slot(self, &modules[i], paths[i], DiagPass.Resolve, diags_from)
         stash_resolve_burn(
             self,
             paths[i],
@@ -18001,81 +18004,71 @@ fn removed_names(self: &Checker) bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Carried-tier diagnostics (RFC-022 section 5): the collect and resolve passes cache what they emit
-// per module, and a demand that reuses the module replays the cache instead of re-running the pass.
+// Carried-pass diagnostics (RFC-022 section 5). A pass that runs reports its output as a slot of
+// `diagnostics`. A pass the demand carries emits nothing: its last output is the caller's to keep,
+// and only its error count stays here.
 // ─────────────────────────────────────────────────────────────────────
 
-// Remember the diagnostics `self.diagnostics[from..]` as module `path`'s collect (or resolve)
-// output, replacing whatever the module had cached.
-fn stash_nominal_diags(self: &Checker, path: String, from: usize, is_collect: bool) {
-    let found = module_diags_entry(self, path, from)
-    if found.is_none() {
-        return
+// Report `self.diagnostics[from..]` as `pass`'s output over `module`, and remember how many errors
+// it holds for a demand that carries the pass.
+fn close_slot(self: &Checker, module: &Module, path: String, pass: DiagPass, from: usize) {
+    self.diag_slots.push(DiagSlot {
+        file_id = module.span.file_id,
+        pass = pass,
+        start = from,
+        end = self.diagnostics.len,
+    })
+    let errors = 0u32
+    for k in from..self.diagnostics.len {
+        if self.diagnostics[k].severity == Severity.Error {
+            errors = errors + 1
+        }
     }
-    let entry = found.unwrap()
-    if is_collect {
-        refill_diags(self, &entry.collect, from)
-    } else {
-        refill_diags(self, &entry.resolve, from)
-    }
-}
-
-// Same, for the signature pass's tier.
-fn stash_sig_diags(self: &Checker, path: String, from: usize) {
-    let found = module_diags_entry(self, path, from)
-    if found.is_none() {
-        return
-    }
-    refill_diags(self, &found.unwrap().signatures, from)
-}
-
-// Same, for the body slot's capture window.
-fn stash_body_diags(self: &Checker, path: String, from: usize) {
-    let found = module_diags_entry(self, path, from)
-    if found.is_none() {
-        return
-    }
-    refill_diags(self, &found.unwrap().bodies, from)
-}
-
-fn replay_body_diags(self: &Checker, path: String) {
-    const found = self.nominal_diags.get_ref(path)
-    if found.is_none() {
-        return
-    }
-    for &d in found.unwrap().bodies {
-        self.diagnostics.push(clone_diag(d))
+    const found = carry_entry(self, path, errors > 0)
+    if found.is_some() {
+        let entry = found.unwrap()
+        entry.errors[pass_index(pass)] = errors
     }
 }
 
-// The module's diag-cache entry, created on first use. Null when there is no entry yet and nothing
-// to stash either - an all-clean module never allocates one.
-fn module_diags_entry(
-    self: &Checker,
-    path: String,
-    from: usize,
-    force: bool = false,
-) &ModuleNomDiags? {
-    if self.nominal_diags.get_ref(path).is_none() {
-        if from == self.diagnostics.len and !force {
+// Module `path`'s `pass` is carried this demand: the errors it reported when it last ran stand.
+fn carry_slot(self: &Checker, path: String, pass: DiagPass) {
+    const found = self.carry.get_ref(path)
+    if found.is_some() {
+        const errors = found.unwrap().errors[pass_index(pass)]
+        self.carried_errors = self.carried_errors + errors as usize
+    }
+}
+
+fn pass_index(pass: DiagPass) usize {
+    return pass match {
+        Collect => 0
+        Resolve => 1
+        Signatures => 2
+        Bodies => 3
+    }
+}
+
+// The module's carry entry, created on first use when `create` holds. Null otherwise - a module
+// with nothing to carry never allocates one.
+fn carry_entry(self: &Checker, path: String, create: bool) &ModuleCarry? {
+    if self.carry.get_ref(path).is_none() {
+        if !create {
             return null
         }
-        const idx = self.nominal_diag_keys.len
-        self.nominal_diag_keys.push(from_view(path))
-        self.nominal_diags.set(
-            self.nominal_diag_keys[idx].view(),
-            ModuleNomDiags {
-                collect = list(0),
-                resolve = list(0),
-                signatures = list(0),
-                bodies = list(0),
+        const idx = self.carry_keys.len
+        self.carry_keys.push(from_view(path))
+        self.carry.set(
+            self.carry_keys[idx].view(),
+            ModuleCarry {
+                errors = [0u32, 0u32, 0u32, 0u32],
                 resolve_burn = null,
                 resolve_refs = list(0),
                 alias_bounds = list(0),
             },
         )
     }
-    return self.nominal_diags.get_ref(path)
+    return self.carry.get_ref(path)
 }
 
 // Records how many variables module `path`'s resolve pass minted, when that is more than its type
@@ -18083,49 +18076,12 @@ fn module_diags_entry(
 // Also takes the pass's logged go-to-definition edges, replayed with the burn.
 fn stash_resolve_burn(self: &Checker, path: String, minted: u32, params: u32) {
     const extra = minted != params
-    const found = module_diags_entry(self, path, self.diagnostics.len, extra or self.ref_log.len > 0
-        or self.alias_log.len > 0)
+    const found = carry_entry(self, path, extra or self.ref_log.len > 0 or self.alias_log.len > 0)
     if found.is_some() {
         let entry = found.unwrap()
         entry.resolve_burn = if extra { Some(minted) } else { null }
         install(&entry.resolve_refs, replace(&self.ref_log, list(0)))
         install(&entry.alias_bounds, replace(&self.alias_log, list(0)))
-    }
-}
-
-fn refill_diags(self: &Checker, dst: &List(Diagnostic), from: usize) {
-    dst.clear()
-    for k in from..self.diagnostics.len {
-        dst.push(clone_diag(&self.diagnostics[k]))
-    }
-}
-
-// Replay module `path`'s cached collect (or resolve) diagnostics into the published list, in the
-// loop position the pass itself would have emitted them.
-fn replay_nominal_diags(self: &Checker, path: String, is_collect: bool) {
-    const found = self.nominal_diags.get_ref(path)
-    if found.is_none() {
-        return
-    }
-    let entry = found.unwrap()
-    if is_collect {
-        for &d in entry.collect {
-            self.diagnostics.push(clone_diag(d))
-        }
-        return
-    }
-    for &d in entry.resolve {
-        self.diagnostics.push(clone_diag(d))
-    }
-}
-
-fn replay_sig_diags(self: &Checker, path: String) {
-    const found = self.nominal_diags.get_ref(path)
-    if found.is_none() {
-        return
-    }
-    for &d in found.unwrap().signatures {
-        self.diagnostics.push(clone_diag(d))
     }
 }
 
@@ -18199,7 +18155,7 @@ fn run_signature_pass(self: &Checker, module: &Module, path: String, sources: &L
     collect_signatures(self, module, path)
     self.sig_capture = false
     self.ref_logging = false
-    stash_sig_diags(self, path, diags_from)
+    close_slot(self, module, path, DiagPass.Signatures, diags_from)
     finish_sig_capture(self, path, &w, collect_default_texts(self, module, sources))
 }
 
@@ -18265,13 +18221,13 @@ fn sig_cache_ok(self: &Checker, path: String, vars_now: u32) bool {
     return c.cacheable and c.vars_at_start == vars_now
 }
 
-// Reproduce what a skipped signature pass would have left behind: the cached diagnostics, the span
-// and node-type entries, and the engine variables it would have minted - burned so every later
-// phase's variable stream matches a cold check's. The carried registries already hold the pass's
+// Reproduce what a skipped signature pass would have left behind: its carried errors, the span and
+// node-type entries, and the engine variables it would have minted - burned so every later phase's
+// variable stream matches a cold check's. The carried registries already hold the pass's
 // registrations; the burned variables are what keeps an unannotated constant's carried variable
 // naming the slot the constants phase then binds.
 fn replay_signature_cache(self: &Checker, path: String) {
-    replay_sig_diags(self, path)
+    carry_slot(self, path, DiagPass.Signatures)
     const found = self.sig_caches.get_ref(path)
     if found.is_none() {
         return
@@ -18321,7 +18277,7 @@ fn harvest_sig_caches(self: &Checker, zonked: &Dict(NodeId, Ty)) {
 // so the result's span table holds the same entries. The carried bodies keep the variable ids of
 // the demand that resolved them; these stand-ins are never read.
 fn burn_type_param_vars(self: &Checker, module: &Module, path: String) {
-    const entry = self.nominal_diags.get_ref(path)
+    const entry = self.carry.get_ref(path)
     const recorded = if entry.is_some() { entry.unwrap().resolve_burn } else { null }
     if entry.is_some() {
         replay_type_refs(self, &entry.unwrap().resolve_refs)
@@ -18433,7 +18389,7 @@ fn run_body_slot(self: &Checker, module: &Module, path: String) SlotTiming {
     const synth_burn = self.next_synth - synth0
     const lambda_burn = self.next_lambda - lambda0
     const lit_window = self.pending_literals.len
-    stash_body_diags(self, path, diags_from)
+    close_slot(self, module, path, DiagPass.Bodies, diags_from)
     let calls = copy_parked_calls(self, calls0)
 
     clear_pick_log(self)
@@ -18480,7 +18436,7 @@ fn body_cache_ok(self: &Checker, path: String) bool {
         and c.synth_at_start == self.next_synth and c.lambda_at_start == self.next_lambda
 }
 
-// Replay module `path`'s slot: cached diagnostics and facts, counter burns, then the settlement
+// Replay module `path`'s slot: carried errors and cached facts, counter burns, then the settlement
 // re-run - the logged picks in their cold process order, the parked calls, and a drain for what
 // their resolution commits. The literal sweep covers only what the live re-run minted; the window's
 // literals were proven clean when the slot last ran.
@@ -18488,7 +18444,7 @@ fn replay_body_slot(self: &Checker, path: String) SlotTiming {
     begin_slot_specs(self, path)
     const bodies_start = monotonic_ns()
     self.current_module = Some(path)
-    replay_body_diags(self, path)
+    carry_slot(self, path, DiagPass.Bodies)
     let c = self.body_caches.get_ref(path).unwrap()
     for &f in c.spans {
         self.results.record_span(f.node, f.span)
@@ -19469,10 +19425,13 @@ fn parse_src(src: String, fid: i32) Module {
 
 // Error counts of two demands on one checker over modules `b` then `a`: a first check of {b_first,
 // a_src}, then a re-demand with only `b` re-parsed as `b_again` - the analyze-layer choreography
-// (begin_demand, interner adoption, recollect flags) spelled out at the check_all level.
+// (begin_demand, interner adoption, recollect flags) spelled out at the check_all level. `second`
+// counts the errors the re-demand emitted plus those its carried passes stand on, `carried` the
+// latter alone.
 type RedemandErrors = struct {
     first: usize
     second: usize
+    carried: usize
 }
 
 fn redemand_errors(b_first: String, b_again: String, a_src: String) RedemandErrors {
@@ -19505,7 +19464,8 @@ fn redemand_errors(b_first: String, b_again: String, a_src: String) RedemandErro
     let gens2 = template_state()
     defer gens2.deinit()
     let res2 = check_all(&chk, &mods, &ps, &gen_srcs, &gen_fps, &gens2, null, Some(&recollect))
-    const second = count_error_diags(&chk.diagnostics)
+    const carried = chk.carried_errors
+    const second = count_error_diags(&chk.diagnostics) + carried
 
     res1.deinit()
     res2.deinit()
@@ -19514,7 +19474,7 @@ fn redemand_errors(b_first: String, b_again: String, a_src: String) RedemandErro
     mods.deinit()
     ps.deinit()
     recollect.deinit()
-    return .{ first = first, second = second }
+    return .{ first = first, second = second, carried = carried }
 }
 
 fn count_error_diags(diags: &List(Diagnostic)) usize {
@@ -19540,29 +19500,30 @@ test "a changed alias invalidates a carried body" {
     assert_true(r.second > 0, "the f64 alias re-resolves the carried body and errors")
 }
 
-test "a carried body replays its cached diagnostics" {
+test "a carried body resolution carries its error" {
     // The duplicate-field error lives in module a's body resolution. Re-demanding with only b dirty
-    // skips that pass for a, so the error must come from the per-module cache, not from re-running
-    // it.
+    // skips that pass for a, so the error stands as carried, not re-emitted.
     let r = redemand_errors(
         "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
         "type H = struct { x: i32\nx: i32 }\nfn main() i32 { return 0 }\n",
     )
     assert_eq(r.first, 1 as usize, "the duplicate field is reported cold")
-    assert_eq(r.second, 1 as usize, "and exactly once again on the re-demand")
+    assert_eq(r.second, 1 as usize, "and stands exactly once on the re-demand")
+    assert_eq(r.carried, 1 as usize, "as carried")
 }
 
-test "a carried signature replays its cached diagnostics" {
+test "a carried signature pass carries its error" {
     // The duplicate-signature error (E2103) lives in module a's signature pass. Re-demanding with
-    // only b dirty skips that pass for a, so the error must come from the signature tier's cache.
+    // only b dirty skips that pass for a, so the error stands as carried, not re-emitted.
     let r = redemand_errors(
         "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
         "fn dup(x: i32) i32 { return x }\nfn dup(x: i32) i32 { return x }\nfn main() i32 { return 0 }\n",
     )
     assert_eq(r.first, 1 as usize, "the duplicate signature is reported cold")
-    assert_eq(r.second, 1 as usize, "and exactly once again on the re-demand")
+    assert_eq(r.second, 1 as usize, "and stands exactly once on the re-demand")
+    assert_eq(r.carried, 1 as usize, "as carried")
 }
 
 test "an edited signature re-resolves its callers" {
@@ -19680,16 +19641,17 @@ test "an edited nested type re-resolves" {
     assert_true(r.second > 0, "the f64 field errors after the edit")
 }
 
-test "a body-tier diagnostic replays from the slot cache" {
+test "a replayed body slot carries its window's error" {
     // The mismatch lives in module a's body window. Re-demanding with only b dirty replays a's
-    // slot, so the error must come from the slot's cached diagnostics, not from re-running it.
+    // slot, so the error stands as carried, not re-emitted.
     let r = redemand_errors(
         "pub fn helper() i32 { return 1 }\n",
         "pub fn helper() i32 { return 2 }\n",
         "fn wrong() i32 { let t = (1i32, 2i32)\nreturn t }\nfn main() i32 { return 0 }\n",
     )
     assert_eq(r.first, 1 as usize, "the mismatch is reported cold")
-    assert_eq(r.second, 1 as usize, "and exactly once again on the replay")
+    assert_eq(r.second, 1 as usize, "and stands exactly once on the replay")
+    assert_eq(r.carried, 1 as usize, "as carried")
 }
 
 test "a changed field type re-runs carried bodies" {
