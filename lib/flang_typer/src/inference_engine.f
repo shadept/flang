@@ -27,6 +27,7 @@ import std.collections.journal
 import std.collections.list
 import std.collections.set
 import std.option
+import std.result
 import std.string_builder
 import std.test
 
@@ -122,6 +123,18 @@ type PrimConstraintUndo = struct {
     prev: PrimSet? // null = the entry was new (rollback deletes)
 }
 
+// What an element-list literal may still become: an array of `len` `elem`s or a slice of `elem`.
+// `len` is null once literals of different lengths merged, which leaves only the slice.
+pub type SeqShape = struct {
+    elem: Ty
+    len: usize?
+}
+
+type SeqShapeUndo = struct {
+    var_id: VarId
+    prev: SeqShape?
+}
+
 // One mutation of `levels`. Mirrors `BindingUndo`: `prev` distinguishes overwrite (restore) from
 // insert (delete on rollback).
 type LevelUndo = struct {
@@ -138,6 +151,8 @@ pub type Engine = struct {
     interner: TypeInterner
     bindings: Dict(VarId, Ty)
     prim_constraints: Dict(VarId, PrimSet)
+    // Unbound literal vars that are an array or a slice, whichever a slot or a use decides first.
+    seq_shapes: Dict(VarId, SeqShape)
     // Level per partition, keyed by representative `VarId`. The rep's level is the *minimum* of
     // every member's original level so that `generalize` doesn't accidentally quantify a var that
     // was unified with a shallower-scope var. Without this, `resolve_var` would return whatever
@@ -146,6 +161,7 @@ pub type Engine = struct {
 
     binding_undo: Journal(BindingUndo)
     prim_undo: Journal(PrimConstraintUndo)
+    seq_undo: Journal(SeqShapeUndo)
     level_undo: Journal(LevelUndo)
 
     var_counter: u32
@@ -170,15 +186,18 @@ pub fn engine() Engine {
     let levels: Dict(VarId, Level) = dict()
     let bu: Journal(BindingUndo) = journal()
     let pu: Journal(PrimConstraintUndo) = journal()
+    let su: Journal(SeqShapeUndo) = journal()
     let lu: Journal(LevelUndo) = journal()
     return .{
         uf = move uf,
         interner = type_interner(),
         bindings = move bindings,
         prim_constraints = move prim_constraints,
+        seq_shapes = dict(),
         levels = move levels,
         binding_undo = move bu,
         prim_undo = move pu,
+        seq_undo = move su,
         level_undo = move lu,
         var_counter = 0u32,
         level = 0u32,
@@ -206,9 +225,11 @@ pub fn deinit(self: move Engine) {
     self.interner.deinit()
     self.bindings.deinit()
     self.prim_constraints.deinit()
+    self.seq_shapes.deinit()
     self.levels.deinit()
     self.binding_undo.deinit()
     self.prim_undo.deinit()
+    self.seq_undo.deinit()
     self.level_undo.deinit()
     self.rigid.deinit()
 }
@@ -312,6 +333,19 @@ pub fn fresh_constrained_var(self: &Engine, allowed: PrimSet) Ty {
     return t
 }
 
+// A fresh var for an element-list literal of `len` `elem`s: an array or a slice, whichever reaches
+// it first - a slot's type binds it, a binding owns it as the array (`own`), and a use that needs
+// its shape settles it to the slice (`settle`).
+pub fn fresh_seq_var(self: &Engine, elem: Ty, len: usize) Ty {
+    let t = self.fresh_var()
+    let v = self.ty_node(t) match {
+        NVar(tv) => tv
+        _ => panic("fresh_var didn't return a var")
+    }
+    set_seq_shape(self, v.id, SeqShape { elem = elem, len = Some(len) })
+    return t
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Compound constructors - thin veneers over the interner's builders. `mk_func` takes ownership of
 // `params` (the list is scratch; the table keeps the shape) and frees it.
@@ -339,6 +373,66 @@ pub fn mk_func(self: &Engine, params: move List(Ty), ret: Ty, moves: usize, conv
 // `Var`).
 // ─────────────────────────────────────────────────────────────────────
 
+// `t` as storage a binding owns: an unbound literal var becomes its array, and so does every
+// literal it holds. A literal whose length is gone stays a slice.
+pub fn own(self: &Engine, t: Ty) Ty {
+    let r = self.resolve(t)
+    const v = self.ty_node(r) match {
+        NVar(tv) => tv
+        _ => return r
+    }
+    const shape = self.seq_shapes.get(v.id) ?? return r
+    if shape.len.is_some() {
+        self.own(shape.elem)
+    }
+    return settle_array(self, v.id, shape)
+}
+
+// `t` with an unbound literal var at its top, or behind one reference, bound to the array it is
+// written as: the coercion ladder decays arrays, never an undecided literal.
+fn written(self: &Engine, t: Ty) {
+    const r = self.resolve(t)
+    const v = self.ty_node(r) match {
+        NVar(tv) => tv
+        NRef(inner) => return written(self, inner)
+        _ => return
+    }
+    const shape = self.seq_shapes.get(v.id) ?? return
+    const _arr = settle_array(self, v.id, shape)
+}
+
+// `t` for a use that needs its shape: an unbound literal var that is still an array or a slice
+// becomes the slice, a view of its storage, since nothing owns it.
+pub fn settle(self: &Engine, t: Ty) Ty {
+    let r = self.resolve(t)
+    return self.ty_node(r) match {
+        NVar(v) => self.seq_shapes.get(v.id) match {
+            Some(shape) => settle_seq(self, v.id, shape)
+            None => r
+        }
+        _ => r
+    }
+}
+
+// Settle every literal var no slot or use has decided yet.
+pub fn settle_all(self: &Engine) {
+    if self.seq_shapes.len() == 0 {
+        return
+    }
+    let open: List(VarId) = list(self.seq_shapes.len())
+    defer open.deinit()
+    for e in self.seq_shapes {
+        open.push(e.key)
+    }
+    for id in open {
+        const shape = self.seq_shapes.get(id)
+        if shape.is_some() {
+            const _slice = settle_seq(self, id, shape.unwrap())
+        }
+    }
+}
+
+// The binding chain: an unbound var comes back as its partition's representative.
 pub fn resolve(self: &Engine, t: Ty) Ty {
     return self.ty_node(t) match {
         NVar(v) => resolve_var(self, v)
@@ -635,10 +729,10 @@ fn unify_resolved(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
     return self.ty_node(a) match {
         NVar(va) => self.ty_node(b) match {
             NVar(vb) => unify_var_var(self, va, vb)
-            _ => bind_var(self, va, b)
+            _ => bind_var(self, va, b, true)
         }
         _ => self.ty_node(b) match {
-            NVar(vb) => bind_var(self, vb, a)
+            NVar(vb) => bind_var(self, vb, a, false)
             _ => unify_concrete(self, a, b)
         }
     }
@@ -651,13 +745,13 @@ fn unify_rigid(self: &Engine, a: Ty, b: Ty, ra: VarId?, rb: VarId?) UnifyOutcome
     }
     if ra.is_some() and rb.is_none() {
         return self.ty_node(b) match {
-            NVar(vb) => bind_var(self, vb, a)
+            NVar(vb) => bind_var(self, vb, a, false)
             _ => UnifyOutcome.UniMismatch(.{ actual = a, expected = b })
         }
     }
     if rb.is_some() and ra.is_none() {
         return self.ty_node(a) match {
-            NVar(va) => bind_var(self, va, b)
+            NVar(va) => bind_var(self, va, b, true)
             _ => UnifyOutcome.UniMismatch(.{ actual = a, expected = b })
         }
     }
@@ -693,6 +787,7 @@ fn unify_concrete(self: &Engine, a: Ty, b: Ty) UnifyOutcome {
 // the `Type(T)` lift).
 fn try_coercion(self: &Engine, raw_from: Ty, raw_to: Ty) Coercion? {
     const it = &self.interner
+    written(self, raw_from)
     // Prim rules match on the (already top-resolved) raw shapes, so the common failed probe pays no
     // allocation.
     let r1 = try_integer_widening(it, raw_from, raw_to)
@@ -858,6 +953,11 @@ fn unify_var_var(self: &Engine, va: TyVar, vb: TyVar) UnifyOutcome {
         )
     }
 
+    const merged_seq = merge_seq_shapes(self, ra, rb) match {
+        Ok(m) => m
+        Err(o) => return o
+    }
+
     // Compute the merged level *before* the merge - both reps still have their own slots at this
     // point. Use the min so the partition stays generalisable only from the outer-most binding
     // scope.
@@ -874,17 +974,28 @@ fn unify_var_var(self: &Engine, va: TyVar, vb: TyVar) UnifyOutcome {
         Some(allowed) => set_prim_constraint(self, new_rep, allowed)
         None => {}
     }
+    clear_seq_shape(self, loser)
+    merged_seq match {
+        Some(shape) => set_seq_shape(self, new_rep, shape)
+        None => {}
+    }
     // Stamp the merged level onto the rep and drop the loser's slot.
     set_level(self, new_rep, merged_level)
     clear_level(self, loser)
     return UnifyOutcome.Unified(.{ ty = self.interner.var_of(va), cost = 0 })
 }
 
-fn bind_var(self: &Engine, v: TyVar, concrete: Ty) UnifyOutcome {
+// `var_actual`: the var is the side flowing into the other, as `unify`'s `actual` is.
+fn bind_var(self: &Engine, v: TyVar, concrete: Ty, var_actual: bool) UnifyOutcome {
     let rep = self.uf.find(v.id)
 
     if self.occurs_in(rep, concrete) {
         return UnifyOutcome.UniOccursCheck(.{ var_id = rep, ty = concrete })
+    }
+
+    const shape = self.seq_shapes.get(rep)
+    if shape.is_some() {
+        return bind_seq(self, rep, shape.unwrap(), concrete, var_actual)
     }
 
     // Honour prim constraint, if any.
@@ -902,6 +1013,82 @@ fn bind_var(self: &Engine, v: TyVar, concrete: Ty) UnifyOutcome {
     record_binding_undo(self, rep)
     self.bindings.set(rep, concrete)
     return UnifyOutcome.Unified(.{ ty = concrete, cost = 0 })
+}
+
+// A literal var meets a concrete type. An array of its length or any slice takes it, element types
+// unified; anything else meets the literal as the array it is written as, coercions included.
+fn bind_seq(self: &Engine, rep: VarId, shape: SeqShape, concrete: Ty, var_actual: bool) UnifyOutcome {
+    const slot_elem = self.ty_node(concrete) match {
+        NArray(arr) => if shape.len.is_none() or shape.len.unwrap() == arr.length {
+            Some(arr.elem)
+        } else {
+            null
+        }
+        NNominal(nn) => slice_elem_of(self, &nn)
+        _ => null
+    }
+    if slot_elem.is_none() {
+        const settled = settle_array(self, rep, shape)
+        if var_actual {
+            return self.unify(settled, concrete)
+        }
+        return self.unify(concrete, settled)
+    }
+    const inner = if var_actual {
+        self.unify(shape.elem, slot_elem.unwrap())
+    } else {
+        self.unify(slot_elem.unwrap(), shape.elem)
+    }
+    if !inner.is_ok() {
+        return inner
+    }
+    clear_seq_shape(self, rep)
+    record_binding_undo(self, rep)
+    self.bindings.set(rep, concrete)
+    return UnifyOutcome.Unified(.{ ty = concrete, cost = 0 })
+}
+
+fn slice_elem_of(self: &Engine, nn: &NNominalNode) Ty? {
+    const reg = self.nominals ?? return null
+    const id = reg.lookup_fqn(FQN_SLICE) ?? return null
+    if nn.id != id or nn.args.len != 1 {
+        return null
+    }
+    return Some(self.interner.child_at(nn.args, 0))
+}
+
+// Bind literal var `rep` to the slice of its elements.
+fn settle_seq(self: &Engine, rep: VarId, shape: SeqShape) Ty {
+    return bind_settled(self, rep, slice_ty(self, shape.elem))
+}
+
+// Bind literal var `rep` to its array, or to its slice once its length is gone.
+fn settle_array(self: &Engine, rep: VarId, shape: SeqShape) Ty {
+    return shape.len match {
+        Some(n) => bind_settled(self, rep, self.interner.array_of(shape.elem, n))
+        None => settle_seq(self, rep, shape)
+    }
+}
+
+fn bind_settled(self: &Engine, rep: VarId, t: Ty) Ty {
+    clear_seq_shape(self, rep)
+    record_binding_undo(self, rep)
+    self.bindings.set(rep, t)
+    return t
+}
+
+fn slice_ty(self: &Engine, elem: Ty) Ty {
+    const id = self.nominals match {
+        Some(reg) => reg.lookup_fqn(FQN_SLICE)
+        None => null
+    }
+    if id.is_none() {
+        return TY_ERROR
+    }
+    let args: List(Ty) = list(1)
+    defer args.deinit()
+    args.push(elem)
+    return self.interner.nominal_of(id.unwrap(), &args)
 }
 
 // Bind `rep` to the poison type and hand back the outcome that rejected it. A var whose constraint
@@ -1075,10 +1262,10 @@ pub fn unify_exact(self: &Engine, actual: Ty, expected: Ty) UnifyOutcome {
     return self.ty_node(a) match {
         NVar(va) => self.ty_node(b) match {
             NVar(vb) => unify_var_var(self, va, vb)
-            _ => bind_var(self, va, b)
+            _ => bind_var(self, va, b, true)
         }
         _ => self.ty_node(b) match {
-            NVar(vb) => bind_var(self, vb, a)
+            NVar(vb) => bind_var(self, vb, a, false)
             _ => unify_structural(self, a, b)
         }
     }
@@ -1151,6 +1338,7 @@ pub fn push_checkpoint(self: &Engine) {
     self.uf.push_checkpoint()
     self.binding_undo.checkpoint()
     self.prim_undo.checkpoint()
+    self.seq_undo.checkpoint()
     self.level_undo.checkpoint()
 }
 
@@ -1160,6 +1348,7 @@ pub fn commit(self: &Engine) {
     self.uf.commit()
     self.binding_undo.commit()
     self.prim_undo.commit()
+    self.seq_undo.commit()
     self.level_undo.commit()
 }
 
@@ -1179,6 +1368,13 @@ pub fn rollback(self: &Engine) {
             self.prim_constraints.set(entry.var_id, entry.prev.unwrap())
         } else {
             let _discard = self.prim_constraints.remove(entry.var_id)
+        }
+    }
+    self.seq_undo.rollback { entry =>
+        if entry.prev.is_some() {
+            self.seq_shapes.set(entry.var_id, entry.prev.unwrap())
+        } else {
+            let _discard = self.seq_shapes.remove(entry.var_id)
         }
     }
     self.level_undo.rollback { entry =>
@@ -1263,6 +1459,58 @@ fn intersect_prim_constraints(self: &Engine, ra: VarId, rb: VarId) PrimSet? {
         return ca
     }
     return Some(ca.unwrap() & cb.unwrap())
+}
+
+// The shape a merged partition keeps: either side's, or both with their elements unified - a length
+// both agree on survives, two different lengths leave only the slice. A literal never merges with a
+// numeric literal.
+fn merge_seq_shapes(self: &Engine, ra: VarId, rb: VarId) Result(SeqShape?, UnifyOutcome) {
+    const sa = self.seq_shapes.get(ra)
+    const sb = self.seq_shapes.get(rb)
+    if sa.is_none() and sb.is_none() {
+        return Ok(null)
+    }
+    const numeric = self.prim_constraints.contains(ra) or self.prim_constraints.contains(rb)
+    if numeric {
+        return Err(make_mismatch(
+            self.interner.var_of(.{ id = ra, level = 0 }),
+            self.interner.var_of(.{ id = rb, level = 0 }),
+        ))
+    }
+    if sa.is_none() {
+        return Ok(sb)
+    }
+    if sb.is_none() {
+        return Ok(sa)
+    }
+    const a = sa.unwrap()
+    const b = sb.unwrap()
+    const inner = self.unify(a.elem, b.elem)
+    if !inner.is_ok() {
+        return Err(inner)
+    }
+    const same = a.len.is_some() and b.len.is_some() and a.len.unwrap() == b.len.unwrap()
+    return Ok(Some(SeqShape { elem = a.elem, len = if same { a.len } else { null } }))
+}
+
+fn set_seq_shape(self: &Engine, var_id: VarId, shape: SeqShape) {
+    record_seq_undo(self, var_id)
+    self.seq_shapes.set(var_id, shape)
+}
+
+fn clear_seq_shape(self: &Engine, var_id: VarId) {
+    if !self.seq_shapes.contains(var_id) {
+        return
+    }
+    record_seq_undo(self, var_id)
+    let _removed = self.seq_shapes.remove(var_id)
+}
+
+fn record_seq_undo(self: &Engine, var_id: VarId) {
+    if !self.seq_undo.is_open() {
+        return
+    }
+    self.seq_undo.record(SeqShapeUndo { var_id = var_id, prev = self.seq_shapes.get(var_id) })
 }
 
 // Logs the current binding of `var_id`, if a region is open, so a rollback can restore it. Called

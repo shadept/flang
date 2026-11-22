@@ -4259,6 +4259,8 @@ fn check_constant_init(self: &Checker, cd: &ConstDecl) {
     self.results.record_target(self.node_of(cd.span), ResolvedTarget.RtConst(stable))
     let v = check_expr(self, cd.value)
     unify_expected(self, v, reg.unwrap(), E_TYPE_MISMATCH, cd.span)
+    // A module constant is storage, like a local binding.
+    const _owned = self.engine.own(reg.unwrap())
 }
 
 fn check_function_body(self: &Checker, fd: &FunctionDecl) {
@@ -4521,6 +4523,8 @@ fn pending_ready(self: &Checker, p: &PendingSpec) bool {
 fn drain_pending_specs(self: &Checker, report: bool = true) {
     let queue = replace(&self.pending_specs, list(0))
     loop {
+        // A pick's key needs concrete types: a literal no slot claimed by now is a slice.
+        self.engine.settle_all()
         let deferred: List(PendingSpec) = list(queue.len)
         let progressed = false
         for p in queue.drain() {
@@ -7577,21 +7581,24 @@ fn receiver_is_ref(self: &Checker, e: &Expr) bool {
     }
 }
 
-// `[a, b, c]` and `[v; N]`. Elements unify to one type; the node types as `[T; len]`. A repeat
-// count must be a plain integer literal - the only form the corpus writes - any other count
-// expression leaves the node untyped (fresh var), the pre-M10 behavior for unsizable shapes.
+// `[a, b, c]` and `[v; N]`. Elements unify to one type. An element list types as `[T; len]` or
+// `T[]`, whichever reaches it first (`fresh_seq_var`): a binding owns it as the array, and anywhere
+// else it is a slice of its storage, so nothing downstream adapts it. A repeat stays `[T; len]`: a
+// slice of one has no count to build from. Its count must be a plain integer literal - the only
+// form the corpus writes - any other count expression leaves the node untyped (fresh var), the
+// pre-M10 behavior for unsizable shapes.
 fn check_array_literal(self: &Checker, al: &ArrayLiteralExpr) Ty {
     return al.kind match {
         Elements(es) => {
             if es.len == 0 {
-                return self.engine.mk_array(self.engine.fresh_var(), 0)
+                return self.engine.fresh_seq_var(self.engine.fresh_var(), 0)
             }
             let elem = check_expr(self, &es[0])
             for i in 1..es.len {
                 let t = check_expr(self, &es[i])
                 unify_expected(self, t, elem, E_TYPE_MISMATCH, expr_span(&es[i]))
             }
-            self.engine.mk_array(elem, es.len)
+            self.engine.fresh_seq_var(elem, es.len)
         }
         Repeat(r) => {
             let elem = check_expr(self, r.value)
@@ -9207,7 +9214,7 @@ fn check_index(self: &Checker, idx: &IndexExpr) Ty {
     let base_ty = check_expr(self, idx.receiver)
     let index_ty = check_expr(self, idx.index)
 
-    let rbase = self.engine.resolve(base_ty)
+    let rbase = self.engine.settle(base_ty)
     let rindex = self.engine.resolve(index_ty)
     let ranged = is_range_ty(self, rindex)
 
@@ -10196,7 +10203,7 @@ fn check_iterable_element(self: &Checker, fs: &ForStmt) Ty {
         Range(r) => check_range_bounds(self, &r)
         _ => {
             let it_ty = check_expr(self, fs.iterable)
-            resolve_for_protocol(self, fs, it_ty)
+            resolve_for_protocol(self, fs, self.engine.settle(it_ty))
         }
     }
 }
@@ -10417,8 +10424,10 @@ fn check_let(self: &Checker, ls: &LetStmt) {
                 None => a
             }
         }
+        // A binding is storage: an unannotated array literal is the array here, not a view a later
+        // use could make it.
         None => inferred match {
-            Some(i) => i
+            Some(i) => self.engine.own(i)
             None => self.engine.fresh_var()
         }
     }
@@ -12079,7 +12088,7 @@ fn materialize_arg_list(
 }
 
 // `[a, b, c]` over the positional arguments from `from` on, checked in place so its node types land
-// in this result set, and unified against the variadic parameter's slice element type so unsuffixed
+// in this result set, and unified against the variadic parameter's slice type so unsuffixed
 // literals pin. Synthetic span - node ids are span fingerprints, and this node exists nowhere in
 // the source.
 fn synth_variadic_pack(
@@ -12100,26 +12109,10 @@ fn synth_variadic_pack(
         kind = ArrayLiteralKind.Elements(self.results.synth_arena.freeze(elems)),
     })
     const at = check_expr(self, &arr)
-    // The parameter is `Slice(T)`; unify the literal's element type with `T` so the arguments
-    // settle (an empty pack leaves `T` to the declaration, which already fixed it).
-    let want = self.engine.resolve(param_ty)
-    let elem = ty_node(self, want) match {
-        NNominal(nn) => if nn.args.len == 1 { Some(self.engine.interner.child_at(
-            nn.args,
-            0,
-        )) } else { null }
-        _ => null
-    }
-    if elem.is_some() {
-        let az = self.engine.resolve(at)
-        ty_node(self, az) match {
-            NArray(a) => {
-                const o = self.engine.unify(a.elem, elem.unwrap())
-                report_unify(self, &o, E_TYPE_MISMATCH, span)
-            }
-            _ => {}
-        }
-    }
+    // The parameter is `Slice(T)`: the pack is a slice of the arguments, so they settle against
+    // `T`.
+    const o = self.engine.unify(at, param_ty)
+    report_unify(self, &o, E_TYPE_MISMATCH, span)
     return arr
 }
 
@@ -13733,7 +13726,7 @@ fn check_member(self: &Checker, ma: &MemberAccessExpr) Ty {
         return nt.unwrap()
     }
 
-    let recv = check_receiver(self, ma.receiver)
+    let recv = self.engine.settle(check_receiver(self, ma.receiver))
     if is_context_ty(self, recv) {
         return context_member(self, ma)
     }
@@ -17852,6 +17845,7 @@ pub fn check_all(
     // at codegen. Scoped to the entries this demand instantiated; carried ones are final already.
     zonk_specializations(self)
 
+    self.engine.settle_all()
     // Zonk every node-type entry so the result is final. Interned on the way (RFC-024): equal
     // shapes share one canonical tree. Presized: the zonked table holds exactly one entry per
     // source entry.
