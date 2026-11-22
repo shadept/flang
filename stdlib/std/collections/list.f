@@ -301,6 +301,11 @@ pub fn freeze(arena: &ArenaAllocator, xs: move UnmanagedList($T)) T[] {
     return out
 }
 
+// `freeze` for a managed list. Its allocator must be `arena`'s.
+pub fn freeze(arena: &ArenaAllocator, xs: move List($T)) T[] {
+    return arena.freeze(xs.__storage)
+}
+
 // =============================================================================
 // UnmanagedList: in-place mutation
 // =============================================================================
@@ -1418,4 +1423,18 @@ test "freeze hands a list's buffer to its arena as a slice of its elements" {
 
     let empty: UnmanagedList(i32) = unmanaged_list(0, &a)
     assert_eq(arena.freeze(empty).len, 0 as usize, "an empty list freezes to an empty slice")
+}
+
+test "freeze takes a managed list built under the arena as the context allocator" {
+    let arena = arena_allocator(context.allocator)
+    defer arena.deinit()
+    const a = arena.allocator()
+    const s = context(allocator = &a) {
+        let xs: List(i32) = list(0)
+        xs.push(3i32)
+        xs.push(4i32)
+        arena.freeze(xs)
+    }
+    assert_eq(s.len, 2 as usize, "the slice holds the elements")
+    assert_eq(s[0], 3i32, "in order")
 }

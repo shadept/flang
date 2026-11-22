@@ -141,6 +141,7 @@ arena:
 ```flang
 // std.collections.list
 pub fn freeze(arena: &ArenaAllocator, xs: move UnmanagedList($T)) T[]
+pub fn freeze(arena: &ArenaAllocator, xs: move List($T)) T[]
 ```
 
 `freeze` shrinks the buffer to its length and gives the block to `arena`; the slice is valid until

@@ -14,6 +14,7 @@
 // ends the loop with code 0 when a `shutdown` request preceded it, 1 otherwise (LSP 3.17 exit
 // semantics).
 
+import std.allocator
 import std.collections.dict
 import std.collections.list
 import std.collections.set
@@ -123,6 +124,9 @@ pub fn deinit(self: move LspServer) {
 
 // Serve until `exit` or the transport dies. Returns the process exit code.
 pub fn run(self: &LspServer) i32 {
+    // Each message is one request: its temp memory is reset once the message is handled.
+    let temp = arena_allocator(context.allocator)
+    defer temp.deinit()
     loop {
         const got = read_message(self.reader)
         if got.is_err() {
@@ -142,9 +146,10 @@ pub fn run(self: &LspServer) i32 {
         let msg = got.unwrap()
         self.access_log("<-", &msg, null)
         const t0 = monotonic_ns()
-        self.dispatch(&msg)
+        context(temp_allocator = &temp.allocator()) { self.dispatch(&msg) }
         self.access_log("->", &msg, Some((monotonic_ns() - t0) / 1000))
         msg.deinit()
+        temp.reset()
         if self.exit_code.is_some() {
             return self.exit_code.unwrap()
         }

@@ -1215,48 +1215,48 @@ pub fn declares_generic(decl: &FunctionDecl) bool {
 }
 
 // The `$T` names a function's `where` bounds introduce, each once, in order.
-pub fn bound_generic_names(decl: &FunctionDecl, out: &UnmanagedList(String), allocator: &Allocator) {
+pub fn bound_generic_names(decl: &FunctionDecl, out: &List(String)) {
     for &b in decl.bounds {
-        collect_generic_names(b.bound, out, allocator)
+        collect_generic_names(b.bound, out)
     }
 }
 
 // Appends the `$T` names `te` introduces that `out` lacks, in order.
-pub fn collect_generic_names(te: &TypeExpr, out: &UnmanagedList(String), allocator: &Allocator) {
+pub fn collect_generic_names(te: &TypeExpr, out: &List(String)) {
     te.* match {
         GenericBind(g) => {
             if !out.contains(g.name) {
-                out.push(g.name, allocator)
+                out.push(g.name)
             }
         }
         Named(n) => {
-            collect_generic_list(n.generic_args, out, allocator)
+            collect_generic_list(n.generic_args, out)
             for &a in n.assoc_args {
-                collect_generic_names(a.ty, out, allocator)
+                collect_generic_names(a.ty, out)
             }
         }
-        Reference(r) => collect_generic_names(r.inner, out, allocator)
-        Optional(o) => collect_generic_names(o.inner, out, allocator)
-        Array(a) => collect_generic_names(a.element, out, allocator)
-        Slice(sl) => collect_generic_names(sl.element, out, allocator)
-        Tuple(t) => collect_generic_list(t.elements, out, allocator)
+        Reference(r) => collect_generic_names(r.inner, out)
+        Optional(o) => collect_generic_names(o.inner, out)
+        Array(a) => collect_generic_names(a.element, out)
+        Slice(sl) => collect_generic_names(sl.element, out)
+        Tuple(t) => collect_generic_list(t.elements, out)
         Function(f) => {
-            collect_generic_list(f.params, out, allocator)
+            collect_generic_list(f.params, out)
             f.return_type match {
-                Some(rt) => collect_generic_names(rt, out, allocator)
+                Some(rt) => collect_generic_names(rt, out)
                 None => {}
             }
         }
-        Combined(c) => collect_generic_list(c.parts, out, allocator)
+        Combined(c) => collect_generic_list(c.parts, out)
         Projection(p) => {
-            collect_generic_names(p.base, out, allocator)
-            collect_generic_list(p.generic_args, out, allocator)
+            collect_generic_names(p.base, out)
+            collect_generic_list(p.generic_args, out)
         }
         Contract(c) => {
             for &r in c.requirements {
-                collect_generic_list(r.signature.params, out, allocator)
+                collect_generic_list(r.signature.params, out)
                 r.signature.return_type match {
-                    Some(rt) => collect_generic_names(rt, out, allocator)
+                    Some(rt) => collect_generic_names(rt, out)
                     None => {}
                 }
             }
@@ -1265,9 +1265,9 @@ pub fn collect_generic_names(te: &TypeExpr, out: &UnmanagedList(String), allocat
     }
 }
 
-fn collect_generic_list(tes: TypeExpr[], out: &UnmanagedList(String), allocator: &Allocator) {
+fn collect_generic_list(tes: TypeExpr[], out: &List(String)) {
     for &te in tes {
-        collect_generic_names(te, out, allocator)
+        collect_generic_names(te, out)
     }
 }
 

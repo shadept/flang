@@ -4989,11 +4989,11 @@ of a value you only hold by reference, put another in its place with `replace`.
 #### Description
 
 A temporary that lands where nothing takes ownership is never released (RFC-033 rule 8): a `T`
-parameter, a read-only receiver, an operator operand, a field read, a discarded result. A `move`
-parameter, a binding, a `return`, a struct literal field and a `match` scrutinee each take it.
-Sugar is checked as what it desugars to: `for x in e` is `e.iter()`, `e?` is `op_try(e)`,
-`a ?? b` is `a match { Some(v) => v, None => b }`, so `b` goes where the result goes, an operator
-resolved to `op_*` is that call, so `get(a + b)` is a temporary, and `$"..."` ends in
+parameter, a read-only receiver, an address taken (`&f()`), an operator operand, a field read, a
+discarded result. A `move` parameter, a binding, a `return`, a struct literal field and a `match`
+scrutinee each take it. Sugar is checked as what it desugars to: `for x in e` is `e.iter()`, `e?` is
+`op_try(e)`, `a ?? b` is `a match { Some(v) => v, None => b }`, so `b` goes where the result goes,
+an operator resolved to `op_*` is that call, so `get(a + b)` is a temporary, and `$"..."` ends in
 `to_string()`, so `println($"{x}".view)` is too.
 
 Leaking is not wrong in itself, and the intended default is a warning a build can promote. The
@@ -5005,6 +5005,7 @@ diagnostic system has no per-diagnostic severity control yet, so it is an error 
 route_count(make_server())      // error[E2132]
 make_server()                   // error[E2132]: discarded
 open("f").is_ok()               // error[E2132]: read-only receiver
+peek(&open("f"))                // error[E2132]: the address of a temporary
 make_a() == make_b()            // error[E2132]: operands are read
 ```
 

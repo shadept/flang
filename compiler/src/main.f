@@ -681,7 +681,10 @@ fn recheck_rounds(unit: &AnalyzedProject, ctx: &ResolveCtx, rounds: u32) {
         if r == 0 {
             first = g
         }
-        unit.reanalyze(ctx, &dirty)
+        // Each round is its own request, as each save is in the language server.
+        let temp = arena_allocator(context.allocator)
+        context(temp_allocator = &temp.allocator()) { unit.reanalyze(ctx, &dirty) }
+        temp.deinit()
     }
     if alloc_tracer.live_blocks() == 0 or rounds < 2 {
         return

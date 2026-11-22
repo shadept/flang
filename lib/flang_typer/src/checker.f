@@ -4613,9 +4613,9 @@ fn prebind_bound_names(self: &Checker, fd: &FunctionDecl) {
     if fd.bounds.len == 0 {
         return
     }
-    let names: UnmanagedList(String) = unmanaged_list(0, context.allocator)
-    defer names.deinit(context.allocator)
-    bound_generic_names(fd, &names, context.allocator)
+    let names: List(String) = list(0)
+    defer names.deinit()
+    bound_generic_names(fd, &names)
     for name in names {
         if self.env.lookup(name).is_none() {
             const g = GenericBindType { span = fd.span, name = name }

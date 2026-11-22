@@ -495,7 +495,7 @@ outer.mid.arr[0] = 1     // store discarded
 
 **Value contexts** are the complement: reading `a.b.c` for its value, passing by value, arithmetic operands. There a copy is correct and expected — FLang is a value-semantics language (§3.1).
 
-**Rvalue materialization.** When a value expression appears where an address is required — `&f()`, or a by-value call result used as a `&T` receiver — it is materialized into a fresh temporary whose address is taken. The temporary lives to the end of the enclosing statement. This is the *only* case in which a place context operates on a temporary, and it applies exclusively to expressions that were never places; a genuine place is never materialized.
+**Rvalue materialization.** When a value expression appears where an address is required — `&f()`, or a by-value call result used as a `&T` receiver — it is materialized into a fresh temporary whose address is taken. The temporary lives to the end of the enclosing statement, which for `context(f = &g()) { ... }` includes the body. Only a copyable value is materialized: a non-copyable one would end with the statement and nothing could release it, so it reaches no owner (`E2132`). This is the *only* case in which a place context operates on a temporary, and it applies exclusively to expressions that were never places; a genuine place is never materialized.
 
 **Diagnostic.** Using a value expression where a place is required is an error (`E3005`, "expression is not assignable"). An assignment target is never silently materialized instead.
 
